@@ -13,7 +13,6 @@ use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::router::ToolRouter;
 use crate::tools::router::tool_log_payload;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
@@ -135,6 +134,10 @@ fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
         ResponseItem::ToolSearchCall { .. }
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
+    ) || matches!(
+        item,
+        ResponseItem::CustomToolCall { name, .. }
+            if codex_tools::is_evidence_backed_x_search_name(name)
     )
 }
 
@@ -293,7 +296,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.mode == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    match ctx.tool_runtime.route_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess
@@ -382,6 +385,8 @@ pub(crate) async fn handle_output_item_done(
         }
         // A fatal error occurred; surface it back into history.
         Err(FunctionCallError::Fatal(message)) => {
+            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+                .await;
             return Err(CodexErr::Fatal(message));
         }
     }
@@ -409,6 +414,8 @@ pub(crate) async fn handle_non_tool_response_item(
         ResponseItem::ToolSearchOutput { .. } => "tool_search_output",
         ResponseItem::WebSearchCall { .. } => "web_search_call",
         ResponseItem::ImageGenerationCall { .. } => "image_generation_call",
+        ResponseItem::GrokImageGenerationCall { .. } => "grok_image_generation_call",
+        ResponseItem::GrokImageGenerationWireCall { .. } => "image_generation_call",
         ResponseItem::Compaction { .. } => "compaction",
         ResponseItem::CompactionTrigger { .. } => "compaction_trigger",
         ResponseItem::ContextCompaction { .. } => "context_compaction",

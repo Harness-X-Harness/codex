@@ -93,6 +93,8 @@ fn strip_image_details(items: &mut [ResponseItem]) {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationWireCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }

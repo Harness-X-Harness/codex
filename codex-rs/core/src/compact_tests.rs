@@ -5,6 +5,45 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
+#[test]
+fn remote_compaction_keeps_hosted_grok_items_but_not_local_custom_calls() {
+    let x_search = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ct", "x")),
+        status: Some("completed".to_string()),
+        call_id: "call_x".to_string(),
+        name: "x_user_search".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let local_custom = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ct", "local")),
+        status: Some("completed".to_string()),
+        call_id: "call_local".to_string(),
+        name: "apply_patch".to_string(),
+        namespace: None,
+        input: "*** Begin Patch".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let image = ResponseItem::GrokImageGenerationCall {
+        id: Some(ResponseItemId::with_suffix("ig", "1")),
+        status: "failed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    assert!(crate::compact_remote::should_keep_compacted_history_item(
+        &x_search
+    ));
+    assert!(crate::compact_remote::should_keep_compacted_history_item(
+        &image
+    ));
+    assert!(!crate::compact_remote::should_keep_compacted_history_item(
+        &local_custom
+    ));
+}
+
 async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,

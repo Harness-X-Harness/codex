@@ -533,7 +533,7 @@ fn parses_reasoning_including_raw_content() {
 fn parses_web_search_call() {
     let item = ResponseItem::WebSearchCall {
         id: Some(ResponseItemId::with_suffix("ws", "1")),
-        status: Some("completed".to_string()),
+        status: Some("in_progress".to_string()),
         action: Some(WebSearchAction::Search {
             query: Some("weather".to_string()),
             queries: None,
@@ -554,6 +554,7 @@ fn parses_web_search_call() {
                     queries: None,
                 },
                 results: None,
+                source: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -583,6 +584,7 @@ fn parses_web_search_open_page_call() {
                     url: Some("https://example.com".to_string()),
                 },
                 results: None,
+                source: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -614,6 +616,7 @@ fn parses_web_search_find_in_page_call() {
                     pattern: Some("needle".to_string()),
                 },
                 results: None,
+                source: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -638,8 +641,57 @@ fn parses_partial_web_search_call_without_action_as_other() {
                 query: String::new(),
                 action: WebSearchAction::Other,
                 results: None,
+                source: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
     }
+}
+
+#[test]
+fn projects_grok_x_search_and_image_items_without_changing_durable_shapes() {
+    let x_item = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ct", "x")),
+        status: Some("completed".to_string()),
+        call_id: "call_x".to_string(),
+        name: "x_keyword_search".to_string(),
+        namespace: None,
+        input: r#"{"query":"Codex"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let image_item = ResponseItem::GrokImageGenerationCall {
+        id: Some(ResponseItemId::with_suffix("ig", "grok")),
+        status: "completed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: Some("opaque-image-result".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let Some(TurnItem::WebSearch(x_search)) = parse_turn_item(&x_item) else {
+        panic!("expected X Search UI projection");
+    };
+    assert_eq!(
+        x_search,
+        WebSearchItem {
+            id: "ct_x".to_string(),
+            query: r#"{"query":"Codex"}"#.to_string(),
+            action: WebSearchAction::Other,
+            results: None,
+            source: Some(codex_protocol::items::SearchSource::X),
+        }
+    );
+    let Some(TurnItem::ImageGeneration(image)) = parse_turn_item(&image_item) else {
+        panic!("expected Grok image UI projection");
+    };
+    assert_eq!(
+        image,
+        codex_protocol::items::ImageGenerationItem {
+            id: "ig_grok".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: None,
+            prompt: Some("Draw a fox.".to_string()),
+            result: "opaque-image-result".to_string(),
+            saved_path: None,
+        }
+    );
 }

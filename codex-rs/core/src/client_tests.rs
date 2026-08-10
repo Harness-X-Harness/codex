@@ -110,6 +110,119 @@ fn test_model_client_with_thread_id(
     )
 }
 
+fn test_grok_model_client() -> ModelClient {
+    let mut provider =
+        create_oss_provider_with_base_url("https://grok.example/v1", WireApi::GrokResponses);
+    provider.name = "Grok".to_string();
+    ModelClient::new(
+        /*auth_manager*/ None,
+        AgentIdentityAuthPolicy::JwtOnly,
+        ThreadId::new(),
+        provider,
+        SessionSource::Cli,
+        "test_originator".to_string(),
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*attestation_provider*/ None,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    )
+}
+
+#[test]
+fn grok_request_codec_restores_native_image_generation_history_shape() {
+    let client = test_grok_model_client();
+    let mut input = vec![ResponseItem::GrokImageGenerationCall {
+        id: Some(codex_protocol::ResponseItemId::with_suffix("ig", "123")),
+        status: "failed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    client.prepare_response_items_for_request(&mut input);
+
+    assert_eq!(
+        serde_json::to_value(input).expect("request history should serialize"),
+        json!([{
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "failed",
+            "prompt": "Draw a fox."
+        }])
+    );
+}
+
+#[test]
+fn grok_request_codec_replays_x_search_custom_item_exactly() {
+    let client = test_grok_model_client();
+    let mut input = vec![ResponseItem::CustomToolCall {
+        id: Some(codex_protocol::ResponseItemId::with_suffix("ct", "x")),
+        status: Some("completed".to_string()),
+        call_id: "call_x".to_string(),
+        name: "x_thread_fetch".to_string(),
+        namespace: None,
+        input: r#"{"post_id":"123"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    client.prepare_response_items_for_request(&mut input);
+
+    assert_eq!(
+        serde_json::to_value(input).expect("X Search history should serialize"),
+        json!([{
+            "id": "ct_x",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_x",
+            "name": "x_thread_fetch",
+            "input": "{\"post_id\":\"123\"}"
+        }])
+    );
+}
+
+#[test]
+fn grok_request_codec_omits_null_reasoning_content() {
+    let client = test_grok_model_client();
+    let mut input = vec![ResponseItem::Reasoning {
+        id: Some(codex_protocol::ResponseItemId::with_suffix("rs", "123")),
+        summary: Vec::new(),
+        content: None,
+        encrypted_content: Some("opaque".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    client.prepare_response_items_for_request(&mut input);
+
+    assert_eq!(
+        serde_json::to_value(input).expect("reasoning history should serialize"),
+        json!([{
+            "id": "rs_123",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "opaque"
+        }])
+    );
+}
+
+#[test]
+fn grok_request_codec_omits_tool_choice_when_no_tools_are_declared() {
+    assert_eq!(
+        ModelClient::tool_choice_for_responses(WireApi::GrokResponses, false),
+        ""
+    );
+    assert_eq!(
+        ModelClient::tool_choice_for_responses(WireApi::GrokResponses, true),
+        "auto"
+    );
+    assert_eq!(
+        ModelClient::tool_choice_for_responses(WireApi::Responses, false),
+        "auto"
+    );
+}
+
 #[tokio::test]
 async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::Result<()> {
     let server = MockServer::start().await;

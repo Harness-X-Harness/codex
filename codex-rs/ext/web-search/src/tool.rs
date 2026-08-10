@@ -129,6 +129,7 @@ impl WebSearchTool {
                     query: String::new(),
                     action: None,
                     results: None,
+                    source: None,
                 },
                 EventMsg::WebSearchBegin(WebSearchBeginEvent {
                     call_id: call.call_id.clone(),
@@ -168,12 +169,14 @@ impl WebSearchTool {
                     query: query.clone(),
                     action: Some(command_action),
                     results: results.clone(),
+                    source: None,
                 },
                 EventMsg::WebSearchEnd(WebSearchEndEvent {
                     call_id: call.call_id.clone(),
                     query,
                     action: legacy_action,
                     results,
+                    source: None,
                 }),
             ))
             .await;

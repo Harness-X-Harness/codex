@@ -2080,6 +2080,51 @@ async fn record_conversation_items_stamps_missing_turn_id_and_preserves_existing
 }
 
 #[tokio::test]
+async fn grok_hosted_items_round_trip_through_rollout_resume() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let rollout_path = attach_thread_persistence(&mut session).await;
+    let mut expected = vec![
+        ResponseItem::CustomToolCall {
+            id: Some(ResponseItemId::with_suffix("ct", "x")),
+            status: Some("completed".to_string()),
+            call_id: "call_x".to_string(),
+            name: "x_semantic_search".to_string(),
+            namespace: None,
+            input: r#"{"query":"Codex"}"#.to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "grok")),
+            status: "completed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: Some("opaque-image-result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    session
+        .record_conversation_items(&turn_context, &expected)
+        .await;
+    for item in &mut expected {
+        item.set_turn_id_if_missing(&turn_context.sub_id);
+    }
+    session.flush_rollout().await.expect("rollout should flush");
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let (resumed_session, _) = make_session_and_context().await;
+    resumed_session
+        .record_initial_history(InitialHistory::Resumed(resumed))
+        .await;
+
+    assert_eq!(resumed_session.clone_history().await.raw_items(), expected);
+}
+
+#[tokio::test]
 async fn record_response_item_and_emit_turn_item_emits_hook_prompt_lifecycle() {
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     let response_item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
@@ -3150,6 +3195,40 @@ async fn record_initial_history_reconstructs_forked_transcript() {
         strip_response_item_ids(&expected),
         strip_response_item_ids(history.raw_items())
     );
+}
+
+#[tokio::test]
+async fn grok_hosted_items_survive_fork_history_reconstruction() {
+    let (session, _) = make_session_and_context().await;
+    let hosted_items = vec![
+        ResponseItem::CustomToolCall {
+            id: Some(ResponseItemId::with_suffix("ct", "forked_x")),
+            status: Some("failed".to_string()),
+            call_id: "call_forked_x".to_string(),
+            name: "x_thread_fetch".to_string(),
+            namespace: None,
+            input: r#"{"post_id":"123"}"#.to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "forked")),
+            status: "failed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    let rollout_items = hosted_items
+        .iter()
+        .cloned()
+        .map(RolloutItem::ResponseItem)
+        .collect();
+
+    session
+        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .await;
+
+    assert_eq!(session.clone_history().await.raw_items(), hosted_items);
 }
 
 #[tokio::test]

@@ -8,6 +8,8 @@ use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
+use codex_protocol::ResponseItemId;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
@@ -177,6 +179,67 @@ pub struct ResponsesStreamEvent {
     safety_buffering: Option<Value>,
 }
 
+#[derive(Deserialize)]
+struct GrokImageGenerationWireItem {
+    #[serde(default)]
+    id: Option<ResponseItemId>,
+    status: String,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    result: Option<String>,
+    #[serde(default)]
+    internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
+}
+
+fn parse_response_item(item: Value) -> Result<ResponseItem, serde_json::Error> {
+    let is_grok_image = item.get("type").and_then(Value::as_str) == Some("image_generation_call")
+        && item.get("revised_prompt").is_none()
+        && (item.get("prompt").is_some() || item.get("result").is_some_and(Value::is_null));
+    if is_grok_image {
+        let item: GrokImageGenerationWireItem = serde_json::from_value(item)?;
+        return Ok(ResponseItem::GrokImageGenerationCall {
+            id: item.id,
+            status: item.status,
+            prompt: item.prompt,
+            result: item.result,
+            internal_chat_message_metadata_passthrough: item
+                .internal_chat_message_metadata_passthrough,
+        });
+    }
+    let item: ResponseItem = serde_json::from_value(item)?;
+    if matches!(item, ResponseItem::Other) {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "unsupported response output item type",
+        ));
+    }
+    Ok(item)
+}
+
+fn output_item_parse_error(
+    event_kind: &str,
+    item: &Value,
+    error: &serde_json::Error,
+) -> ResponsesEventError {
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing>")
+        .chars()
+        .take(128)
+        .collect::<String>();
+    debug!(
+        error_category = ?error.classify(),
+        error_line = error.line(),
+        error_column = error.column(),
+        item_type,
+        "failed to parse response output item"
+    );
+    ResponsesEventError::Fatal(ApiError::Stream(format!(
+        "failed to parse {event_kind} item type `{item_type}`"
+    )))
+}
+
 impl ResponsesStreamEvent {
     pub fn kind(&self) -> &str {
         &self.kind
@@ -317,12 +380,13 @@ fn json_value_as_string(value: &Value) -> Option<String> {
 #[derive(Debug)]
 pub enum ResponsesEventError {
     Api(ApiError),
+    Fatal(ApiError),
 }
 
 impl ResponsesEventError {
     pub fn into_api_error(self) -> ApiError {
         match self {
-            Self::Api(error) => error,
+            Self::Api(error) | Self::Fatal(error) => error,
         }
     }
 }
@@ -333,10 +397,10 @@ pub fn process_responses_event(
     match event.kind.as_str() {
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemDone(item)));
-                }
-                debug!("failed to parse ResponseItem from output_item.done");
+                let item = parse_response_item(item_val.clone()).map_err(|error| {
+                    output_item_parse_error("response.output_item.done", &item_val, &error)
+                })?;
+                return Ok(Some(ResponseEvent::OutputItemDone(item)));
             }
         }
         "response.output_text.delta" => {
@@ -454,10 +518,10 @@ pub fn process_responses_event(
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemAdded(item)));
-                }
-                debug!("failed to parse ResponseItem from output_item.added");
+                let item = parse_response_item(item_val.clone()).map_err(|error| {
+                    output_item_parse_error("response.output_item.added", &item_val, &error)
+                })?;
+                return Ok(Some(ResponseEvent::OutputItemAdded(item)));
             }
         }
         "response.reasoning_summary_part.added" => {
@@ -617,8 +681,12 @@ async fn process_sse_with_treatment(
                 }
             }
             Ok(None) => {}
-            Err(error) => {
-                response_error = Some(error.into_api_error());
+            Err(ResponsesEventError::Api(error)) => {
+                response_error = Some(error);
+            }
+            Err(ResponsesEventError::Fatal(error)) => {
+                let _ = tx_event.send(Err(error)).await;
+                return;
             }
         };
     }
@@ -834,6 +902,37 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unknown_output_item_fails_closed_without_echoing_payload() {
+        let secret_marker = "must-not-appear-in-error";
+        let item = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "future_gateway_tool_call",
+                "status": "completed",
+                "private_payload": secret_marker
+            }
+        })
+        .to_string();
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "resp1" }
+        })
+        .to_string();
+        let sse1 = format!("event: response.output_item.done\ndata: {item}\n\n");
+        let sse2 = format!("event: response.completed\ndata: {completed}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes(), sse2.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::Stream(message))
+                if message.contains("future_gateway_tool_call")
+                    && !message.contains(secret_marker)
+        );
+    }
+
     #[test]
     fn parses_cache_write_token_usage() {
         let usage: ResponseCompletedUsage = serde_json::from_value(json!({
@@ -950,6 +1049,121 @@ mod tests {
             }) if call_id.as_deref() == Some("search-1")
                 && execution == "client"
                 && arguments == &json!({"query": "calendar create", "limit": 1})
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_grok_image_generation_terminal_items_without_prompt_coercion() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "ig_success",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "prompt": "Draw a red fox.",
+                    "result": "data:image/png;base64,AAAA"
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "ig_failed",
+                    "type": "image_generation_call",
+                    "status": "failed",
+                    "prompt": "Draw a blue fox."
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemDone(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt,
+                result: Some(result),
+                internal_chat_message_metadata_passthrough: None,
+            }) if id.as_str() == "ig_success"
+                && status == "completed"
+                && prompt.as_deref() == Some("Draw a red fox.")
+                && result == "data:image/png;base64,AAAA"
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::OutputItemDone(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt,
+                result: None,
+                internal_chat_message_metadata_passthrough: None,
+            }) if id.as_str() == "ig_failed"
+                && status == "failed"
+                && prompt.as_deref() == Some("Draw a blue fox.")
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_grok_hosted_tool_started_items_from_output_item_added() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "ct_x",
+                    "type": "custom_tool_call",
+                    "status": "in_progress",
+                    "call_id": "call_x",
+                    "name": "x_keyword_search",
+                    "input": ""
+                }
+            }),
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "ig_grok",
+                    "type": "image_generation_call",
+                    "status": "in_progress",
+                    "result": null
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemAdded(ResponseItem::CustomToolCall {
+                id: Some(id),
+                status: Some(status),
+                call_id,
+                name,
+                input,
+                ..
+            }) if id.as_str() == "ct_x"
+                && status == "in_progress"
+                && call_id == "call_x"
+                && name == "x_keyword_search"
+                && input.is_empty()
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::OutputItemAdded(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt,
+                result: None,
+                ..
+            }) if id.as_str() == "ig_grok"
+                && status == "in_progress"
+                && prompt.is_none()
         );
     }
 

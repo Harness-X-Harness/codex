@@ -842,6 +842,14 @@ impl ModelClient {
         }
     }
 
+    fn tool_choice_for_responses(wire_api: WireApi, has_declared_tools: bool) -> &'static str {
+        if wire_api == WireApi::GrokResponses && !has_declared_tools {
+            ""
+        } else {
+            "auto"
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn build_responses_request(
         &self,
@@ -928,7 +936,11 @@ impl ModelClient {
             instructions,
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice: Self::tool_choice_for_responses(
+                self.state.provider.info().wire_api,
+                !prompt.tools.is_empty(),
+            )
+            .to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning: Some(reasoning),
             store: provider.is_azure_responses_endpoint(),
@@ -945,6 +957,34 @@ impl ModelClient {
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
+            if self.state.provider.info().wire_api == WireApi::GrokResponses {
+                // The Grok Gateway rejects encrypted reasoning when `content` is JSON null.
+                // Preserve the durable item and use an empty request-only value because the
+                // existing ResponseItem serializer omits an empty reasoning-content array.
+                if let ResponseItem::Reasoning { content, .. } = item
+                    && content.is_none()
+                {
+                    *content = Some(Vec::new());
+                }
+
+                if let ResponseItem::GrokImageGenerationCall {
+                    id,
+                    status,
+                    prompt,
+                    result,
+                    internal_chat_message_metadata_passthrough,
+                } = item
+                {
+                    *item = ResponseItem::GrokImageGenerationWireCall {
+                        id: id.clone(),
+                        status: status.clone(),
+                        prompt: prompt.clone(),
+                        result: result.clone(),
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
+                    };
+                }
+            }
             if item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }
@@ -1866,7 +1906,7 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
-            WireApi::Responses => {
+            WireApi::Responses | WireApi::GrokResponses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
