@@ -63,6 +63,7 @@ use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_login::AuthManager;
+use codex_model_provider_info::WireApi;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::WebSearchMode;
@@ -74,6 +75,7 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_tools::GrokLocalTool;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -89,6 +91,7 @@ use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
+use codex_tools::plan_grok_tools;
 use codex_tools::request_user_input_available_modes;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
@@ -220,7 +223,10 @@ fn apply_mcp_tool_exposure_policy(
             exposures = exposures.difference(ToolExposures::DEFERRED | ToolExposures::CODE_MODE);
         }
 
-        exposures = if search_tool_enabled(turn_context)
+        exposures = if is_grok_dialect(turn_context) && exposures.contains(ToolExposures::DEFERRED)
+        {
+            exposures.difference(ToolExposures::DEFERRED) | ToolExposures::DIRECT
+        } else if search_tool_enabled(turn_context)
             && exposures.contains(ToolExposures::DEFERRED)
             && (effective_tool_mode(turn_context) != ToolMode::CodeModeOnly
                 || exposures.contains(ToolExposures::CODE_MODE))
@@ -320,6 +326,9 @@ pub(crate) fn finalize_tool_router(
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
+    if is_grok_dialect(turn_context) {
+        promote_grok_deferred_tools(&mut registry);
+    }
     let code_mode_enabled = matches!(
         effective_tool_mode(turn_context),
         ToolMode::CodeMode | ToolMode::CodeModeOnly
@@ -400,7 +409,9 @@ pub(crate) fn finalize_tool_router(
                     ToolSpec::Namespace(namespace) => namespace.name.as_str(),
                     ToolSpec::Function(_) | ToolSpec::Freeform(_) => DEFAULT_FUNCTION_NAMESPACE,
                     ToolSpec::ToolSearch { .. } => TOOL_SEARCH_TOOL_NAME,
-                    ToolSpec::WebSearch { .. } => continue,
+                    ToolSpec::WebSearch { .. } | ToolSpec::XSearch | ToolSpec::ImageGeneration => {
+                        continue;
+                    }
                 };
                 let owner = tool.runtime.mcp_server_name();
                 match namespace_owners.get(namespace_name) {
@@ -434,8 +445,35 @@ pub(crate) fn finalize_tool_router(
         }
     }
 
-    let model_visible_specs =
-        build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs);
+    let (model_visible_specs, grok_tool_plan) = if is_grok_dialect(turn_context) {
+        let local_tools = registry
+            .entries()
+            .filter(|tool| {
+                let tool_name = tool.runtime.tool_name();
+                tool.exposure.is_direct()
+                    && !is_hidden_by_code_mode_only(turn_context, &tool_name, tool.exposure)
+            })
+            .map(|tool| {
+                let identity = tool.runtime.tool_name();
+                let spec = spec_for_model_request(
+                    turn_context,
+                    tool.exposure,
+                    &identity,
+                    &code_mode_tool_names,
+                    tool.runtime.spec(),
+                );
+                GrokLocalTool { identity, spec }
+            })
+            .collect();
+        let plan = plan_grok_tools(local_tools)
+            .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
+        (plan.declarations.clone(), Some(plan))
+    } else {
+        (
+            build_model_visible_specs(turn_context, &registry, &code_mode_tool_names, hosted_specs),
+            None,
+        )
+    };
     if include_tool_namespaces_info {
         turn_context
             .turn_metadata_state
@@ -446,7 +484,20 @@ pub(crate) fn finalize_tool_router(
             ));
     }
 
-    Ok(ToolRouter::from_parts(registry, model_visible_specs))
+    Ok(match grok_tool_plan {
+        Some(plan) => ToolRouter::from_grok_plan(registry, plan),
+        None => ToolRouter::from_parts(registry, model_visible_specs),
+    })
+}
+
+fn promote_grok_deferred_tools(registry: &mut ToolRegistry) {
+    for tool in registry.entries_mut() {
+        tool.exposure = match tool.exposure {
+            ToolExposure::Deferred => ToolExposure::Direct,
+            ToolExposure::DeferredModelOnly => ToolExposure::DirectModelOnly,
+            exposure => exposure,
+        };
+    }
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -578,7 +629,13 @@ fn hosted_model_tool_specs(
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
+    !is_grok_dialect(turn_context)
+        && turn_context.model_info.supports_search_tool
+        && namespace_tools_enabled(turn_context)
+}
+
+fn is_grok_dialect(turn_context: &TurnContext) -> bool {
+    turn_context.provider.info().wire_api == WireApi::GrokResponses
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
@@ -744,7 +801,11 @@ fn register_code_mode_executors(
             ToolSpec::Namespace(namespace) if !namespace.tools.is_empty() => {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
-            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::Namespace(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::XSearch
+            | ToolSpec::ImageGeneration => {
                 continue;
             }
         };

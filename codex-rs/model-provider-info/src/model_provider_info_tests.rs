@@ -124,6 +124,18 @@ wire_api = "chat"
 }
 
 #[test]
+fn test_deserialize_grok_responses_wire_api() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://grok.example/v1"
+wire_api = "grok_responses"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::GrokResponses);
+}
+
+#[test]
 fn test_deserialize_websocket_connect_timeout() {
     let provider_toml = r#"
 name = "OpenAI"

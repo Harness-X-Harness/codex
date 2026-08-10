@@ -17,6 +17,8 @@ use crate::tools::spec_plan::finalize_tool_router;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
+use codex_tools::GrokLocalToolInput;
+use codex_tools::GrokToolPlan;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
@@ -68,6 +70,7 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Vec<ToolSpec>,
+    grok_tool_plan: Option<GrokToolPlan>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +106,15 @@ impl ToolRouter {
         Self {
             registry,
             model_visible_specs,
+            grok_tool_plan: None,
+        }
+    }
+
+    pub(crate) fn from_grok_plan(registry: ToolRegistry, grok_tool_plan: GrokToolPlan) -> Self {
+        Self {
+            registry,
+            model_visible_specs: grok_tool_plan.declarations.clone(),
+            grok_tool_plan: Some(grok_tool_plan),
         }
     }
 
@@ -138,6 +150,10 @@ impl ToolRouter {
         self.registry
             .supports_parallel_tool_calls(&call.tool_name)
             .unwrap_or(false)
+    }
+
+    pub(crate) fn projects_custom_call_as_function(&self, call: &ToolCall) -> bool {
+        self.grok_tool_plan.is_some() && matches!(call.payload, ToolPayload::Custom { .. })
     }
 
     pub(crate) fn tool_runtime(&self, call: &ToolCall) -> Option<Arc<dyn CoreToolRuntime>> {
@@ -203,6 +219,58 @@ impl ToolRouter {
             })),
             _ => Ok(None),
         }
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub fn route_tool_call(
+        &self,
+        item: ResponseItem,
+    ) -> Result<Option<ToolCall>, FunctionCallError> {
+        let Some(plan) = &self.grok_tool_plan else {
+            return Self::build_tool_call(item);
+        };
+        if let ResponseItem::CustomToolCall { name, .. } = &item {
+            return Err(FunctionCallError::Fatal(format!(
+                "unknown Grok hosted custom output `{name}`"
+            )));
+        }
+        let ResponseItem::FunctionCall {
+            name,
+            namespace,
+            arguments,
+            encrypted_function_args,
+            call_id,
+            ..
+        } = item
+        else {
+            return Self::build_tool_call(item);
+        };
+        if namespace.as_deref().is_some_and(|value| !value.is_empty()) {
+            return Err(FunctionCallError::RespondToModel(
+                "Grok function_call unexpectedly included a namespace".to_string(),
+            ));
+        }
+        let decoded = plan
+            .decode_local_function_call(&name, &arguments)
+            .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "Grok returned undeclared local function `{name}`"
+                ))
+            })?;
+        let payload = match decoded.input {
+            GrokLocalToolInput::FunctionArguments(arguments) => ToolPayload::Function { arguments },
+            GrokLocalToolInput::Freeform(input) => ToolPayload::Custom { input },
+        };
+        // Grok function arguments are plaintext. Normalize the missing OpenAI
+        // marker into Codex's existing plaintext representation before local dispatch.
+        let encrypted_function_args = Some(encrypted_function_args.unwrap_or_default());
+        Ok(Some(ToolCall {
+            tool_name: decoded.canonical_identity,
+            call_id,
+            payload,
+            encrypted_function_args,
+        }))
     }
 
     #[allow(dead_code)]

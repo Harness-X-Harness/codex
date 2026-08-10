@@ -110,6 +110,22 @@ fn test_model_client_with_thread_id(
     )
 }
 
+#[test]
+fn grok_request_codec_omits_tool_choice_when_no_tools_are_declared() {
+    assert_eq!(
+        ModelClient::tool_choice_for_responses(WireApi::GrokResponses, false),
+        ""
+    );
+    assert_eq!(
+        ModelClient::tool_choice_for_responses(WireApi::GrokResponses, true),
+        "auto"
+    );
+    assert_eq!(
+        ModelClient::tool_choice_for_responses(WireApi::Responses, false),
+        "auto"
+    );
+}
+
 #[tokio::test]
 async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::Result<()> {
     let server = MockServer::start().await;

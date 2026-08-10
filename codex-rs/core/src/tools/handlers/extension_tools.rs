@@ -75,7 +75,9 @@ impl CoreToolRuntime for ExtensionToolAdapter {
                 }),
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
-                | ToolSpec::WebSearch { .. } => false,
+                | ToolSpec::WebSearch { .. }
+                | ToolSpec::XSearch
+                | ToolSpec::ImageGeneration => false,
             },
             ToolPayload::ToolSearch { .. } => false,
         }
@@ -291,6 +293,7 @@ mod tests {
                         query: String::new(),
                         action: None,
                         results: None,
+                        source: None,
                     }),
                     legacy_events: Vec::new(),
                 })
@@ -455,6 +458,7 @@ mod tests {
                 query: String::new(),
                 action: None,
                 results: None,
+                source: None,
             }
         );
     }
@@ -471,6 +475,7 @@ mod tests {
             id: "call-image".to_string(),
             status: "in_progress".to_string(),
             revised_prompt: None,
+            prompt: None,
             result: String::new(),
             transparent_background: None,
             saved_path: None,
@@ -479,6 +484,7 @@ mod tests {
             id: "call-image".to_string(),
             status: "completed".to_string(),
             revised_prompt: Some("A tiny blue square".to_string()),
+            prompt: None,
             result: "cG5n".to_string(),
             transparent_background: Some(true),
             saved_path: Some(expected_path.clone()),
@@ -501,6 +507,7 @@ mod tests {
                     call_id: "call-image".to_string(),
                     status: "completed".to_string(),
                     revised_prompt: Some("A tiny blue square".to_string()),
+                    prompt: None,
                     result: "cG5n".to_string(),
                     transparent_background: Some(true),
                     saved_path: Some(expected_path.clone()),

@@ -28,11 +28,16 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::GrokLocalInputProjection;
+use codex_tools::GrokLocalTool;
+use codex_tools::GrokLocalToolRoute;
+use codex_tools::GrokToolPlan;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::default_namespace_description;
+use codex_tools::plan_grok_tools;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -42,6 +47,39 @@ use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
 use super::tool_log_payload;
+
+#[test]
+fn grok_collaboration_function_arguments_are_plaintext() {
+    let wire_name = "local__collaboration_spawn_agent__test";
+    let router = ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations: Vec::new(),
+            local_routes: BTreeMap::from([(
+                wire_name.to_string(),
+                GrokLocalToolRoute {
+                    canonical_identity: ToolName::namespaced("collaboration", "spawn_agent"),
+                    input_projection: GrokLocalInputProjection::Function,
+                },
+            )]),
+        },
+    );
+
+    let call = router
+        .route_tool_call(ResponseItem::FunctionCall {
+            id: None,
+            name: wire_name.to_string(),
+            namespace: None,
+            arguments: json!({"message": "review"}).to_string(),
+            encrypted_function_args: None,
+            call_id: "spawn-1".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .expect("Grok collaboration call should decode")
+        .expect("Grok collaboration call should be local-owned");
+
+    assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+}
 
 struct ExtensionEchoContributor;
 
@@ -407,6 +445,46 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn grok_stable_function_route_preserves_canonical_parallel_capability() -> anyhow::Result<()> {
+    let registered = mcp_runtime(mcp_tool_info(
+        "echo",
+        /*supports_parallel_tool_calls*/ true,
+        "mcp__echo__",
+        "query_with_delay",
+    ));
+    let identity = registered.runtime.tool_name();
+    let local_spec = registered.runtime.spec();
+    let registry = crate::tools::registry::ToolRegistry::from_tools([registered.runtime]);
+    let plan = plan_grok_tools(vec![GrokLocalTool {
+        identity: identity.clone(),
+        spec: local_spec,
+    }])?;
+    let wire_name = plan
+        .declarations
+        .first()
+        .expect("planned declaration")
+        .name()
+        .to_string();
+    let router = ToolRouter::from_grok_plan(registry, plan);
+
+    let call = router
+        .route_tool_call(ResponseItem::FunctionCall {
+            id: None,
+            name: wire_name,
+            namespace: None,
+            arguments: "{}".to_string(),
+            encrypted_function_args: None,
+            call_id: "call_grok_parallel".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        })?
+        .expect("Grok function should route to canonical local tool");
+
+    assert_eq!(call.tool_name, identity);
+    assert!(router.tool_supports_parallel(&call));
+    Ok(())
+}
+
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
@@ -627,6 +705,8 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
             | ToolSpec::WebSearch { .. }
+            | ToolSpec::XSearch
+            | ToolSpec::ImageGeneration
             | ToolSpec::Namespace(_) => None,
         })
         .unwrap_or_default()

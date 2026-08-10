@@ -4922,6 +4922,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "The official Grok Gateway Responses contract.",
+          "enum": [
+            "grok_responses"
+          ],
+          "type": "string"
         }
       ]
     },

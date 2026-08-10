@@ -69,7 +69,10 @@ impl ToolSearchInfo {
                 }
                 LoadableToolSpec::Namespace(namespace)
             }
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::XSearch
+            | ToolSpec::ImageGeneration => {
                 return None;
             }
         };
@@ -110,6 +113,12 @@ fn default_tool_search_text(spec: &ToolSpec) -> String {
         }
         ToolSpec::WebSearch { .. } => {
             push_search_part(&mut parts, "web search".to_string());
+        }
+        ToolSpec::XSearch => {
+            push_search_part(&mut parts, "X search".to_string());
+        }
+        ToolSpec::ImageGeneration => {
+            push_search_part(&mut parts, "image generation".to_string());
         }
         ToolSpec::Freeform(tool) => {
             push_search_part(&mut parts, tool.name.clone());

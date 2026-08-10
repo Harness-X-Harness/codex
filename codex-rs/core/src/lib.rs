@@ -53,6 +53,7 @@ pub mod exec_env;
 mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;
+mod grok_model_input;
 mod guardian;
 mod hook_runtime;
 mod image_preparation;

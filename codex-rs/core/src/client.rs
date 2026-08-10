@@ -588,7 +588,7 @@ impl ModelClient {
         let ResponsesApiRequest {
             model,
             instructions,
-            mut input,
+            input,
             tools,
             parallel_tool_calls,
             reasoning,
@@ -597,7 +597,7 @@ impl ModelClient {
             text,
             ..
         } = request;
-        self.prepare_response_items_for_request(&mut input);
+        let input = self.prepare_response_items_for_request(input)?;
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -842,6 +842,14 @@ impl ModelClient {
         }
     }
 
+    fn tool_choice_for_responses(wire_api: WireApi, has_declared_tools: bool) -> &'static str {
+        if wire_api == WireApi::GrokResponses && !has_declared_tools {
+            ""
+        } else {
+            "auto"
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn build_responses_request(
         &self,
@@ -928,7 +936,11 @@ impl ModelClient {
             instructions,
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice: Self::tool_choice_for_responses(
+                self.state.provider.info().wire_api,
+                !prompt.tools.is_empty(),
+            )
+            .to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning: Some(reasoning),
             store: provider.is_azure_responses_endpoint(),
@@ -943,12 +955,22 @@ impl ModelClient {
         Ok(request)
     }
 
-    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
-        for item in input {
+    fn prepare_response_items_for_request(
+        &self,
+        input: Vec<ResponseItem>,
+    ) -> Result<Vec<ResponseItem>> {
+        let mut input = if self.state.provider.info().wire_api == WireApi::GrokResponses {
+            crate::grok_model_input::encode(input)
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
+        } else {
+            input
+        };
+        for item in &mut input {
             if item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }
         }
+        Ok(input)
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
@@ -1499,8 +1521,9 @@ impl ModelClientSession {
                     .extra_headers
                     .insert(X_CODEX_ROUTING_HINT_HEADER, header_value);
             }
-            self.client
-                .prepare_response_items_for_request(&mut request.input);
+            request.input = self
+                .client
+                .prepare_response_items_for_request(request.input)?;
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             let inference_trace_attempt = inference_trace.start_attempt();
@@ -1686,8 +1709,9 @@ impl ModelClientSession {
                 None => (None, None),
             };
             let original_item_ids = if let Some(incremental_items) = &mut incremental_items {
-                self.client
-                    .prepare_response_items_for_request(incremental_items);
+                *incremental_items = self
+                    .client
+                    .prepare_response_items_for_request(std::mem::take(incremental_items))?;
                 None
             } else {
                 let original_item_ids = request
@@ -1695,8 +1719,9 @@ impl ModelClientSession {
                     .iter()
                     .map(|item| item.id().cloned())
                     .collect::<Vec<_>>();
-                self.client
-                    .prepare_response_items_for_request(&mut request.input);
+                request.input = self
+                    .client
+                    .prepare_response_items_for_request(request.input)?;
                 Some(original_item_ids)
             };
             let ws_payload = ResponseCreateWsRequest {
@@ -1866,7 +1891,7 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
-            WireApi::Responses => {
+            WireApi::Responses | WireApi::GrokResponses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
