@@ -1,0 +1,696 @@
+name: Grokex CI and release
+
+on:
+  push:
+    branches:
+      - grok-backend
+    tags:
+      - "grokex-v*"
+    paths-ignore:
+      - ".github/workflows/grokex-release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Validate base and generate schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      statuses: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      official_tag: ${{ steps.base.outputs.official_tag }}
+      version: ${{ steps.base.outputs.version }}
+      grokex_tag: ${{ steps.base.outputs.grokex_tag }}
+      prerelease: ${{ steps.base.outputs.prerelease }}
+      reuse_run_id: ${{ steps.reuse.outputs.reuse_run_id }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Verify official Codex release base
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          official_tag="$(tr -d '[:space:]' < grokex/codex-release-tag)"
+          if [[ ! "$official_tag" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid official Codex tag marker." >&2
+            exit 1
+          fi
+
+          version="${official_tag#rust-v}"
+          grokex_tag="grokex-v${version}"
+          git ls-remote --exit-code --tags https://github.com/openai/codex.git \
+            "refs/tags/${official_tag}" >/dev/null
+          git fetch --no-tags https://github.com/openai/codex.git \
+            "refs/tags/${official_tag}:refs/tags/${official_tag}"
+          git merge-base --is-ancestor "${official_tag}^{commit}" HEAD
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "$grokex_tag" ]]; then
+            echo "Grokex tag does not match its official Codex tag." >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+          echo "official_tag=$official_tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "grokex_tag=$grokex_tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Verify reusable branch artifacts for tag
+        id: reuse
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          branch_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/grok-backend" \
+              --jq '.object.sha'
+          )"
+          if [[ "$branch_sha" != "$source_sha" ]]; then
+            echo "Tag target is not the current grok-backend HEAD." >&2
+            exit 1
+          fi
+
+          runs="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/grokex-release.yml/runs" \
+              -f branch=grok-backend \
+              -f event=push \
+              -f status=success \
+              -f head_sha="$source_sha" \
+              -f per_page=100
+          )"
+          run_id="$(
+            jq -r --arg sha "$source_sha" '
+              [
+                .workflow_runs[]
+                | select(
+                    .head_sha == $sha
+                    and .head_branch == "grok-backend"
+                    and .event == "push"
+                    and .conclusion == "success"
+                    and .path == ".github/workflows/grokex-release.yml"
+                  )
+              ]
+              | sort_by(.created_at)
+              | last
+              | .id // empty
+            ' <<< "$runs"
+          )"
+          if [[ -z "$run_id" ]]; then
+            echo "No successful Grokex branch run exists for the tag target." >&2
+            exit 1
+          fi
+
+          expected_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          statuses="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/commits/${source_sha}/statuses" \
+              -f per_page=100
+          )"
+          if ! jq -e --arg url "$expected_url" '
+            any(
+              .[];
+              .context == "grokex/remote-validation"
+              and .state == "success"
+              and .target_url == $url
+            )
+          ' <<< "$statuses" >/dev/null; then
+            echo "The reusable run does not own the successful validation status." >&2
+            exit 1
+          fi
+
+          artifacts="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+              -f per_page=100
+          )"
+          expected_artifacts=(
+            grokex-aarch64-apple-darwin
+            grokex-x86_64-apple-darwin
+            grokex-aarch64-unknown-linux-musl
+            grokex-x86_64-unknown-linux-musl
+            grokex-aarch64-pc-windows-msvc
+            grokex-x86_64-pc-windows-msvc
+            grokex-release-assets
+          )
+          for name in "${expected_artifacts[@]}"; do
+            count="$(
+              jq -r \
+                --arg name "$name" \
+                --arg sha "$source_sha" \
+                --argjson run_id "$run_id" '
+                  [
+                    .artifacts[]
+                    | select(
+                        .name == $name
+                        and .expired == false
+                        and .workflow_run.id == $run_id
+                        and .workflow_run.head_sha == $sha
+                      )
+                  ]
+                  | length
+                ' <<< "$artifacts"
+            )"
+            if [[ "$count" != 1 ]]; then
+              echo "Reusable artifact is missing, expired, or ambiguous: $name" >&2
+              exit 1
+            fi
+          done
+
+          echo "Reusable validated branch run: $run_id"
+          echo "reuse_run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-ci
+        if: github.ref_type != 'tag'
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        if: github.ref_type != 'tag'
+
+      - name: Generate config and App Server schemas
+        if: github.ref_type != 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --locked --manifest-path codex-rs/Cargo.toml \
+            -p codex-core --bin codex-write-config-schema
+          python3 codex-rs/app-server-protocol/scripts/write_schema_fixtures.py
+          python3 codex-rs/app-server-protocol/scripts/write_schema_fixtures.py --experimental
+
+      - name: Commit remote-generated schemas on the trusted branch
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed_files="$(git diff --name-only)"
+          if [[ -n "$changed_files" ]]; then
+            while IFS= read -r path; do
+              case "$path" in
+                codex-rs/app-server-protocol/schema/*) ;;
+                codex-rs/core/config.schema.json) ;;
+                codex-rs/Cargo.lock) ;;
+                *)
+                  echo "Schema generation changed a non-schema file: $path" >&2
+                  exit 1
+                  ;;
+              esac
+            done <<< "$changed_files"
+
+            if [[ "$GITHUB_REF" != "refs/heads/grok-backend" ]]; then
+              echo "Generated schemas are stale. Tags and other refs are immutable." >&2
+              exit 1
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A -- \
+              codex-rs/app-server-protocol/schema \
+              codex-rs/core/config.schema.json \
+              codex-rs/Cargo.lock
+            git commit -m "Regenerate Grokex schemas and Rust lock"
+            git push origin HEAD:refs/heads/grok-backend
+          fi
+
+          source_sha="$(git rev-parse HEAD)"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "Validated source: $source_sha"
+
+  contracts:
+    name: Rust and Grok contract tests
+    needs: source
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: Install Linux test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap libcap-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Check Rust formatting
+        working-directory: codex-rs
+        run: cargo fmt --all -- --config imports_granularity=Item --check
+
+      - name: Run protocol and provider tests
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: |
+          cargo test --locked \
+            -p codex-tools \
+            -p codex-api \
+            -p codex-protocol \
+            -p codex-model-provider-info \
+            -p codex-models-manager \
+            -p codex-extension-items \
+            -p codex-app-server-protocol
+
+      - name: Build Code Mode host for integration contracts
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p codex-code-mode-host
+          target_dir="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.target_directory')"
+          host_path="${target_dir}/debug/codex-code-mode-host"
+          test -x "$host_path"
+          echo "CARGO_BIN_EXE_codex_code_mode_host=$host_path" >> "$GITHUB_ENV"
+
+      - name: Run Grok harness and persistence contracts
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: |
+          # codex-core also contains host process and sandbox tests whose
+          # contracts cannot run reliably on GitHub-hosted runners. Exercise
+          # every Grok-named core contract plus the generated config fixture.
+          cargo test --locked -p codex-core grok_
+          cargo test --locked -p codex-core config_schema_matches_fixture
+
+      - name: Run Grok TUI projection contracts
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: cargo test --locked -p codex-tui grok_
+
+      - name: Run App Server unit and Grok projection tests
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: |
+          # The full App Server integration suite requires privileged network
+          # namespace operations that GitHub-hosted runners reject. Keep this
+          # workflow focused on the App Server surfaces changed by Grokex.
+          cargo test --locked -p codex-app-server --lib
+          cargo test --locked -p codex-app-server --test all \
+            suite::v2::web_search
+          cargo test --locked -p codex-app-server --test all \
+            standalone_image_generation_failure_emits_terminal_item
+          cargo test --locked -p codex-app-server --test all \
+            thread_resume_redacts_payloads_for_chatgpt_remote_clients
+
+  bazel-lock:
+    name: Bazel dependency lock
+    needs: source
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Verify the Bazel lock file
+        run: bazel mod deps --lockfile_mode=error
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs:
+      - source
+      - contracts
+      - bazel-lock
+    if: github.ref_type != 'tag'
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            archive: tar
+            timeout_minutes: 130
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar
+            timeout_minutes: 180
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar
+            timeout_minutes: 100
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            archive: tar
+            timeout_minutes: 100
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: zip
+            timeout_minutes: 100
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            timeout_minutes: 100
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Use hermetic Cargo home for musl
+        if: contains(matrix.target, 'linux-musl')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - name: Install Zig
+        if: contains(matrix.target, 'linux-musl')
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install musl build tools
+        if: contains(matrix.target, 'linux-musl')
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash .github/scripts/install-musl-build-tools.sh
+
+      - name: Disable aws-lc jitter entropy for musl
+        if: contains(matrix.target, 'linux-musl')
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+          name="AWS_LC_SYS_NO_JITTER_ENTROPY_${{ matrix.target }}"
+          echo "${name//-/_}=1" >> "$GITHUB_ENV"
+
+      - name: Configure MSVC environment
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build Grokex binaries
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          cargo build --locked --release --target "${{ matrix.target }}" \
+            --bin codex --bin codex-code-mode-host
+
+      - name: Package Unix archive
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          package="grokex-${target}"
+          release_dir="${CARGO_TARGET_DIR}/${target}/release"
+          mkdir -p "dist/${package}/bin"
+          cp "${release_dir}/codex" "dist/${package}/bin/codex"
+          cp "${release_dir}/codex-code-mode-host" "dist/${package}/bin/codex-code-mode-host"
+          cp grokex/config.toml.example "dist/${package}/config.toml.example"
+          cp grokex/INSTALL.md "dist/${package}/INSTALL.md"
+          cp LICENSE NOTICE "dist/${package}/"
+          chmod 755 "dist/${package}/bin/codex" "dist/${package}/bin/codex-code-mode-host"
+          tar -C dist -czf "dist/${package}.tar.gz" "$package"
+          rm -rf -- "dist/${package}"
+
+      - name: Package Windows archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $Target = "${{ matrix.target }}"
+          $Package = "grokex-$Target"
+          $ReleaseDir = Join-Path $env:CARGO_TARGET_DIR "$Target\release"
+          $PackageRoot = Join-Path $env:GITHUB_WORKSPACE "dist\$Package"
+          New-Item -ItemType Directory -Path (Join-Path $PackageRoot "bin") -Force | Out-Null
+          Copy-Item (Join-Path $ReleaseDir "codex.exe") (Join-Path $PackageRoot "bin\codex.exe")
+          Copy-Item (Join-Path $ReleaseDir "codex-code-mode-host.exe") (Join-Path $PackageRoot "bin\codex-code-mode-host.exe")
+          Copy-Item "grokex\config.toml.example" (Join-Path $PackageRoot "config.toml.example")
+          Copy-Item "grokex\INSTALL.md" (Join-Path $PackageRoot "INSTALL.md")
+          Copy-Item "LICENSE", "NOTICE" $PackageRoot
+          Compress-Archive -Path $PackageRoot -DestinationPath "dist\$Package.zip" -CompressionLevel Optimal
+          Remove-Item -Recurse -Force $PackageRoot
+
+      - name: Upload Grokex archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-${{ matrix.target }}
+          path: dist/grokex-${{ matrix.target }}.*
+          if-no-files-found: error
+          retention-days: 14
+
+  checksums:
+    name: Assemble release assets
+    needs:
+      - source
+      - build
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v8.0.1
+        with:
+          pattern: grokex-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add installers and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/install-grokex.sh scripts/install-grokex.ps1 dist/
+          chmod 755 dist/install-grokex.sh
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum \
+              | sed 's#  \./#  #'
+          ) > dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  live-acceptance:
+    name: Native Grok live acceptance
+    needs:
+      - source
+      - contracts
+      - bazel-lock
+      - checksums
+    if: github.repository == 'weavertech-group/codex' && github.ref == 'refs/heads/grok-backend'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v8.0.1
+        with:
+          name: grokex-release-assets
+          path: ${{ runner.temp }}/grokex-assets
+
+      - name: Verify and extract Linux archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/grokex-assets"
+          grep '  grokex-x86_64-unknown-linux-musl.tar.gz$' SHA256SUMS \
+            | sha256sum -c -
+          tar -xzf grokex-x86_64-unknown-linux-musl.tar.gz \
+            -C "${RUNNER_TEMP}"
+
+      - name: Create isolated Codex Home
+        shell: bash
+        env:
+          GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ -z "$GROK_CONFIG_TOML" ]]; then
+            echo "GROK_CONFIG_TOML is required for live acceptance." >&2
+            exit 1
+          fi
+          codex_home="${RUNNER_TEMP}/grokex-codex-home"
+          mkdir -p "$codex_home"
+          chmod 700 "$codex_home"
+          umask 077
+          printf '%s' "$GROK_CONFIG_TOML" | base64 --decode > "$codex_home/config.toml"
+          chmod 600 "$codex_home/config.toml"
+
+      - name: Run native Grok behavior stories
+        shell: bash
+        env:
+          CODEX_HOME: ${{ runner.temp }}/grokex-codex-home
+          GROKEX_CODEX_BIN: ${{ runner.temp }}/grokex-x86_64-unknown-linux-musl/bin/codex
+          GROKEX_WORKSPACE: ${{ runner.temp }}/grokex-live-workspace
+          GROKEX_OUTPUT_DIR: ${{ runner.temp }}/grokex-live-output
+        run: bash .github/scripts/grokex-live-acceptance.sh
+
+      - name: Remove live acceptance state
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- \
+            "${RUNNER_TEMP}/grokex-codex-home" \
+            "${RUNNER_TEMP}/grokex-live-workspace" \
+            "${RUNNER_TEMP}/grokex-live-output" \
+            "${RUNNER_TEMP}/grokex-x86_64-unknown-linux-musl" \
+            "${RUNNER_TEMP}/grokex-assets"
+
+  validated:
+    name: Record validated source
+    needs:
+      - source
+      - contracts
+      - bazel-lock
+      - checksums
+      - live-acceptance
+    if: success() && github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      statuses: write
+    steps:
+      - name: Record successful remote validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+        run: |
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${SOURCE_SHA}" \
+            -f state=success \
+            -f context=grokex/remote-validation \
+            -f description='Tests, six builds, and live acceptance passed.' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - source
+    if: success() && startsWith(github.ref, 'refs/tags/grokex-v')
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v8.0.1
+        with:
+          name: grokex-release-assets
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.source.outputs.reuse_run_id }}
+
+      - name: Verify reused release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(mktemp)"
+          actual="$(mktemp)"
+          trap 'rm -f -- "$expected" "$actual"' EXIT
+          printf '%s\n' \
+            grokex-aarch64-apple-darwin.tar.gz \
+            grokex-x86_64-apple-darwin.tar.gz \
+            grokex-aarch64-unknown-linux-musl.tar.gz \
+            grokex-x86_64-unknown-linux-musl.tar.gz \
+            grokex-aarch64-pc-windows-msvc.zip \
+            grokex-x86_64-pc-windows-msvc.zip \
+            install-grokex.sh \
+            install-grokex.ps1 \
+            SHA256SUMS \
+            | sort > "$expected"
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort > "$actual"
+          diff -u "$expected" "$actual"
+          (
+            cd dist
+            sha256sum -c SHA256SUMS
+          )
+
+      - name: Write release notes
+        env:
+          OFFICIAL_TAG: ${{ needs.source.outputs.official_tag }}
+          SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+        run: |
+          cat > release-notes.md <<EOF
+          Grokex ${{ needs.source.outputs.version }} is based on official Codex ${OFFICIAL_TAG}.
+
+          Validated source commit: ${SOURCE_SHA}
+          Validated branch run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${{ needs.source.outputs.reuse_run_id }}
+
+          This release contains codex and codex-code-mode-host for macOS,
+          Linux, and Windows on x64 and ARM64. Install as grokex with the
+          attached platform installer. Verify downloads with SHA256SUMS.
+          EOF
+
+      - name: Publish Grokex GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          name: Grokex ${{ needs.source.outputs.version }}
+          tag_name: ${{ needs.source.outputs.grokex_tag }}
+          body_path: release-notes.md
+          files: dist/*
+          overwrite_files: true
+          prerelease: ${{ needs.source.outputs.prerelease }}
+          make_latest: false
