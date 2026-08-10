@@ -24,6 +24,7 @@ use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
 use codex_extension_items::ExtensionItem;
+pub use codex_extension_items::web_search::SearchSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use quick_xml::de::from_str as from_xml_str;
@@ -331,6 +332,9 @@ pub struct WebSearchItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub results: Option<Vec<JsonValue>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<SearchSource>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -350,6 +354,9 @@ pub struct ImageGenerationItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prompt: Option<String>,
     pub result: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

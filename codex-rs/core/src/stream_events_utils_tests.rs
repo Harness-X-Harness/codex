@@ -15,6 +15,7 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributor;
 use codex_protocol::ResponseItemId;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::memory_citation::MemoryCitation;
@@ -25,6 +26,8 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_tools::GrokToolPlan;
+use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -305,6 +308,55 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         output.last_agent_message.as_deref(),
         Some("contributed assistant text")
     );
+}
+
+#[tokio::test]
+async fn grok_unknown_custom_output_is_persisted_before_failing_closed() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let router = Arc::new(ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations: vec![ToolSpec::XSearch],
+            local_routes: Default::default(),
+        },
+    ));
+    let step_context =
+        StepContext::for_test(Arc::clone(&turn_context)).with_tool_router_for_test(router);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
+    let item = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ct", "unknown")),
+        status: Some("completed".to_string()),
+        call_id: "call_unknown".to_string(),
+        name: "future_gateway_tool".to_string(),
+        namespace: None,
+        input: r#"{"opaque":"provider-payload"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut expected = item.clone();
+    expected.set_turn_id_if_missing(&turn_context.sub_id);
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&session),
+        turn_context: Arc::clone(&turn_context),
+        turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
+        tool_runtime,
+        cancellation_token: CancellationToken::new(),
+    };
+
+    let error = match handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None).await
+    {
+        Ok(_) => panic!("unknown hosted output must fail closed"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::Fatal(message)
+            if message.contains("unknown Grok hosted custom output `future_gateway_tool`")
+    ));
+    assert_eq!(session.clone_history().await.raw_items(), &[expected]);
 }
 
 #[tokio::test]

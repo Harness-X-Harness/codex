@@ -465,8 +465,10 @@ pub(crate) fn finalize_tool_router(
                 GrokLocalTool { identity, spec }
             })
             .collect();
-        let plan = plan_grok_tools(local_tools)
+        let mut plan = plan_grok_tools(local_tools)
             .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
+        plan.declarations
+            .extend(grok_hosted_tool_specs(turn_context)?);
         (plan.declarations.clone(), Some(plan))
     } else {
         (
@@ -498,6 +500,54 @@ fn promote_grok_deferred_tools(registry: &mut ToolRegistry) {
             exposure => exposure,
         };
     }
+}
+
+fn grok_hosted_tool_specs(turn_context: &TurnContext) -> CodexResult<Vec<ToolSpec>> {
+    let mut specs = Vec::new();
+    match turn_context.config.web_search_mode.value() {
+        WebSearchMode::Disabled => {}
+        WebSearchMode::Live => {
+            let config = turn_context.config.web_search_config.as_ref();
+            if config.is_some_and(|config| {
+                config.user_location.is_some() || config.search_context_size.is_some()
+            }) {
+                return Err(CodexErrorDetails::InvalidRequest(
+                    "Grok Web Search does not support the configured user location or search context size"
+                        .to_string(),
+                )
+                .into());
+            }
+            specs.push(ToolSpec::WebSearch {
+                external_web_access: None,
+                indexed_web_access: None,
+                filters: config
+                    .and_then(|config| config.filters.clone())
+                    .map(Into::into),
+                user_location: None,
+                search_context_size: None,
+                search_content_types: None,
+            });
+        }
+        WebSearchMode::Cached | WebSearchMode::Indexed => {
+            return Err(CodexErrorDetails::InvalidRequest(format!(
+                "Grok Web Search does not support Codex mode `{}`",
+                turn_context.config.web_search_mode.value()
+            ))
+            .into());
+        }
+    }
+    if turn_context.provider.info().x_search {
+        specs.push(ToolSpec::XSearch);
+    }
+    if turn_context
+        .config
+        .features
+        .get()
+        .enabled(Feature::ImageGeneration)
+    {
+        specs.push(ToolSpec::ImageGeneration);
+    }
+    Ok(specs)
 }
 
 fn apply_direct_model_only_namespace_overrides(

@@ -350,6 +350,12 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         ResponseItem::Message { role, .. } if role == "assistant" => true,
         ResponseItem::Message { .. } => false,
         ResponseItem::AgentMessage { .. } => true,
+        ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::CustomToolCall { name, .. }
+            if codex_tools::is_evidence_backed_x_search_name(name) =>
+        {
+            true
+        }
         ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::CompactionTrigger { .. } => false,
         ResponseItem::AdditionalTools { .. }
@@ -361,9 +367,10 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::GrokImageGenerationWireCall { .. }
         | ResponseItem::Other => false,
+        ResponseItem::GrokImageGenerationCall { .. } => true,
     }
 }
 

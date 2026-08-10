@@ -70,6 +70,20 @@ fn encode_item(item: ResponseItem) -> Result<ResponseItem, GrokModelInputError> 
             "namespaced_function_call",
         )),
         ResponseItem::FunctionCall { .. } => Ok(item),
+        ResponseItem::GrokImageGenerationCall {
+            id,
+            status,
+            prompt,
+            result,
+            internal_chat_message_metadata_passthrough,
+        } => Ok(ResponseItem::GrokImageGenerationWireCall {
+            id,
+            status,
+            prompt,
+            result,
+            internal_chat_message_metadata_passthrough,
+        }),
+        ResponseItem::GrokImageGenerationWireCall { .. } => Ok(item),
         ResponseItem::AdditionalTools { .. } => {
             Err(GrokModelInputError::UnsupportedItem("additional_tools"))
         }

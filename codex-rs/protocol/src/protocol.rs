@@ -32,6 +32,7 @@ use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::dynamic_tools::DynamicToolCallRequest;
 use crate::dynamic_tools::DynamicToolResponse;
 use crate::dynamic_tools::DynamicToolSpec;
+use crate::items::SearchSource;
 use crate::items::TurnItem;
 use crate::mcp::CallToolResult;
 use crate::mcp::RequestId;
@@ -2532,6 +2533,9 @@ pub struct WebSearchEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub results: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<SearchSource>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2546,6 +2550,9 @@ pub struct ImageGenerationEndEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prompt: Option<String>,
     pub result: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -5236,6 +5243,7 @@ mod tests {
                     queries: None,
                 },
                 results: None,
+                source: None,
             }),
             started_at_ms: 0,
         };
@@ -5273,6 +5281,7 @@ mod tests {
                 id: "ig-1".into(),
                 status: "in_progress".into(),
                 revised_prompt: None,
+                prompt: None,
                 result: String::new(),
                 saved_path: None,
             }),
@@ -5379,6 +5388,7 @@ mod tests {
                 id: "ig-1".into(),
                 status: "completed".into(),
                 revised_prompt: Some("A tiny blue square".into()),
+                prompt: None,
                 result: "Zm9v".into(),
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             }),

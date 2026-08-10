@@ -95,6 +95,7 @@ fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
         call_id: item.id.clone(),
         status: item.status.clone(),
         revised_prompt: item.revised_prompt.clone(),
+        prompt: item.prompt.clone(),
         result: item.result.clone(),
         transparent_background: item.transparent_background,
         saved_path: item.saved_path.clone(),
@@ -142,6 +143,7 @@ impl ImageGenerationTool {
                     id: call.call_id.clone(),
                     status: "in_progress".to_string(),
                     revised_prompt: None,
+                    prompt: None,
                     result: String::new(),
                     transparent_background: None,
                     saved_path: None,
@@ -176,6 +178,7 @@ impl ImageGenerationTool {
                     id: call.call_id.clone(),
                     status: "failed".to_string(),
                     revised_prompt: Some(args.prompt),
+                    prompt: None,
                     result: String::new(),
                     transparent_background: None,
                     saved_path: None,
@@ -216,6 +219,7 @@ impl ImageGenerationTool {
             id: call.call_id.clone(),
             status: "completed".to_string(),
             revised_prompt: Some(args.prompt),
+            prompt: None,
             result: result.clone(),
             transparent_background,
             saved_path: saved_path.clone(),
@@ -358,6 +362,8 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationWireCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
@@ -402,6 +408,8 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationWireCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }

@@ -2190,6 +2190,9 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    // Grok can interleave hosted-tool and reasoning items inside one streamed assistant
+    // message, then continue sending deltas for that original message without adding it again.
+    let mut suspended_agent_message: Option<(TurnItem, bool)> = None;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -2260,7 +2263,9 @@ async fn try_run_sampling_request(
                         ResponseItem::ToolSearchCall { call_id, .. }
                         | ResponseItem::LocalShellCall { call_id, .. } => call_id.as_deref(),
                         ResponseItem::WebSearchCall { id, .. }
-                        | ResponseItem::ImageGenerationCall { id, .. } => {
+                        | ResponseItem::ImageGenerationCall { id, .. }
+                        | ResponseItem::GrokImageGenerationCall { id, .. }
+                        | ResponseItem::GrokImageGenerationWireCall { id, .. } => {
                             id.as_ref().map(codex_protocol::ResponseItemId::as_str)
                         }
                         _ => None,
@@ -2306,6 +2311,10 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
+                    if let Some((item, streaming_to_client)) = suspended_agent_message.take() {
+                        active_item = Some(item);
+                        active_item_is_streaming_to_client = streaming_to_client;
+                    }
                     continue;
                 }
 
@@ -2333,6 +2342,8 @@ async fn try_run_sampling_request(
                     | ResponseItem::ToolSearchOutput { .. }
                     | ResponseItem::WebSearchCall { .. }
                     | ResponseItem::ImageGenerationCall { .. }
+                    | ResponseItem::GrokImageGenerationCall { .. }
+                    | ResponseItem::GrokImageGenerationWireCall { .. }
                     | ResponseItem::Compaction { .. }
                     | ResponseItem::CompactionTrigger { .. }
                     | ResponseItem::ContextCompaction { .. }
@@ -2354,6 +2365,10 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                if let Some((item, streaming_to_client)) = suspended_agent_message.take() {
+                    active_item = Some(item);
+                    active_item_is_streaming_to_client = streaming_to_client;
+                }
                 // todo: remove before stabilizing multi-agent v2
                 if preempt_for_mailbox_mail && sess.input_queue.has_pending_mailbox_items().await {
                     break Ok(SamplingRequestResult {
@@ -2364,6 +2379,29 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(mut item) => {
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
+                let interrupts_agent_message = !matches!(
+                    &item,
+                    ResponseItem::Message {
+                        role,
+                        ..
+                    } if role == "assistant"
+                );
+                let suspended_for_added = interrupts_agent_message
+                    && suspended_agent_message.is_none()
+                    && matches!(active_item, Some(TurnItem::AgentMessage(_)));
+                if suspended_for_added && let Some(active) = active_item.take() {
+                    suspended_agent_message = Some((active, active_item_is_streaming_to_client));
+                    active_item_is_streaming_to_client = false;
+                }
+                let x_search_like = matches!(
+                    &item,
+                    ResponseItem::CustomToolCall { name, .. }
+                        if codex_tools::is_evidence_backed_x_search_name(name)
+                );
+                let remote_x_search_lifecycle =
+                    x_search_like && tool_runtime.is_declared_x_search_item(&item);
+                let project_added_item =
+                    !x_search_like || tool_runtime.allows_x_search_projection(&item);
                 if let ResponseItem::CustomToolCall {
                     call_id,
                     name,
@@ -2371,20 +2409,25 @@ async fn try_run_sampling_request(
                     ..
                 } = &item
                 {
-                    let tool_name = ToolName::new(namespace.clone(), name.as_str());
-                    active_tool_argument_diff_consumer = tool_runtime
-                        .create_diff_consumer(&tool_name)
-                        .map(|consumer| (call_id.clone(), consumer));
+                    active_tool_argument_diff_consumer = if x_search_like {
+                        None
+                    } else {
+                        let tool_name = ToolName::new(namespace.clone(), name.as_str());
+                        tool_runtime
+                            .create_diff_consumer(&tool_name)
+                            .map(|consumer| (call_id.clone(), consumer))
+                    };
                 } else if matches!(&item, ResponseItem::FunctionCall { .. }) {
                     active_tool_argument_diff_consumer = None;
                 }
-                if let Some(turn_item) = handle_non_tool_response_item(
-                    sess.as_ref(),
-                    TurnItemContributorPolicy::Skip,
-                    &item,
-                    plan_mode,
-                )
-                .await
+                if project_added_item
+                    && let Some(turn_item) = handle_non_tool_response_item(
+                        sess.as_ref(),
+                        TurnItemContributorPolicy::Skip,
+                        &item,
+                        plan_mode,
+                    )
+                    .await
                 {
                     let mut turn_item = turn_item;
                     let stream_item_to_client = !defer_streamed_turn_items_for_contributors;
@@ -2438,6 +2481,12 @@ async fn try_run_sampling_request(
                     }
                     active_item = Some(turn_item);
                     active_item_is_streaming_to_client = stream_item_to_client;
+                } else if suspended_for_added
+                    && !remote_x_search_lifecycle
+                    && let Some((item, streaming_to_client)) = suspended_agent_message.take()
+                {
+                    active_item = Some(item);
+                    active_item_is_streaming_to_client = streaming_to_client;
                 }
             }
             ResponseEvent::ServerModel(server_model) => {

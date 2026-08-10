@@ -1,6 +1,7 @@
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::ReasoningItem;
+use codex_protocol::items::SearchSource;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
@@ -230,6 +231,29 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 query,
                 action,
                 results: None,
+                source: None,
+            }))
+        }
+        ResponseItem::CustomToolCall {
+            id,
+            status,
+            name,
+            namespace,
+            input,
+            ..
+        } if namespace.is_none()
+            && matches!(
+                status.as_deref(),
+                Some("in_progress" | "completed" | "failed")
+            )
+            && codex_tools::is_evidence_backed_x_search_name(name) =>
+        {
+            Some(TurnItem::WebSearch(WebSearchItem {
+                id: id.as_deref()?.to_string(),
+                query: input.clone(),
+                action: WebSearchAction::Other,
+                results: None,
+                source: Some(SearchSource::X),
             }))
         }
         ResponseItem::ImageGenerationCall {
@@ -243,7 +267,24 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 id: id.as_deref()?.to_string(),
                 status: status.clone(),
                 revised_prompt: revised_prompt.clone(),
+                prompt: None,
                 result: result.clone(),
+                saved_path: None,
+            },
+        )),
+        ResponseItem::GrokImageGenerationCall {
+            id,
+            status,
+            prompt,
+            result,
+            ..
+        } => Some(TurnItem::ImageGeneration(
+            codex_protocol::items::ImageGenerationItem {
+                id: id.as_deref()?.to_string(),
+                status: status.clone(),
+                revised_prompt: None,
+                prompt: prompt.clone(),
+                result: result.clone().unwrap_or_default(),
                 saved_path: None,
             },
         )),

@@ -418,6 +418,7 @@ impl WebSearchItem {
             query: self.query.clone(),
             action: self.action.clone(),
             results: self.results.clone(),
+            source: self.source,
         })
     }
 }
@@ -428,6 +429,7 @@ impl ImageGenerationItem {
             call_id: self.id.clone(),
             status: self.status.clone(),
             revised_prompt: self.revised_prompt.clone(),
+            prompt: self.prompt.clone(),
             result: self.result.clone(),
             transparent_background: None,
             saved_path: self.saved_path.clone(),

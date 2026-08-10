@@ -72,6 +72,29 @@ fn unsupported_codex_only_history_fails_before_provider_request() {
 }
 
 #[test]
+fn image_history_uses_native_grok_wire_shape() {
+    let input = vec![ResponseItem::GrokImageGenerationCall {
+        id: Some(ResponseItemId::with_suffix("ig", "123")),
+        status: "failed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    let encoded = encode(input).expect("Grok image history should project");
+
+    assert_eq!(
+        serde_json::to_value(encoded).expect("request history should serialize"),
+        json!([{
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "failed",
+            "prompt": "Draw a fox."
+        }])
+    );
+}
+
+#[test]
 fn x_search_history_replays_exactly() {
     let input = vec![ResponseItem::CustomToolCall {
         id: Some(ResponseItemId::with_suffix("ct", "x")),

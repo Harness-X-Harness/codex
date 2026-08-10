@@ -77,6 +77,18 @@ impl ToolCallRuntime {
         self.step_context.tool_router.route_tool_call(item)
     }
 
+    pub(crate) fn allows_x_search_projection(&self, item: &ResponseItem) -> bool {
+        self.step_context
+            .tool_router
+            .allows_x_search_projection(item)
+    }
+
+    pub(crate) fn is_declared_x_search_item(&self, item: &ResponseItem) -> bool {
+        self.step_context
+            .tool_router
+            .is_declared_x_search_item(item)
+    }
+
     #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call(
         self,

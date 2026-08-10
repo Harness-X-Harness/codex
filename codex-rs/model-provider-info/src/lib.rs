@@ -6,6 +6,7 @@
 //!      key. These override or extend the defaults at runtime.
 
 use codex_api::Provider as ApiProvider;
+use codex_api::ResponsesDialect;
 use codex_api::RetryConfig as ApiRetryConfig;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -116,6 +117,9 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
+    /// Whether this Grok provider may declare the Gateway-owned X Search tool.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub x_search: bool,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -162,6 +166,9 @@ pub struct ModelProviderAwsAuthInfo {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.x_search && self.wire_api != WireApi::GrokResponses {
+            return Err("provider x_search requires wire_api = \"grok_responses\"".to_string());
+        }
         if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -284,6 +291,10 @@ impl ModelProviderInfo {
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            responses_dialect: match self.wire_api {
+                WireApi::Responses => ResponsesDialect::OpenAi,
+                WireApi::GrokResponses => ResponsesDialect::Grok,
+            },
         })
     }
 
@@ -346,6 +357,7 @@ impl ModelProviderInfo {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            x_search: false,
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -392,6 +404,7 @@ impl ModelProviderInfo {
                 region: None,
             })),
             wire_api: WireApi::Responses,
+            x_search: false,
             query_params: None,
             http_headers: Some(HashMap::from([(
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
@@ -539,6 +552,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         auth: None,
         aws: None,
         wire_api,
+        x_search: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

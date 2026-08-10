@@ -48,6 +48,113 @@ use super::ToolCallSource;
 use super::ToolRouter;
 use super::tool_log_payload;
 
+fn grok_router_with_x_search() -> ToolRouter {
+    ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations: vec![ToolSpec::XSearch],
+            local_routes: Default::default(),
+        },
+    )
+}
+
+fn grok_custom_call(name: &str) -> ResponseItem {
+    ResponseItem::CustomToolCall {
+        id: Some(codex_protocol::ResponseItemId::with_suffix("ct", "x")),
+        status: Some("completed".to_string()),
+        call_id: "call_x".to_string(),
+        name: name.to_string(),
+        namespace: None,
+        input: r#"{"query":"Codex"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[test]
+fn grok_declared_x_search_custom_call_never_routes_to_local_dispatch() {
+    let router = grok_router_with_x_search();
+
+    assert_eq!(
+        router
+            .route_tool_call(grok_custom_call("x_semantic_search"))
+            .expect("evidence-backed X Search should be remote-owned"),
+        None
+    );
+}
+
+#[test]
+fn grok_x_search_projection_requires_the_current_authoritative_plan() {
+    let declared = grok_router_with_x_search();
+    let undeclared = ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations: Vec::new(),
+            local_routes: Default::default(),
+        },
+    );
+    let mut in_progress = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall { status, .. } = &mut in_progress else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *status = Some("in_progress".to_string());
+
+    assert!(declared.allows_x_search_projection(&in_progress));
+    assert!(!undeclared.allows_x_search_projection(&in_progress));
+}
+
+#[test]
+fn grok_x_search_projection_rejects_invalid_gateway_shape() {
+    let router = grok_router_with_x_search();
+    let mut namespaced = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall { namespace, .. } = &mut namespaced else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *namespace = Some("local".to_string());
+    let mut missing_call_id = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall { call_id, .. } = &mut missing_call_id else {
+        unreachable!("fixture is a custom tool call");
+    };
+    call_id.clear();
+
+    assert!(!router.allows_x_search_projection(&namespaced));
+    assert!(!router.allows_x_search_projection(&missing_call_id));
+}
+
+#[test]
+fn grok_x_search_started_item_can_be_remote_owned_before_it_is_projectable() {
+    let router = grok_router_with_x_search();
+    let mut partial = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall {
+        id,
+        status,
+        call_id,
+        ..
+    } = &mut partial
+    else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *id = None;
+    *status = Some("in_progress".to_string());
+    call_id.clear();
+
+    assert!(router.is_declared_x_search_item(&partial));
+    assert!(!router.allows_x_search_projection(&partial));
+}
+
+#[test]
+fn grok_unknown_custom_output_fails_closed() {
+    let router = grok_router_with_x_search();
+
+    let error = router
+        .route_tool_call(grok_custom_call("unknown_remote_tool"))
+        .expect_err("unknown custom output must not reach local dispatch");
+    assert!(matches!(
+        error,
+        codex_tools::FunctionCallError::Fatal(message)
+            if message.contains("unknown Grok hosted custom output")
+    ));
+}
+
 #[test]
 fn grok_collaboration_function_arguments_are_plaintext() {
     let wire_name = "local__collaboration_spawn_agent__test";

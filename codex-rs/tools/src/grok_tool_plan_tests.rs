@@ -361,6 +361,31 @@ fn apply_patch_freeform_round_trips_through_function_wrapper() {
 }
 
 #[test]
+fn grok_hosted_declarations_use_native_wire_types() {
+    let declarations = vec![
+        ToolSpec::WebSearch {
+            external_web_access: None,
+            indexed_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+        ToolSpec::XSearch,
+        ToolSpec::ImageGeneration,
+    ];
+
+    assert_eq!(
+        serde_json::to_value(declarations).expect("hosted declarations should serialize"),
+        serde_json::json!([
+            {"type": "web_search"},
+            {"type": "x_search"},
+            {"type": "image_generation"}
+        ])
+    );
+}
+
+#[test]
 fn stable_names_survive_repeated_plans_reordering_and_namespace_collisions() {
     let alpha = namespaced_function("alpha", "search");
     let beta = namespaced_function("beta", "search");

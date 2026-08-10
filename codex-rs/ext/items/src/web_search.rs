@@ -4,6 +4,13 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SearchSource {
+    X,
+}
+
 // Standalone web-search item owned by the web extension. This is also the
 // field-level representation exposed by app-server; core and rollout
 // persistence only carry it inside an ExtensionItem envelope.
@@ -20,6 +27,9 @@ pub struct WebSearchItem {
     /// result fields and result types can pass through without a Codex release.
     #[serde(default)]
     pub results: Option<Vec<JsonValue>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<SearchSource>,
 }
 
 // App-server-facing description of the action performed by standalone web search.

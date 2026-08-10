@@ -4,6 +4,8 @@ use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
+use crate::responses_codec::ResponsesDialect;
+use crate::responses_codec::decode_response_item;
 use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
@@ -36,6 +38,22 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+) -> ResponseStream {
+    spawn_response_stream_with_dialect(
+        stream_response,
+        idle_timeout,
+        telemetry,
+        turn_state,
+        ResponsesDialect::OpenAi,
+    )
+}
+
+pub fn spawn_response_stream_with_dialect(
+    stream_response: StreamResponse,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
+    dialect: ResponsesDialect,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -89,6 +107,7 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             safety_buffering_treatment,
+            dialect,
         )
         .await;
     });
@@ -175,6 +194,30 @@ pub struct ResponsesStreamEvent {
     summary_index: Option<i64>,
     content_index: Option<i64>,
     safety_buffering: Option<Value>,
+}
+
+fn output_item_parse_error(
+    event_kind: &str,
+    item: &Value,
+    error: &serde_json::Error,
+) -> ResponsesEventError {
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing>")
+        .chars()
+        .take(128)
+        .collect::<String>();
+    debug!(
+        error_category = ?error.classify(),
+        error_line = error.line(),
+        error_column = error.column(),
+        item_type,
+        "failed to parse response output item"
+    );
+    ResponsesEventError::Fatal(ApiError::Stream(format!(
+        "failed to parse {event_kind} item type `{item_type}`"
+    )))
 }
 
 impl ResponsesStreamEvent {
@@ -317,12 +360,13 @@ fn json_value_as_string(value: &Value) -> Option<String> {
 #[derive(Debug)]
 pub enum ResponsesEventError {
     Api(ApiError),
+    Fatal(ApiError),
 }
 
 impl ResponsesEventError {
     pub fn into_api_error(self) -> ApiError {
         match self {
-            Self::Api(error) => error,
+            Self::Api(error) | Self::Fatal(error) => error,
         }
     }
 }
@@ -330,13 +374,20 @@ impl ResponsesEventError {
 pub fn process_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
+    process_responses_event_with_dialect(event, ResponsesDialect::OpenAi)
+}
+
+pub fn process_responses_event_with_dialect(
+    event: ResponsesStreamEvent,
+    dialect: ResponsesDialect,
+) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemDone(item)));
-                }
-                debug!("failed to parse ResponseItem from output_item.done");
+                let item = decode_response_item(dialect, item_val.clone()).map_err(|error| {
+                    output_item_parse_error("response.output_item.done", &item_val, &error)
+                })?;
+                return Ok(Some(ResponseEvent::OutputItemDone(item)));
             }
         }
         "response.output_text.delta" => {
@@ -454,10 +505,10 @@ pub fn process_responses_event(
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
-                if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
-                    return Ok(Some(ResponseEvent::OutputItemAdded(item)));
-                }
-                debug!("failed to parse ResponseItem from output_item.added");
+                let item = decode_response_item(dialect, item_val.clone()).map_err(|error| {
+                    output_item_parse_error("response.output_item.added", &item_val, &error)
+                })?;
+                return Ok(Some(ResponseEvent::OutputItemAdded(item)));
             }
         }
         "response.reasoning_summary_part.added" => {
@@ -507,6 +558,7 @@ pub async fn process_sse(
         idle_timeout,
         telemetry,
         SafetyBufferingTreatment::default(),
+        ResponsesDialect::OpenAi,
     )
     .await;
 }
@@ -517,6 +569,7 @@ async fn process_sse_with_treatment(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    dialect: ResponsesDialect,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
@@ -606,7 +659,7 @@ async fn process_sse_with_treatment(
             return;
         }
 
-        match process_responses_event(event) {
+        match process_responses_event_with_dialect(event, dialect) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
                 if tx_event.send(Ok(event)).await.is_err() {
@@ -617,8 +670,12 @@ async fn process_sse_with_treatment(
                 }
             }
             Ok(None) => {}
-            Err(error) => {
-                response_error = Some(error.into_api_error());
+            Err(ResponsesEventError::Api(error)) => {
+                response_error = Some(error);
+            }
+            Err(ResponsesEventError::Fatal(error)) => {
+                let _ = tx_event.send(Err(error)).await;
+                return;
             }
         };
     }
@@ -734,6 +791,13 @@ mod tests {
     }
 
     async fn run_sse(events: Vec<serde_json::Value>) -> Vec<ResponseEvent> {
+        run_sse_with_dialect(events, ResponsesDialect::OpenAi).await
+    }
+
+    async fn run_sse_with_dialect(
+        events: Vec<serde_json::Value>,
+        dialect: ResponsesDialect,
+    ) -> Vec<ResponseEvent> {
         let mut body = String::new();
         for e in events {
             let kind = e
@@ -750,11 +814,13 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
         let stream = ReaderStream::new(std::io::Cursor::new(body))
             .map_err(|err| TransportError::Network(err.to_string()));
-        tokio::spawn(process_sse(
+        tokio::spawn(process_sse_with_treatment(
             Box::pin(stream),
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            SafetyBufferingTreatment::default(),
+            dialect,
         ));
 
         let mut out = Vec::new();
@@ -832,6 +898,31 @@ mod tests {
             }
             other => panic!("unexpected third event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn grok_unknown_output_item_fails_closed_without_echoing_payload() {
+        let secret_marker = "must-not-appear-in-error";
+        let item = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "future_gateway_tool_call",
+                "status": "completed",
+                "private_payload": secret_marker
+            }
+        })
+        .to_string();
+        let event: ResponsesStreamEvent =
+            serde_json::from_str(&item).expect("fixture should parse");
+        let error = process_responses_event_with_dialect(event, ResponsesDialect::Grok)
+            .expect_err("unknown Grok output must fail closed")
+            .into_api_error();
+        assert_matches!(
+            error,
+            ApiError::Stream(message)
+                if message.contains("future_gateway_tool_call")
+                    && !message.contains(secret_marker)
+        );
     }
 
     #[test]
@@ -950,6 +1041,127 @@ mod tests {
             }) if call_id.as_deref() == Some("search-1")
                 && execution == "client"
                 && arguments == &json!({"query": "calendar create", "limit": 1})
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_grok_image_generation_terminal_items_without_prompt_coercion() {
+        let events = run_sse_with_dialect(
+            vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "ig_success",
+                        "type": "image_generation_call",
+                        "status": "completed",
+                        "prompt": "Draw a red fox.",
+                        "result": "data:image/png;base64,AAAA"
+                    }
+                }),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "ig_failed",
+                        "type": "image_generation_call",
+                        "status": "failed",
+                        "prompt": "Draw a blue fox."
+                    }
+                }),
+                json!({
+                    "type": "response.completed",
+                    "response": { "id": "resp1" }
+                }),
+            ],
+            ResponsesDialect::Grok,
+        )
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemDone(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt,
+                result: Some(result),
+                internal_chat_message_metadata_passthrough: None,
+            }) if id.as_str() == "ig_success"
+                && status == "completed"
+                && prompt.as_deref() == Some("Draw a red fox.")
+                && result == "data:image/png;base64,AAAA"
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::OutputItemDone(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt,
+                result: None,
+                internal_chat_message_metadata_passthrough: None,
+            }) if id.as_str() == "ig_failed"
+                && status == "failed"
+                && prompt.as_deref() == Some("Draw a blue fox.")
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_grok_hosted_tool_started_items_from_output_item_added() {
+        let events = run_sse_with_dialect(
+            vec![
+                json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "ct_x",
+                        "type": "custom_tool_call",
+                        "status": "in_progress",
+                        "call_id": "call_x",
+                        "name": "x_keyword_search",
+                        "input": ""
+                    }
+                }),
+                json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "ig_grok",
+                        "type": "image_generation_call",
+                        "status": "in_progress",
+                        "result": null
+                    }
+                }),
+                json!({
+                    "type": "response.completed",
+                    "response": { "id": "resp1" }
+                }),
+            ],
+            ResponsesDialect::Grok,
+        )
+        .await;
+
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemAdded(ResponseItem::CustomToolCall {
+                id: Some(id),
+                status: Some(status),
+                call_id,
+                name,
+                input,
+                ..
+            }) if id.as_str() == "ct_x"
+                && status == "in_progress"
+                && call_id == "call_x"
+                && name == "x_keyword_search"
+                && input.is_empty()
+        );
+        assert_matches!(
+            &events[1],
+            ResponseEvent::OutputItemAdded(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt,
+                result: None,
+                ..
+            }) if id.as_str() == "ig_grok"
+                && status == "in_progress"
+                && prompt.is_none()
         );
     }
 

@@ -1872,6 +1872,10 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "x_search": {
+          "description": "Whether this Grok provider may declare the Gateway-owned X Search tool.",
+          "type": "boolean"
         }
       },
       "type": "object"

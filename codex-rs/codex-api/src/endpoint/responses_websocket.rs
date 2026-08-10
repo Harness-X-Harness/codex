@@ -7,9 +7,10 @@ use crate::common::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
+use crate::responses_codec::ResponsesDialect;
 use crate::safety_buffering::treatment_from_headers;
 use crate::sse::ResponsesStreamEvent;
-use crate::sse::process_responses_event;
+use crate::sse::process_responses_event_with_dialect;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
 use codex_http_client::HttpClientFactory;
@@ -187,6 +188,7 @@ pub struct ResponsesWebsocketConnection {
     models_etag: Option<String>,
     server_model: Option<String>,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+    responses_dialect: ResponsesDialect,
 }
 
 impl std::fmt::Debug for ResponsesWebsocketConnection {
@@ -210,6 +212,7 @@ impl ResponsesWebsocketConnection {
         models_etag: Option<String>,
         server_model: Option<String>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
+        responses_dialect: ResponsesDialect,
     ) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
@@ -218,6 +221,7 @@ impl ResponsesWebsocketConnection {
             models_etag,
             server_model,
             telemetry,
+            responses_dialect,
         }
     }
 
@@ -245,6 +249,7 @@ impl ResponsesWebsocketConnection {
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
+        let responses_dialect = self.responses_dialect;
         let ResponsesWsRequest::ResponseCreate(ws_request) = &request;
         let client_metadata = ws_request.client_metadata.as_ref();
         let timing_log_context = ResponsesWebsocketTimingLogContext {
@@ -309,6 +314,7 @@ impl ResponsesWebsocketConnection {
                         telemetry,
                         turn_state.as_deref(),
                         &timing_log_context,
+                        responses_dialect,
                     )
                     .await
                 };
@@ -402,6 +408,7 @@ impl ResponsesWebsocketClient {
             models_etag,
             server_model,
             telemetry,
+            self.provider.responses_dialect,
         ))
     }
 
@@ -680,6 +687,7 @@ async fn run_websocket_response_stream(
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
     timing_log_context: &ResponsesWebsocketTimingLogContext,
+    responses_dialect: ResponsesDialect,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
@@ -789,7 +797,7 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                match process_responses_event(event) {
+                match process_responses_event_with_dialect(event, responses_dialect) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;

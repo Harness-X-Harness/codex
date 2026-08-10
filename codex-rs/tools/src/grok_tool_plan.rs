@@ -81,6 +81,12 @@ pub enum GrokToolCallDecodeError {
 }
 
 impl GrokToolPlan {
+    pub fn declares_x_search(&self) -> bool {
+        self.declarations
+            .iter()
+            .any(|declaration| matches!(declaration, ToolSpec::XSearch))
+    }
+
     pub fn decode_local_function_call(
         &self,
         wire_name: &str,

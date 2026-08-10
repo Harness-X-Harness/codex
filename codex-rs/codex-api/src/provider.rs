@@ -1,3 +1,4 @@
+use crate::responses_codec::ResponsesDialect;
 use codex_client::Request;
 use codex_client::RequestCompression;
 use codex_client::RetryOn;
@@ -47,6 +48,7 @@ pub struct Provider {
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
+    pub responses_dialect: ResponsesDialect,
 }
 
 impl Provider {

@@ -78,6 +78,8 @@ pub fn prepare_response_items(items: &mut [ResponseItem]) {
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationCall { .. }
+            | ResponseItem::GrokImageGenerationWireCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }

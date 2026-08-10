@@ -13,6 +13,7 @@ fn completed_image_generation_item() -> ExtensionItem {
         id: "image-1".to_string(),
         status: "completed".to_string(),
         revised_prompt: Some("A blue square".to_string()),
+        prompt: None,
         result: "cG5n".to_string(),
         transparent_background: None,
         saved_path: None,
@@ -96,6 +97,7 @@ fn web_search_item_preserves_stable_wire_shape() {
             queries: None,
         }),
         results: None,
+        source: None,
     });
     let value = serde_json::to_value(&item).expect("serialize extension item");
 

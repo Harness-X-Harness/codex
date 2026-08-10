@@ -14,6 +14,9 @@ pub struct ImageGenerationItem {
     pub id: String,
     pub status: String,
     pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prompt: Option<String>,
     pub result: String,
     #[serde(default)]
     #[ts(optional)]
