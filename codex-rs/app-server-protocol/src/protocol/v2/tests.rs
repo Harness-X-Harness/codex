@@ -3092,6 +3092,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             "ref_id": "turn0search0",
             "url": "https://example.com/docs",
         })]),
+        source: None,
     });
 
     let expected_search_item = WebSearchItem {
@@ -3106,6 +3107,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             "ref_id": "turn0search0",
             "url": "https://example.com/docs",
         })]),
+        source: None,
     };
 
     assert_eq!(

@@ -76,6 +76,33 @@ async fn resumed_initial_messages_render_history() {
 }
 
 #[tokio::test]
+async fn resumed_grok_image_generation_renders_native_prompt() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_item(
+        AppServerThreadItem::ImageGeneration(codex_app_server_protocol::ImageGenerationItem {
+            id: "grok-image-1".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: None,
+            prompt: Some("A Grok-native blue square".to_string()),
+            result: String::new(),
+            transparent_background: None,
+            saved_path: None,
+        }),
+        "turn-1".to_string(),
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+
+    assert!(rendered.contains("A Grok-native blue square"));
+    assert!(!rendered.contains("grok-image-1"));
+}
+
+#[tokio::test]
 async fn replayed_failed_turns_preserve_overload_warnings_between_retries() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let prompt = "The workspace also looks super confusing with its separator.";

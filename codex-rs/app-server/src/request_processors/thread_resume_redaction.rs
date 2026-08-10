@@ -105,6 +105,7 @@ mod tests {
                 id: "ig-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("revised".to_string()),
+                prompt: None,
                 result: "base64-result".to_string(),
                 transparent_background: None,
                 saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),

@@ -644,6 +644,7 @@ impl ThreadHistoryBuilder {
             query: String::new(),
             action: None,
             results: None,
+            source: None,
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -654,6 +655,7 @@ impl ThreadHistoryBuilder {
             query: payload.query.clone(),
             action: Some(web_search_action_from_core(payload.action.clone())),
             results: payload.results.clone(),
+            source: payload.source,
         });
         self.upsert_item_in_current_turn(item);
     }
@@ -861,6 +863,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             status: String::new(),
             revised_prompt: None,
+            prompt: None,
             result: String::new(),
             transparent_background: None,
             saved_path: None,
@@ -873,6 +876,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
+            prompt: payload.prompt.clone(),
             result: payload.result.clone(),
             transparent_background: payload.transparent_background,
             saved_path: payload.saved_path.clone(),
@@ -2077,6 +2081,7 @@ mod tests {
                         id: "image-1".to_string(),
                         status: "completed".to_string(),
                         revised_prompt: Some("A blue square".to_string()),
+                        prompt: None,
                         result: "cG5n".to_string(),
                         transparent_background: Some(true),
                         saved_path: Some(saved_path.clone()),
@@ -2108,6 +2113,7 @@ mod tests {
                 id: "image-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("A blue square".to_string()),
+                prompt: None,
                 result: "cG5n".to_string(),
                 transparent_background: Some(true),
                 saved_path: Some(saved_path),
@@ -2371,6 +2377,7 @@ mod tests {
                 call_id: "ig_123".into(),
                 status: "completed".into(),
                 revised_prompt: Some("final prompt".into()),
+                prompt: None,
                 result: "Zm9v".into(),
                 transparent_background: Some(true),
                 saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
@@ -2411,6 +2418,7 @@ mod tests {
                         id: "ig_123".into(),
                         status: "completed".into(),
                         revised_prompt: Some("final prompt".into()),
+                        prompt: None,
                         result: "Zm9v".into(),
                         transparent_background: Some(true),
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
@@ -2801,6 +2809,7 @@ mod tests {
                     "ref_id": "turn0search0",
                     "url": "https://example.com/codex",
                 })]),
+                source: None,
             }),
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: "exec-1".into(),
@@ -2864,6 +2873,7 @@ mod tests {
                     "ref_id": "turn0search0",
                     "url": "https://example.com/codex",
                 })]),
+                source: None,
             })
         );
         assert_eq!(
@@ -4545,6 +4555,7 @@ mod tests {
                     queries: None,
                 },
                 results: None,
+                source: None,
             }),
         ));
         assert_eq!(
@@ -4560,6 +4571,7 @@ mod tests {
                             queries: None,
                         }),
                         results: None,
+                        source: None,
                     }),
                     started_at_ms: None,
                     completed_at_ms: None,
@@ -4686,6 +4698,7 @@ mod tests {
                     queries: None,
                 },
                 results: None,
+                source: None,
             })),
         ]);
         assert_eq!(
@@ -4701,6 +4714,7 @@ mod tests {
                             queries: None,
                         }),
                         results: None,
+                        source: None,
                     }),
                     started_at_ms: None,
                     completed_at_ms: None,
