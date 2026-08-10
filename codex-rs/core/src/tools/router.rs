@@ -17,8 +17,11 @@ use crate::tools::spec_plan::finalize_tool_router;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
+use codex_tools::GrokLocalToolInput;
+use codex_tools::GrokToolPlan;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_tools::is_evidence_backed_x_search_name;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -68,6 +71,7 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Vec<ToolSpec>,
+    grok_tool_plan: Option<GrokToolPlan>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +107,15 @@ impl ToolRouter {
         Self {
             registry,
             model_visible_specs,
+            grok_tool_plan: None,
+        }
+    }
+
+    pub(crate) fn from_grok_plan(registry: ToolRegistry, grok_tool_plan: GrokToolPlan) -> Self {
+        Self {
+            registry,
+            model_visible_specs: grok_tool_plan.declarations.clone(),
+            grok_tool_plan: Some(grok_tool_plan),
         }
     }
 
@@ -134,10 +147,46 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
+    pub(crate) fn allows_x_search_projection(&self, item: &ResponseItem) -> bool {
+        let ResponseItem::CustomToolCall {
+            id,
+            status,
+            call_id,
+            ..
+        } = item
+        else {
+            return false;
+        };
+        self.is_declared_x_search_item(item)
+            && id.is_some()
+            && !call_id.is_empty()
+            && matches!(
+                status.as_deref(),
+                Some("in_progress" | "completed" | "failed")
+            )
+    }
+
+    pub(crate) fn is_declared_x_search_item(&self, item: &ResponseItem) -> bool {
+        let Some(plan) = &self.grok_tool_plan else {
+            return false;
+        };
+        let ResponseItem::CustomToolCall {
+            name, namespace, ..
+        } = item
+        else {
+            return false;
+        };
+        plan.declares_x_search() && is_evidence_backed_x_search_name(name) && namespace.is_none()
+    }
+
     pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
         self.registry
             .supports_parallel_tool_calls(&call.tool_name)
             .unwrap_or(false)
+    }
+
+    pub(crate) fn projects_custom_call_as_function(&self, call: &ToolCall) -> bool {
+        self.grok_tool_plan.is_some() && matches!(call.payload, ToolPayload::Custom { .. })
     }
 
     pub(crate) fn tool_runtime(&self, call: &ToolCall) -> Option<Arc<dyn CoreToolRuntime>> {
@@ -203,6 +252,59 @@ impl ToolRouter {
             })),
             _ => Ok(None),
         }
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub fn route_tool_call(
+        &self,
+        item: ResponseItem,
+    ) -> Result<Option<ToolCall>, FunctionCallError> {
+        let Some(plan) = &self.grok_tool_plan else {
+            return Self::build_tool_call(item);
+        };
+        if let ResponseItem::CustomToolCall { status, name, .. } = &item {
+            let terminal_status = matches!(status.as_deref(), Some("completed" | "failed"));
+            if self.allows_x_search_projection(&item) && terminal_status {
+                return Ok(None);
+            }
+            return Err(FunctionCallError::Fatal(format!(
+                "unknown Grok hosted custom output `{name}`"
+            )));
+        }
+        let ResponseItem::FunctionCall {
+            name,
+            namespace,
+            arguments,
+            encrypted_function_args,
+            call_id,
+            ..
+        } = item
+        else {
+            return Self::build_tool_call(item);
+        };
+        if namespace.as_deref().is_some_and(|value| !value.is_empty()) {
+            return Err(FunctionCallError::RespondToModel(
+                "Grok function_call unexpectedly included a namespace".to_string(),
+            ));
+        }
+        let decoded = plan
+            .decode_local_function_call(&name, &arguments)
+            .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "Grok returned undeclared local function `{name}`"
+                ))
+            })?;
+        let payload = match decoded.input {
+            GrokLocalToolInput::FunctionArguments(arguments) => ToolPayload::Function { arguments },
+            GrokLocalToolInput::Freeform(input) => ToolPayload::Custom { input },
+        };
+        Ok(Some(ToolCall {
+            tool_name: decoded.canonical_identity,
+            call_id,
+            payload,
+            encrypted_function_args,
+        }))
     }
 
     #[allow(dead_code)]

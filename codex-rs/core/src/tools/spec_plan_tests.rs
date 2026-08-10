@@ -11,6 +11,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
@@ -102,6 +103,8 @@ impl ToolPlanProbe {
                 ToolSpec::Function(_)
                 | ToolSpec::ToolSearch { .. }
                 | ToolSpec::WebSearch { .. }
+                | ToolSpec::XSearch
+                | ToolSpec::ImageGeneration
                 | ToolSpec::Freeform(_) => None,
             })
             .collect::<BTreeMap<_, _>>();
@@ -301,6 +304,26 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
+fn use_grok_provider(turn: &mut TurnContext) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.wire_api = WireApi::GrokResponses;
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    set_web_search_mode(turn, WebSearchMode::Disabled);
+    set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
+}
+
+fn enable_grok_x_search(turn: &mut TurnContext) {
+    let mut provider_info = turn.config.model_provider.clone();
+    provider_info.x_search = true;
+    update_config(turn, |config| {
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
 struct TestNamespaceExtensionTool {
     namespace: &'static str,
     tool_name: &'static str,
@@ -365,6 +388,73 @@ impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
     fn handle(&self, _call: ExtensionToolCall) -> codex_tools::ToolExecutorFuture<'_> {
         Box::pin(async { panic!("spec planning should not execute extension tools") })
     }
+}
+
+#[tokio::test]
+async fn grok_plan_is_authoritative_for_visible_local_tools_and_registry_ownership() {
+    let plan = probe_with(
+        use_grok_provider,
+        ToolPlanInputs {
+            extension_tool_executors: vec![
+                Arc::new(TestNamespaceExtensionTool {
+                    namespace: "alpha",
+                    tool_name: "search",
+                }),
+                Arc::new(DeferredExtensionTool),
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["local__alpha_search__27de2572f1d5fb99", "extension_echo"]);
+    plan.assert_visible_lacks(&["alpha", "tool_search"]);
+    assert!(
+        plan.visible_specs
+            .iter()
+            .all(|spec| matches!(spec, ToolSpec::Function(_) | ToolSpec::WebSearch { .. }))
+    );
+    plan.assert_registered_contains(&[
+        &ToolName::namespaced("alpha", "search").to_string(),
+        "extension_echo",
+    ]);
+    assert_eq!(
+        plan.exposure("extension_echo"),
+        ToolExposure::Direct,
+        "Grok eagerly exposes representable deferred local tools"
+    );
+}
+
+#[tokio::test]
+async fn grok_plan_owns_native_hosted_declarations_without_local_handlers() {
+    let plan = probe(|turn| {
+        use_grok_provider(turn);
+        enable_grok_x_search(turn);
+        set_web_search_mode(turn, WebSearchMode::Live);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+    })
+    .await;
+
+    let hosted = plan
+        .visible_specs
+        .iter()
+        .filter(|spec| {
+            matches!(
+                spec,
+                ToolSpec::WebSearch { .. } | ToolSpec::XSearch | ToolSpec::ImageGeneration
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(hosted).expect("hosted tools should serialize"),
+        json!([
+            {"type": "web_search"},
+            {"type": "x_search"},
+            {"type": "image_generation"}
+        ])
+    );
+    plan.assert_registered_lacks(&["web_search", "x_search", "image_generation"]);
 }
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {

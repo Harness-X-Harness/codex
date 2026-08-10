@@ -1872,6 +1872,10 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "x_search": {
+          "description": "Whether this Grok provider may declare the Gateway-owned X Search tool.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -4920,6 +4924,13 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The official Grok Gateway Responses contract.",
+          "enum": [
+            "grok_responses"
           ],
           "type": "string"
         }

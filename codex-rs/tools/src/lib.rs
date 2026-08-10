@@ -4,6 +4,7 @@
 mod code_mode;
 mod dynamic_tool;
 mod function_call_error;
+mod grok_tool_plan;
 mod image_detail;
 mod json_schema;
 mod mcp_tool;
@@ -28,6 +29,16 @@ pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
 pub use function_call_error::FunctionCallError;
+pub use grok_tool_plan::GrokDecodedLocalToolCall;
+pub use grok_tool_plan::GrokLocalInputProjection;
+pub use grok_tool_plan::GrokLocalTool;
+pub use grok_tool_plan::GrokLocalToolInput;
+pub use grok_tool_plan::GrokLocalToolRoute;
+pub use grok_tool_plan::GrokToolCallDecodeError;
+pub use grok_tool_plan::GrokToolPlan;
+pub use grok_tool_plan::GrokToolPlanError;
+pub use grok_tool_plan::is_evidence_backed_x_search_name;
+pub use grok_tool_plan::plan_grok_tools;
 pub use image_detail::can_request_original_image_detail;
 pub use image_detail::normalize_output_image_detail;
 pub use image_detail::sanitize_original_image_detail;
@@ -110,3 +121,7 @@ pub use tool_spec::ToolSpec;
 pub use tool_spec::create_tools_json_for_responses_api;
 pub use tool_spec::create_tools_json_for_responses_lite;
 pub use tool_spec::create_tools_raw_json_for_responses_api;
+
+#[cfg(test)]
+#[path = "grok_tool_plan_tests.rs"]
+mod grok_tool_plan_tests;

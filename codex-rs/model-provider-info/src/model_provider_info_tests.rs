@@ -20,6 +20,7 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        x_search: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -53,6 +54,7 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        x_search: false,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -90,6 +92,7 @@ supports_standalone_web_search = true
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        x_search: false,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -121,6 +124,50 @@ wire_api = "chat"
 
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
     assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+}
+
+#[test]
+fn test_deserialize_grok_responses_wire_api() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://grok.example/v1"
+wire_api = "grok_responses"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::GrokResponses);
+    assert!(!provider.x_search);
+    assert!(!toml::to_string(&provider).unwrap().contains("x_search"));
+}
+
+#[test]
+fn test_x_search_is_explicit_and_grok_only() {
+    let grok: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Grok"
+base_url = "https://grok.example/v1"
+wire_api = "grok_responses"
+x_search = true
+        "#,
+    )
+    .expect("Grok provider should accept explicit X Search capability");
+    assert!(grok.x_search);
+    assert_eq!(grok.validate(), Ok(()));
+    assert!(toml::to_string(&grok).unwrap().contains("x_search = true"));
+
+    let responses: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Other"
+base_url = "https://example.test/v1"
+wire_api = "responses"
+x_search = true
+        "#,
+    )
+    .expect("provider shape should deserialize before semantic validation");
+    assert_eq!(
+        responses.validate(),
+        Err("provider x_search requires wire_api = \"grok_responses\"".to_string())
+    );
 }
 
 #[test]
@@ -245,6 +292,7 @@ fn test_create_amazon_bedrock_provider() {
                 region: None,
             }),
             wire_api: WireApi::Responses,
+            x_search: false,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>

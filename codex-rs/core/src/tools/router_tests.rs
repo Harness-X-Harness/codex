@@ -28,11 +28,14 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::GrokLocalTool;
+use codex_tools::GrokToolPlan;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::default_namespace_description;
+use codex_tools::plan_grok_tools;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -42,6 +45,113 @@ use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
 use super::tool_log_payload;
+
+fn grok_router_with_x_search() -> ToolRouter {
+    ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations: vec![ToolSpec::XSearch],
+            local_routes: Default::default(),
+        },
+    )
+}
+
+fn grok_custom_call(name: &str) -> ResponseItem {
+    ResponseItem::CustomToolCall {
+        id: Some(codex_protocol::ResponseItemId::with_suffix("ct", "x")),
+        status: Some("completed".to_string()),
+        call_id: "call_x".to_string(),
+        name: name.to_string(),
+        namespace: None,
+        input: r#"{"query":"Codex"}"#.to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[test]
+fn grok_declared_x_search_custom_call_never_routes_to_local_dispatch() {
+    let router = grok_router_with_x_search();
+
+    assert_eq!(
+        router
+            .route_tool_call(grok_custom_call("x_semantic_search"))
+            .expect("evidence-backed X Search should be remote-owned"),
+        None
+    );
+}
+
+#[test]
+fn grok_x_search_projection_requires_the_current_authoritative_plan() {
+    let declared = grok_router_with_x_search();
+    let undeclared = ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations: Vec::new(),
+            local_routes: Default::default(),
+        },
+    );
+    let mut in_progress = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall { status, .. } = &mut in_progress else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *status = Some("in_progress".to_string());
+
+    assert!(declared.allows_x_search_projection(&in_progress));
+    assert!(!undeclared.allows_x_search_projection(&in_progress));
+}
+
+#[test]
+fn grok_x_search_projection_rejects_invalid_gateway_shape() {
+    let router = grok_router_with_x_search();
+    let mut namespaced = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall { namespace, .. } = &mut namespaced else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *namespace = Some("local".to_string());
+    let mut missing_call_id = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall { call_id, .. } = &mut missing_call_id else {
+        unreachable!("fixture is a custom tool call");
+    };
+    call_id.clear();
+
+    assert!(!router.allows_x_search_projection(&namespaced));
+    assert!(!router.allows_x_search_projection(&missing_call_id));
+}
+
+#[test]
+fn grok_x_search_started_item_can_be_remote_owned_before_it_is_projectable() {
+    let router = grok_router_with_x_search();
+    let mut partial = grok_custom_call("x_keyword_search");
+    let ResponseItem::CustomToolCall {
+        id,
+        status,
+        call_id,
+        ..
+    } = &mut partial
+    else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *id = None;
+    *status = Some("in_progress".to_string());
+    call_id.clear();
+
+    assert!(router.is_declared_x_search_item(&partial));
+    assert!(!router.allows_x_search_projection(&partial));
+}
+
+#[test]
+fn grok_unknown_custom_output_fails_closed() {
+    let router = grok_router_with_x_search();
+
+    let error = router
+        .route_tool_call(grok_custom_call("unknown_remote_tool"))
+        .expect_err("unknown custom output must not reach local dispatch");
+    assert!(matches!(
+        error,
+        codex_tools::FunctionCallError::Fatal(message)
+            if message.contains("unknown Grok hosted custom output")
+    ));
+}
 
 struct ExtensionEchoContributor;
 
@@ -407,6 +517,46 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn grok_stable_function_route_preserves_canonical_parallel_capability() -> anyhow::Result<()> {
+    let registered = mcp_runtime(mcp_tool_info(
+        "echo",
+        /*supports_parallel_tool_calls*/ true,
+        "mcp__echo__",
+        "query_with_delay",
+    ));
+    let identity = registered.runtime.tool_name();
+    let local_spec = registered.runtime.spec();
+    let registry = crate::tools::registry::ToolRegistry::from_tools([registered.runtime]);
+    let plan = plan_grok_tools(vec![GrokLocalTool {
+        identity: identity.clone(),
+        spec: local_spec,
+    }])?;
+    let wire_name = plan
+        .declarations
+        .first()
+        .expect("planned declaration")
+        .name()
+        .to_string();
+    let router = ToolRouter::from_grok_plan(registry, plan);
+
+    let call = router
+        .route_tool_call(ResponseItem::FunctionCall {
+            id: None,
+            name: wire_name,
+            namespace: None,
+            arguments: "{}".to_string(),
+            encrypted_function_args: None,
+            call_id: "call_grok_parallel".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        })?
+        .expect("Grok function should route to canonical local tool");
+
+    assert_eq!(call.tool_name, identity);
+    assert!(router.tool_supports_parallel(&call));
+    Ok(())
+}
+
 #[tokio::test]
 async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> {
     let (_, turn) = make_session_and_context().await;
@@ -627,6 +777,8 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
             | ToolSpec::WebSearch { .. }
+            | ToolSpec::XSearch
+            | ToolSpec::ImageGeneration
             | ToolSpec::Namespace(_) => None,
         })
         .unwrap_or_default()

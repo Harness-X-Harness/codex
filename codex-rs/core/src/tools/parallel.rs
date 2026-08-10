@@ -27,6 +27,7 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 
 struct ToolCallTimingGuard {
     started_at: Instant,
@@ -69,20 +70,50 @@ impl ToolCallRuntime {
             .create_diff_consumer(tool_name)
     }
 
+    pub(crate) fn route_tool_call(
+        &self,
+        item: ResponseItem,
+    ) -> Result<Option<ToolCall>, FunctionCallError> {
+        self.step_context.tool_router.route_tool_call(item)
+    }
+
+    pub(crate) fn allows_x_search_projection(&self, item: &ResponseItem) -> bool {
+        self.step_context
+            .tool_router
+            .allows_x_search_projection(item)
+    }
+
+    pub(crate) fn is_declared_x_search_item(&self, item: &ResponseItem) -> bool {
+        self.step_context
+            .tool_router
+            .is_declared_x_search_item(item)
+    }
+
     #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call(
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+        let projects_custom_call_as_function = self
+            .step_context
+            .tool_router
+            .projects_custom_call_as_function(&call);
         let error_call = call.clone();
         let source = call.direct_source();
         let future = self.handle_tool_call_with_source(call, source, cancellation_token);
         async move {
             match future.await {
-                Ok(response) => Ok(response.into_response()),
+                Ok(response) => Ok(Self::project_response_for_wire(
+                    response.into_response(),
+                    projects_custom_call_as_function,
+                )),
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
-                Err(other) => Ok(Self::failure_response(error_call, other)),
+                Err(other) => Ok(Self::failure_response(
+                    error_call,
+                    other,
+                    projects_custom_call_as_function,
+                )),
             }
         }
         .in_current_span()
@@ -227,9 +258,13 @@ impl ToolCallRuntime {
         FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
     }
 
-    fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
+    fn failure_response(
+        call: ToolCall,
+        err: FunctionCallError,
+        projects_custom_call_as_function: bool,
+    ) -> ResponseInputItem {
         let message = err.to_string();
-        match call.payload {
+        let response = match call.payload {
             ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
                 call_id: call.call_id,
                 status: "completed".to_string(),
@@ -251,6 +286,22 @@ impl ToolCallRuntime {
                     success: Some(false),
                 },
             },
+        };
+        Self::project_response_for_wire(response, projects_custom_call_as_function)
+    }
+
+    fn project_response_for_wire(
+        response: ResponseInputItem,
+        projects_custom_call_as_function: bool,
+    ) -> ResponseInputItem {
+        if !projects_custom_call_as_function {
+            return response;
+        }
+        match response {
+            ResponseInputItem::CustomToolCallOutput {
+                call_id, output, ..
+            } => ResponseInputItem::FunctionCallOutput { call_id, output },
+            response => response,
         }
     }
 
