@@ -1,0 +1,13 @@
+# Grokex uses a separate Codex Home. Keep credentials in the environment.
+model = "grok-4.5"
+model_provider = "mini_grok"
+web_search = "live"
+
+[model_providers.mini_grok]
+name = "Mini Grok Surface"
+base_url = "https://grok.trustedtunnel.app/v1"
+env_key = "GROK_API_KEY"
+env_key_instructions = "Set GROK_API_KEY to your Mini end-user API key."
+wire_api = "grok_responses"
+x_search = true
+requires_openai_auth = false
