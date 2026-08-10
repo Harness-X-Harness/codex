@@ -669,6 +669,12 @@
       "minLength": 1,
       "type": "string"
     },
+    "SearchSource": {
+      "enum": [
+        "x"
+      ],
+      "type": "string"
+    },
     "SubAgentActivityKind": {
       "enum": [
         "started",
@@ -1292,6 +1298,16 @@
                 "null"
               ]
             },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SearchSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "webSearch"
@@ -1363,6 +1379,12 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "result": {
               "type": "string"

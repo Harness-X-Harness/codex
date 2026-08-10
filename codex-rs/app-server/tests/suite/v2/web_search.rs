@@ -310,6 +310,7 @@ async fn assert_standalone_web_search_round_trips_output(
             query: String::new(),
             action: None,
             results: None,
+            source: None,
         })
     );
     let expected_completed_item = ThreadItem::WebSearch(WebSearchItem {
@@ -327,6 +328,7 @@ async fn assert_standalone_web_search_round_trips_output(
             "snippet": "A result snippet",
             "future_field": {"preserved": true},
         })]),
+        source: None,
     });
     assert_eq!(completed.item, expected_completed_item);
 

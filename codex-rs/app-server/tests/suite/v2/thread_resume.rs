@@ -1842,6 +1842,7 @@ fn append_resume_redaction_history(
             call_id: "ig-1".to_string(),
             status: "completed".to_string(),
             revised_prompt: Some("secret revised prompt".to_string()),
+            prompt: None,
             result: "base64-image-result".to_string(),
             transparent_background: None,
             saved_path: Some(test_absolute_path("/tmp/ig-1.png")),

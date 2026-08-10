@@ -912,6 +912,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 query: search.query,
                 action: Some(web_search_action_from_core(search.action)),
                 results: search.results,
+                source: search.source,
             }),
             CoreTurnItem::ImageView(image) => ThreadItem::ImageView {
                 id: image.id,
@@ -927,6 +928,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: image.id,
                     status: image.status,
                     revised_prompt: image.revised_prompt,
+                    prompt: image.prompt,
                     result: image.result,
                     transparent_background: None,
                     saved_path: image.saved_path,

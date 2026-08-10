@@ -3443,6 +3443,12 @@
         }
       ]
     },
+    "SearchSource": {
+      "enum": [
+        "x"
+      ],
+      "type": "string"
+    },
     "ServerRequestResolvedNotification": {
       "properties": {
         "requestId": {
@@ -4637,6 +4643,16 @@
                 "null"
               ]
             },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SearchSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "webSearch"
@@ -4708,6 +4724,12 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "result": {
               "type": "string"

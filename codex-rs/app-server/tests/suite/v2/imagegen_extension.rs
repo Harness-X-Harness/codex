@@ -414,6 +414,7 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
             id: call_id.to_string(),
             status: "failed".to_string(),
             revised_prompt: Some("paint a blue whale".to_string()),
+            prompt: None,
             result: String::new(),
             transparent_background: None,
             saved_path: None,

@@ -711,6 +711,7 @@ pub(super) fn handle_image_generation_end(
                 id: call_id.into(),
                 status: status.into(),
                 revised_prompt,
+                prompt: None,
                 result: String::new(),
                 transparent_background: None,
                 saved_path,

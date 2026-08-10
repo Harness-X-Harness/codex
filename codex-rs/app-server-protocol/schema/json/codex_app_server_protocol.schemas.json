@@ -17103,6 +17103,55 @@
             "type": "object"
           },
           {
+            "description": "Durable representation of the official Grok Gateway image-generation shape. The internal tag differs from the Gateway tag so `prompt` is never coerced to OpenAI's `revised_prompt`; the Grok codec restores the native tag on replay.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "internal_chat_message_metadata_passthrough": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/InternalChatMessageMetadataPassthrough"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "result": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "grok_image_generation_call"
+                ],
+                "title": "GrokImageGenerationCallResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "type"
+            ],
+            "title": "GrokImageGenerationCallResponseItem",
+            "type": "object"
+          },
+          {
             "properties": {
               "encrypted_content": {
                 "type": "string"
@@ -17721,6 +17770,12 @@
           "FR",
           "SA",
           "SU"
+        ],
+        "type": "string"
+      },
+      "SearchSource": {
+        "enum": [
+          "x"
         ],
         "type": "string"
       },
@@ -19827,6 +19882,16 @@
                   "null"
                 ]
               },
+              "source": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/SearchSource"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "webSearch"
@@ -19898,6 +19963,12 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "prompt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "result": {
                 "type": "string"

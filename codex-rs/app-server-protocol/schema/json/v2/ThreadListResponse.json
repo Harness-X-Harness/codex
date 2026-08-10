@@ -695,6 +695,12 @@
       "minLength": 1,
       "type": "string"
     },
+    "SearchSource": {
+      "enum": [
+        "x"
+      ],
+      "type": "string"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1632,6 +1638,16 @@
                 "null"
               ]
             },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SearchSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "webSearch"
@@ -1703,6 +1719,12 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "result": {
               "type": "string"
