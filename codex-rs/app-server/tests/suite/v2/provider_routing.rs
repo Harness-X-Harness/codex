@@ -38,6 +38,8 @@ use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+mod runtime;
+
 struct ProviderRoutingFixture {
     codex_home: TempDir,
     openai_server: MockServer,
@@ -50,6 +52,18 @@ impl ProviderRoutingFixture {
     }
 
     async fn with_review_model(review_model: Option<&str>) -> Result<Self> {
+        Self::with_config(
+            "model = \"openai-model\"\nmodel_provider = \"openai\"\n",
+            review_model,
+        )
+        .await
+    }
+
+    async fn with_implicit_openai_default() -> Result<Self> {
+        Self::with_config("", /*review_model*/ None).await
+    }
+
+    async fn with_config(default_selection: &str, review_model: Option<&str>) -> Result<Self> {
         let openai_server = MockServer::start().await;
         let grok_server = MockServer::start().await;
         mount_models_repeating(
@@ -78,9 +92,7 @@ impl ProviderRoutingFixture {
             codex_home.path().join("config.toml"),
             format!(
                 r#"
-model = "openai-model"
-model_provider = "openai"
-{review_model}approval_policy = "never"
+{default_selection}{review_model}approval_policy = "never"
 sandbox_mode = "read-only"
 web_search = "live"
 openai_base_url = "{}/v1"
@@ -90,6 +102,9 @@ name = "Grok"
 base_url = "{}/v1"
 env_key = "GROK_API_KEY"
 wire_api = "grok_responses"
+
+[features]
+enable_request_compression = false
 "#,
                 openai_server.uri(),
                 grok_server.uri(),
@@ -629,14 +644,18 @@ fn completion_sse(response_id: &str) -> String {
 }
 
 async fn materialize_thread(app: &mut TestAppServer, thread_id: &str) -> Result<()> {
-    app.start_turn_and_wait_for_completion(TurnStartParams {
+    app.start_turn_and_wait_for_completion(turn_for_thread(thread_id))
+        .await?;
+    Ok(())
+}
+
+fn turn_for_thread(thread_id: &str) -> TurnStartParams {
+    TurnStartParams {
         thread_id: thread_id.to_string(),
         input: vec![UserInput::Text {
             text: "Persist this thread".to_string(),
             text_elements: Vec::new(),
         }],
         ..Default::default()
-    })
-    .await?;
-    Ok(())
+    }
 }
