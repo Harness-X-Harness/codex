@@ -30,6 +30,34 @@ use wiremock::MockServer;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
+fn remote_catalog_model(slug: &str, display_name: &str) -> Result<ModelInfo> {
+    Ok(serde_json::from_value(json!({
+        "slug": slug,
+        "display_name": display_name,
+        "description": format!("{display_name} model"),
+        "default_reasoning_level": "high",
+        "supported_reasoning_levels": [
+            {"effort": "high", "description": "High"}
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "minimal_client_version": [0, 1, 0],
+        "supported_in_api": true,
+        "priority": 0,
+        "upgrade": null,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10_000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "multi_agent_version": "v2",
+        "context_window": 272_000,
+        "max_context_window": 272_000,
+        "experimental_supported_tools": [],
+    }))?)
+}
+
 fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
         id: preset.id.clone(),
@@ -257,6 +285,88 @@ openai_base_url = "{server_uri}/v1"
         1,
         "expected a single /models request"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_models_unifies_openai_and_grok_provider_catalogs() -> Result<()> {
+    let openai_server = MockServer::start().await;
+    let grok_server = MockServer::start().await;
+    let openai_model = remote_catalog_model("openai-model", "ChatGPT Model")?;
+    let grok_model = remote_catalog_model("grok-model", "Grok Model")?;
+    let openai_models_mock = mount_models_once(
+        &openai_server,
+        ModelsResponse {
+            models: vec![openai_model],
+        },
+    )
+    .await;
+    let grok_models_mock = mount_models_once(
+        &grok_server,
+        ModelsResponse {
+            models: vec![grok_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+model = "openai-model"
+model_provider = "openai"
+approval_policy = "never"
+sandbox_mode = "read-only"
+openai_base_url = "{}/v1"
+
+[model_providers.grok]
+name = "Grok"
+base_url = "{}/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+"#,
+            openai_server.uri(),
+            grok_server.uri(),
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-access-token").plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            ("GROK_API_KEY", Some("grok-test-key")),
+        ])
+        .build_initialized()
+        .await?;
+    let response: ModelListResponse = mcp
+        .request(|request_id| ClientRequest::ModelList {
+            request_id,
+            params: ModelListParams {
+                limit: Some(100),
+                cursor: None,
+                include_hidden: None,
+            },
+        })
+        .await?;
+    let returned_models = response
+        .data
+        .into_iter()
+        .map(|model| model.model)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        returned_models,
+        vec!["openai-model".to_string(), "grok-model".to_string()]
+    );
+    assert_eq!(openai_models_mock.requests().len(), 1);
+    assert_eq!(grok_models_mock.requests().len(), 1);
     Ok(())
 }
 
