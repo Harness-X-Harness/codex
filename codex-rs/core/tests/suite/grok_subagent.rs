@@ -167,6 +167,7 @@ async fn grok_subagent_first_turn_uses_standard_plaintext_model_input() -> Resul
     let child_input = child_request["input"]
         .as_array()
         .expect("child request input should be an array");
+    assert_eq!(child_request["model"], "koffing");
     assert!(child_input.iter().all(|item| {
         item.get("type").and_then(Value::as_str) != Some("agent_message")
             && item.get("encrypted_content").is_none()

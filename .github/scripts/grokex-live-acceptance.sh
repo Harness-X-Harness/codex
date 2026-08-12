@@ -9,6 +9,46 @@ set +x
 
 mkdir -p "$GROKEX_WORKSPACE" "$GROKEX_OUTPUT_DIR"
 
+report_failure_class() {
+  local jsonl="$1"
+  local stderr_file="$2"
+  local message
+  message="$(
+    jq -r '
+      select(.type == "turn.failed" or .type == "error")
+      | if .type == "turn.failed" then .error.message else .message end
+    ' "$jsonl" 2>/dev/null | tail -n 1
+  )"
+
+  case "$message" in
+    *"401"*|*"unauthorized"*|*"authentication"*) echo "failure_class=authentication" >&2 ;;
+    *"403"*|*"forbidden"*) echo "failure_class=authorization" >&2 ;;
+    *"404"*|*"not found"*) echo "failure_class=endpoint_or_model_not_found" >&2 ;;
+    *"422"*|*"invalid"*schema*|*"invalid request"*) echo "failure_class=provider_contract" >&2 ;;
+    *"429"*|*"rate limit"*) echo "failure_class=rate_limit" >&2 ;;
+    *"timed out"*|*"timeout"*) echo "failure_class=timeout" >&2 ;;
+    *"model"*catalog*|*"model"*provider*) echo "failure_class=provider_catalog" >&2 ;;
+    "")
+      if grep -Eqi '401|unauthorized|authentication' "$stderr_file"; then
+        echo "failure_class=authentication" >&2
+      elif grep -Eqi '403|forbidden' "$stderr_file"; then
+        echo "failure_class=authorization" >&2
+      elif grep -Eqi '404|not found' "$stderr_file"; then
+        echo "failure_class=endpoint_or_model_not_found" >&2
+      elif grep -Eqi '422|invalid.*schema|invalid request' "$stderr_file"; then
+        echo "failure_class=provider_contract" >&2
+      elif grep -Eqi '429|rate limit' "$stderr_file"; then
+        echo "failure_class=rate_limit" >&2
+      elif grep -Eqi 'timed out|timeout' "$stderr_file"; then
+        echo "failure_class=timeout" >&2
+      else
+        echo "failure_class=unknown" >&2
+      fi
+      ;;
+    *) echo "failure_class=provider_or_runtime" >&2 ;;
+  esac
+}
+
 run_exec() {
   local name="$1"
   shift
@@ -21,6 +61,9 @@ run_exec() {
     >"$GROKEX_OUTPUT_DIR/${name}.jsonl" \
     2>"$GROKEX_OUTPUT_DIR/${name}.stderr"; then
     echo "Grokex live acceptance case failed: ${name}" >&2
+    report_failure_class \
+      "$GROKEX_OUTPUT_DIR/${name}.jsonl" \
+      "$GROKEX_OUTPUT_DIR/${name}.stderr"
     return 1
   fi
 }
