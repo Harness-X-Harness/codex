@@ -777,18 +777,22 @@ impl ThreadManager {
             .await
     }
 
-    pub async fn validate_thread_model_provider(
+    pub async fn resolve_existing_thread_provider(
         &self,
         bound_provider_id: &str,
-        requested_model: &str,
+        persisted_model: Option<&str>,
+        requested_model: Option<&str>,
+        requested_provider_id: Option<&str>,
         refresh_strategy: RefreshStrategy,
         http_client_factory: codex_http_client::HttpClientFactory,
-    ) -> CodexResult<()> {
+    ) -> CodexResult<Option<ResolvedProviderSelection>> {
         self.state
             .provider_registry
-            .validate_bound_model(
+            .resolve_existing_thread_selection(
                 bound_provider_id,
+                persisted_model,
                 requested_model,
+                requested_provider_id,
                 refresh_strategy,
                 http_client_factory,
             )

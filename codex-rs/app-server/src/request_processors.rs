@@ -543,6 +543,7 @@ mod search;
 mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_processor;
+mod thread_provider_binding;
 mod thread_sections;
 mod token_usage_replay;
 mod turn_processor;

@@ -249,6 +249,59 @@ impl ModelProviderRegistry {
         Ok(())
     }
 
+    /// Resolve an existing thread without changing its provider binding.
+    ///
+    /// A requested model may replace the persisted model only when both models belong to the
+    /// bound provider. A missing persisted model falls back to that provider's catalog default.
+    pub async fn resolve_existing_thread_selection(
+        &self,
+        bound_provider_id: &str,
+        persisted_model: Option<&str>,
+        requested_model: Option<&str>,
+        requested_provider_id: Option<&str>,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<Option<ResolvedProviderSelection>> {
+        if !self.federated || !self.is_selectable(bound_provider_id) {
+            return Ok(None);
+        }
+        if let Some(requested_provider_id) = requested_provider_id
+            && requested_provider_id != bound_provider_id
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread is bound to provider `{bound_provider_id}`, not `{requested_provider_id}`; start a new thread to use another provider"
+            )));
+        }
+
+        if let Some(requested_model) = requested_model {
+            self.validate_bound_model(
+                bound_provider_id,
+                requested_model,
+                refresh_strategy,
+                http_client_factory,
+            )
+            .await?;
+            return Ok(Some(ResolvedProviderSelection {
+                model: requested_model.to_string(),
+                provider_id: bound_provider_id.to_string(),
+            }));
+        }
+        if let Some(persisted_model) = persisted_model {
+            return Ok(Some(ResolvedProviderSelection {
+                model: persisted_model.to_string(),
+                provider_id: bound_provider_id.to_string(),
+            }));
+        }
+
+        self.resolve_new_thread_selection(
+            /*requested_model*/ None,
+            Some(bound_provider_id),
+            refresh_strategy,
+            http_client_factory,
+        )
+        .await
+    }
+
     fn is_selectable(&self, provider_id: &str) -> bool {
         self.selectable_ids
             .iter()
@@ -450,6 +503,63 @@ mod tests {
             .await
             .expect_err("bound provider must reject another provider's model");
         assert!(cross_provider.to_string().contains("start a new thread"));
+    }
+
+    #[tokio::test]
+    async fn existing_thread_selection_preserves_provider_and_persisted_model() {
+        let registry = test_registry(&["openai-model", "openai-model-2"], &["grok-model"]);
+        let factory = test_http_client_factory();
+
+        let persisted = registry
+            .resolve_existing_thread_selection(
+                "grok",
+                Some("retired-grok-model"),
+                /*requested_model*/ None,
+                /*requested_provider_id*/ None,
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await
+            .expect("persisted model should not require current catalog membership");
+        assert_eq!(
+            persisted,
+            Some(ResolvedProviderSelection {
+                model: "retired-grok-model".to_string(),
+                provider_id: "grok".to_string(),
+            })
+        );
+
+        let same_provider = registry
+            .resolve_existing_thread_selection(
+                "openai",
+                Some("openai-model"),
+                Some("openai-model-2"),
+                Some("openai"),
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await
+            .expect("same-provider model change should resolve");
+        assert_eq!(
+            same_provider,
+            Some(ResolvedProviderSelection {
+                model: "openai-model-2".to_string(),
+                provider_id: "openai".to_string(),
+            })
+        );
+
+        let provider_mismatch = registry
+            .resolve_existing_thread_selection(
+                "grok",
+                Some("grok-model"),
+                Some("openai-model"),
+                Some("openai"),
+                RefreshStrategy::Offline,
+                factory,
+            )
+            .await
+            .expect_err("existing thread provider must be immutable");
+        assert!(provider_mismatch.to_string().contains("start a new thread"));
     }
 
     #[test]

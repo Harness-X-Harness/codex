@@ -1,5 +1,8 @@
 use super::thread_enrichment::enrich_loaded_threads;
 use super::thread_fork_goal::inherit_thread_goal_snapshot;
+use super::thread_provider_binding::ExistingThreadProviderBinding;
+use super::thread_provider_binding::ProviderSelectionOverrides;
+use super::thread_provider_binding::apply_existing_thread_provider_binding;
 use super::turn_processor::can_accept_direct_input;
 use super::*;
 use crate::error_code::method_not_found;
@@ -261,6 +264,7 @@ fn has_model_resume_override(
     typesafe_overrides.model.is_some()
         || typesafe_overrides.model_provider.is_some()
         || request_overrides.is_some_and(|overrides| overrides.contains_key("model"))
+        || request_overrides.is_some_and(|overrides| overrides.contains_key("model_provider"))
         || request_overrides
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
 }
@@ -3285,6 +3289,14 @@ impl ThreadRequestProcessor {
         }
         let has_explicit_model_resume_override =
             has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
+        let provider_selection_overrides = if self.thread_manager.has_federated_model_catalog() {
+            Some(ProviderSelectionOverrides::capture(
+                request_overrides.as_ref(),
+                &typesafe_overrides,
+            )?)
+        } else {
+            None
+        };
         let persisted_metadata = self
             .load_and_apply_persisted_resume_metadata(
                 &thread_history,
@@ -3292,6 +3304,22 @@ impl ThreadRequestProcessor {
                 &mut typesafe_overrides,
             )
             .await;
+        if let (Some(source_thread), Some(selection_overrides)) =
+            (resume_source_thread.as_ref(), provider_selection_overrides)
+        {
+            apply_existing_thread_provider_binding(
+                self.thread_manager.as_ref(),
+                self.config.as_ref(),
+                ExistingThreadProviderBinding {
+                    provider_id: source_thread.model_provider.as_str(),
+                    model: source_thread.model.as_deref(),
+                },
+                selection_overrides,
+                &mut request_overrides,
+                &mut typesafe_overrides,
+            )
+            .await?;
+        }
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let mut config = match self
@@ -4245,7 +4273,7 @@ impl ThreadRequestProcessor {
                 WindowsSandboxLevel::Disabled => {}
             }
         }
-        let request_overrides = if cli_overrides.is_empty() {
+        let mut request_overrides = if cli_overrides.is_empty() {
             None
         } else {
             Some(cli_overrides)
@@ -4266,6 +4294,24 @@ impl ThreadRequestProcessor {
             /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
+        if self.thread_manager.has_federated_model_catalog() {
+            let selection_overrides = ProviderSelectionOverrides::capture(
+                request_overrides.as_ref(),
+                &typesafe_overrides,
+            )?;
+            apply_existing_thread_provider_binding(
+                self.thread_manager.as_ref(),
+                self.config.as_ref(),
+                ExistingThreadProviderBinding {
+                    provider_id: source_thread.model_provider.as_str(),
+                    model: source_thread.model.as_deref(),
+                },
+                selection_overrides,
+                &mut request_overrides,
+                &mut typesafe_overrides,
+            )
+            .await?;
+        }
         let latest_context = if paginated_source
             && typesafe_overrides.approvals_reviewer.is_none()
             && !request_overrides
@@ -4652,6 +4698,7 @@ impl ThreadRequestProcessor {
                 }
             }
             None if relation_filter.is_some() => None,
+            None if self.thread_manager.has_federated_model_catalog() => None,
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
         let (allowed_sources_vec, source_kind_filter) =

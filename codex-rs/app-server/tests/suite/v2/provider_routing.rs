@@ -11,6 +11,7 @@ use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
@@ -42,7 +43,10 @@ impl ProviderRoutingFixture {
         mount_models_repeating(
             &openai_server,
             ModelsResponse {
-                models: vec![remote_catalog_model("openai-model", "ChatGPT Model")],
+                models: vec![
+                    remote_catalog_model("openai-model", "ChatGPT Model"),
+                    remote_catalog_model("openai-model-2", "ChatGPT Model 2"),
+                ],
             },
         )
         .await;
@@ -174,6 +178,57 @@ async fn turn_rejects_a_model_owned_by_another_provider_before_egress() -> Resul
 }
 
 #[tokio::test]
+async fn turn_allows_a_model_owned_by_the_bound_provider() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let response = mount_completion(&fixture.openai_server, "openai-same-provider").await;
+    let mut app = fixture.start_app().await?;
+    let started = app.start_thread(ThreadStartParams::default()).await?;
+
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: started.thread.id,
+        input: vec![UserInput::Text {
+            text: "Use another model from this provider".to_string(),
+            text_elements: Vec::new(),
+        }],
+        model: Some("openai-model-2".to_string()),
+        ..Default::default()
+    })
+    .await?;
+
+    assert_eq!(
+        response.single_request().body_json()["model"],
+        "openai-model-2"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_settings_reject_a_model_owned_by_another_provider() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let mut app = fixture.start_app().await?;
+    let started = app.start_thread(ThreadStartParams::default()).await?;
+
+    let request_id = app
+        .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+            thread_id: started.thread.id,
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("new thread"));
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn fork_inherits_the_source_thread_provider_binding() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     mount_completion(&fixture.grok_server, "grok-fork-seed").await;
@@ -216,6 +271,7 @@ async fn cold_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
         .await?;
     materialize_thread(&mut primary, &started.thread.id).await?;
     timeout(DEFAULT_TIMEOUT, primary.shutdown_gracefully()).await??;
+    let grok_request_count_before_resume = received_responses_count(&fixture.grok_server).await?;
 
     let mut secondary = fixture.start_app().await?;
     let request_id = secondary
@@ -235,7 +291,10 @@ async fn cold_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
     assert_eq!(error.error.code, -32600);
     assert!(error.error.message.contains("new thread"));
     assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
-    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
+    assert_eq!(
+        received_responses_count(&fixture.grok_server).await?,
+        grok_request_count_before_resume
+    );
     Ok(())
 }
 
@@ -312,7 +371,7 @@ async fn received_responses_count(server: &MockServer) -> Result<usize> {
         .count())
 }
 
-async fn mount_completion(server: &MockServer, response_id: &str) {
+async fn mount_completion(server: &MockServer, response_id: &str) -> responses::ResponseMock {
     mount_sse_once_match(
         server,
         method("POST"),
@@ -322,7 +381,7 @@ async fn mount_completion(server: &MockServer, response_id: &str) {
             responses::ev_completed(response_id),
         ]),
     )
-    .await;
+    .await
 }
 
 async fn materialize_thread(app: &mut TestAppServer, thread_id: &str) -> Result<()> {

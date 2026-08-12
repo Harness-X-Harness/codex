@@ -1,3 +1,4 @@
+use super::thread_provider_binding::validate_existing_thread_model_update;
 use super::*;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
@@ -704,11 +705,24 @@ impl TurnRequestProcessor {
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request.
-        let snapshot = if permissions.is_some() {
+        let snapshot = if permissions.is_some() || model.is_some() {
             Some(thread.config_snapshot().await)
         } else {
             None
         };
+        if let Some(requested_model) = model.as_deref() {
+            let snapshot = snapshot.as_ref().ok_or_else(|| {
+                internal_error(format!("{method} model selection missing thread snapshot"))
+            })?;
+            validate_existing_thread_model_update(
+                self.thread_manager.as_ref(),
+                self.config.as_ref(),
+                snapshot.model_provider_id.as_str(),
+                snapshot.model.as_str(),
+                requested_model,
+            )
+            .await?;
+        }
 
         let has_any_overrides = has_environment_override
             || approval_policy.is_some()
