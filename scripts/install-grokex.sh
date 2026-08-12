@@ -89,4 +89,5 @@ if [ ! -e "${codex_home}/config.toml" ]; then
 fi
 
 echo "Installed Grokex ${version} as ${bin_dir}/grokex"
-echo "Set GROK_API_KEY, ensure ${bin_dir} is in PATH, then run: grokex"
+echo "Ensure ${bin_dir} is in PATH, then run 'grokex login' for ChatGPT."
+echo "Set GROK_API_KEY to use Grok, then run: grokex"

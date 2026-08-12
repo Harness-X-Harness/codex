@@ -76,7 +76,8 @@ if not defined CODEX_HOME set "CODEX_HOME=%USERPROFILE%\.codex-grok"
     }
 
     Write-Host "Installed Grokex $Version as $Shim"
-    Write-Host "Set GROK_API_KEY, open a new terminal, then run: grokex"
+    Write-Host "Open a new terminal, then run 'grokex login' for ChatGPT."
+    Write-Host "Set GROK_API_KEY to use Grok, then run: grokex"
 }
 finally {
     if (Test-Path $TempRoot) { Remove-Item -Recurse -Force $TempRoot }

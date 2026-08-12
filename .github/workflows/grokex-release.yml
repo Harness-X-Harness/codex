@@ -86,6 +86,10 @@ jobs:
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "build_matrix=$build_matrix" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Grokex distribution contract
+        if: github.ref_type != 'tag'
+        run: python3 .github/scripts/test_grokex_distribution.py
+
       - name: Verify reusable branch artifacts for tag
         id: reuse
         if: github.ref_type == 'tag'

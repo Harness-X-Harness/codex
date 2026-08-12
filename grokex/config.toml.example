@@ -1,13 +1,14 @@
-# Grokex uses a separate Codex Home. Keep credentials in the environment.
-model = "grok-4.5"
-model_provider = "mini_grok"
+# Grokex keeps ChatGPT login and Grok provider configuration in one Codex Home.
+# Run `grokex login` for ChatGPT. Keep the Mini end-user key in GROK_API_KEY.
+# With no top-level model or model_provider override, ChatGPT stays the default.
 web_search = "live"
 
 [model_providers.mini_grok]
-name = "Mini Grok Surface"
+name = "Grok"
 base_url = "https://grok.trustedtunnel.app/v1"
 env_key = "GROK_API_KEY"
 env_key_instructions = "Set GROK_API_KEY to your Mini end-user API key."
 wire_api = "grok_responses"
-x_search = true
+# X Search can derive remote queries from Thread context. Enable it explicitly.
+x_search = false
 requires_openai_auth = false
