@@ -48,14 +48,24 @@ class GrokexDistributionTest(unittest.TestCase):
             self.assertIn("grokex login", content)
             self.assertIn("GROK_API_KEY", content)
 
-    def test_rust_jobs_share_the_github_sccache_backend(self) -> None:
+    def test_rust_jobs_share_the_persistent_sccache_action(self) -> None:
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
         ).read_text(encoding="utf-8")
+        action = (
+            REPO_ROOT
+            / ".github"
+            / "actions"
+            / "setup-grokex-sccache"
+            / "action.yml"
+        ).read_text(encoding="utf-8")
 
-        self.assertEqual(workflow.count('SCCACHE_GHA_ENABLED: "true"'), 3)
-        self.assertEqual(workflow.count('RUSTC_WRAPPER: "sccache"'), 3)
-        self.assertEqual(workflow.count("tool: sccache"), 3)
+        self.assertEqual(
+            workflow.count("uses: ./.github/actions/setup-grokex-sccache"), 3
+        )
+        self.assertIn("uses: actions/cache@", action)
+        self.assertIn("SCCACHE_GHA_ENABLED=false", action)
+        self.assertIn("RUSTC_WRAPPER=${wrapper}", action)
 
     def test_controlled_dual_provider_live_driver_is_versioned(self) -> None:
         driver = REPO_ROOT / ".github" / "scripts" / "grokex_dual_provider_live.py"

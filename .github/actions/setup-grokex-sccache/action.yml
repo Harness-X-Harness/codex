@@ -1,0 +1,40 @@
+name: Set up Grokex sccache
+description: Install sccache and persist its local cache with GitHub Actions
+
+inputs:
+  target:
+    description: Rust target used to isolate incompatible compiler artifacts
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install sccache
+      uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+      with:
+        tool: sccache
+        version: 0.7.5
+
+    - name: Restore sccache artifacts
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ github.workspace }}/.sccache
+        key: grokex-sccache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.job }}
+        restore-keys: |
+          grokex-sccache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ hashFiles('codex-rs/Cargo.lock') }}-
+          grokex-sccache-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-
+
+    - name: Enable local sccache backend
+      shell: bash
+      run: |
+        set -euo pipefail
+        wrapper="$(command -v sccache)"
+        cache_dir="${GITHUB_WORKSPACE}/.sccache"
+        if [[ "${RUNNER_OS}" == "Windows" ]] && command -v cygpath >/dev/null 2>&1; then
+          wrapper="$(cygpath -w "${wrapper}")"
+          cache_dir="$(cygpath -w "${cache_dir}")"
+        fi
+        echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+        echo "SCCACHE_DIR=${cache_dir}" >> "$GITHUB_ENV"
+        echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+        echo "CARGO_BUILD_RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"

@@ -28,9 +28,6 @@ jobs:
     name: Validate base and generate schemas
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     permissions:
       actions: read
       contents: write
@@ -208,12 +205,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         if: github.ref_type != 'tag'
 
-      - name: Install sccache
+      - name: Configure persistent Rust compiler cache
         if: github.ref_type != 'tag'
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        uses: ./.github/actions/setup-grokex-sccache
         with:
-          tool: sccache
-          version: 0.7.5
+          target: x86_64-unknown-linux-gnu
 
       - name: Generate config and App Server schemas
         if: github.ref_type != 'tag'
@@ -269,9 +265,6 @@ jobs:
     if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -290,11 +283,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
 
-      - name: Install sccache
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+      - name: Configure persistent Rust compiler cache
+        uses: ./.github/actions/setup-grokex-sccache
         with:
-          tool: sccache
-          version: 0.7.5
+          target: x86_64-unknown-linux-gnu
 
       - name: Configure rusty_v8 artifacts
         uses: ./.github/actions/setup-rusty-v8
@@ -405,9 +397,6 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.source.outputs.build_matrix) }}
     runs-on: ${{ matrix.runner }}
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -420,11 +409,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install sccache
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+      - name: Configure persistent Rust compiler cache
+        uses: ./.github/actions/setup-grokex-sccache
         with:
-          tool: sccache
-          version: 0.7.5
+          target: ${{ matrix.target }}
 
       - name: Use hermetic Cargo home for musl
         if: contains(matrix.target, 'linux-musl')
