@@ -7,3 +7,10 @@ pub(super) fn environment_selection_error(err: CodexErr) -> JSONRPCErrorError {
         _ => internal_error(format!("failed to validate environment selections: {err}")),
     }
 }
+
+pub(super) fn provider_binding_error(err: CodexErr) -> JSONRPCErrorError {
+    match err.details() {
+        CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+        _ => internal_error(format!("failed to resolve provider binding: {err}")),
+    }
+}

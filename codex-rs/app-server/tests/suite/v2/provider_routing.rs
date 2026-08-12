@@ -9,24 +9,27 @@ use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses;
-use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once_match;
 use tempfile::TempDir;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
 use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 #[tokio::test]
 async fn thread_start_resolves_grok_model_to_provider_runtime() -> Result<()> {
     let openai_server = MockServer::start().await;
     let grok_server = MockServer::start().await;
-    let _openai_models = mount_models_once(
+    mount_models_repeating(
         &openai_server,
         ModelsResponse {
             models: vec![remote_catalog_model("openai-model", "ChatGPT Model")],
         },
     )
     .await;
-    let _grok_models = mount_models_once(
+    mount_models_repeating(
         &grok_server,
         ModelsResponse {
             models: vec![remote_catalog_model("grok-model", "Grok Model")],
@@ -53,6 +56,7 @@ model = "openai-model"
 model_provider = "openai"
 approval_policy = "never"
 sandbox_mode = "read-only"
+web_search = "live"
 openai_base_url = "{}/v1"
 
 [model_providers.grok]
@@ -105,4 +109,16 @@ wire_api = "grok_responses"
         "grok-model"
     );
     Ok(())
+}
+
+async fn mount_models_repeating(server: &MockServer, body: ModelsResponse) {
+    Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(body),
+        )
+        .mount(server)
+        .await;
 }

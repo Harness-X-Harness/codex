@@ -40,6 +40,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
 use codex_model_provider::ModelProviderRegistry;
+use codex_model_provider::ResolvedProviderSelection;
 use codex_model_provider::create_model_provider;
 use codex_model_provider::provider_models_home;
 use codex_model_provider_info::ModelProviderInfo;
@@ -755,6 +756,42 @@ impl ThreadManager {
         self.state
             .provider_registry
             .list_models(refresh_strategy, http_client_factory)
+            .await
+    }
+
+    pub async fn resolve_new_thread_provider(
+        &self,
+        requested_model: Option<&str>,
+        requested_provider_id: Option<&str>,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: codex_http_client::HttpClientFactory,
+    ) -> CodexResult<Option<ResolvedProviderSelection>> {
+        self.state
+            .provider_registry
+            .resolve_new_thread_selection(
+                requested_model,
+                requested_provider_id,
+                refresh_strategy,
+                http_client_factory,
+            )
+            .await
+    }
+
+    pub async fn validate_thread_model_provider(
+        &self,
+        bound_provider_id: &str,
+        requested_model: &str,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: codex_http_client::HttpClientFactory,
+    ) -> CodexResult<()> {
+        self.state
+            .provider_registry
+            .validate_bound_model(
+                bound_provider_id,
+                requested_model,
+                refresh_strategy,
+                http_client_factory,
+            )
             .await
     }
 

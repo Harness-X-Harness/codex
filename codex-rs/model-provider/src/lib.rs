@@ -27,4 +27,5 @@ pub use provider::RemoteCompactionSupport;
 pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;
 pub use registry::ModelProviderRegistry;
+pub use registry::ResolvedProviderSelection;
 pub use registry::provider_models_home;

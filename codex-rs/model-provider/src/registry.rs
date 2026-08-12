@@ -29,6 +29,24 @@ struct ProviderProfile {
     models_manager: SharedModelsManager,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedProviderSelection {
+    pub model: String,
+    pub provider_id: String,
+}
+
+#[derive(Debug)]
+struct ProviderCatalog {
+    provider_id: String,
+    models: Vec<ModelPreset>,
+}
+
+#[derive(Debug)]
+struct UnifiedModelCatalog {
+    providers: Vec<ProviderCatalog>,
+    owners: HashMap<String, String>,
+}
+
 /// Process-owned provider profiles and their isolated model catalogs.
 #[derive(Debug)]
 pub struct ModelProviderRegistry {
@@ -123,31 +141,16 @@ impl ModelProviderRegistry {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<Vec<ModelPreset>> {
+        let catalog = self
+            .load_unified_catalog(refresh_strategy, http_client_factory)
+            .await?;
         let mut models = Vec::new();
-        let mut owners = HashMap::<String, String>::new();
-        for provider_id in &self.selectable_ids {
+        for provider_catalog in catalog.providers {
             let profile = self
                 .profiles
-                .get(provider_id)
+                .get(&provider_catalog.provider_id)
                 .expect("selectable provider must be registered");
-            let provider_models = profile
-                .models_manager
-                .list_models(refresh_strategy, http_client_factory.clone())
-                .await;
-            if provider_models.is_empty() {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "model provider `{provider_id}` has no available model catalog"
-                )));
-            }
-            for mut model in provider_models {
-                if let Some(previous_owner) =
-                    owners.insert(model.model.clone(), provider_id.clone())
-                {
-                    return Err(CodexErr::InvalidRequest(format!(
-                        "model `{}` is advertised by both `{previous_owner}` and `{provider_id}`",
-                        model.model
-                    )));
-                }
+            for mut model in provider_catalog.models {
                 if self.federated {
                     model.display_name =
                         format!("{} · {}", profile_picker_label(profile), model.display_name);
@@ -156,6 +159,139 @@ impl ModelProviderRegistry {
             }
         }
         Ok(models)
+    }
+
+    /// Resolve an explicit new-thread selection through the unified catalog.
+    ///
+    /// `None` means the caller supplied neither field, or explicitly selected a legacy provider
+    /// that is outside the OpenAI/Grok unified catalog. In both cases normal config resolution
+    /// remains authoritative.
+    pub async fn resolve_new_thread_selection(
+        &self,
+        requested_model: Option<&str>,
+        requested_provider_id: Option<&str>,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<Option<ResolvedProviderSelection>> {
+        if !self.federated || requested_model.is_none() && requested_provider_id.is_none() {
+            return Ok(None);
+        }
+        if requested_provider_id.is_some_and(|provider_id| !self.is_selectable(provider_id)) {
+            return Ok(None);
+        }
+
+        let catalog = self
+            .load_unified_catalog(refresh_strategy, http_client_factory)
+            .await?;
+        match (requested_model, requested_provider_id) {
+            (Some(model), provider_id) => {
+                let owner = catalog.owners.get(model).ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "model `{model}` is not present in the unified provider catalog"
+                    ))
+                })?;
+                if let Some(provider_id) = provider_id
+                    && provider_id != owner
+                {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "model `{model}` belongs to provider `{owner}`, not `{provider_id}`"
+                    )));
+                }
+                Ok(Some(ResolvedProviderSelection {
+                    model: model.to_string(),
+                    provider_id: owner.clone(),
+                }))
+            }
+            (None, Some(provider_id)) => {
+                let provider_catalog = catalog
+                    .providers
+                    .iter()
+                    .find(|catalog| catalog.provider_id == provider_id)
+                    .expect("selectable provider must have a catalog");
+                let model = provider_catalog
+                    .models
+                    .iter()
+                    .find(|model| model.is_default)
+                    .or_else(|| provider_catalog.models.first())
+                    .expect("provider catalog must not be empty");
+                Ok(Some(ResolvedProviderSelection {
+                    model: model.model.clone(),
+                    provider_id: provider_id.to_string(),
+                }))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+
+    pub async fn validate_bound_model(
+        &self,
+        bound_provider_id: &str,
+        requested_model: &str,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<()> {
+        if !self.federated || !self.is_selectable(bound_provider_id) {
+            return Ok(());
+        }
+        let catalog = self
+            .load_unified_catalog(refresh_strategy, http_client_factory)
+            .await?;
+        let owner = catalog.owners.get(requested_model).ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "model `{requested_model}` is not present in the unified provider catalog"
+            ))
+        })?;
+        if owner != bound_provider_id {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread is bound to provider `{bound_provider_id}`, but model `{requested_model}` belongs to `{owner}`; start a new thread to use another provider"
+            )));
+        }
+        Ok(())
+    }
+
+    fn is_selectable(&self, provider_id: &str) -> bool {
+        self.selectable_ids
+            .iter()
+            .any(|selectable_id| selectable_id == provider_id)
+    }
+
+    async fn load_unified_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<UnifiedModelCatalog> {
+        let mut providers = Vec::with_capacity(self.selectable_ids.len());
+        let mut owners = HashMap::<String, String>::new();
+        for provider_id in &self.selectable_ids {
+            let profile = self
+                .profiles
+                .get(provider_id)
+                .expect("selectable provider must be registered");
+            let models = profile
+                .models_manager
+                .list_models(refresh_strategy, http_client_factory.clone())
+                .await;
+            if models.is_empty() {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "model provider `{provider_id}` has no available model catalog"
+                )));
+            }
+            for model in &models {
+                if let Some(previous_owner) =
+                    owners.insert(model.model.clone(), provider_id.clone())
+                {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "model `{}` is advertised by both `{previous_owner}` and `{provider_id}`",
+                        model.model
+                    )));
+                }
+            }
+            providers.push(ProviderCatalog {
+                provider_id: provider_id.clone(),
+                models,
+            });
+        }
+        Ok(UnifiedModelCatalog { providers, owners })
     }
 }
 
@@ -263,6 +399,57 @@ mod tests {
             .await
             .expect_err("duplicate slugs must reject the complete catalog");
         assert!(duplicate.to_string().contains("advertised by both"));
+    }
+
+    #[tokio::test]
+    async fn explicit_selections_resolve_and_bound_models_cannot_cross_providers() {
+        let registry = test_registry(&["openai-model"], &["grok-model"]);
+        let factory = test_http_client_factory();
+
+        let inferred = registry
+            .resolve_new_thread_selection(
+                Some("grok-model"),
+                /*requested_provider_id*/ None,
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await
+            .expect("known model should resolve");
+        assert_eq!(
+            inferred,
+            Some(ResolvedProviderSelection {
+                model: "grok-model".to_string(),
+                provider_id: "grok".to_string(),
+            })
+        );
+
+        let provider_default = registry
+            .resolve_new_thread_selection(
+                /*requested_model*/ None,
+                Some("grok"),
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await
+            .expect("known provider should select its default");
+        assert_eq!(provider_default, inferred);
+
+        let mismatch = registry
+            .resolve_new_thread_selection(
+                Some("grok-model"),
+                Some("openai"),
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await
+            .expect_err("model and provider must have the same catalog owner");
+        assert!(mismatch.to_string().contains("belongs to provider `grok`"));
+
+        let cross_provider = registry
+            .validate_bound_model("openai", "grok-model", RefreshStrategy::Offline, factory)
+            .await
+            .expect_err("bound provider must reject another provider's model");
+        assert!(cross_provider.to_string().contains("start a new thread"));
     }
 
     #[test]

@@ -1186,7 +1186,7 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
         client_mcp_extensions: ClientMcpExtensions,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
-        typesafe_overrides: ConfigOverrides,
+        mut typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<DynamicToolSpec>>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
         history_mode: Option<ThreadHistoryMode>,
@@ -1201,10 +1201,46 @@ impl ThreadRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         let thread_start_started_at = std::time::Instant::now();
         let requested_cwd = typesafe_overrides.cwd.clone();
+        let has_explicit_model = typesafe_overrides.model.is_some()
+            || config_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("model"));
+        let has_explicit_provider = typesafe_overrides.model_provider.is_some()
+            || config_overrides
+                .as_ref()
+                .is_some_and(|overrides| overrides.contains_key("model_provider"));
         let mut config = config_manager
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
+        if listener_task_context
+            .thread_manager
+            .has_federated_model_catalog()
+        {
+            let requested_model = has_explicit_model
+                .then(|| config.model.as_deref())
+                .flatten();
+            let requested_provider_id =
+                has_explicit_provider.then_some(config.model_provider_id.as_str());
+            if let Some(selection) = listener_task_context
+                .thread_manager
+                .resolve_new_thread_provider(
+                    requested_model,
+                    requested_provider_id,
+                    RefreshStrategy::OnlineIfUncached,
+                    config.http_client_factory(),
+                )
+                .await
+                .map_err(provider_binding_error)?
+            {
+                typesafe_overrides.model = Some(selection.model);
+                typesafe_overrides.model_provider = Some(selection.provider_id);
+                config = config_manager
+                    .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+            }
+        }
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
         // could be downgraded to ReadOnly (perhaps there is no sandbox
