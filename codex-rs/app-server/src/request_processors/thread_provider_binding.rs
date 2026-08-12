@@ -73,6 +73,32 @@ pub(super) async fn apply_existing_thread_provider_binding(
     Ok(())
 }
 
+/// Reject a running-thread resume that requests a provider other than the
+/// thread's immutable provider binding.
+pub(super) async fn validate_existing_thread_provider_binding(
+    thread_manager: &ThreadManager,
+    config: &Config,
+    binding: ExistingThreadProviderBinding<'_>,
+    selection_overrides: ProviderSelectionOverrides,
+) -> Result<(), JSONRPCErrorError> {
+    if selection_overrides.model.is_none() && selection_overrides.provider_id.is_none() {
+        return Ok(());
+    }
+
+    thread_manager
+        .resolve_existing_thread_provider(
+            binding.provider_id,
+            binding.model,
+            selection_overrides.model.as_deref(),
+            selection_overrides.provider_id.as_deref(),
+            RefreshStrategy::OnlineIfUncached,
+            config.http_client_factory(),
+        )
+        .await
+        .map_err(provider_binding_error)?;
+    Ok(())
+}
+
 pub(super) async fn validate_existing_thread_model_update(
     thread_manager: &ThreadManager,
     config: &Config,

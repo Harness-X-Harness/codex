@@ -3,6 +3,7 @@ use super::thread_fork_goal::inherit_thread_goal_snapshot;
 use super::thread_provider_binding::ExistingThreadProviderBinding;
 use super::thread_provider_binding::ProviderSelectionOverrides;
 use super::thread_provider_binding::apply_existing_thread_provider_binding;
+use super::thread_provider_binding::validate_existing_thread_provider_binding;
 use super::turn_processor::can_accept_direct_input;
 use super::*;
 use crate::error_code::method_not_found;
@@ -3673,6 +3674,27 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
+            if self.thread_manager.has_federated_model_catalog() {
+                let provider_overrides = ConfigOverrides {
+                    model: params.model.clone(),
+                    model_provider: params.model_provider.clone(),
+                    ..Default::default()
+                };
+                let selection_overrides = ProviderSelectionOverrides::capture(
+                    params.config.as_ref(),
+                    &provider_overrides,
+                )?;
+                validate_existing_thread_provider_binding(
+                    self.thread_manager.as_ref(),
+                    self.config.as_ref(),
+                    ExistingThreadProviderBinding {
+                        provider_id: config_snapshot.model_provider_id.as_str(),
+                        model: Some(config_snapshot.model.as_str()),
+                    },
+                    selection_overrides,
+                )
+                .await?;
+            }
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
