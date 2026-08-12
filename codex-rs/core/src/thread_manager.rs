@@ -740,6 +740,17 @@ impl ThreadManager {
         &self,
         refresh_strategy: RefreshStrategy,
         http_client_factory: codex_http_client::HttpClientFactory,
+    ) -> Vec<ModelPreset> {
+        self.state
+            .models_manager
+            .list_models(refresh_strategy, http_client_factory)
+            .await
+    }
+
+    pub async fn list_provider_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: codex_http_client::HttpClientFactory,
     ) -> CodexResult<Vec<ModelPreset>> {
         self.state
             .provider_registry

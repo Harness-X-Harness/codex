@@ -18,7 +18,7 @@ pub async fn supported_models(
     http_client_factory: HttpClientFactory,
 ) -> Result<Vec<Model>, codex_app_server_protocol::JSONRPCErrorError> {
     Ok(thread_manager
-        .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
+        .list_provider_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
         .await
         .map_err(|err| invalid_request(err.to_string()))?
         .into_iter()
