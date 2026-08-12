@@ -299,6 +299,44 @@ async fn cold_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
 }
 
 #[tokio::test]
+async fn running_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    mount_completion(&fixture.openai_server, "openai-running-resume-seed").await;
+    let mut app = fixture.start_app().await?;
+    let started = app.start_thread(ThreadStartParams::default()).await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+    let openai_request_count_before_resume =
+        received_responses_count(&fixture.openai_server).await?;
+    let grok_request_count_before_resume = received_responses_count(&fixture.grok_server).await?;
+
+    let request_id = app
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id,
+            model: Some("grok-model".to_string()),
+            model_provider: Some("grok".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("new thread"));
+    assert_eq!(
+        received_responses_count(&fixture.openai_server).await?,
+        openai_request_count_before_resume
+    );
+    assert_eq!(
+        received_responses_count(&fixture.grok_server).await?,
+        grok_request_count_before_resume
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_defaults_to_all_configured_provider_profiles() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     mount_completion(&fixture.openai_server, "openai-list-seed").await;
