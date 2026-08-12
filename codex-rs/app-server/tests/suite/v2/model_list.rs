@@ -4,6 +4,7 @@ use anyhow::Error;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
+use app_test_support::remote_catalog_model;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
 use codex_app_server_protocol::ClientRequest;
@@ -29,34 +30,6 @@ use wiremock::MockServer;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
-
-fn remote_catalog_model(slug: &str, display_name: &str) -> Result<ModelInfo> {
-    Ok(serde_json::from_value(json!({
-        "slug": slug,
-        "display_name": display_name,
-        "description": format!("{display_name} model"),
-        "default_reasoning_level": "high",
-        "supported_reasoning_levels": [
-            {"effort": "high", "description": "High"}
-        ],
-        "shell_type": "shell_command",
-        "visibility": "list",
-        "minimal_client_version": [0, 1, 0],
-        "supported_in_api": true,
-        "priority": 0,
-        "upgrade": null,
-        "support_verbosity": false,
-        "default_verbosity": null,
-        "apply_patch_tool_type": null,
-        "truncation_policy": {"mode": "bytes", "limit": 10_000},
-        "supports_parallel_tool_calls": false,
-        "supports_image_detail_original": false,
-        "multi_agent_version": "v2",
-        "context_window": 272_000,
-        "max_context_window": 272_000,
-        "experimental_supported_tools": [],
-    }))?)
-}
 
 fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
@@ -292,8 +265,8 @@ openai_base_url = "{server_uri}/v1"
 async fn list_models_unifies_openai_and_grok_provider_catalogs() -> Result<()> {
     let openai_server = MockServer::start().await;
     let grok_server = MockServer::start().await;
-    let openai_model = remote_catalog_model("openai-model", "ChatGPT Model")?;
-    let grok_model = remote_catalog_model("grok-model", "Grok Model")?;
+    let openai_model = remote_catalog_model("openai-model", "ChatGPT Model");
+    let grok_model = remote_catalog_model("grok-model", "Grok Model");
     let openai_models_mock = mount_models_once(
         &openai_server,
         ModelsResponse {

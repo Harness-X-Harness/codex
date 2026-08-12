@@ -13,6 +13,35 @@ use codex_protocol::openai_models::default_input_modalities;
 use serde_json::json;
 use std::path::Path;
 
+pub fn remote_catalog_model(slug: &str, display_name: &str) -> ModelInfo {
+    serde_json::from_value(json!({
+        "slug": slug,
+        "display_name": display_name,
+        "description": format!("{display_name} model"),
+        "default_reasoning_level": "high",
+        "supported_reasoning_levels": [
+            {"effort": "high", "description": "High"}
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "minimal_client_version": [0, 1, 0],
+        "supported_in_api": true,
+        "priority": 0,
+        "upgrade": null,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10_000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "multi_agent_version": "v2",
+        "context_window": 272_000,
+        "max_context_window": 272_000,
+        "experimental_supported_tools": [],
+    }))
+    .expect("valid remote catalog model")
+}
+
 /// Convert a ModelPreset to ModelInfo for cache storage.
 fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
     ModelInfo {
