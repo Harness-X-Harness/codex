@@ -3192,6 +3192,17 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        if params.history.is_some() && self.thread_manager.has_federated_model_catalog() {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    invalid_request(
+                        "`thread/resume.history` has no verifiable provider binding in federated provider mode; resume a stored thread or start a new thread",
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
 
         let ThreadResumeParams {
             thread_id,
