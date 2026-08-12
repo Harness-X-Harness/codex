@@ -57,6 +57,15 @@ class GrokexDistributionTest(unittest.TestCase):
         self.assertEqual(workflow.count('RUSTC_WRAPPER: "sccache"'), 3)
         self.assertEqual(workflow.count("tool: sccache"), 3)
 
+    def test_controlled_dual_provider_live_driver_is_versioned(self) -> None:
+        driver = REPO_ROOT / ".github" / "scripts" / "grokex_dual_provider_live.py"
+        driver_test = (
+            REPO_ROOT / ".github" / "scripts" / "test_grokex_dual_provider_live.py"
+        )
+
+        self.assertTrue(driver.is_file())
+        self.assertTrue(driver_test.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

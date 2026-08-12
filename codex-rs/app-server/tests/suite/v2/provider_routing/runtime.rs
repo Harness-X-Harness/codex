@@ -9,6 +9,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::Mutex;
+use tokio::sync::Notify;
 use wiremock::Request;
 use wiremock::Respond;
 
@@ -46,6 +47,7 @@ async fn unified_home_keeps_chatgpt_subscription_account_visible() -> Result<()>
 #[derive(Clone, Default)]
 struct FederatedSubagentResponder {
     child_requests: Arc<Mutex<Vec<Value>>>,
+    child_request_seen: Arc<Notify>,
 }
 
 impl Respond for FederatedSubagentResponder {
@@ -72,6 +74,7 @@ impl Respond for FederatedSubagentResponder {
                 .lock()
                 .expect("child request log should not be poisoned")
                 .push(body);
+            self.child_request_seen.notify_one();
             return responses::sse_response(responses::sse(vec![
                 responses::ev_response_created("grok-child"),
                 responses::ev_assistant_message("grok-child-message", "Child complete"),
@@ -180,6 +183,7 @@ async fn grok_subagent_inherits_parent_provider_binding_and_auth() -> Result<()>
     let fixture = ProviderRoutingFixture::with_implicit_openai_default().await?;
     let responder = FederatedSubagentResponder::default();
     let child_requests = Arc::clone(&responder.child_requests);
+    let child_request_seen = Arc::clone(&responder.child_request_seen);
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
         .and(header("authorization", "Bearer grok-test-key"))
@@ -203,6 +207,14 @@ async fn grok_subagent_inherits_parent_provider_binding_and_auth() -> Result<()>
         ..Default::default()
     })
     .await?;
+
+    if child_requests
+        .lock()
+        .expect("child request log should not be poisoned")
+        .is_empty()
+    {
+        timeout(DEFAULT_TIMEOUT, child_request_seen.notified()).await?;
+    }
 
     let child_models = child_requests
         .lock()

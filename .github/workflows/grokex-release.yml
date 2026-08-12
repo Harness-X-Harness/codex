@@ -91,7 +91,9 @@ jobs:
 
       - name: Verify Grokex distribution contract
         if: github.ref_type != 'tag'
-        run: python3 .github/scripts/test_grokex_distribution.py
+        run: |
+          python3 .github/scripts/test_grokex_distribution.py
+          python3 .github/scripts/test_grokex_dual_provider_live.py
 
       - name: Verify reusable branch artifacts for tag
         id: reuse
