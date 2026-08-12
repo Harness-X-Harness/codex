@@ -1,3 +1,4 @@
+use super::request_errors::provider_binding_error;
 use super::thread_provider_binding::validate_existing_thread_model_update;
 use super::*;
 use codex_agent_extension::AgentInvocation;
@@ -1277,7 +1278,7 @@ impl TurnRequestProcessor {
                 Op::Review { review_request },
             )
             .await
-            .map_err(|err| internal_error(format!("failed to start review: {err}")))?;
+            .map_err(provider_binding_error)?;
         let turn = Self::build_review_turn(turn_id, display_text);
         self.emit_review_started(request_id, turn, parent_thread_id)
             .await;
@@ -1301,10 +1302,12 @@ impl TurnRequestProcessor {
                 "paginated threads do not support detached review",
             ));
         }
-        let mut config = self.config.as_ref().clone();
+        let mut config = parent_thread.config().await.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
+        let fallback_provider = config.model_provider_id.clone();
+        let fallback_cwd = config.cwd.clone();
 
         let AgentRun {
             thread_id,
@@ -1321,9 +1324,8 @@ impl TurnRequestProcessor {
                 },
             )
             .await
-            .map_err(|err| internal_error(format!("failed to start detached review: {err}")))?;
+            .map_err(provider_binding_error)?;
 
-        let fallback_provider = self.config.model_provider_id.as_str();
         let stored_thread = match review_thread
             .read_thread(
                 /*include_archived*/ true, /*include_history*/ false,
@@ -1332,7 +1334,7 @@ impl TurnRequestProcessor {
         {
             Ok(stored_thread) => {
                 let (thread, _) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                    thread_from_stored_thread(stored_thread, &fallback_provider, &fallback_cwd);
                 Some(thread)
             }
             Err(err) => {

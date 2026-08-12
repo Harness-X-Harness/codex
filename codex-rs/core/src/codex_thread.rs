@@ -240,7 +240,7 @@ impl CodexThread {
     }
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
-        self.io.submit(op).await
+        self.submit_with_trace(op, /*trace*/ None).await
     }
 
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
@@ -297,8 +297,32 @@ impl CodexThread {
         op: Op,
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
+        self.validate_provider_binding_for_op(&op).await?;
         self.io
             .submit_with_trace(op, trace, /*parent_turn_id*/ None)
+            .await
+    }
+
+    async fn validate_provider_binding_for_op(&self, op: &Op) -> CodexResult<()> {
+        let Op::Review { .. } = op else {
+            return Ok(());
+        };
+        let config = self.config().await;
+        let Some(review_model) = config.review_model.as_deref() else {
+            return Ok(());
+        };
+        let thread_config = self.config_snapshot().await;
+        if review_model == thread_config.model {
+            return Ok(());
+        }
+        self.session
+            .services
+            .agent_control
+            .validate_bound_model(
+                &thread_config.model_provider_id,
+                review_model,
+                config.http_client_factory(),
+            )
             .await
     }
 

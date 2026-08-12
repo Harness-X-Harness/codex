@@ -20,6 +20,7 @@ use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+use codex_http_client::HttpClientFactory;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -106,6 +107,8 @@ pub(crate) struct AgentControl {
     manager: Weak<ThreadManagerState>,
     /// Captured at construction so delegates retain their manager's allocation policy.
     thread_id_generator: ThreadIdGenerator,
+    /// Cached runtime policy so a federated Session fails closed if its manager is dropped.
+    provider_binding_enforced: bool,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
@@ -130,10 +133,14 @@ impl AgentControl {
         thread_id_generator: ThreadIdGenerator,
         rollout_budget: Option<RolloutBudgetConfig>,
     ) -> Self {
+        let provider_binding_enforced = manager
+            .upgrade()
+            .is_some_and(|manager| manager.provider_binding_enforced());
         let control = Self {
             session_id: SessionId::default(),
             manager,
             thread_id_generator,
+            provider_binding_enforced,
             state: Arc::default(),
             v2_residency: Arc::default(),
             agent_execution_limiter: Arc::default(),
@@ -161,6 +168,21 @@ impl AgentControl {
 
     pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
         self.rollout_budget.as_ref()
+    }
+
+    /// Validate a model override against the current Thread's provider binding.
+    pub(crate) async fn validate_bound_model(
+        &self,
+        provider_id: &str,
+        model: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<()> {
+        if !self.provider_binding_enforced {
+            return Ok(());
+        }
+        self.upgrade()?
+            .validate_bound_model(provider_id, model, http_client_factory)
+            .await
     }
 
     /// Send rich user input items to an existing agent thread.

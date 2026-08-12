@@ -99,6 +99,8 @@ use tokio::sync::broadcast;
 use tracing::instrument;
 use tracing::warn;
 
+mod provider_binding;
+
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
 /// Test-only override for enabling thread-manager behaviors used by integration
@@ -1741,7 +1743,7 @@ impl ThreadManagerState {
             user_shell_override,
         } = request;
         let StartThreadOptions {
-            config,
+            mut config,
             allow_provider_model_fallback,
             initial_history,
             history_mode,
@@ -1784,6 +1786,8 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
+        self.bind_derived_thread_config(&mut config, parent_thread_id, forked_from_thread_id)
+            .await?;
         let user_instructions = self
             .user_instructions_for_spawn(&session_source, parent_thread_id, forked_from_thread_id)
             .await;
