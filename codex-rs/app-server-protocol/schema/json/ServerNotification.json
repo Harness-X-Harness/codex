@@ -4617,6 +4617,7 @@
           "type": "object"
         },
         {
+          "description": "App-server projection of a hosted or standalone web search.\n\nThis type is separate from the durable extension item so v2 can keep its required-nullable field contract without changing rollout serialization.",
           "properties": {
             "action": {
               "anyOf": [
@@ -4635,8 +4636,6 @@
               "type": "string"
             },
             "results": {
-              "default": null,
-              "description": "Structured search results returned out-of-band by standalone web search.\n\nThese stay as opaque JSON at the extension/app-server boundary so new result fields and result types can pass through without a Codex release.",
               "items": true,
               "type": [
                 "array",
@@ -4721,6 +4720,7 @@
           "type": "object"
         },
         {
+          "description": "App-server projection of an image-generation result.\n\nThis type is separate from the durable extension item so v2 can keep its required-nullable field contract without changing rollout serialization.",
           "properties": {
             "id": {
               "type": "string"
@@ -4754,7 +4754,6 @@
               "type": "string"
             },
             "transparentBackground": {
-              "default": null,
               "type": [
                 "boolean",
                 "null"
