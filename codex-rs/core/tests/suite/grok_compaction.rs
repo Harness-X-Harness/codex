@@ -1,3 +1,4 @@
+use super::compact::COMPACT_WARNING_MESSAGE;
 use anyhow::Result;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_model_provider_info::WireApi;
@@ -40,6 +41,7 @@ async fn grok_compaction_and_follow_up_keep_the_bound_provider_contract() -> Res
     let test = test_codex()
         .with_model("koffing")
         .with_config(|config| {
+            config.model_provider.name = "Grok test provider".to_string();
             config.model_provider.wire_api = WireApi::GrokResponses;
             config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
         })
@@ -48,6 +50,16 @@ async fn grok_compaction_and_follow_up_keep_the_bound_provider_contract() -> Res
 
     test.submit_turn("Before compact").await?;
     test.codex.submit(Op::Compact).await?;
+    let compact_result = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(warning) if warning.message == COMPACT_WARNING_MESSAGE
+        ) || matches!(event, EventMsg::Error(_))
+    })
+    .await;
+    if let EventMsg::Error(error) = compact_result {
+        anyhow::bail!("Grok compaction failed: {}", error.message);
+    }
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -64,18 +76,8 @@ async fn grok_compaction_and_follow_up_keep_the_bound_provider_contract() -> Res
                 && item.get("encrypted_content").is_none()
         }));
     }
-    assert!(
-        requests[1]
-            .body_json()
-            .to_string()
-            .contains(SUMMARIZATION_PROMPT)
-    );
-    assert!(
-        requests[2]
-            .body_json()
-            .to_string()
-            .contains("Bound provider summary")
-    );
+    assert!(requests[1].body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(requests[2].body_contains_text("Bound provider summary"));
     Ok(())
 }
 
