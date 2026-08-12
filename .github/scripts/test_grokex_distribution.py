@@ -48,6 +48,15 @@ class GrokexDistributionTest(unittest.TestCase):
             self.assertIn("grokex login", content)
             self.assertIn("GROK_API_KEY", content)
 
+    def test_rust_jobs_share_the_github_sccache_backend(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(workflow.count('SCCACHE_GHA_ENABLED: "true"'), 3)
+        self.assertEqual(workflow.count('RUSTC_WRAPPER: "sccache"'), 3)
+        self.assertEqual(workflow.count("tool: sccache"), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
