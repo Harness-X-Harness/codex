@@ -6,6 +6,10 @@ use app_test_support::remote_catalog_model;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewDelivery;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -13,6 +17,8 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -40,6 +46,10 @@ struct ProviderRoutingFixture {
 
 impl ProviderRoutingFixture {
     async fn new() -> Result<Self> {
+        Self::with_review_model(/*review_model*/ None).await
+    }
+
+    async fn with_review_model(review_model: Option<&str>) -> Result<Self> {
         let openai_server = MockServer::start().await;
         let grok_server = MockServer::start().await;
         mount_models_repeating(
@@ -61,13 +71,16 @@ impl ProviderRoutingFixture {
         .await;
 
         let codex_home = TempDir::new()?;
+        let review_model = review_model
+            .map(|model| format!("review_model = \"{model}\"\n"))
+            .unwrap_or_default();
         std::fs::write(
             codex_home.path().join("config.toml"),
             format!(
                 r#"
 model = "openai-model"
 model_provider = "openai"
-approval_policy = "never"
+{review_model}approval_policy = "never"
 sandbox_mode = "read-only"
 web_search = "live"
 openai_base_url = "{}/v1"
@@ -261,6 +274,161 @@ async fn fork_inherits_the_source_thread_provider_binding() -> Result<()> {
 }
 
 #[tokio::test]
+async fn detached_review_inherits_the_parent_provider_binding() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let grok_responses = responses::mount_sse_sequence(
+        &fixture.grok_server,
+        vec![
+            completion_sse("grok-review-seed"),
+            completion_sse("grok-detached-review"),
+        ],
+    )
+    .await;
+    let openai_responses = mount_completion(&fixture.openai_server, "wrong-review-provider").await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+
+    let request_id = app
+        .send_review_start_request(ReviewStartParams {
+            thread_id: started.thread.id,
+            target: ReviewTarget::Custom {
+                instructions: "Review this thread".to_string(),
+            },
+            delivery: Some(ReviewDelivery::Detached),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ReviewStartResponse {
+        review_thread_id, ..
+    } = to_response(response)?;
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_matching_notification("detached review thread/started", |message| {
+            message.method == "thread/started"
+                && message.params.as_ref().is_some_and(|params| {
+                    serde_json::from_value::<ThreadStartedNotification>(params.clone())
+                        .is_ok_and(|started| started.thread.id == review_thread_id)
+                })
+        }),
+    )
+    .await??;
+    let review_started: ThreadStartedNotification = serde_json::from_value(
+        notification
+            .params
+            .context("thread/started must include params")?,
+    )?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_matching_notification("detached review turn/completed", |message| {
+            message.method == "turn/completed"
+                && message.params.as_ref().is_some_and(|params| {
+                    serde_json::from_value::<TurnCompletedNotification>(params.clone())
+                        .is_ok_and(|completed| completed.thread_id == review_thread_id)
+                })
+        }),
+    )
+    .await??;
+
+    assert_eq!(review_started.thread.model_provider, "grok");
+    assert_eq!(grok_responses.requests().len(), 2);
+    assert_eq!(
+        grok_responses.requests()[1].body_json()["model"],
+        "grok-model"
+    );
+    assert_eq!(openai_responses.requests().len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn detached_review_rejects_a_cross_provider_review_model_before_egress() -> Result<()> {
+    let fixture = ProviderRoutingFixture::with_review_model(Some("openai-model")).await?;
+    mount_completion(&fixture.grok_server, "grok-review-seed").await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+    let grok_request_count = received_responses_count(&fixture.grok_server).await?;
+
+    let request_id = app
+        .send_review_start_request(ReviewStartParams {
+            thread_id: started.thread.id,
+            target: ReviewTarget::Custom {
+                instructions: "Review this thread".to_string(),
+            },
+            delivery: Some(ReviewDelivery::Detached),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("new thread"));
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(
+        received_responses_count(&fixture.grok_server).await?,
+        grok_request_count
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn inline_review_rejects_a_cross_provider_review_model_before_egress() -> Result<()> {
+    let fixture = ProviderRoutingFixture::with_review_model(Some("openai-model")).await?;
+    mount_completion(&fixture.grok_server, "grok-inline-review-seed").await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+    let grok_request_count = received_responses_count(&fixture.grok_server).await?;
+
+    let request_id = app
+        .send_review_start_request(ReviewStartParams {
+            thread_id: started.thread.id,
+            target: ReviewTarget::Custom {
+                instructions: "Review this thread".to_string(),
+            },
+            delivery: Some(ReviewDelivery::Inline),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("new thread"));
+
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(
+        received_responses_count(&fixture.grok_server).await?,
+        grok_request_count
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn cold_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     mount_completion(&fixture.grok_server, "grok-resume-seed").await;
@@ -449,16 +617,15 @@ async fn received_responses_count(server: &MockServer) -> Result<usize> {
 }
 
 async fn mount_completion(server: &MockServer, response_id: &str) -> responses::ResponseMock {
-    mount_sse_once_match(
-        server,
-        method("POST"),
-        responses::sse(vec![
-            responses::ev_response_created(response_id),
-            responses::ev_assistant_message(&format!("{response_id}-message"), "Seed response"),
-            responses::ev_completed(response_id),
-        ]),
-    )
-    .await
+    mount_sse_once_match(server, method("POST"), completion_sse(response_id)).await
+}
+
+fn completion_sse(response_id: &str) -> String {
+    responses::sse(vec![
+        responses::ev_response_created(response_id),
+        responses::ev_assistant_message(&format!("{response_id}-message"), "Seed response"),
+        responses::ev_completed(response_id),
+    ])
 }
 
 async fn materialize_thread(app: &mut TestAppServer, thread_id: &str) -> Result<()> {
