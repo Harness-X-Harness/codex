@@ -8,13 +8,13 @@ installs as `grokex` and does not replace a stock `codex` installation.
 On macOS or Linux:
 
 ```sh
-curl -fsSL https://github.com/weavertech-group/codex/releases/latest/download/install-grokex.sh | sh
+curl -fsSL https://github.com/weavertech-group/codex/releases/download/grokex-v0.148.0-alpha.5/install-grokex.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-irm https://github.com/weavertech-group/codex/releases/latest/download/install-grokex.ps1 | iex
+irm https://github.com/weavertech-group/codex/releases/download/grokex-v0.148.0-alpha.5/install-grokex.ps1 | iex
 ```
 
 The default Codex Home is `~/.codex-grok`. It is one Home for both providers.

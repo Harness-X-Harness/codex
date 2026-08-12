@@ -37,6 +37,10 @@ class GrokexDistributionTest(unittest.TestCase):
         install_doc = (REPO_ROOT / "grokex" / "INSTALL.md").read_text(
             encoding="utf-8"
         )
+        codex_tag = (REPO_ROOT / "grokex" / "codex-release-tag").read_text(
+            encoding="utf-8"
+        ).strip()
+        grokex_tag = "grokex-v" + codex_tag.removeprefix("rust-v")
         unix_installer = (REPO_ROOT / "scripts" / "install-grokex.sh").read_text(
             encoding="utf-8"
         )
@@ -47,6 +51,16 @@ class GrokexDistributionTest(unittest.TestCase):
         for content in (install_doc, unix_installer, windows_installer):
             self.assertIn("grokex login", content)
             self.assertIn("GROK_API_KEY", content)
+
+        self.assertNotIn("/releases/latest/", install_doc)
+        self.assertIn(
+            f"/releases/download/{grokex_tag}/install-grokex.sh",
+            install_doc,
+        )
+        self.assertIn(
+            f"/releases/download/{grokex_tag}/install-grokex.ps1",
+            install_doc,
+        )
 
     def test_rust_jobs_share_the_persistent_sccache_action(self) -> None:
         workflow = (
