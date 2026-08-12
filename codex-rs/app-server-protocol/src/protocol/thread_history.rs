@@ -11,6 +11,7 @@ use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
+use crate::protocol::v2::ImageGenerationItem;
 use crate::protocol::v2::McpToolCallAppContext;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
@@ -26,7 +27,6 @@ use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
 use crate::protocol::v2::WebSearchItem;
 use crate::protocol::v2::web_search_action_from_core;
-use codex_extension_items::image_generation::ImageGenerationItem;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
@@ -1631,6 +1631,7 @@ mod tests {
     use super::*;
     use crate::protocol::v2::CommandExecutionSource;
     use codex_extension_items::ExtensionItem as CoreExtensionItem;
+    use codex_extension_items::image_generation::ImageGenerationItem as CoreImageGenerationItem;
     use codex_extension_items::sleep::SleepItem as CoreSleepItem;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
@@ -2077,7 +2078,7 @@ mod tests {
                 thread_id,
                 turn_id: turn_id.to_string(),
                 item: CoreTurnItem::Extension(CoreExtensionItem::ImageGeneration(
-                    ImageGenerationItem {
+                    CoreImageGenerationItem {
                         id: "image-1".to_string(),
                         status: "completed".to_string(),
                         revised_prompt: Some("A blue square".to_string()),

@@ -172,6 +172,7 @@ pub use rollout::read_head_for_summary;
 pub use rollout::read_session_meta_line;
 pub use rollout::rollout_date_parts;
 mod function_tool;
+mod hosted_tool_lifecycle;
 mod state;
 mod tasks;
 mod user_shell_command;

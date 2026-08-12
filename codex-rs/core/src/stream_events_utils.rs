@@ -248,9 +248,16 @@ pub(crate) async fn finalize_non_tool_response_item(
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
+    allow_x_search_projection: bool,
 ) -> Option<FinalizedTurnItem> {
-    let turn_item =
-        handle_non_tool_response_item(sess, contributor_policy, item, plan_mode).await?;
+    let turn_item = handle_non_tool_response_item(
+        sess,
+        contributor_policy,
+        item,
+        plan_mode,
+        allow_x_search_projection,
+    )
+    .await?;
     let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
         match &turn_item {
             TurnItem::AgentMessage(agent_message) => {
@@ -330,11 +337,13 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
+            let allow_x_search_projection = ctx.tool_runtime.allows_x_search_projection(&item);
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
                 plan_mode,
+                allow_x_search_projection,
             )
             .await;
             let finalized_facts = finalized_turn_item
@@ -399,6 +408,7 @@ pub(crate) async fn handle_non_tool_response_item(
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
+    allow_x_search_projection: bool,
 ) -> Option<TurnItem> {
     let item_type = match item {
         ResponseItem::AdditionalTools { .. } => "additional_tools",
@@ -430,7 +440,13 @@ pub(crate) async fn handle_non_tool_response_item(
     match item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => {
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::GrokImageGenerationCall { .. } => {
+            let mut turn_item = parse_turn_item(item)?;
+            finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
+            Some(turn_item)
+        }
+        ResponseItem::CustomToolCall { .. } if allow_x_search_projection => {
             let mut turn_item = parse_turn_item(item)?;
             finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)

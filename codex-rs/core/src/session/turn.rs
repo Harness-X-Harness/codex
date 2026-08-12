@@ -22,6 +22,10 @@ use crate::hook_runtime::reject_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
+use crate::hosted_tool_lifecycle::HostedToolCompletion;
+use crate::hosted_tool_lifecycle::HostedToolEventPhase;
+use crate::hosted_tool_lifecycle::HostedToolLifecycle;
+use crate::hosted_tool_lifecycle::validate_grok_hosted_item;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -78,6 +82,7 @@ use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_login::CodexAuth;
 use codex_model_provider::RemoteCompactionSupport;
+use codex_model_provider_info::WireApi;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
@@ -2059,6 +2064,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             TurnItemContributorPolicy::Run(turn_store),
             item,
             /*plan_mode*/ true,
+            /*allow_x_search_projection*/ false,
         )
         .await
         {
@@ -2190,6 +2196,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut active_hosted_item_id: Option<String> = None;
     // Grok can interleave hosted-tool and reasoning items inside one streamed assistant
     // message, then continue sending deltas for that original message without adding it again.
     let mut suspended_agent_message: Option<(TurnItem, bool)> = None;
@@ -2208,6 +2215,8 @@ async fn try_run_sampling_request(
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
+    let mut hosted_tool_lifecycle = HostedToolLifecycle::default();
+    let grok_dialect = turn_context.provider.info().wire_api == WireApi::GrokResponses;
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -2233,14 +2242,35 @@ async fn try_run_sampling_request(
         {
             Ok(event) => event,
             Err(codex_async_utils::CancelErr::Cancelled) => {
+                hosted_tool_lifecycle
+                    .close_incomplete(sess.as_ref(), &turn_context)
+                    .await;
                 break Err(CodexErr::TurnAborted);
             }
         };
 
         let event = match event {
             Some(Ok(event)) => event,
-            Some(Err(err)) => break Err(err),
+            Some(Err(err)) => {
+                let incomplete_count = hosted_tool_lifecycle
+                    .close_incomplete(sess.as_ref(), &turn_context)
+                    .await;
+                if incomplete_count > 0 {
+                    break Err(CodexErr::Fatal(
+                        "hosted tool stream failed before output_item.done".to_string(),
+                    ));
+                }
+                break Err(err);
+            }
             None => {
+                let incomplete_count = hosted_tool_lifecycle
+                    .close_incomplete(sess.as_ref(), &turn_context)
+                    .await;
+                if incomplete_count > 0 {
+                    break Err(CodexErr::Fatal(
+                        "hosted tool stream closed before output_item.done".to_string(),
+                    ));
+                }
                 break Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                 ));
@@ -2255,7 +2285,26 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(mut item) => {
+                let declared_x_search = tool_runtime.is_declared_x_search_item(&item);
+                let hosted_item_id = if grok_dialect {
+                    match validate_grok_hosted_item(
+                        &item,
+                        declared_x_search,
+                        HostedToolEventPhase::Done,
+                    ) {
+                        Ok(item_id) => item_id.map(str::to_string),
+                        Err(message) => break Err(CodexErr::Fatal(message.to_string())),
+                    }
+                } else {
+                    None
+                };
                 assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
+                let hosted_completion = hosted_item_id
+                    .as_deref()
+                    .map(|item_id| hosted_tool_lifecycle.record_completed(item_id));
+                if matches!(&hosted_completion, Some(HostedToolCompletion::Duplicate)) {
+                    continue;
+                }
                 if analytics_tool_call_ids.len() < MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE {
                     let call_id = match &item {
                         ResponseItem::FunctionCall { call_id, .. }
@@ -2279,13 +2328,32 @@ async fn try_run_sampling_request(
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
+                let active_matches_completed = hosted_item_id
+                    .as_deref()
+                    .is_none_or(|item_id| active_hosted_item_id.as_deref() == Some(item_id));
+                let active_was_streamed = active_item_is_streaming_to_client;
+                let previously_active_item = if active_matches_completed {
+                    active_hosted_item_id = None;
+                    active_item.take()
+                } else {
+                    match hosted_completion {
+                        Some(HostedToolCompletion::First { started_item }) => started_item,
+                        Some(HostedToolCompletion::Duplicate) | None => None,
+                    }
+                };
+                let previous_was_streamed = if active_matches_completed {
+                    active_was_streamed
+                } else {
+                    previously_active_item.is_some()
+                };
+                let previously_streamed_item = if previous_was_streamed {
                     previously_active_item
                 } else {
                     None
                 };
-                active_item_is_streaming_to_client = false;
+                if active_matches_completed {
+                    active_item_is_streaming_to_client = false;
+                }
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2311,8 +2379,11 @@ async fn try_run_sampling_request(
                     )
                     .await
                 {
-                    if let Some((item, streaming_to_client)) = suspended_agent_message.take() {
+                    if active_item.is_none()
+                        && let Some((item, streaming_to_client)) = suspended_agent_message.take()
+                    {
                         active_item = Some(item);
+                        active_hosted_item_id = None;
                         active_item_is_streaming_to_client = streaming_to_client;
                     }
                     continue;
@@ -2365,8 +2436,11 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                if let Some((item, streaming_to_client)) = suspended_agent_message.take() {
+                if active_item.is_none()
+                    && let Some((item, streaming_to_client)) = suspended_agent_message.take()
+                {
                     active_item = Some(item);
+                    active_hosted_item_id = None;
                     active_item_is_streaming_to_client = streaming_to_client;
                 }
                 // todo: remove before stabilizing multi-agent v2
@@ -2378,7 +2452,35 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
+                let declared_x_search = tool_runtime.is_declared_x_search_item(&item);
+                let hosted_item_id = if grok_dialect {
+                    match validate_grok_hosted_item(
+                        &item,
+                        declared_x_search,
+                        HostedToolEventPhase::Added,
+                    ) {
+                        Ok(item_id) => item_id.map(str::to_string),
+                        Err(message) => break Err(CodexErr::Fatal(message.to_string())),
+                    }
+                } else {
+                    None
+                };
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
+                let x_search_like = matches!(
+                    &item,
+                    ResponseItem::CustomToolCall { name, .. }
+                        if codex_tools::is_evidence_backed_x_search_name(name)
+                );
+                let remote_x_search_lifecycle =
+                    x_search_like && tool_runtime.is_declared_x_search_item(&item);
+                let project_added_item =
+                    !x_search_like || tool_runtime.allows_x_search_projection(&item);
+                if hosted_item_id
+                    .as_deref()
+                    .is_some_and(|item_id| hosted_tool_lifecycle.has_seen(item_id))
+                {
+                    continue;
+                }
                 let interrupts_agent_message = !matches!(
                     &item,
                     ResponseItem::Message {
@@ -2391,17 +2493,9 @@ async fn try_run_sampling_request(
                     && matches!(active_item, Some(TurnItem::AgentMessage(_)));
                 if suspended_for_added && let Some(active) = active_item.take() {
                     suspended_agent_message = Some((active, active_item_is_streaming_to_client));
+                    active_hosted_item_id = None;
                     active_item_is_streaming_to_client = false;
                 }
-                let x_search_like = matches!(
-                    &item,
-                    ResponseItem::CustomToolCall { name, .. }
-                        if codex_tools::is_evidence_backed_x_search_name(name)
-                );
-                let remote_x_search_lifecycle =
-                    x_search_like && tool_runtime.is_declared_x_search_item(&item);
-                let project_added_item =
-                    !x_search_like || tool_runtime.allows_x_search_projection(&item);
                 if let ResponseItem::CustomToolCall {
                     call_id,
                     name,
@@ -2426,6 +2520,7 @@ async fn try_run_sampling_request(
                         TurnItemContributorPolicy::Skip,
                         &item,
                         plan_mode,
+                        x_search_like && project_added_item,
                     )
                     .await
                 {
@@ -2479,13 +2574,23 @@ async fn try_run_sampling_request(
                             .await;
                         }
                     }
+                    if let Some(hosted_item_id) = hosted_item_id.as_deref() {
+                        let inserted = hosted_tool_lifecycle.record_started(
+                            hosted_item_id,
+                            turn_item.clone(),
+                            stream_item_to_client,
+                        );
+                        debug_assert!(inserted);
+                    }
                     active_item = Some(turn_item);
+                    active_hosted_item_id = hosted_item_id;
                     active_item_is_streaming_to_client = stream_item_to_client;
                 } else if suspended_for_added
                     && !remote_x_search_lifecycle
                     && let Some((item, streaming_to_client)) = suspended_agent_message.take()
                 {
                     active_item = Some(item);
+                    active_hosted_item_id = None;
                     active_item_is_streaming_to_client = streaming_to_client;
                 }
             }
@@ -2549,6 +2654,15 @@ async fn try_run_sampling_request(
                 token_usage,
                 end_turn,
             } => {
+                if hosted_tool_lifecycle
+                    .close_incomplete(sess.as_ref(), &turn_context)
+                    .await
+                    > 0
+                {
+                    break Err(CodexErr::Fatal(
+                        "response completed before a hosted tool reached output_item.done".into(),
+                    ));
+                }
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(

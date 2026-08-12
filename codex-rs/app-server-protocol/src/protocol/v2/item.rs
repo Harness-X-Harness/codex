@@ -13,12 +13,12 @@ use crate::TS;
 use crate::protocol::item_builders::CommandExecutionPresentation;
 use crate::protocol::item_builders::convert_patch_changes;
 use crate::protocol::item_builders::review_output_text;
+use crate::protocol::v2::hosted_items::ImageGenerationItem;
+use crate::protocol::v2::hosted_items::WebSearchAction;
+use crate::protocol::v2::hosted_items::WebSearchItem;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_extension_items::ExtensionItem;
-pub use codex_extension_items::image_generation::ImageGenerationItem;
 pub use codex_extension_items::sleep::SleepItem;
-pub use codex_extension_items::web_search::WebSearchAction;
-pub use codex_extension_items::web_search::WebSearchItem;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
@@ -919,9 +919,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 path: image.path.into(),
             },
             CoreTurnItem::Extension(extension) => match extension {
-                ExtensionItem::ImageGeneration(item) => ThreadItem::ImageGeneration(item),
+                ExtensionItem::ImageGeneration(item) => ThreadItem::ImageGeneration(item.into()),
                 ExtensionItem::Sleep(item) => ThreadItem::Sleep(item),
-                ExtensionItem::WebSearch(item) => ThreadItem::WebSearch(item),
+                ExtensionItem::WebSearch(item) => ThreadItem::WebSearch(item.into()),
             },
             CoreTurnItem::ImageGeneration(image) => {
                 ThreadItem::ImageGeneration(ImageGenerationItem {

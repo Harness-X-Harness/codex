@@ -151,6 +151,7 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         TurnItemContributorPolicy::Skip,
         &item,
         /*plan_mode*/ false,
+        /*allow_x_search_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -175,6 +176,70 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         memory_citation.rollout_ids,
         vec!["019cc2ea-1dff-7902-8d40-c8f6e5d83cc4".to_string()]
     );
+}
+
+#[tokio::test]
+async fn grok_x_search_projection_requires_authoritative_plan_approval() {
+    let (session, _) = make_session_and_context().await;
+    for status in ["completed", "failed"] {
+        let item = ResponseItem::CustomToolCall {
+            id: Some(ResponseItemId::with_suffix("ct", status)),
+            status: Some(status.to_string()),
+            call_id: format!("call_{status}"),
+            name: "x_keyword_search".to_string(),
+            namespace: None,
+            input: r#"{"query":"Codex"}"#.to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+
+        assert!(
+            handle_non_tool_response_item(
+                &session,
+                TurnItemContributorPolicy::Skip,
+                &item,
+                /*plan_mode*/ false,
+                /*allow_x_search_projection*/ false,
+            )
+            .await
+            .is_none()
+        );
+        let projected = handle_non_tool_response_item(
+            &session,
+            TurnItemContributorPolicy::Skip,
+            &item,
+            /*plan_mode*/ false,
+            /*allow_x_search_projection*/ true,
+        )
+        .await;
+        assert!(matches!(projected, Some(TurnItem::WebSearch(_))));
+    }
+}
+
+#[tokio::test]
+async fn grok_image_variant_uses_the_common_non_tool_projection_path() {
+    let (session, _) = make_session_and_context().await;
+    for (status, result) in [
+        ("completed", Some("opaque-image-result".to_string())),
+        ("failed", None),
+    ] {
+        let item = ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", status)),
+            status: status.to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result,
+            internal_chat_message_metadata_passthrough: None,
+        };
+
+        let projected = handle_non_tool_response_item(
+            &session,
+            TurnItemContributorPolicy::Skip,
+            &item,
+            /*plan_mode*/ false,
+            /*allow_x_search_projection*/ false,
+        )
+        .await;
+        assert!(matches!(projected, Some(TurnItem::ImageGeneration(_))));
+    }
 }
 
 struct TestTurnItemContributor;
@@ -238,6 +303,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         TurnItemContributorPolicy::Skip,
         &item,
         /*plan_mode*/ false,
+        /*allow_x_search_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -253,6 +319,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
+        /*allow_x_search_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -373,6 +440,7 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
+        /*allow_x_search_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -398,6 +466,7 @@ async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
+        /*allow_x_search_projection*/ false,
     )
     .await
     .expect("assistant message should parse");

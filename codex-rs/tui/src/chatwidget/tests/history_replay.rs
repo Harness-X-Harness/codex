@@ -98,8 +98,10 @@ async fn resumed_grok_image_generation_renders_native_prompt() {
         .map(|lines| lines_to_single_string(&lines))
         .collect::<String>();
 
-    assert!(rendered.contains("A Grok-native blue square"));
-    assert!(!rendered.contains("grok-image-1"));
+    insta::assert_snapshot!(rendered, @r"
+    • Generated Image:
+      └ A Grok-native blue square
+    ");
 }
 
 #[tokio::test]

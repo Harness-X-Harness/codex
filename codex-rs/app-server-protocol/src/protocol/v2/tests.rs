@@ -3116,7 +3116,15 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
     assert_eq!(
         ThreadItem::from(TurnItem::Extension(
-            codex_extension_items::ExtensionItem::WebSearch(expected_search_item.clone()),
+            codex_extension_items::ExtensionItem::WebSearch(
+                codex_extension_items::web_search::WebSearchItem {
+                    id: expected_search_item.id.clone(),
+                    query: expected_search_item.query.clone(),
+                    action: expected_search_item.action.clone(),
+                    results: expected_search_item.results.clone(),
+                    source: expected_search_item.source,
+                },
+            ),
         )),
         ThreadItem::WebSearch(expected_search_item)
     );
