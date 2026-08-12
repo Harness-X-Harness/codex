@@ -180,7 +180,7 @@ async fn openai_and_grok_threads_run_concurrently_with_provider_scoped_auth() ->
 
 #[tokio::test]
 async fn grok_subagent_inherits_parent_provider_binding_and_auth() -> Result<()> {
-    let fixture = ProviderRoutingFixture::with_implicit_openai_default().await?;
+    let fixture = ProviderRoutingFixture::with_implicit_openai_default_and_multi_agent_v2().await?;
     let responder = FederatedSubagentResponder::default();
     let child_requests = Arc::clone(&responder.child_requests);
     let child_request_seen = Arc::clone(&responder.child_request_seen);
@@ -246,7 +246,12 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
             ..Default::default()
         })
         .await?;
-    materialize_thread(&mut app, &grok_thread.thread.id).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        materialize_thread(&mut app, &grok_thread.thread.id),
+    )
+    .await
+    .context("Grok turn before compaction did not complete")??;
 
     let compact_request_id = app
         .send_thread_compact_start_request(ThreadCompactStartParams {
@@ -278,7 +283,12 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
         ),
     )
     .await??;
-    materialize_thread(&mut app, &grok_thread.thread.id).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        materialize_thread(&mut app, &grok_thread.thread.id),
+    )
+    .await
+    .context("Grok turn after compaction did not complete")??;
 
     let requests = grok_responses.requests();
     assert_eq!(requests.len(), 3);

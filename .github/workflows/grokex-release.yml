@@ -304,8 +304,19 @@ jobs:
         run: |
           cargo test --locked -p codex-app-server --test all \
             list_models_unifies_openai_and_grok_provider_catalogs
-          cargo test --locked -p codex-app-server --test all \
-            suite::v2::provider_routing
+          timeout --signal=TERM --kill-after=15s 5m \
+            cargo test --locked -p codex-app-server --test all \
+              suite::v2::provider_routing::runtime::grok_compaction_and_follow_up_keep_provider_binding_and_auth \
+              -- --exact
+          timeout --signal=TERM --kill-after=15s 5m \
+            cargo test --locked -p codex-app-server --test all \
+              suite::v2::provider_routing::runtime::grok_subagent_inherits_parent_provider_binding_and_auth \
+              -- --exact
+          timeout --signal=TERM --kill-after=15s 10m \
+            cargo test --locked -p codex-app-server --test all \
+              suite::v2::provider_routing -- \
+              --skip suite::v2::provider_routing::runtime::grok_compaction_and_follow_up_keep_provider_binding_and_auth \
+              --skip suite::v2::provider_routing::runtime::grok_subagent_inherits_parent_provider_binding_and_auth
 
       - name: Run protocol and provider tests
         working-directory: codex-rs
@@ -316,6 +327,7 @@ jobs:
             -p codex-tools \
             -p codex-api \
             -p codex-protocol \
+            -p codex-model-provider \
             -p codex-model-provider-info \
             -p codex-models-manager \
             -p codex-extension-items \

@@ -170,6 +170,12 @@ pub(crate) fn auth_manager_for_provider(
 ) -> Option<Arc<AuthManager>> {
     match provider.auth.clone() {
         Some(config) => Some(AuthManager::external_bearer_only(config)),
+        None if provider.is_amazon_bedrock() => auth_manager.filter(|auth_manager| {
+            matches!(
+                auth_manager.auth_cached(),
+                Some(CodexAuth::BedrockApiKey(_))
+            )
+        }),
         None if provider.requires_openai_auth
             && provider.env_key.is_none()
             && provider.experimental_bearer_token.is_none()

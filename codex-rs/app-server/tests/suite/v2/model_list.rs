@@ -266,7 +266,6 @@ async fn list_models_unifies_openai_and_grok_provider_catalogs() -> Result<()> {
     let openai_server = MockServer::start().await;
     let grok_server = MockServer::start().await;
     let openai_model = remote_catalog_model("openai-model", "ChatGPT Model");
-    let grok_model = remote_catalog_model("grok-model", "Grok Model");
     let openai_models_mock = mount_models_once(
         &openai_server,
         ModelsResponse {
@@ -274,13 +273,15 @@ async fn list_models_unifies_openai_and_grok_provider_catalogs() -> Result<()> {
         },
     )
     .await;
-    let grok_models_mock = mount_models_once(
-        &grok_server,
-        ModelsResponse {
-            models: vec![grok_model],
-        },
-    )
-    .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path_regex(".*/models$"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "object": "list",
+            "data": [{"id": "grok-model", "object": "model", "owned_by": "xai"}]
+        })))
+        .expect(1)
+        .mount(&grok_server)
+        .await;
 
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -339,7 +340,14 @@ wire_api = "grok_responses"
         vec!["openai-model".to_string(), "grok-model".to_string()]
     );
     assert_eq!(openai_models_mock.requests().len(), 1);
-    assert_eq!(grok_models_mock.requests().len(), 1);
+    assert_eq!(
+        grok_server
+            .received_requests()
+            .await
+            .expect("Grok models server should retain request history")
+            .len(),
+        1
+    );
     Ok(())
 }
 

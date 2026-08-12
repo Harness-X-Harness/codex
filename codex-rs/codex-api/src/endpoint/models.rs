@@ -9,7 +9,19 @@ use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
+use serde::Deserialize;
 use std::sync::Arc;
+
+#[derive(Deserialize)]
+struct OpenAiModelsResponse {
+    object: String,
+    data: Vec<OpenAiModel>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModel {
+    id: String,
+}
 
 pub struct ModelsClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -48,24 +60,8 @@ impl<T: HttpTransport> ModelsClient<T> {
         request_url: String,
         extra_headers: HeaderMap,
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
-        let resp = self
-            .session
-            .execute_with(
-                Method::GET,
-                Self::path(),
-                extra_headers,
-                /*body*/ None,
-                move |req| {
-                    req.url.clone_from(&request_url);
-                },
-            )
-            .await?;
-
-        let header_etag = resp
-            .headers
-            .get(ETAG)
-            .and_then(|value| value.to_str().ok())
-            .map(ToString::to_string);
+        let resp = self.execute(request_url, extra_headers).await?;
+        let header_etag = response_etag(&resp.headers);
 
         let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
             .map_err(|e| {
@@ -77,6 +73,64 @@ impl<T: HttpTransport> ModelsClient<T> {
 
         Ok((models, header_etag))
     }
+
+    /// List model identifiers from the standard OpenAI-compatible catalog envelope.
+    ///
+    /// Provider code chooses this decoder explicitly. It does not auto-detect an envelope from
+    /// response fields, so a provider cannot silently switch catalog contracts.
+    pub async fn list_openai_compatible_model_ids(
+        &self,
+        request_url: String,
+        extra_headers: HeaderMap,
+    ) -> Result<(Vec<String>, Option<String>), ApiError> {
+        let resp = self.execute(request_url, extra_headers).await?;
+        let header_etag = response_etag(&resp.headers);
+        let response =
+            serde_json::from_slice::<OpenAiModelsResponse>(&resp.body).map_err(|error| {
+                ApiError::Stream(format!("failed to decode models response: {error}"))
+            })?;
+        if response.object != "list" {
+            return Err(ApiError::Stream(
+                "failed to decode models response: expected object=list".to_string(),
+            ));
+        }
+        let ids = response
+            .data
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        if ids.iter().any(String::is_empty) {
+            return Err(ApiError::Stream(
+                "failed to decode models response: model id must not be empty".to_string(),
+            ));
+        }
+        Ok((ids, header_etag))
+    }
+
+    async fn execute(
+        &self,
+        request_url: String,
+        extra_headers: HeaderMap,
+    ) -> Result<codex_client::Response, ApiError> {
+        self.session
+            .execute_with(
+                Method::GET,
+                Self::path(),
+                extra_headers,
+                /*body*/ None,
+                move |req| {
+                    req.url.clone_from(&request_url);
+                },
+            )
+            .await
+    }
+}
+
+fn response_etag(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]

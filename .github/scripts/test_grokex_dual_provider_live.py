@@ -276,46 +276,102 @@ requires_openai_auth = false
                 "turn/start", {"error": {"code": -32600, "message": "other"}}
             )
 
-    def test_hosted_story_requires_turn_and_persisted_app_projection(self) -> None:
-        class FakeServer:
-            def __init__(self, persisted: bool) -> None:
-                self.persisted = persisted
+    def test_hosted_probe_uses_one_native_tool_and_required_choice(self) -> None:
+        request = MODULE._hosted_probe_request("grok-4.5", "x_search")
+        self.assertEqual(
+            request,
+            {
+                "model": "grok-4.5",
+                "input": [
+                    {"role": "user", "content": "Use X Search to find the official xAI account."}
+                ],
+                "tools": [{"type": "x_search"}],
+                "tool_choice": "required",
+                "stream": True,
+                "store": False,
+            },
+        )
 
-            def request(self, method, params, timeout=90):
-                if method == "turn/start":
-                    return {}
-                if method == "thread/read":
-                    items = (
-                        [{"id": "search-current", "type": "webSearch", "source": "x"}]
-                        if self.persisted
-                        else [{"id": "search-old", "type": "webSearch", "source": "x"}]
-                    )
-                    return {"thread": {"turns": [{"items": items}]}}
-                raise AssertionError(f"unexpected request: {method}")
-
-        turn = {
-            "items": [
-                {"id": "search-current", "type": "webSearch", "source": "x"}
-            ]
-        }
-        with mock.patch.object(MODULE, "_wait_turn", return_value=turn):
-            MODULE._run_hosted_story(
-                FakeServer(True),
-                "thread-1",
-                "use x search",
-                "webSearch",
-                "x",
+    def test_hosted_probe_requires_the_exact_completed_item_shape(self) -> None:
+        self.assertTrue(
+            MODULE._is_completed_hosted_item(
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "web_search_call", "status": "completed"},
+                },
+                "web_search",
             )
-            with self.assertRaisesRegex(
-                MODULE.AcceptanceError, "hosted_item_not_persisted:webSearch"
-            ):
-                MODULE._run_hosted_story(
-                    FakeServer(False),
-                    "thread-1",
-                    "use x search",
-                    "webSearch",
-                    "x",
+        )
+        self.assertTrue(
+            MODULE._is_completed_hosted_item(
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "custom_tool_call",
+                        "status": "completed",
+                        "name": "x_semantic_search",
+                    },
+                },
+                "x_search",
+            )
+        )
+        self.assertTrue(
+            MODULE._is_completed_hosted_item(
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "image_generation_call",
+                        "status": "completed",
+                        "result": "opaque",
+                    },
+                },
+                "image_generation",
+            )
+        )
+        self.assertFalse(
+            MODULE._is_completed_hosted_item(
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "custom_tool_call",
+                        "status": "completed",
+                        "name": "unknown",
+                    },
+                },
+                "x_search",
+            )
+        )
+
+    def test_hosted_probe_parses_sse_without_retaining_output(self) -> None:
+        class FakeResponse:
+            status = 200
+
+            def __init__(self) -> None:
+                self.lines = iter(
+                    [
+                        b'data: {"type":"response.output_item.done","item":{"type":"web_search_call","status":"completed"}}\n',
+                        b"\n",
+                        b"data: [DONE]\n",
+                        b"\n",
+                    ]
                 )
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def readline(self, _limit):
+                return next(self.lines, b"")
+
+        with mock.patch.object(MODULE.urllib.request, "urlopen", return_value=FakeResponse()):
+            MODULE._probe_hosted_tool(
+                "https://example.test/v1/responses",
+                "private-token",
+                "grok-4.5",
+                "web_search",
+            )
 
     def test_model_selection_requires_grok_but_allows_grok_only_mode(self) -> None:
         class FakeServer:
@@ -330,14 +386,29 @@ requires_openai_auth = false
             FakeServer(
                 [
                     {
-                        "model": "grok-model",
+                        "model": "grok-4.5",
                         "displayName": "Grok · Grok Model",
                         "isDefault": True,
                     }
                 ]
             )
         )
-        self.assertEqual(grok_only, {"grok": "grok-model"})
+        self.assertEqual(grok_only, {"grok": "grok-4.5"})
+
+        with self.assertRaisesRegex(
+            MODULE.AcceptanceError, "grok_model_catalog_incomplete"
+        ):
+            MODULE._models(
+                FakeServer(
+                    [
+                        {
+                            "model": "grok-unverified",
+                            "displayName": "Grok · Unverified",
+                            "isDefault": True,
+                        }
+                    ]
+                )
+            )
 
         with self.assertRaisesRegex(
             MODULE.AcceptanceError, "grok_model_catalog_incomplete"

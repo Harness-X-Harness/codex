@@ -24,10 +24,12 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
@@ -106,10 +108,26 @@ impl OpenAiModelsEndpoint {
                 .await?;
             let client = ModelsClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry));
-            client
-                .list_models(request_url, HeaderMap::new())
-                .await
-                .map_err(map_api_error)
+            if self.provider_info.wire_api == WireApi::GrokResponses {
+                let (model_ids, etag) = client
+                    .list_openai_compatible_model_ids(request_url, HeaderMap::new())
+                    .await
+                    .map_err(map_api_error)?;
+                let models = model_ids
+                    .into_iter()
+                    .map(|model_id| {
+                        let mut model = model_info_from_slug(&model_id);
+                        model.visibility = ModelVisibility::List;
+                        model
+                    })
+                    .collect();
+                Ok((models, etag))
+            } else {
+                client
+                    .list_models(request_url, HeaderMap::new())
+                    .await
+                    .map_err(map_api_error)
+            }
         })
         .await
         .map_err(|_| CodexErr::Timeout)?
@@ -338,6 +356,14 @@ mod tests {
         }
     }
 
+    fn grok_provider_info(base_url: String) -> ModelProviderInfo {
+        let mut provider = ModelProviderInfo::create_openai_provider(Some(base_url));
+        provider.name = "Grok".to_string();
+        provider.wire_api = WireApi::GrokResponses;
+        provider.requires_openai_auth = false;
+        provider
+    }
+
     #[test]
     fn command_auth_provider_reports_command_auth_without_cached_auth() {
         let endpoint = OpenAiModelsEndpoint::new(
@@ -396,6 +422,68 @@ mod tests {
                 OutboundProxyPolicy::RespectSystemProxy,
                 format!("{}/models?client_version=0.0.0", server.uri()),
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn grok_model_request_projects_openai_compatible_catalog() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(query_param("client_version", "0.0.0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "object": "list",
+                "data": [{
+                    "id": "grok-4.5",
+                    "object": "model",
+                    "owned_by": "xai"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let endpoint =
+            OpenAiModelsEndpoint::new(grok_provider_info(server.uri()), /*auth_manager*/ None);
+
+        let (models, etag) = endpoint
+            .list_models(
+                "0.0.0",
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await
+            .expect("Grok models request should succeed");
+        let mut expected_model = model_info_from_slug("grok-4.5");
+        expected_model.visibility = ModelVisibility::List;
+
+        assert_eq!((models, etag), (vec![expected_model], None));
+    }
+
+    #[tokio::test]
+    async fn grok_model_request_rejects_codex_catalog_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(ModelsResponse { models: Vec::new() }),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let endpoint =
+            OpenAiModelsEndpoint::new(grok_provider_info(server.uri()), /*auth_manager*/ None);
+
+        let error = endpoint
+            .list_models(
+                "0.0.0",
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await
+            .expect_err("Grok must not infer a different catalog envelope");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode models response")
         );
     }
 }

@@ -19,6 +19,8 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.error
+import urllib.request
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,16 @@ from typing import Any
 
 class AcceptanceError(RuntimeError):
     pass
+
+
+GROK_LIVE_MODEL = "grok-4.5"
+X_SEARCH_NAMES = {
+    "x_keyword_search",
+    "x_semantic_search",
+    "x_user_search",
+    "x_thread_fetch",
+}
+HOSTED_PROBE_MAX_EVENT_BYTES = 64 * 1024 * 1024
 
 
 def _toml_string(value: str) -> str:
@@ -46,7 +58,7 @@ def _write_evidence(path: Path, evidence: dict[str, Any]) -> None:
         output.write(encoded)
 
 
-def _write_isolated_config(source: Path, target: Path) -> str:
+def _grok_profile(source: Path) -> tuple[str, dict[str, Any], str]:
     data = tomllib.loads(source.read_text(encoding="utf-8"))
     providers = data.get("model_providers")
     if not isinstance(providers, dict):
@@ -71,6 +83,11 @@ def _write_isolated_config(source: Path, target: Path) -> str:
         raise AcceptanceError("grok_profile_requires_one_credential_path")
     if credential_keys == ["env_key"] and not os.environ.get(profile["env_key"]):
         raise AcceptanceError("grok_credential_environment_is_missing")
+    return provider_id, profile, credential_keys[0]
+
+
+def _write_isolated_config(source: Path, target: Path) -> str:
+    provider_id, profile, credential_key = _grok_profile(source)
 
     lines = [
         'web_search = "live"',
@@ -85,9 +102,8 @@ def _write_isolated_config(source: Path, target: Path) -> str:
         f"x_search = {str(bool(profile.get('x_search', False))).lower()}",
         "requires_openai_auth = false",
     ]
-    for key in credential_keys:
-        lines.append(f"{key} = {_toml_string(profile[key])}")
-    if credential_keys == ["env_key"] and isinstance(
+    lines.append(f"{credential_key} = {_toml_string(profile[credential_key])}")
+    if credential_key == "env_key" and isinstance(
         profile.get("env_key_instructions"), str
     ):
         lines.append(
@@ -97,6 +113,120 @@ def _write_isolated_config(source: Path, target: Path) -> str:
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     target.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return provider_id
+
+
+def _hosted_probe_request(model: str, tool_type: str) -> dict[str, Any]:
+    prompts = {
+        "web_search": "Use Web Search to find the official xAI home page.",
+        "x_search": "Use X Search to find the official xAI account.",
+        "image_generation": "Generate a simple blue circle on a white background.",
+    }
+    return {
+        "model": model,
+        "input": [{"role": "user", "content": prompts[tool_type]}],
+        "tools": [{"type": tool_type}],
+        "tool_choice": "required",
+        "stream": True,
+        "store": False,
+    }
+
+
+def _is_completed_hosted_item(event: dict[str, Any], tool_type: str) -> bool:
+    if event.get("type") != "response.output_item.done":
+        return False
+    item = event.get("item")
+    if not isinstance(item, dict) or item.get("status") != "completed":
+        return False
+    if tool_type == "web_search":
+        return item.get("type") == "web_search_call"
+    if tool_type == "x_search":
+        return (
+            item.get("type") == "custom_tool_call"
+            and item.get("name") in X_SEARCH_NAMES
+        )
+    return (
+        item.get("type") == "image_generation_call"
+        and isinstance(item.get("result"), str)
+        and bool(item["result"])
+    )
+
+
+def _probe_hosted_tool(
+    endpoint: str,
+    token: str,
+    model: str,
+    tool_type: str,
+) -> None:
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(_hosted_probe_request(model, tool_type)).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        },
+        method="POST",
+    )
+    completed = False
+    event_data: list[bytes] = []
+    event_bytes = 0
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            if response.status != 200:
+                raise AcceptanceError(f"hosted_probe_http_status:{tool_type}")
+            while True:
+                line = response.readline(HOSTED_PROBE_MAX_EVENT_BYTES + 1)
+                if not line:
+                    break
+                if len(line) > HOSTED_PROBE_MAX_EVENT_BYTES:
+                    raise AcceptanceError(f"hosted_probe_event_too_large:{tool_type}")
+                if line in (b"\n", b"\r\n"):
+                    if event_data:
+                        payload = b"\n".join(event_data)
+                        if payload == b"[DONE]":
+                            event_data = []
+                            event_bytes = 0
+                            continue
+                        try:
+                            event = json.loads(payload)
+                        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                            raise AcceptanceError(
+                                f"hosted_probe_invalid_sse:{tool_type}"
+                            ) from error
+                        if isinstance(event, dict) and _is_completed_hosted_item(
+                            event, tool_type
+                        ):
+                            completed = True
+                        event_data = []
+                        event_bytes = 0
+                    continue
+                if line.startswith(b"data:"):
+                    value = line[5:].lstrip().rstrip(b"\r\n")
+                    event_bytes += len(value)
+                    if event_bytes > HOSTED_PROBE_MAX_EVENT_BYTES:
+                        raise AcceptanceError(f"hosted_probe_event_too_large:{tool_type}")
+                    event_data.append(value)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise AcceptanceError(
+            f"hosted_probe_http_status:{tool_type}:{error.code}"
+        ) from None
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise AcceptanceError(f"hosted_probe_transport:{tool_type}") from error
+    if not completed:
+        raise AcceptanceError(f"hosted_probe_terminal_item_missing:{tool_type}")
+
+
+def _run_gateway_hosted_live(source: Path, model: str) -> None:
+    _provider_id, profile, credential_key = _grok_profile(source)
+    token = (
+        os.environ[profile[credential_key]]
+        if credential_key == "env_key"
+        else profile[credential_key]
+    )
+    endpoint = profile["base_url"].rstrip("/") + "/responses"
+    for tool_type in ("web_search", "x_search", "image_generation"):
+        _probe_hosted_tool(endpoint, token, model, tool_type)
 
 
 class AppServer:
@@ -293,13 +423,14 @@ def _models(server: AppServer) -> dict[str, str]:
         if not isinstance(cursor, str) or not cursor:
             break
 
-    def choose(prefix: str, required: bool) -> str | None:
+    def choose(prefix: str, required: bool, exact_model: str | None = None) -> str | None:
         matches = [
             model
             for model in models
             if isinstance(model.get("displayName"), str)
             and model["displayName"].startswith(prefix)
             and isinstance(model.get("model"), str)
+            and (exact_model is None or model["model"] == exact_model)
         ]
         if not matches:
             if required:
@@ -312,7 +443,7 @@ def _models(server: AppServer) -> dict[str, str]:
         selected = next((model for model in matches if model.get("isDefault")), matches[0])
         return selected["model"]
 
-    grok = choose("Grok · ", required=True)
+    grok = choose("Grok · ", required=True, exact_model=GROK_LIVE_MODEL)
     assert grok is not None
     selected = {"grok": grok}
     chatgpt = choose("ChatGPT · ", required=False)
@@ -383,67 +514,6 @@ def _start_marker_turn(server: AppServer, thread_id: str, marker: str) -> None:
         thread_id,
         f"Reply with exactly {marker}. Do not call any tool.",
     )
-
-
-def _turn_has_item(turn: dict[str, Any], expected_type: str, source: str | None) -> bool:
-    items = turn.get("items")
-    if not isinstance(items, list):
-        return False
-    return any(
-        isinstance(item, dict)
-        and item.get("type") == expected_type
-        and (source is None or item.get("source") == source)
-        for item in items
-    )
-
-
-def _thread_has_items(
-    server: AppServer,
-    thread_id: str,
-    expected_ids: set[str],
-) -> bool:
-    result = server.request(
-        "thread/read", {"threadId": thread_id, "includeTurns": True}
-    )
-    thread = result.get("thread")
-    turns = thread.get("turns") if isinstance(thread, dict) else None
-    if not isinstance(turns, list):
-        return False
-    persisted_ids = {
-        item["id"]
-        for turn in turns
-        if isinstance(turn, dict) and isinstance(turn.get("items"), list)
-        for item in turn["items"]
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
-    return expected_ids <= persisted_ids
-
-
-def _run_hosted_story(
-    server: AppServer,
-    thread_id: str,
-    prompt: str,
-    expected_type: str,
-    source: str | None = None,
-) -> None:
-    _start_turn(server, thread_id, prompt)
-    turn = _wait_turn(server, thread_id)
-    if not _turn_has_item(turn, expected_type, source):
-        raise AcceptanceError(f"hosted_item_missing:{expected_type}")
-    items = turn.get("items")
-    assert isinstance(items, list)
-    expected_ids = {
-        item["id"]
-        for item in items
-        if isinstance(item, dict)
-        and item.get("type") == expected_type
-        and (source is None or item.get("source") == source)
-        and isinstance(item.get("id"), str)
-    }
-    if not expected_ids:
-        raise AcceptanceError(f"hosted_item_id_missing:{expected_type}")
-    if not _thread_has_items(server, thread_id, expected_ids):
-        raise AcceptanceError(f"hosted_item_not_persisted:{expected_type}")
 
 
 def _resume(server: AppServer, thread_id: str, provider: str) -> None:
@@ -611,28 +681,6 @@ def _resume_grok_only(
         server, thread_id, grok_provider, "GROKEX_SUBAGENT_CHILD_OK"
     )
 
-    _run_hosted_story(
-        server,
-        thread_id,
-        "Use web search to find the official xAI home page. Return its domain only.",
-        "webSearch",
-    )
-    _run_hosted_story(
-        server,
-        thread_id,
-        (
-            "Use X search to find a recent public post from the official xAI "
-            "account. State the account name only."
-        ),
-        "webSearch",
-        "x",
-    )
-    _run_hosted_story(
-        server,
-        thread_id,
-        "Use image generation to create a simple blue circle on a white background.",
-        "imageGeneration",
-    )
     _thread_list_has_bindings(
         server,
         {
@@ -644,7 +692,11 @@ def _resume_grok_only(
     return {
         "provider": grok_provider,
         "model": grok_model,
-        "thread_ids": [thread_id, fork_id, child_id],
+        "thread_ids": [
+            thread_id,
+            fork_id,
+            child_id,
+        ],
     }
 
 
@@ -670,6 +722,7 @@ def run(args: argparse.Namespace) -> None:
             (codex_home / "auth.json").chmod(stat.S_IRUSR | stat.S_IWUSR)
         grok_provider = _write_isolated_config(grok_source, codex_home / "config.toml")
         _assert_openai_does_not_target_grok(codex_home / "config.toml")
+        _run_gateway_hosted_live(grok_source, GROK_LIVE_MODEL)
 
         server = AppServer(binary, codex_home, workspace)
         try:
@@ -799,6 +852,7 @@ def _finish(
     if openai is not None:
         print("chatgpt_provider_binding=passed")
     print("grok_provider_binding=passed")
+    print("grok_hosted_gateway_live=passed")
     print("mini_accounting_gate=requires_operator_usage_evidence")
     print("isolated_runtime_home_cleanup=passed")
 
