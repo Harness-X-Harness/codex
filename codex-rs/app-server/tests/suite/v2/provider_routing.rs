@@ -16,6 +16,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once_match;
@@ -333,6 +335,43 @@ async fn running_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
         received_responses_count(&fixture.grok_server).await?,
         grok_request_count_before_resume
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_history_resume_rejects_an_unverifiable_provider_binding() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let mut app = fixture.start_app().await?;
+
+    let request_id = app
+        .send_thread_resume_request(ThreadResumeParams {
+            // thread_id is intentionally ignored by the public raw-history API.
+            thread_id: "ignored-raw-history-id".to_string(),
+            history: Some(vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Unbound provider history".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }]),
+            model: Some("grok-model".to_string()),
+            model_provider: Some("grok".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("history"));
+    assert!(error.error.message.contains("provider binding"));
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
     Ok(())
 }
 
