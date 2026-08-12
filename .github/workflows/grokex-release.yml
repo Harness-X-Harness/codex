@@ -288,7 +288,7 @@ jobs:
           cargo test --locked -p codex-app-server --test all \
             list_models_unifies_openai_and_grok_provider_catalogs
           cargo test --locked -p codex-app-server --test all \
-            thread_start_resolves_grok_model_to_provider_runtime
+            suite::v2::provider_routing
 
       - name: Run protocol and provider tests
         working-directory: codex-rs
