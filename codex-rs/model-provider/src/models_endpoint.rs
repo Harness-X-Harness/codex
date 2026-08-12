@@ -21,6 +21,7 @@ use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_otel::TelemetryAuthMode;
@@ -130,6 +131,13 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
 
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
         Box::pin(OpenAiModelsEndpoint::uses_codex_backend(self))
+    }
+
+    fn remote_catalog_is_authoritative(&self) -> bool {
+        self.provider_info.wire_api == WireApi::GrokResponses
+            || self.provider_info.env_key.is_some()
+            || self.provider_info.experimental_bearer_token.is_some()
+            || self.provider_info.auth.is_some()
     }
 
     fn list_models<'a>(

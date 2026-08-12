@@ -267,7 +267,7 @@ impl CatalogRequestProcessor {
             include_hidden.unwrap_or(false),
             http_client_factory,
         )
-        .await;
+        .await?;
         let total = models.len();
 
         if total == 0 {

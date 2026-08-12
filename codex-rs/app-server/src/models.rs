@@ -10,18 +10,21 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
+use crate::error_code::invalid_request;
+
 pub async fn supported_models(
     thread_manager: Arc<ThreadManager>,
     include_hidden: bool,
     http_client_factory: HttpClientFactory,
-) -> Vec<Model> {
-    thread_manager
+) -> Result<Vec<Model>, codex_app_server_protocol::JSONRPCErrorError> {
+    Ok(thread_manager
         .list_models(RefreshStrategy::OnlineIfUncached, http_client_factory)
         .await
+        .map_err(|err| invalid_request(err.to_string()))?
         .into_iter()
         .filter(|preset| include_hidden || preset.show_in_picker)
         .map(model_from_preset)
-        .collect()
+        .collect())
 }
 
 fn model_from_preset(preset: ModelPreset) -> Model {

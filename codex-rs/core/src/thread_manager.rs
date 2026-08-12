@@ -39,7 +39,9 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
+use codex_model_provider::ModelProviderRegistry;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::provider_models_home;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
@@ -319,6 +321,7 @@ pub(crate) struct ThreadManagerState {
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    provider_registry: ModelProviderRegistry,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
     skills_service: Arc<HostSkillsService>,
@@ -344,7 +347,7 @@ pub fn build_models_manager(
 ) -> SharedModelsManager {
     let provider = create_model_provider(config.model_provider.clone(), Some(auth_manager));
     provider.models_manager(
-        config.codex_home.to_path_buf(),
+        provider_models_home(config.codex_home.as_path(), &config.model_provider_id),
         config.model_catalog.clone(),
     )
 }
@@ -440,6 +443,14 @@ impl ThreadManager {
             } else {
                 Arc::new(DisabledCodeModeSessionProvider)
             };
+        let provider_registry = ModelProviderRegistry::new(
+            &config.model_providers,
+            &config.model_provider_id,
+            config.codex_home.as_path(),
+            Arc::clone(&models_manager),
+            Arc::clone(&auth_manager),
+        )
+        .expect("validated config must register its default model provider");
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -459,6 +470,7 @@ impl ThreadManager {
                 attestation_provider,
                 external_time_provider,
                 auth_manager,
+                provider_registry,
                 session_source,
                 installation_id,
                 analytics_events_client,
@@ -586,13 +598,23 @@ impl ThreadManager {
             state_db.clone(),
         ));
         let agent_graph_store = local_agent_graph_store_from_state_db(state_db.as_ref());
+        let provider = create_model_provider(provider, Some(auth_manager.clone()));
+        let models_manager = provider.models_manager(
+            provider_models_home(&codex_home, OPENAI_PROVIDER_ID),
+            /*config_model_catalog*/ None,
+        );
+        let provider_registry = ModelProviderRegistry::single(
+            OPENAI_PROVIDER_ID,
+            provider,
+            Arc::clone(&models_manager),
+        );
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
-                models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                models_manager,
+                provider_registry,
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
                 skills_service,
@@ -718,11 +740,15 @@ impl ThreadManager {
         &self,
         refresh_strategy: RefreshStrategy,
         http_client_factory: codex_http_client::HttpClientFactory,
-    ) -> Vec<ModelPreset> {
+    ) -> CodexResult<Vec<ModelPreset>> {
         self.state
-            .models_manager
+            .provider_registry
             .list_models(refresh_strategy, http_client_factory)
             .await
+    }
+
+    pub fn has_federated_model_catalog(&self) -> bool {
+        self.state.provider_registry.is_federated()
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
@@ -1739,13 +1765,26 @@ impl ThreadManagerState {
             starting.retain(|runtime| runtime.strong_count() != 0);
             starting.push(Arc::downgrade(&source_changed_during_startup));
         }
+        let models_manager = self
+            .provider_registry
+            .models_manager(&config.model_provider_id)
+            .unwrap_or_else(|| {
+                create_model_provider(config.model_provider.clone(), Some(auth_manager.clone()))
+                    .models_manager(
+                        provider_models_home(
+                            config.codex_home.as_path(),
+                            &config.model_provider_id,
+                        ),
+                        config.model_catalog.clone(),
+                    )
+            });
         let (session, io) = Box::pin(Session::spawn(SessionSpawnArgs {
             config,
             allow_provider_model_fallback,
             user_instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: Arc::clone(&self.models_manager),
+            models_manager,
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),

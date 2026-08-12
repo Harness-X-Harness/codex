@@ -3,6 +3,7 @@ mod auth;
 mod bearer_auth_provider;
 mod models_endpoint;
 mod provider;
+mod registry;
 
 pub use amazon_bedrock::is_supported_amazon_bedrock_region;
 pub use auth::AgentIdentitySessionFallback;
@@ -25,3 +26,5 @@ pub use provider::ProviderCapabilities;
 pub use provider::RemoteCompactionSupport;
 pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;
+pub use registry::ModelProviderRegistry;
+pub use registry::provider_models_home;

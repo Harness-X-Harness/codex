@@ -41,6 +41,11 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     /// Returns whether the currently resolved auth can use Codex backend-only models.
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool>;
 
+    /// Returns whether the remote catalog fully owns this provider's model namespace.
+    fn remote_catalog_is_authoritative(&self) -> bool {
+        false
+    }
+
     /// Fetches the latest remote model catalog and optional ETag.
     fn list_models<'a>(
         &'a self,
@@ -273,7 +278,11 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let remote_models = if endpoint_client.remote_catalog_is_authoritative() {
+            Vec::new()
+        } else {
+            load_remote_models_from_file().unwrap_or_default()
+        };
         Self {
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
@@ -435,7 +444,9 @@ impl OpenAiModelsManager {
     }
 
     async fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.uses_codex_backend().await || self.endpoint_client.has_command_auth()
+        self.endpoint_client.remote_catalog_is_authoritative()
+            || self.endpoint_client.uses_codex_backend().await
+            || self.endpoint_client.has_command_auth()
     }
 
     async fn get_etag(&self) -> Option<String> {
@@ -444,6 +455,10 @@ impl OpenAiModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
+        if self.endpoint_client.remote_catalog_is_authoritative() {
+            *self.remote_models.write().await = models;
+            return;
+        }
         // Use the remote models list as the source of truth if it contains at least one
         // non-hidden model and the user is using ChatGPT auth.
         let should_use_remote_models_only = !models.is_empty()

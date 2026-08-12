@@ -280,6 +280,14 @@ jobs:
         working-directory: codex-rs
         run: cargo fmt --all -- --config imports_granularity=Item --check
 
+      - name: Run unified provider tracer contract
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: |
+          cargo test --locked -p codex-app-server --test all \
+            list_models_unifies_openai_and_grok_provider_catalogs
+
       - name: Run protocol and provider tests
         working-directory: codex-rs
         env:
@@ -332,8 +340,6 @@ jobs:
           # namespace operations that GitHub-hosted runners reject. Keep this
           # workflow focused on the App Server surfaces changed by Grokex.
           cargo test --locked -p codex-app-server --lib
-          cargo test --locked -p codex-app-server --test all \
-            list_models_unifies_openai_and_grok_provider_catalogs
           cargo test --locked -p codex-app-server --test all \
             suite::v2::web_search
           cargo test --locked -p codex-app-server --test all \
