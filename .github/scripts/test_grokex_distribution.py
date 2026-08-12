@@ -76,6 +76,21 @@ class GrokexDistributionTest(unittest.TestCase):
         self.assertTrue(driver.is_file())
         self.assertTrue(driver_test.is_file())
 
+    def test_native_live_uses_the_shared_app_server_driver(self) -> None:
+        script = (
+            REPO_ROOT / ".github" / "scripts" / "grokex-live-acceptance.sh"
+        ).read_text(encoding="utf-8")
+        driver = (
+            REPO_ROOT / ".github" / "scripts" / "grokex_dual_provider_live.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("grokex_dual_provider_live.py", script)
+        self.assertIn("--grok-only", script)
+        self.assertNotIn("grep -R", script)
+        self.assertIn('item.get("type") == "agentMessage"', driver)
+        self.assertIn('item.get("text") == expected_marker', driver)
+        self.assertIn('"thread/read"', driver)
+
 
 if __name__ == "__main__":
     unittest.main()

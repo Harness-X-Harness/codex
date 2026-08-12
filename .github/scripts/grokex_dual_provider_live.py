@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Secret-safe live acceptance for one ChatGPT + Grok Codex Home.
+"""Secret-safe live acceptance for Grokex provider behavior.
 
-This driver uses only the public app-server protocol. It never prints model
-content, endpoint URLs, credentials, configuration, or rollout data.
+The same public app-server driver supports Grok-only CI and controlled
+ChatGPT + Grok acceptance. It never prints model content, endpoint URLs,
+credentials, configuration, or rollout data.
 """
 
 from __future__ import annotations
@@ -29,6 +30,20 @@ class AcceptanceError(RuntimeError):
 
 def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _write_evidence(path: Path, evidence: dict[str, Any]) -> None:
+    encoded = (json.dumps(evidence, separators=(",", ":")) + "\n").encode()
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
+    except OSError as error:
+        raise AcceptanceError("evidence_output_unavailable") from error
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(encoded)
 
 
 def _write_isolated_config(source: Path, target: Path) -> str:
@@ -167,7 +182,15 @@ class AppServer:
         if "error" in message:
             error = message.get("error")
             code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
-            raise AcceptanceError(f"rpc_error:{method}:{code}")
+            error_message = error.get("message") if isinstance(error, dict) else None
+            classification = (
+                ":provider_binding"
+                if method == "turn/start"
+                and isinstance(error_message, str)
+                and "new thread" in error_message.lower()
+                else ""
+            )
+            raise AcceptanceError(f"rpc_error:{method}:{code}{classification}")
         result = message.get("result")
         if not isinstance(result, dict):
             raise AcceptanceError(f"rpc_result_invalid:{method}")
@@ -244,7 +267,17 @@ def _initialize(server: AppServer) -> None:
     server.notify("initialized")
 
 
-def _models(server: AppServer) -> tuple[str, str]:
+def _assert_chatgpt_subscription_visible(server: AppServer) -> None:
+    account = server.request("account/read", {"refreshToken": False})
+    if (
+        not isinstance(account.get("account"), dict)
+        or account["account"].get("type") != "chatgpt"
+        or account.get("requiresOpenaiAuth") is not True
+    ):
+        raise AcceptanceError("chatgpt_subscription_not_visible")
+
+
+def _models(server: AppServer) -> dict[str, str]:
     models: list[dict[str, Any]] = []
     cursor: str | None = None
     while True:
@@ -260,7 +293,7 @@ def _models(server: AppServer) -> tuple[str, str]:
         if not isinstance(cursor, str) or not cursor:
             break
 
-    def choose(prefix: str) -> str:
+    def choose(prefix: str, required: bool) -> str | None:
         matches = [
             model
             for model in models
@@ -269,11 +302,23 @@ def _models(server: AppServer) -> tuple[str, str]:
             and isinstance(model.get("model"), str)
         ]
         if not matches:
-            raise AcceptanceError("unified_model_catalog_incomplete")
+            if required:
+                raise AcceptanceError(
+                    "grok_model_catalog_incomplete"
+                    if prefix == "Grok · "
+                    else "chatgpt_model_catalog_incomplete"
+                )
+            return None
         selected = next((model for model in matches if model.get("isDefault")), matches[0])
         return selected["model"]
 
-    return choose("ChatGPT · "), choose("Grok · ")
+    grok = choose("Grok · ", required=True)
+    assert grok is not None
+    selected = {"grok": grok}
+    chatgpt = choose("ChatGPT · ", required=False)
+    if chatgpt is not None:
+        selected["openai"] = chatgpt
+    return selected
 
 
 def _start_thread(server: AppServer, model: str, workspace: Path) -> tuple[str, str]:
@@ -294,7 +339,7 @@ def _start_thread(server: AppServer, model: str, workspace: Path) -> tuple[str, 
     return thread["id"], provider
 
 
-def _start_turn(server: AppServer, thread_id: str, marker: str) -> None:
+def _start_turn(server: AppServer, thread_id: str, prompt: str) -> None:
     server.request(
         "turn/start",
         {
@@ -302,7 +347,7 @@ def _start_turn(server: AppServer, thread_id: str, marker: str) -> None:
             "input": [
                 {
                     "type": "text",
-                    "text": f"Reply with exactly {marker}. Do not call any tool.",
+                    "text": prompt,
                     "text_elements": [],
                 }
             ],
@@ -310,13 +355,95 @@ def _start_turn(server: AppServer, thread_id: str, marker: str) -> None:
     )
 
 
-def _wait_turn(server: AppServer, thread_id: str) -> None:
+def _wait_turn(
+    server: AppServer, thread_id: str, expected_marker: str | None = None
+) -> dict[str, Any]:
     params = server.wait_notification(
         "turn/completed", lambda value: value.get("threadId") == thread_id
     )
     turn = params.get("turn")
     if not isinstance(turn, dict) or turn.get("status") != "completed":
         raise AcceptanceError("turn_did_not_complete")
+    if expected_marker is None:
+        return turn
+    items = turn.get("items")
+    if not isinstance(items, list) or not any(
+        isinstance(item, dict)
+        and item.get("type") == "agentMessage"
+        and item.get("text") == expected_marker
+        for item in items
+    ):
+        raise AcceptanceError("turn_response_marker_missing")
+    return turn
+
+
+def _start_marker_turn(server: AppServer, thread_id: str, marker: str) -> None:
+    _start_turn(
+        server,
+        thread_id,
+        f"Reply with exactly {marker}. Do not call any tool.",
+    )
+
+
+def _turn_has_item(turn: dict[str, Any], expected_type: str, source: str | None) -> bool:
+    items = turn.get("items")
+    if not isinstance(items, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and item.get("type") == expected_type
+        and (source is None or item.get("source") == source)
+        for item in items
+    )
+
+
+def _thread_has_items(
+    server: AppServer,
+    thread_id: str,
+    expected_ids: set[str],
+) -> bool:
+    result = server.request(
+        "thread/read", {"threadId": thread_id, "includeTurns": True}
+    )
+    thread = result.get("thread")
+    turns = thread.get("turns") if isinstance(thread, dict) else None
+    if not isinstance(turns, list):
+        return False
+    persisted_ids = {
+        item["id"]
+        for turn in turns
+        if isinstance(turn, dict) and isinstance(turn.get("items"), list)
+        for item in turn["items"]
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    return expected_ids <= persisted_ids
+
+
+def _run_hosted_story(
+    server: AppServer,
+    thread_id: str,
+    prompt: str,
+    expected_type: str,
+    source: str | None = None,
+) -> None:
+    _start_turn(server, thread_id, prompt)
+    turn = _wait_turn(server, thread_id)
+    if not _turn_has_item(turn, expected_type, source):
+        raise AcceptanceError(f"hosted_item_missing:{expected_type}")
+    items = turn.get("items")
+    assert isinstance(items, list)
+    expected_ids = {
+        item["id"]
+        for item in items
+        if isinstance(item, dict)
+        and item.get("type") == expected_type
+        and (source is None or item.get("source") == source)
+        and isinstance(item.get("id"), str)
+    }
+    if not expected_ids:
+        raise AcceptanceError(f"hosted_item_id_missing:{expected_type}")
+    if not _thread_has_items(server, thread_id, expected_ids):
+        raise AcceptanceError(f"hosted_item_not_persisted:{expected_type}")
 
 
 def _resume(server: AppServer, thread_id: str, provider: str) -> None:
@@ -343,34 +470,58 @@ def _compact(server: AppServer, thread_id: str) -> None:
         and isinstance(value.get("item"), dict)
         and value["item"].get("type") == "contextCompaction",
     )
-
-
-def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) -> None:
-    server.request(
-        "turn/start",
-        {
-            "threadId": thread_id,
-            "input": [
-                {
-                    "type": "text",
-                    "text": (
-                        "Use spawn_agent to create one reviewer. Tell it to reply with "
-                        f"exactly {marker}. Wait for it, then return exactly that marker."
-                    ),
-                    "text_elements": [],
-                }
-            ],
-        },
-    )
     _wait_turn(server, thread_id)
-    children = server.request(
-        "thread/list", {"limit": 20, "parentThreadId": thread_id}
-    ).get("data")
-    if not isinstance(children, list) or not any(
-        isinstance(child, dict) and child.get("modelProvider") == provider
-        for child in children
-    ):
-        raise AcceptanceError("subagent_provider_binding_missing")
+
+
+def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) -> str:
+    _start_turn(
+        server,
+        thread_id,
+        (
+            "Use spawn_agent to create one reviewer. Tell it to reply with "
+            f"exactly {marker}. Wait for it, then return exactly that marker."
+        ),
+    )
+    _wait_turn(server, thread_id, marker)
+    deadline = time.monotonic() + 300
+    while True:
+        children = server.request(
+            "thread/list", {"limit": 20, "parentThreadId": thread_id}
+        ).get("data")
+        if not isinstance(children, list):
+            raise AcceptanceError("subagent_provider_binding_missing")
+        matching_children = [
+            child
+            for child in children
+            if isinstance(child, dict)
+            and child.get("modelProvider") == provider
+            and isinstance(child.get("id"), str)
+        ]
+        if matching_children:
+            child = matching_children[0]
+            status = child.get("status")
+            if isinstance(status, dict) and status.get("type") == "idle":
+                read = server.request(
+                    "thread/read", {"threadId": child["id"], "includeTurns": True}
+                )
+                persisted = read.get("thread")
+                turns = persisted.get("turns") if isinstance(persisted, dict) else None
+                if not isinstance(turns, list) or not any(
+                    isinstance(turn, dict)
+                    and isinstance(turn.get("items"), list)
+                    and any(
+                        isinstance(item, dict)
+                        and item.get("type") == "agentMessage"
+                        and item.get("text") == marker
+                        for item in turn["items"]
+                    )
+                    for turn in turns
+                ):
+                    raise AcceptanceError("subagent_response_marker_missing")
+                return child["id"]
+        if time.monotonic() >= deadline:
+            raise AcceptanceError("subagent_did_not_complete")
+        time.sleep(1)
 
 
 def _thread_list_has_bindings(
@@ -388,6 +539,31 @@ def _thread_list_has_bindings(
         raise AcceptanceError("thread_list_provider_binding_missing")
 
 
+def _assert_cross_provider_model_is_rejected(
+    server: AppServer, thread_id: str, foreign_model: str
+) -> None:
+    try:
+        server.request(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "model": foreign_model,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "This request must be rejected before provider egress.",
+                        "text_elements": [],
+                    }
+                ],
+            },
+        )
+    except AcceptanceError as error:
+        if str(error) == "rpc_error:turn/start:-32600:provider_binding":
+            return
+        raise
+    raise AcceptanceError("cross_provider_model_was_not_rejected")
+
+
 def _assert_openai_does_not_target_grok(config: Path) -> None:
     data = tomllib.loads(config.read_text(encoding="utf-8"))
     if "model" in data or "model_provider" in data:
@@ -397,99 +573,244 @@ def _assert_openai_does_not_target_grok(config: Path) -> None:
         raise AcceptanceError("openai_profile_uses_grok_dialect")
 
 
+def _start_grok_only(
+    server: AppServer,
+    grok_model: str,
+    grok_provider: str,
+    workspace: Path,
+) -> str:
+    thread_id, resolved_provider = _start_thread(server, grok_model, workspace)
+    if resolved_provider != grok_provider:
+        raise AcceptanceError("grok_model_owner_mismatch")
+
+    _start_turn(
+        server,
+        thread_id,
+        "Use the local shell tool to run printf GROKEX_LOCAL_OK. Return only that marker.",
+    )
+    _wait_turn(server, thread_id, "GROKEX_LOCAL_OK")
+    return thread_id
+
+
+def _resume_grok_only(
+    server: AppServer,
+    thread_id: str,
+    grok_model: str,
+    grok_provider: str,
+) -> dict[str, Any]:
+    _resume(server, thread_id, grok_provider)
+    _start_marker_turn(server, thread_id, "GROKEX_RESUME_OK")
+    _wait_turn(server, thread_id, "GROKEX_RESUME_OK")
+
+    fork_id = _fork(server, thread_id, grok_provider)
+    _start_marker_turn(server, fork_id, "GROKEX_FORK_OK")
+    _wait_turn(server, fork_id, "GROKEX_FORK_OK")
+
+    _compact(server, thread_id)
+    child_id = _spawn_child(
+        server, thread_id, grok_provider, "GROKEX_SUBAGENT_CHILD_OK"
+    )
+
+    _run_hosted_story(
+        server,
+        thread_id,
+        "Use web search to find the official xAI home page. Return its domain only.",
+        "webSearch",
+    )
+    _run_hosted_story(
+        server,
+        thread_id,
+        (
+            "Use X search to find a recent public post from the official xAI "
+            "account. State the account name only."
+        ),
+        "webSearch",
+        "x",
+    )
+    _run_hosted_story(
+        server,
+        thread_id,
+        "Use image generation to create a simple blue circle on a white background.",
+        "imageGeneration",
+    )
+    _thread_list_has_bindings(
+        server,
+        {
+            thread_id: grok_provider,
+            fork_id: grok_provider,
+            child_id: grok_provider,
+        },
+    )
+    return {
+        "provider": grok_provider,
+        "model": grok_model,
+        "thread_ids": [thread_id, fork_id, child_id],
+    }
+
+
 def run(args: argparse.Namespace) -> None:
     binary = args.codex_bin.resolve()
-    auth_source = args.chatgpt_auth.resolve()
+    auth_source = args.chatgpt_auth.resolve() if args.chatgpt_auth else None
     grok_source = args.grok_config.resolve()
     workspace = args.workspace.resolve()
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise AcceptanceError("codex_binary_unavailable")
-    if not auth_source.is_file():
+    if not args.grok_only and (auth_source is None or not auth_source.is_file()):
         raise AcceptanceError("chatgpt_auth_unavailable")
     if not grok_source.is_file():
         raise AcceptanceError("grok_config_unavailable")
     workspace.mkdir(parents=True, exist_ok=True)
 
+    started_at = time.time()
     with tempfile.TemporaryDirectory(prefix="grokex-dual-provider-") as temp:
         codex_home = Path(temp)
         codex_home.chmod(stat.S_IRWXU)
-        shutil.copyfile(auth_source, codex_home / "auth.json")
-        (codex_home / "auth.json").chmod(stat.S_IRUSR | stat.S_IWUSR)
+        if auth_source is not None:
+            shutil.copyfile(auth_source, codex_home / "auth.json")
+            (codex_home / "auth.json").chmod(stat.S_IRUSR | stat.S_IWUSR)
         grok_provider = _write_isolated_config(grok_source, codex_home / "config.toml")
         _assert_openai_does_not_target_grok(codex_home / "config.toml")
 
         server = AppServer(binary, codex_home, workspace)
         try:
             _initialize(server)
-            account = server.request("account/read", {"refreshToken": False})
-            if (
-                not isinstance(account.get("account"), dict)
-                or account["account"].get("type") != "chatgpt"
-                or account.get("requiresOpenaiAuth") is not True
-            ):
-                raise AcceptanceError("chatgpt_subscription_not_visible")
-            openai_model, grok_model = _models(server)
-            openai_thread, openai_provider = _start_thread(
-                server, openai_model, workspace
-            )
-            grok_thread, resolved_grok_provider = _start_thread(
-                server, grok_model, workspace
-            )
-            if openai_provider == resolved_grok_provider:
-                raise AcceptanceError("provider_catalog_not_federated")
-            if resolved_grok_provider != grok_provider:
-                raise AcceptanceError("grok_model_owner_mismatch")
+            models = _models(server)
+            grok_model = models["grok"]
+            if args.grok_only:
+                grok_thread = _start_grok_only(
+                    server, grok_model, grok_provider, workspace
+                )
+            else:
+                _assert_chatgpt_subscription_visible(server)
+                openai_model = models.get("openai")
+                if openai_model is None:
+                    raise AcceptanceError("chatgpt_model_catalog_incomplete")
+                openai_thread, openai_provider = _start_thread(
+                    server, openai_model, workspace
+                )
+                grok_thread, resolved_grok_provider = _start_thread(
+                    server, grok_model, workspace
+                )
+                if openai_provider == resolved_grok_provider:
+                    raise AcceptanceError("provider_catalog_not_federated")
+                if resolved_grok_provider != grok_provider:
+                    raise AcceptanceError("grok_model_owner_mismatch")
 
-            _start_turn(server, openai_thread, "GROKEX_OPENAI_CONCURRENT_OK")
-            _start_turn(server, grok_thread, "GROKEX_GROK_CONCURRENT_OK")
-            _wait_turn(server, openai_thread)
-            _wait_turn(server, grok_thread)
+                _assert_cross_provider_model_is_rejected(
+                    server, openai_thread, grok_model
+                )
+                _assert_cross_provider_model_is_rejected(
+                    server, grok_thread, openai_model
+                )
+
+                _start_marker_turn(
+                    server, openai_thread, "GROKEX_OPENAI_CONCURRENT_OK"
+                )
+                _start_marker_turn(
+                    server, grok_thread, "GROKEX_GROK_CONCURRENT_OK"
+                )
+                _wait_turn(server, openai_thread, "GROKEX_OPENAI_CONCURRENT_OK")
+                _wait_turn(server, grok_thread, "GROKEX_GROK_CONCURRENT_OK")
         finally:
             server.close()
 
         server = AppServer(binary, codex_home, workspace)
         try:
             _initialize(server)
-            _resume(server, openai_thread, openai_provider)
-            _resume(server, grok_thread, resolved_grok_provider)
-            openai_fork = _fork(server, openai_thread, openai_provider)
-            grok_fork = _fork(server, grok_thread, resolved_grok_provider)
-            _thread_list_has_bindings(
-                server,
-                {
-                    openai_thread: openai_provider,
-                    grok_thread: resolved_grok_provider,
-                    openai_fork: openai_provider,
-                    grok_fork: resolved_grok_provider,
-                },
-            )
-            _compact(server, openai_thread)
-            _compact(server, grok_thread)
-            _spawn_child(
-                server, openai_thread, openai_provider, "GROKEX_OPENAI_CHILD_OK"
-            )
-            _spawn_child(
-                server,
-                grok_thread,
-                resolved_grok_provider,
-                "GROKEX_GROK_CHILD_OK",
-            )
+            if args.grok_only:
+                grok_evidence = _resume_grok_only(
+                    server,
+                    grok_thread,
+                    grok_model,
+                    grok_provider,
+                )
+                openai_evidence = None
+            else:
+                _assert_chatgpt_subscription_visible(server)
+                _resume(server, openai_thread, openai_provider)
+                _resume(server, grok_thread, resolved_grok_provider)
+                _start_marker_turn(server, openai_thread, "GROKEX_OPENAI_RESUME_OK")
+                _start_marker_turn(server, grok_thread, "GROKEX_GROK_RESUME_OK")
+                _wait_turn(server, openai_thread, "GROKEX_OPENAI_RESUME_OK")
+                _wait_turn(server, grok_thread, "GROKEX_GROK_RESUME_OK")
+                openai_fork = _fork(server, openai_thread, openai_provider)
+                grok_fork = _fork(server, grok_thread, resolved_grok_provider)
+                _thread_list_has_bindings(
+                    server,
+                    {
+                        openai_thread: openai_provider,
+                        grok_thread: resolved_grok_provider,
+                        openai_fork: openai_provider,
+                        grok_fork: resolved_grok_provider,
+                    },
+                )
+                _start_marker_turn(server, openai_fork, "GROKEX_OPENAI_FORK_OK")
+                _start_marker_turn(server, grok_fork, "GROKEX_GROK_FORK_OK")
+                _wait_turn(server, openai_fork, "GROKEX_OPENAI_FORK_OK")
+                _wait_turn(server, grok_fork, "GROKEX_GROK_FORK_OK")
+                _compact(server, openai_thread)
+                _compact(server, grok_thread)
+                openai_child = _spawn_child(
+                    server,
+                    openai_thread,
+                    openai_provider,
+                    "GROKEX_OPENAI_CHILD_OK",
+                )
+                grok_child = _spawn_child(
+                    server,
+                    grok_thread,
+                    resolved_grok_provider,
+                    "GROKEX_GROK_CHILD_OK",
+                )
         finally:
             server.close()
 
-    print("dual_provider_live=passed")
-    print("chatgpt_provider_binding=passed")
+        if not args.grok_only:
+            openai_evidence = {
+                "provider": openai_provider,
+                "model": openai_model,
+                "thread_ids": [openai_thread, openai_fork, openai_child],
+            }
+            grok_evidence = {
+                "provider": resolved_grok_provider,
+                "model": grok_model,
+                "thread_ids": [grok_thread, grok_fork, grok_child],
+            }
+    _finish(args, started_at, openai_evidence, grok_evidence)
+
+
+def _finish(
+    args: argparse.Namespace,
+    started_at: float,
+    openai: dict[str, Any] | None,
+    grok: dict[str, Any],
+) -> None:
+    if args.evidence_output is not None:
+        evidence = {
+            "schema": "grokex_dual_provider_live/v1",
+            "started_at_unix": started_at,
+            "completed_at_unix": time.time(),
+            "openai": openai,
+            "grok": grok,
+        }
+        _write_evidence(args.evidence_output, evidence)
+
+    print("live_mode=" + ("dual_provider" if openai is not None else "grok_only"))
+    if openai is not None:
+        print("chatgpt_provider_binding=passed")
     print("grok_provider_binding=passed")
     print("mini_accounting_gate=requires_operator_usage_evidence")
-    print("credential_and_home_cleanup=passed")
+    print("isolated_runtime_home_cleanup=passed")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex-bin", type=Path, required=True)
-    parser.add_argument("--chatgpt-auth", type=Path, required=True)
+    parser.add_argument("--chatgpt-auth", type=Path)
     parser.add_argument("--grok-config", type=Path, required=True)
     parser.add_argument("--workspace", type=Path, required=True)
+    parser.add_argument("--evidence-output", type=Path)
+    parser.add_argument("--grok-only", action="store_true")
     return parser.parse_args()
 
 
