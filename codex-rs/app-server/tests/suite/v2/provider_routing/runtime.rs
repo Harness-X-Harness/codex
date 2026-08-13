@@ -263,7 +263,7 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
         app.read_stream_until_response_message(RequestId::Integer(compact_request_id)),
     )
     .await??;
-    timeout(
+    let compact_completed = timeout(
         DEFAULT_TIMEOUT,
         app.read_stream_until_matching_notification(
             "Grok context compaction completion",
@@ -277,6 +277,28 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
                                         completed.item,
                                         ThreadItem::ContextCompaction { .. }
                                     )
+                            })
+                    })
+            },
+        ),
+    )
+    .await??;
+    let compact_completed: ItemCompletedNotification = serde_json::from_value(
+        compact_completed
+            .params
+            .context("context compaction completion must include params")?,
+    )?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_matching_notification(
+            "Grok context compaction turn/completed",
+            |message| {
+                message.method == "turn/completed"
+                    && message.params.as_ref().is_some_and(|params| {
+                        serde_json::from_value::<TurnCompletedNotification>(params.clone())
+                            .is_ok_and(|completed| {
+                                completed.thread_id == grok_thread.thread.id
+                                    && completed.turn.id == compact_completed.turn_id
                             })
                     })
             },

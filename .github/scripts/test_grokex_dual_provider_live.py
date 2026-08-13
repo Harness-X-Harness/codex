@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import stat
 import tempfile
@@ -109,6 +110,64 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                 MODULE._spawn_child(
                     FakeServer("WRONG"), "parent-1", "grok", "CHILD_OK"
                 )
+
+    def test_compaction_waits_for_its_exact_terminal_turn(self) -> None:
+        class FakeServer:
+            def request(self, method, params, timeout=90):
+                self.request_call = (method, params)
+                return {}
+
+            def wait_notification(self, method, predicate, timeout=300):
+                if method == "item/completed":
+                    stale = {
+                        "threadId": "thread-1",
+                        "turnId": "turn-stale",
+                        "item": {"type": "agentMessage"},
+                    }
+                    self.assert_rejects_stale_item = not predicate(stale)
+                    return {
+                        "threadId": "thread-1",
+                        "turnId": "turn-compact",
+                        "item": {"type": "contextCompaction"},
+                    }
+                stale = {
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-stale", "status": "completed"},
+                }
+                self.assert_rejects_stale_turn = not predicate(stale)
+                terminal = {
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-compact", "status": "completed"},
+                }
+                if not predicate(terminal):
+                    raise AssertionError("test terminal turn did not match")
+                return terminal
+
+        server = FakeServer()
+        MODULE._compact(server, "thread-1")
+        self.assertEqual(
+            server.request_call,
+            ("thread/compact/start", {"threadId": "thread-1"}),
+        )
+        self.assertTrue(server.assert_rejects_stale_item)
+        self.assertTrue(server.assert_rejects_stale_turn)
+
+    def test_interactive_thread_list_does_not_require_spawned_children(self) -> None:
+        class FakeServer:
+            def request(self, method, params, timeout=90):
+                self.call = (method, params)
+                return {
+                    "data": [
+                        {"id": "root", "modelProvider": "grok"},
+                        {"id": "fork", "modelProvider": "grok"},
+                    ]
+                }
+
+        server = FakeServer()
+        MODULE._interactive_thread_list_has_bindings(
+            server, {"root": "grok", "fork": "grok"}
+        )
+        self.assertEqual(server.call, ("thread/list", {"limit": 100}))
 
     def test_app_server_driver_preserves_multiple_frames_from_one_read(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -365,13 +424,88 @@ requires_openai_auth = false
             def readline(self, _limit):
                 return next(self.lines, b"")
 
-        with mock.patch.object(MODULE.urllib.request, "urlopen", return_value=FakeResponse()):
+        captured = None
+
+        def open_request(request, timeout):
+            nonlocal captured
+            captured = (request, timeout)
+            return FakeResponse()
+
+        with mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=open_request):
             MODULE._probe_hosted_tool(
                 "https://example.test/v1/responses",
                 "private-token",
+                "codex_cli_rs/0.148.0-alpha.5 (grokex_live_acceptance)",
                 "grok-4.5",
                 "web_search",
             )
+        self.assertIsNotNone(captured)
+        request, timeout = captured
+        self.assertEqual(timeout, 300)
+        self.assertEqual(
+            request.get_header("User-agent"),
+            "codex_cli_rs/0.148.0-alpha.5 (grokex_live_acceptance)",
+        )
+        self.assertEqual(request.get_header("Originator"), "codex_cli_rs")
+
+    def test_all_hosted_probes_share_the_codex_client_identity(self) -> None:
+        calls = []
+        with mock.patch.object(
+            MODULE,
+            "_codex_live_user_agent",
+            return_value="codex_cli_rs/1.2.3 (grokex_live_acceptance)",
+        ), mock.patch.object(
+            MODULE,
+            "_grok_profile",
+            return_value=(
+                "grok",
+                {
+                    "base_url": "https://example.test/v1",
+                    "wire_api": "grok_responses",
+                    "experimental_bearer_token": "private-token",
+                },
+                "experimental_bearer_token",
+            ),
+        ), mock.patch.object(
+            MODULE,
+            "_probe_hosted_tool",
+            side_effect=lambda *args: calls.append(args),
+        ):
+            MODULE._run_gateway_hosted_live(
+                Path("config.toml"), Path("codex"), "grok-4.5"
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "https://example.test/v1/responses",
+                    "private-token",
+                    "codex_cli_rs/1.2.3 (grokex_live_acceptance)",
+                    "grok-4.5",
+                    tool_type,
+                )
+                for tool_type in ("web_search", "x_search", "image_generation")
+            ],
+        )
+
+    def test_hosted_probe_classifies_cloudflare_client_rejection(self) -> None:
+        error = MODULE.urllib.error.HTTPError(
+            "https://example.test/v1/responses",
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(
+                b'{"error_code":"1010","error_name":"browser_signature_banned"}'
+            ),
+        )
+        try:
+            self.assertEqual(
+                MODULE._hosted_probe_error_classification(error),
+                "1010",
+            )
+        finally:
+            error.close()
 
     def test_model_selection_requires_grok_but_allows_grok_only_mode(self) -> None:
         class FakeServer:

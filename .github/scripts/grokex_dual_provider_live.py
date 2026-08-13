@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import selectors
 import shutil
 import stat
@@ -38,6 +39,8 @@ X_SEARCH_NAMES = {
     "x_thread_fetch",
 }
 HOSTED_PROBE_MAX_EVENT_BYTES = 64 * 1024 * 1024
+HOSTED_PROBE_ERROR_BYTES = 64 * 1024
+SAFE_ERROR_FIELD = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
 
 def _toml_string(value: str) -> str:
@@ -131,6 +134,55 @@ def _hosted_probe_request(model: str, tool_type: str) -> dict[str, Any]:
     }
 
 
+def _codex_live_user_agent(binary: Path) -> str:
+    result = subprocess.run(
+        [str(binary), "--version"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=15,
+    )
+    fields = result.stdout.strip().split()
+    version = fields[-1] if result.returncode == 0 and fields else ""
+    if not SAFE_ERROR_FIELD.fullmatch(version):
+        raise AcceptanceError("codex_binary_version_invalid")
+    return f"codex_cli_rs/{version} (grokex_live_acceptance)"
+
+
+def _hosted_probe_headers(token: str, user_agent: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "User-Agent": user_agent,
+        "originator": "codex_cli_rs",
+    }
+
+
+def _hosted_probe_error_classification(error: urllib.error.HTTPError) -> str:
+    try:
+        payload = json.loads(error.read(HOSTED_PROBE_ERROR_BYTES))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "unclassified"
+    if not isinstance(payload, dict):
+        return "unclassified"
+    nested = payload.get("error")
+    candidates = [
+        nested.get("code") if isinstance(nested, dict) else None,
+        payload.get("error_code"),
+        payload.get("error_name"),
+    ]
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, str) and SAFE_ERROR_FIELD.fullmatch(candidate)
+        ),
+        "unclassified",
+    )
+
+
 def _is_completed_hosted_item(event: dict[str, Any], tool_type: str) -> bool:
     if event.get("type") != "response.output_item.done":
         return False
@@ -154,17 +206,14 @@ def _is_completed_hosted_item(event: dict[str, Any], tool_type: str) -> bool:
 def _probe_hosted_tool(
     endpoint: str,
     token: str,
+    user_agent: str,
     model: str,
     tool_type: str,
 ) -> None:
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(_hosted_probe_request(model, tool_type)).encode(),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-        },
+        headers=_hosted_probe_headers(token, user_agent),
         method="POST",
     )
     completed = False
@@ -207,9 +256,10 @@ def _probe_hosted_tool(
                         raise AcceptanceError(f"hosted_probe_event_too_large:{tool_type}")
                     event_data.append(value)
     except urllib.error.HTTPError as error:
+        classification = _hosted_probe_error_classification(error)
         error.close()
         raise AcceptanceError(
-            f"hosted_probe_http_status:{tool_type}:{error.code}"
+            f"hosted_probe_http_status:{tool_type}:{error.code}:{classification}"
         ) from None
     except (urllib.error.URLError, TimeoutError) as error:
         raise AcceptanceError(f"hosted_probe_transport:{tool_type}") from error
@@ -217,7 +267,7 @@ def _probe_hosted_tool(
         raise AcceptanceError(f"hosted_probe_terminal_item_missing:{tool_type}")
 
 
-def _run_gateway_hosted_live(source: Path, model: str) -> None:
+def _run_gateway_hosted_live(source: Path, binary: Path, model: str) -> None:
     _provider_id, profile, credential_key = _grok_profile(source)
     token = (
         os.environ[profile[credential_key]]
@@ -225,8 +275,9 @@ def _run_gateway_hosted_live(source: Path, model: str) -> None:
         else profile[credential_key]
     )
     endpoint = profile["base_url"].rstrip("/") + "/responses"
+    user_agent = _codex_live_user_agent(binary)
     for tool_type in ("web_search", "x_search", "image_generation"):
-        _probe_hosted_tool(endpoint, token, model, tool_type)
+        _probe_hosted_tool(endpoint, token, user_agent, model, tool_type)
 
 
 class AppServer:
@@ -534,13 +585,24 @@ def _fork(server: AppServer, thread_id: str, provider: str) -> str:
 
 def _compact(server: AppServer, thread_id: str) -> None:
     server.request("thread/compact/start", {"threadId": thread_id})
-    server.wait_notification(
+    completed = server.wait_notification(
         "item/completed",
         lambda value: value.get("threadId") == thread_id
         and isinstance(value.get("item"), dict)
         and value["item"].get("type") == "contextCompaction",
     )
-    _wait_turn(server, thread_id)
+    turn_id = completed.get("turnId")
+    if not isinstance(turn_id, str):
+        raise AcceptanceError("compaction_turn_id_missing")
+    params = server.wait_notification(
+        "turn/completed",
+        lambda value: value.get("threadId") == thread_id
+        and isinstance(value.get("turn"), dict)
+        and value["turn"].get("id") == turn_id,
+    )
+    turn = params.get("turn")
+    if not isinstance(turn, dict) or turn.get("status") != "completed":
+        raise AcceptanceError("compaction_turn_did_not_complete")
 
 
 def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) -> str:
@@ -594,7 +656,7 @@ def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) 
         time.sleep(1)
 
 
-def _thread_list_has_bindings(
+def _interactive_thread_list_has_bindings(
     server: AppServer, expected: dict[str, str]
 ) -> None:
     threads = server.request("thread/list", {"limit": 100}).get("data")
@@ -681,12 +743,11 @@ def _resume_grok_only(
         server, thread_id, grok_provider, "GROKEX_SUBAGENT_CHILD_OK"
     )
 
-    _thread_list_has_bindings(
+    _interactive_thread_list_has_bindings(
         server,
         {
             thread_id: grok_provider,
             fork_id: grok_provider,
-            child_id: grok_provider,
         },
     )
     return {
@@ -722,7 +783,7 @@ def run(args: argparse.Namespace) -> None:
             (codex_home / "auth.json").chmod(stat.S_IRUSR | stat.S_IWUSR)
         grok_provider = _write_isolated_config(grok_source, codex_home / "config.toml")
         _assert_openai_does_not_target_grok(codex_home / "config.toml")
-        _run_gateway_hosted_live(grok_source, GROK_LIVE_MODEL)
+        _run_gateway_hosted_live(grok_source, binary, GROK_LIVE_MODEL)
 
         server = AppServer(binary, codex_home, workspace)
         try:
@@ -788,7 +849,7 @@ def run(args: argparse.Namespace) -> None:
                 _wait_turn(server, grok_thread, "GROKEX_GROK_RESUME_OK")
                 openai_fork = _fork(server, openai_thread, openai_provider)
                 grok_fork = _fork(server, grok_thread, resolved_grok_provider)
-                _thread_list_has_bindings(
+                _interactive_thread_list_has_bindings(
                     server,
                     {
                         openai_thread: openai_provider,
