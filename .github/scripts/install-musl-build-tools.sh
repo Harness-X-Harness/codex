@@ -60,8 +60,13 @@ libcap_pkgconfig_dir="${libcap_prefix}/lib/pkgconfig"
 if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
   libcap_tarball="${libcap_root}/${libcap_tarball_name}"
+  libcap_partial="${libcap_tarball}.part"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  rm -f "${libcap_partial}"
+  curl --fail --show-error --silent --location \
+    --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+    "${libcap_download_url}" --output "${libcap_partial}"
+  mv "${libcap_partial}" "${libcap_tarball}"
   echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"

@@ -81,6 +81,28 @@ class GrokexDistributionTest(unittest.TestCase):
         self.assertIn("SCCACHE_GHA_ENABLED=false", action)
         self.assertIn("RUSTC_WRAPPER=${wrapper}", action)
 
+    def test_rusty_v8_downloads_retry_transient_network_failures(self) -> None:
+        action = (
+            REPO_ROOT
+            / ".github"
+            / "actions"
+            / "setup-rusty-v8"
+            / "action.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("download()", action)
+        self.assertIn("--retry 5", action)
+        self.assertIn("--retry-all-errors", action)
+        self.assertIn('local partial="${destination}.part"', action)
+        self.assertEqual(action.count('download "${base_url}/'), 3)
+
+        musl_setup = (
+            REPO_ROOT / ".github" / "scripts" / "install-musl-build-tools.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("--retry 5", musl_setup)
+        self.assertIn("--retry-all-errors", musl_setup)
+        self.assertIn('libcap_partial="${libcap_tarball}.part"', musl_setup)
+
     def test_controlled_dual_provider_live_driver_is_versioned(self) -> None:
         driver = REPO_ROOT / ".github" / "scripts" / "grokex_dual_provider_live.py"
         driver_test = (

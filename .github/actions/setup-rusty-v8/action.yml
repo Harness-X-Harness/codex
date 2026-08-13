@@ -35,9 +35,21 @@ runs:
         checksums_path="${binding_dir}/${checksums_name}"
 
         mkdir -p "${binding_dir}"
-        curl -fsSL "${base_url}/${archive_name}" -o "${archive_path}"
-        curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
-        curl -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
+        download() {
+          local url="$1"
+          local destination="$2"
+          local partial="${destination}.part"
+
+          rm -f "${partial}"
+          curl --fail --show-error --silent --location \
+            --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+            "${url}" --output "${partial}"
+          mv "${partial}" "${destination}"
+        }
+
+        download "${base_url}/${archive_name}" "${archive_path}"
+        download "${base_url}/${binding_name}" "${binding_path}"
+        download "${base_url}/${checksums_name}" "${checksums_path}"
 
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
