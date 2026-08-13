@@ -21,6 +21,60 @@ SPEC.loader.exec_module(MODULE)
 
 
 class GrokexDualProviderLiveTest(unittest.TestCase):
+    def test_chatgpt_subscription_visibility_is_independent_of_current_provider(self) -> None:
+        class FakeServer:
+            def __init__(self, account, auth_status=None):
+                self.account = account
+                self.auth_status = auth_status or {
+                    "authMethod": "chatgpt",
+                    "requiresOpenaiAuth": False,
+                }
+                self.calls = []
+
+            def request(self, method, params, timeout=90):
+                self.calls.append((method, params))
+                return self.account if method == "account/read" else self.auth_status
+
+        server = FakeServer(
+            {
+                "account": {"type": "chatgpt", "planType": "pro"},
+                "requiresOpenaiAuth": False,
+            }
+        )
+        MODULE._assert_chatgpt_subscription_visible(server)
+        self.assertEqual(
+            server.calls,
+            [
+                ("account/read", {"refreshToken": False}),
+                (
+                    "getAuthStatus",
+                    {"includeToken": False, "refreshToken": False},
+                ),
+            ],
+        )
+
+        with self.assertRaisesRegex(
+            MODULE.AcceptanceError, "chatgpt_subscription_not_visible"
+        ):
+            MODULE._assert_chatgpt_subscription_visible(
+                FakeServer(
+                    {"account": None, "requiresOpenaiAuth": False}
+                )
+            )
+
+        with self.assertRaisesRegex(
+            MODULE.AcceptanceError, "chatgpt_auth_method_not_visible"
+        ):
+            MODULE._assert_chatgpt_subscription_visible(
+                FakeServer(
+                    {
+                        "account": {"type": "chatgpt", "planType": "pro"},
+                        "requiresOpenaiAuth": False,
+                    },
+                    {"authMethod": None, "requiresOpenaiAuth": False},
+                )
+            )
+
     def test_wait_turn_requires_the_exact_assistant_marker(self) -> None:
         class FakeServer:
             def __init__(self, text: str) -> None:

@@ -98,6 +98,48 @@ impl std::error::Error for ProviderAccountError {}
 
 pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
+/// Returns the application-level OpenAI account represented by `auth_manager`.
+///
+/// Provider runtimes use this when OpenAI authentication belongs to that
+/// provider. Application account surfaces may also use it independently of the
+/// active provider so a configured custom provider does not hide an existing
+/// ChatGPT login.
+pub fn openai_account_state(auth_manager: Option<&AuthManager>) -> ProviderAccountResult {
+    let account = auth_manager
+        .and_then(|auth_manager| {
+            let auth = auth_manager.auth_cached()?;
+            if auth_manager.refresh_failure_for_auth(&auth).is_some() {
+                return None;
+            }
+            if matches!(auth, CodexAuth::Headers(_)) {
+                return None;
+            }
+            Some(auth)
+        })
+        .map(|auth| match &auth {
+            CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
+            CodexAuth::BedrockApiKey(_) => Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth),
+            CodexAuth::Chatgpt(_)
+            | CodexAuth::ChatgptAuthTokens(_)
+            | CodexAuth::Headers(_)
+            | CodexAuth::AgentIdentity(_)
+            | CodexAuth::PersonalAccessToken(_) => {
+                let email = auth.get_account_email();
+                let plan_type = auth.account_plan_type();
+
+                plan_type
+                    .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
+                    .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
+            }
+        })
+        .transpose()?;
+
+    Ok(ProviderAccountState {
+        account,
+        requires_openai_auth: true,
+    })
+}
+
 /// Default model used for automatic approval review when a provider does not
 /// require a backend-specific model ID.
 pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
@@ -345,46 +387,14 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn account_state(&self) -> ProviderAccountResult {
-        let account = if self.info.requires_openai_auth {
-            self.auth_manager
-                .as_ref()
-                .and_then(|auth_manager| {
-                    let auth = auth_manager.auth_cached()?;
-                    if auth_manager.refresh_failure_for_auth(&auth).is_some() {
-                        return None;
-                    }
-                    if matches!(auth, CodexAuth::Headers(_)) {
-                        return None;
-                    }
-                    Some(auth)
-                })
-                .map(|auth| match &auth {
-                    CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
-                    CodexAuth::BedrockApiKey(_) => {
-                        Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
-                    }
-                    CodexAuth::Chatgpt(_)
-                    | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::Headers(_)
-                    | CodexAuth::AgentIdentity(_)
-                    | CodexAuth::PersonalAccessToken(_) => {
-                        let email = auth.get_account_email();
-                        let plan_type = auth.account_plan_type();
-
-                        plan_type
-                            .map(|plan_type| ProviderAccount::Chatgpt { email, plan_type })
-                            .ok_or(ProviderAccountError::MissingChatgptAccountDetails)
-                    }
-                })
-                .transpose()?
+        if self.info.requires_openai_auth {
+            openai_account_state(self.auth_manager.as_deref())
         } else {
-            None
-        };
-
-        Ok(ProviderAccountState {
-            account,
-            requires_openai_auth: self.info.requires_openai_auth,
-        })
+            Ok(ProviderAccountState {
+                account: None,
+                requires_openai_auth: false,
+            })
+        }
     }
 
     fn models_manager(

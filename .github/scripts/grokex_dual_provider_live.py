@@ -450,12 +450,15 @@ def _initialize(server: AppServer) -> None:
 
 def _assert_chatgpt_subscription_visible(server: AppServer) -> None:
     account = server.request("account/read", {"refreshToken": False})
-    if (
-        not isinstance(account.get("account"), dict)
-        or account["account"].get("type") != "chatgpt"
-        or account.get("requiresOpenaiAuth") is not True
-    ):
+    if not isinstance(account.get("account"), dict) or account["account"].get(
+        "type"
+    ) != "chatgpt":
         raise AcceptanceError("chatgpt_subscription_not_visible")
+    auth_status = server.request(
+        "getAuthStatus", {"includeToken": False, "refreshToken": False}
+    )
+    if auth_status.get("authMethod") != "chatgpt":
+        raise AcceptanceError("chatgpt_auth_method_not_visible")
 
 
 def _models(server: AppServer) -> dict[str, str]:

@@ -2195,7 +2195,16 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 ### API Overview
 
-- `account/read` — fetch current account info; optionally refresh tokens.
+- `account/read` — fetch current account info; optionally refresh tokens. The
+  `account` field reports the application-level OpenAI/ChatGPT identity when
+  one exists, even if the active custom provider does not require it. The
+  independent `requiresOpenaiAuth` field continues to describe the active
+  provider. A provider-owned account such as managed Amazon Bedrock takes
+  precedence while that provider is active.
+- `getAuthStatus` — legacy authentication status used by existing desktop
+  clients. `authMethod` reports the application-level OpenAI/ChatGPT login,
+  while `requiresOpenaiAuth` independently reports whether the active provider
+  requires that login.
 - `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`, `amazonBedrock`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.

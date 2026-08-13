@@ -253,12 +253,13 @@ async fn get_auth_status_with_api_key_when_auth_not_required() -> Result<()> {
 
     let status: GetAuthStatusResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
-    assert_eq!(status.auth_method, None, "expected no auth method");
-    assert_eq!(status.auth_token, None, "expected no token");
     assert_eq!(
-        status.requires_openai_auth,
-        Some(false),
-        "requires_openai_auth should be false",
+        status,
+        GetAuthStatusResponse {
+            auth_method: Some(AuthMode::ApiKey),
+            auth_token: Some("sk-test-key".to_string()),
+            requires_openai_auth: Some(false),
+        }
     );
     Ok(())
 }

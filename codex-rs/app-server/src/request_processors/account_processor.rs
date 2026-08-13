@@ -829,11 +829,7 @@ impl AccountRequestProcessor {
         payload_v2: AccountLoginCompletedNotification,
     ) {
         let success = payload_v2.success;
-        outgoing
-            .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
-            .await;
-
-        if success {
+        let account_updated = if success {
             let auth_manager = thread_manager.auth_manager();
             auth_manager.reload().await;
             config_manager.replace_cloud_config_bundle_loader(
@@ -852,13 +848,22 @@ impl AccountRequestProcessor {
                 auth.clone(),
             )
             .await;
-            let payload_v2 = AccountUpdatedNotification {
+            Some(AccountUpdatedNotification {
                 auth_mode: auth
                     .as_ref()
                     .map(CodexAuth::api_auth_mode)
                     .map(auth_mode_to_api),
                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-            };
+            })
+        } else {
+            None
+        };
+
+        outgoing
+            .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
+            .await;
+
+        if let Some(payload_v2) = account_updated {
             outgoing
                 .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                 .await;
@@ -961,65 +966,57 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Determine whether auth is required based on the active model provider.
-        // If a custom provider is configured with `requires_openai_auth == false`,
-        // then no auth step is required; otherwise, default to requiring auth.
+        // The current provider decides whether OpenAI auth is required, but it does not own the
+        // application-level OpenAI login. Existing desktop clients use both fields, so report the
+        // login independently instead of hiding it when a custom provider does not require it.
         let config = self.load_latest_config().await;
         let requires_openai_auth = config.model_provider.requires_openai_auth;
 
-        let response = if !requires_openai_auth {
-            GetAuthStatusResponse {
+        let auth = if do_refresh {
+            self.auth_manager.auth_cached()
+        } else {
+            self.auth_manager.auth().await
+        };
+        let response = match auth {
+            Some(auth) => {
+                let permanent_refresh_failure =
+                    self.auth_manager.refresh_failure_for_auth(&auth).is_some();
+                let auth_mode = auth_mode_to_api(auth.api_auth_mode());
+                let (reported_auth_method, token_opt) = if matches!(
+                    auth,
+                    CodexAuth::Headers(_)
+                        | CodexAuth::AgentIdentity(_)
+                        | CodexAuth::PersonalAccessToken(_)
+                ) || include_token
+                    && permanent_refresh_failure
+                {
+                    // This response cannot represent the metadata needed to reuse these
+                    // credentials.
+                    (Some(auth_mode), None)
+                } else {
+                    match auth.get_token() {
+                        Ok(token) if !token.is_empty() => {
+                            let tok = if include_token { Some(token) } else { None };
+                            (Some(auth_mode), tok)
+                        }
+                        Ok(_) => (None, None),
+                        Err(err) => {
+                            tracing::warn!("failed to get token for auth status: {err}");
+                            (None, None)
+                        }
+                    }
+                };
+                GetAuthStatusResponse {
+                    auth_method: reported_auth_method,
+                    auth_token: token_opt,
+                    requires_openai_auth: Some(requires_openai_auth),
+                }
+            }
+            None => GetAuthStatusResponse {
                 auth_method: None,
                 auth_token: None,
-                requires_openai_auth: Some(false),
-            }
-        } else {
-            let auth = if do_refresh {
-                self.auth_manager.auth_cached()
-            } else {
-                self.auth_manager.auth().await
-            };
-            match auth {
-                Some(auth) => {
-                    let permanent_refresh_failure =
-                        self.auth_manager.refresh_failure_for_auth(&auth).is_some();
-                    let auth_mode = auth_mode_to_api(auth.api_auth_mode());
-                    let (reported_auth_method, token_opt) = if matches!(
-                        auth,
-                        CodexAuth::Headers(_)
-                            | CodexAuth::AgentIdentity(_)
-                            | CodexAuth::PersonalAccessToken(_)
-                    ) || include_token
-                        && permanent_refresh_failure
-                    {
-                        // This response cannot represent the metadata needed to reuse these
-                        // credentials.
-                        (Some(auth_mode), None)
-                    } else {
-                        match auth.get_token() {
-                            Ok(token) if !token.is_empty() => {
-                                let tok = if include_token { Some(token) } else { None };
-                                (Some(auth_mode), tok)
-                            }
-                            Ok(_) => (None, None),
-                            Err(err) => {
-                                tracing::warn!("failed to get token for auth status: {err}");
-                                (None, None)
-                            }
-                        }
-                    };
-                    GetAuthStatusResponse {
-                        auth_method: reported_auth_method,
-                        auth_token: token_opt,
-                        requires_openai_auth: Some(true),
-                    }
-                }
-                None => GetAuthStatusResponse {
-                    auth_method: None,
-                    auth_token: None,
-                    requires_openai_auth: Some(true),
-                },
-            }
+                requires_openai_auth: Some(requires_openai_auth),
+            },
         };
 
         Ok(response)
@@ -1036,15 +1033,32 @@ impl AccountRequestProcessor {
         let config = self.load_latest_config().await;
         let provider =
             create_model_provider(config.model_provider, Some(self.auth_manager.clone()));
-        let account_state = match provider.account_state() {
+        let provider_account_state = match provider.account_state() {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),
         };
-        let account = account_state.account.map(Account::from);
+        let requires_openai_auth = provider_account_state.requires_openai_auth;
+        // Provider-owned identities take precedence while that provider is active. A custom
+        // provider without its own account must not hide the application-level OpenAI identity.
+        let account = match provider_account_state.account {
+            Some(account) => Some(account),
+            None if !matches!(
+                self.auth_manager.auth_cached(),
+                Some(CodexAuth::BedrockApiKey(_))
+            ) =>
+            {
+                match openai_account_state(Some(self.auth_manager.as_ref())) {
+                    Ok(account_state) => account_state.account,
+                    Err(err) => return Err(invalid_request(err.to_string())),
+                }
+            }
+            None => None,
+        }
+        .map(Account::from);
 
         Ok(GetAccountResponse {
             account,
-            requires_openai_auth: account_state.requires_openai_auth,
+            requires_openai_auth,
         })
     }
 
