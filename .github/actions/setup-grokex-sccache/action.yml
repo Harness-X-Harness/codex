@@ -34,7 +34,13 @@ runs:
           wrapper="$(cygpath -w "${wrapper}")"
           cache_dir="$(cygpath -w "${cache_dir}")"
         fi
+        export SCCACHE_DIR="${cache_dir}"
+        export SCCACHE_IDLE_TIMEOUT=0
+        export SCCACHE_CACHE_SIZE=10G
+        sccache --start-server
         echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
         echo "SCCACHE_DIR=${cache_dir}" >> "$GITHUB_ENV"
+        echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
+        echo "SCCACHE_CACHE_SIZE=10G" >> "$GITHUB_ENV"
         echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
         echo "CARGO_BUILD_RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"

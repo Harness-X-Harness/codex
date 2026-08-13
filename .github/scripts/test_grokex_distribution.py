@@ -80,6 +80,28 @@ class GrokexDistributionTest(unittest.TestCase):
         self.assertIn("uses: actions/cache@", action)
         self.assertIn("SCCACHE_GHA_ENABLED=false", action)
         self.assertIn("RUSTC_WRAPPER=${wrapper}", action)
+        self.assertIn("SCCACHE_IDLE_TIMEOUT=0", action)
+        self.assertIn("SCCACHE_CACHE_SIZE=10G", action)
+        self.assertIn("sccache --start-server", action)
+        self.assertIn("sccache --show-stats", workflow)
+
+    def test_macos_release_matrix_matches_upstream_runner_policy(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(workflow.count('"runner":"macos-15-xlarge"'), 2)
+        self.assertNotIn('"runner":"macos-15-intel"', workflow)
+        self.assertIn(
+            '"target":"aarch64-apple-darwin","archive":"tar",'
+            '"timeout_minutes":130,"use_sccache":true',
+            workflow,
+        )
+        self.assertIn(
+            '"target":"x86_64-apple-darwin","archive":"tar",'
+            '"timeout_minutes":180,"use_sccache":false',
+            workflow,
+        )
 
     def test_rusty_v8_downloads_retry_transient_network_failures(self) -> None:
         action = (

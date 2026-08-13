@@ -74,8 +74,8 @@ jobs:
             prerelease=true
           fi
 
-          development_matrix='{"include":[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100}]}'
-          full_matrix='{"include":[{"runner":"macos-15","target":"aarch64-apple-darwin","archive":"tar","timeout_minutes":130},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","archive":"tar","timeout_minutes":180},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl","archive":"tar","timeout_minutes":100},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100},{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","archive":"zip","timeout_minutes":100},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","archive":"zip","timeout_minutes":100}]}'
+          development_matrix='{"include":[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true}]}'
+          full_matrix='{"include":[{"runner":"macos-15-xlarge","target":"aarch64-apple-darwin","archive":"tar","timeout_minutes":130,"use_sccache":true},{"runner":"macos-15-xlarge","target":"x86_64-apple-darwin","archive":"tar","timeout_minutes":180,"use_sccache":false},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true},{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","archive":"zip","timeout_minutes":100,"use_sccache":true},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","archive":"zip","timeout_minutes":100,"use_sccache":true}]}'
           build_matrix="$development_matrix"
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "${{ inputs.full_matrix }}" == "true" ]]; then
             build_matrix="$full_matrix"
@@ -422,6 +422,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Configure persistent Rust compiler cache
+        if: ${{ matrix.use_sccache }}
         uses: ./.github/actions/setup-grokex-sccache
         with:
           target: ${{ matrix.target }}
@@ -481,6 +482,11 @@ jobs:
           fi
           cargo build --locked --release --target "${{ matrix.target }}" \
             --bin codex --bin codex-code-mode-host
+
+      - name: Report compiler cache health
+        if: ${{ always() && matrix.use_sccache }}
+        shell: bash
+        run: sccache --show-stats
 
       - name: Package Unix archive
         if: matrix.archive == 'tar'
