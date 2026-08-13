@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      macos_arm64:
+        description: Build only macOS ARM64 for local Grokex.app acceptance
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: grokex-${{ github.ref }}
@@ -39,6 +44,7 @@ jobs:
       grokex_tag: ${{ steps.base.outputs.grokex_tag }}
       prerelease: ${{ steps.base.outputs.prerelease }}
       build_matrix: ${{ steps.base.outputs.build_matrix }}
+      includes_linux_x64: ${{ steps.base.outputs.includes_linux_x64 }}
       reuse_run_id: ${{ steps.reuse.outputs.reuse_run_id }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -75,16 +81,28 @@ jobs:
           fi
 
           development_matrix='{"include":[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true}]}'
-          full_matrix='{"include":[{"runner":"macos-15-xlarge","target":"aarch64-apple-darwin","archive":"tar","timeout_minutes":130,"use_sccache":true},{"runner":"macos-15-xlarge","target":"x86_64-apple-darwin","archive":"tar","timeout_minutes":180,"use_sccache":false},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true},{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","archive":"zip","timeout_minutes":100,"use_sccache":true},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","archive":"zip","timeout_minutes":100,"use_sccache":true}]}'
+          macos_arm64_matrix='{"include":[{"runner":"macos-15","target":"aarch64-apple-darwin","archive":"tar","timeout_minutes":130,"use_sccache":true}]}'
+          full_matrix='{"include":[{"runner":"macos-15","target":"aarch64-apple-darwin","archive":"tar","timeout_minutes":130,"use_sccache":true},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","archive":"tar","timeout_minutes":180,"use_sccache":false},{"runner":"ubuntu-24.04-arm","target":"aarch64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-musl","archive":"tar","timeout_minutes":100,"use_sccache":true},{"runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","archive":"zip","timeout_minutes":100,"use_sccache":true},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","archive":"zip","timeout_minutes":100,"use_sccache":true}]}'
           build_matrix="$development_matrix"
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "${{ inputs.full_matrix }}" == "true" ]]; then
-            build_matrix="$full_matrix"
+          includes_linux_x64=true
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "${{ inputs.full_matrix }}" == "true" && "${{ inputs.macos_arm64 }}" == "true" ]]; then
+              echo "Choose either full_matrix or macos_arm64, not both." >&2
+              exit 1
+            fi
+            if [[ "${{ inputs.full_matrix }}" == "true" ]]; then
+              build_matrix="$full_matrix"
+            elif [[ "${{ inputs.macos_arm64 }}" == "true" ]]; then
+              build_matrix="$macos_arm64_matrix"
+              includes_linux_x64=false
+            fi
           fi
           echo "official_tag=$official_tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "grokex_tag=$grokex_tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "build_matrix=$build_matrix" >> "$GITHUB_OUTPUT"
+          echo "includes_linux_x64=$includes_linux_x64" >> "$GITHUB_OUTPUT"
 
       - name: Verify Grokex distribution contract
         if: github.ref_type != 'tag'
@@ -377,6 +395,12 @@ jobs:
             standalone_image_generation_failure_emits_terminal_item
           cargo test --locked -p codex-app-server --test all \
             thread_resume_redacts_payloads_for_chatgpt_remote_clients
+          cargo test --locked -p codex-app-server --test all \
+            suite::v2::account::get_account_keeps_chatgpt_visible_when_current_provider_does_not_require_it \
+            -- --exact
+          cargo test --locked -p codex-app-server --test all \
+            suite::v2::account::login_account_chatgpt_redirects_to_hosted_success_page \
+            -- --exact
 
   bazel-lock:
     name: Bazel dependency lock
@@ -578,7 +602,10 @@ jobs:
       - contracts
       - bazel-lock
       - checksums
-    if: github.repository == 'weavertech-group/codex' && github.ref == 'refs/heads/grok-backend'
+    if: >-
+      github.repository == 'weavertech-group/codex' &&
+      github.ref == 'refs/heads/grok-backend' &&
+      needs.source.outputs.includes_linux_x64 == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

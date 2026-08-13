@@ -90,16 +90,54 @@ class GrokexDistributionTest(unittest.TestCase):
             REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertEqual(workflow.count('"runner":"macos-15-xlarge"'), 2)
-        self.assertNotIn('"runner":"macos-15-intel"', workflow)
+        self.assertEqual(workflow.count('"runner":"macos-15"'), 2)
+        self.assertEqual(workflow.count('"runner":"macos-15-intel"'), 1)
+        self.assertNotIn('"runner":"macos-15-xlarge"', workflow)
+        self.assertEqual(
+            workflow.count(
+                '"target":"aarch64-apple-darwin","archive":"tar",'
+                '"timeout_minutes":130,"use_sccache":true'
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(
+                '"target":"x86_64-apple-darwin","archive":"tar",'
+                '"timeout_minutes":180,"use_sccache":false'
+            ),
+            1,
+        )
+
+    def test_macos_arm64_acceptance_scope_does_not_require_linux_live(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("macos_arm64:", workflow)
+        self.assertIn('build_matrix="$macos_arm64_matrix"', workflow)
+        self.assertIn("includes_linux_x64=false", workflow)
         self.assertIn(
-            '"target":"aarch64-apple-darwin","archive":"tar",'
-            '"timeout_minutes":130,"use_sccache":true',
+            "needs.source.outputs.includes_linux_x64 == 'true'",
             workflow,
         )
         self.assertIn(
-            '"target":"x86_64-apple-darwin","archive":"tar",'
-            '"timeout_minutes":180,"use_sccache":false',
+            "Choose either full_matrix or macos_arm64, not both.",
+            workflow,
+        )
+
+    def test_account_visibility_contracts_run_in_remote_ci(self) -> None:
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "suite::v2::account::"
+            "get_account_keeps_chatgpt_visible_when_current_provider_does_not_require_it",
+            workflow,
+        )
+        self.assertIn(
+            "suite::v2::account::"
+            "login_account_chatgpt_redirects_to_hosted_success_page",
             workflow,
         )
 

@@ -477,30 +477,39 @@ def _models(server: AppServer) -> dict[str, str]:
         if not isinstance(cursor, str) or not cursor:
             break
 
-    def choose(prefix: str, required: bool, exact_model: str | None = None) -> str | None:
+    def choose(
+        *,
+        required_error: str | None,
+        exact_model: str | None = None,
+        display_prefix: str | None = None,
+    ) -> str | None:
         matches = [
             model
             for model in models
-            if isinstance(model.get("displayName"), str)
-            and model["displayName"].startswith(prefix)
-            and isinstance(model.get("model"), str)
+            if isinstance(model.get("model"), str)
             and (exact_model is None or model["model"] == exact_model)
+            and (
+                display_prefix is None
+                or (
+                    isinstance(model.get("displayName"), str)
+                    and model["displayName"].startswith(display_prefix)
+                )
+            )
         ]
         if not matches:
-            if required:
-                raise AcceptanceError(
-                    "grok_model_catalog_incomplete"
-                    if prefix == "Grok · "
-                    else "chatgpt_model_catalog_incomplete"
-                )
+            if required_error is not None:
+                raise AcceptanceError(required_error)
             return None
         selected = next((model for model in matches if model.get("isDefault")), matches[0])
         return selected["model"]
 
-    grok = choose("Grok · ", required=True, exact_model=GROK_LIVE_MODEL)
+    grok = choose(
+        required_error="grok_model_catalog_incomplete",
+        exact_model=GROK_LIVE_MODEL,
+    )
     assert grok is not None
     selected = {"grok": grok}
-    chatgpt = choose("ChatGPT · ", required=False)
+    chatgpt = choose(required_error=None, display_prefix="ChatGPT · ")
     if chatgpt is not None:
         selected["openai"] = chatgpt
     return selected

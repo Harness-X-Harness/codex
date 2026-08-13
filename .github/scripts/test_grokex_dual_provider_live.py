@@ -561,7 +561,7 @@ requires_openai_auth = false
         finally:
             error.close()
 
-    def test_model_selection_requires_grok_but_allows_grok_only_mode(self) -> None:
+    def test_model_selection_uses_verified_grok_slug_with_custom_provider_name(self) -> None:
         class FakeServer:
             def __init__(self, models):
                 self.models = models
@@ -575,7 +575,7 @@ requires_openai_auth = false
                 [
                     {
                         "model": "grok-4.5",
-                        "displayName": "Grok · Grok Model",
+                        "displayName": "Mini Grok Surface · Grok 4.5",
                         "isDefault": True,
                     }
                 ]
