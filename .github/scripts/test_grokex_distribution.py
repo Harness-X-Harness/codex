@@ -176,16 +176,10 @@ class GrokexDistributionTest(unittest.TestCase):
         script = (
             REPO_ROOT / ".github" / "scripts" / "grokex-live-acceptance.sh"
         ).read_text(encoding="utf-8")
-        driver = (
-            REPO_ROOT / ".github" / "scripts" / "grokex_dual_provider_live.py"
-        ).read_text(encoding="utf-8")
 
         self.assertIn("grokex_dual_provider_live.py", script)
         self.assertIn("--grok-only", script)
         self.assertNotIn("grep -R", script)
-        self.assertIn('item.get("type") == "agentMessage"', driver)
-        self.assertIn('item.get("text") == expected_marker', driver)
-        self.assertIn('"thread/read"', driver)
 
 
 if __name__ == "__main__":

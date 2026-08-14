@@ -21,6 +21,39 @@ SPEC.loader.exec_module(MODULE)
 
 
 class GrokexDualProviderLiveTest(unittest.TestCase):
+    def test_start_turn_returns_the_authoritative_turn_id(self) -> None:
+        class FakeServer:
+            def request(self, method, params, timeout=90):
+                self.call = (method, params)
+                return {
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "inProgress",
+                        "items": [],
+                    }
+                }
+
+        server = FakeServer()
+        turn_id = MODULE._start_turn(server, "thread-1", "safe prompt")
+
+        self.assertEqual(turn_id, "turn-1")
+        self.assertEqual(
+            server.call,
+            (
+                "turn/start",
+                {
+                    "threadId": "thread-1",
+                    "input": [
+                        {
+                            "type": "text",
+                            "text": "safe prompt",
+                            "text_elements": [],
+                        }
+                    ],
+                },
+            ),
+        )
+
     def test_chatgpt_subscription_visibility_is_independent_of_current_provider(self) -> None:
         class FakeServer:
             def __init__(self, account, auth_status=None):
@@ -75,23 +108,73 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                 )
             )
 
-    def test_wait_turn_requires_the_exact_assistant_marker(self) -> None:
+    def test_wait_turn_uses_exact_identity_and_typed_message_evidence(self) -> None:
         class FakeServer:
-            def __init__(self, text: str) -> None:
-                self.text = text
-
             def wait_notification(self, method, predicate, timeout=300):
                 self.asserted_method = method
-                params = {
+                stale = {
                     "threadId": "thread-1",
                     "turn": {
+                        "id": "turn-stale",
+                        "status": "completed",
+                        "items": [
+                            {
+                                "type": "agentMessage",
+                                "id": "message-stale",
+                                "text": "untrusted model text",
+                            }
+                        ],
+                    },
+                }
+                self.rejected_stale = not predicate(stale)
+                terminal = {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-expected",
                         "status": "completed",
                         "items": [
                             {
                                 "type": "agentMessage",
                                 "id": "message-1",
-                                "text": self.text,
+                                "text": "any model response is acceptable",
                             }
+                        ],
+                    },
+                }
+                if not predicate(terminal):
+                    raise AssertionError("test notification did not match")
+                return terminal
+
+        server = FakeServer()
+        turn = MODULE._wait_turn(server, "thread-1", "turn-expected")
+
+        self.assertEqual(turn["id"], "turn-expected")
+        self.assertEqual(server.asserted_method, "turn/completed")
+        self.assertTrue(server.rejected_stale)
+
+    def test_wait_turn_requires_completed_local_command_evidence(self) -> None:
+        class FakeServer:
+            def __init__(
+                self, command_status: str, command_source: str = "agent"
+            ) -> None:
+                self.command_status = command_status
+                self.command_source = command_source
+
+            def wait_notification(self, method, predicate, timeout=300):
+                params = {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "completed",
+                        "items": [
+                            {"type": "agentMessage", "id": "message-1", "text": "ok"},
+                            {
+                                "type": "commandExecution",
+                                "id": "command-1",
+                                "source": self.command_source,
+                                "status": self.command_status,
+                                "exitCode": 0,
+                            },
                         ],
                     },
                 }
@@ -99,32 +182,126 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                     raise AssertionError("test notification did not match")
                 return params
 
-        accepted = FakeServer("EXPECTED")
-        MODULE._wait_turn(accepted, "thread-1", "EXPECTED")
-        self.assertEqual(accepted.asserted_method, "turn/completed")
+        MODULE._wait_turn(
+            FakeServer("completed"),
+            "thread-1",
+            "turn-1",
+            required_item_types=("agentMessage", "commandExecution"),
+        )
 
         with self.assertRaisesRegex(
-            MODULE.AcceptanceError, "turn_response_marker_missing"
+            MODULE.AcceptanceError,
+            "turn_item_evidence_missing:commandExecution",
         ):
-            MODULE._wait_turn(FakeServer("WRONG"), "thread-1", "EXPECTED")
+            MODULE._wait_turn(
+                FakeServer("inProgress"),
+                "thread-1",
+                "turn-1",
+                required_item_types=("agentMessage", "commandExecution"),
+            )
 
-    def test_spawn_child_verifies_persisted_child_output(self) -> None:
+        with self.assertRaisesRegex(
+            MODULE.AcceptanceError,
+            "turn_item_evidence_missing:commandExecution",
+        ):
+            MODULE._wait_turn(
+                FakeServer("completed", "userShell"),
+                "thread-1",
+                "turn-1",
+                required_item_types=("agentMessage", "commandExecution"),
+            )
+
+    def test_grok_only_starts_in_the_explicit_local_environment(self) -> None:
+        case = self
+
         class FakeServer:
-            def __init__(self, child_text: str) -> None:
-                self.child_text = child_text
+            def __init__(self, workspace: Path) -> None:
+                self.workspace = workspace
+                self.turn_prompt: str | None = None
+
+            def request(self, method, params, timeout=90):
+                if method == "thread/start":
+                    case.assertEqual(
+                        params["environments"],
+                        [
+                            {
+                                "environmentId": "local",
+                                "cwd": str(self.workspace),
+                            }
+                        ],
+                    )
+                    return {
+                        "thread": {"id": "thread-1"},
+                        "modelProvider": "grok",
+                    }
+                if method == "turn/start":
+                    self.turn_prompt = params["input"][0]["text"]
+                    return {"turn": {"id": "turn-1"}}
+                raise AssertionError(f"unexpected request: {method}")
+
+            def wait_notification(self, method, predicate, timeout=300):
+                params = {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "completed",
+                        "items": [
+                            {"type": "agentMessage", "id": "message-1"},
+                        ],
+                    },
+                }
+                if not predicate(params):
+                    raise AssertionError("test notification did not match")
+                return params
+
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp)
+            server = FakeServer(workspace)
+
+            thread_id = MODULE._start_grok_only(
+                server, "grok-4.5", "grok", workspace
+            )
+
+            self.assertEqual(thread_id, "thread-1")
+            self.assertEqual(
+                server.turn_prompt,
+                "Reply with a brief confirmation. Do not call any tool.",
+            )
+
+    def test_spawn_child_uses_a_new_provider_bound_completed_child(self) -> None:
+        class FakeServer:
+            def __init__(self) -> None:
+                self.list_count = 0
+                self.read_params = None
 
             def request(self, method, params, timeout=90):
                 if method == "turn/start":
-                    return {}
-                if method == "thread/list":
                     return {
-                        "data": [
+                        "turn": {
+                            "id": "parent-turn-1",
+                            "status": "inProgress",
+                            "items": [],
+                        }
+                    }
+                if method == "thread/list":
+                    self.list_count += 1
+                    children = [
+                        {
+                            "id": "old-child",
+                            "modelProvider": "grok",
+                            "status": {"type": "idle"},
+                        }
+                    ]
+                    if self.list_count > 1:
+                        children.append(
                             {
-                                "id": "child-1",
+                                "id": "new-child",
                                 "modelProvider": "grok",
                                 "status": {"type": "idle"},
                             }
-                        ]
+                        )
+                    return {
+                        "data": children
                     }
                 if method == "thread/read":
                     self.read_params = params
@@ -132,10 +309,12 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                         "thread": {
                             "turns": [
                                 {
+                                    "id": "child-turn-1",
+                                    "status": "completed",
                                     "items": [
                                         {
                                             "type": "agentMessage",
-                                            "text": self.child_text,
+                                            "text": "arbitrary child response",
                                         }
                                     ]
                                 }
@@ -144,26 +323,34 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                     }
                 raise AssertionError(f"unexpected request: {method}")
 
-        accepted = FakeServer("CHILD_OK")
-        with mock.patch.object(MODULE, "_wait_turn"):
-            self.assertEqual(
-                MODULE._spawn_child(
-                    accepted, "parent-1", "grok", "CHILD_OK"
-                ),
-                "child-1",
-            )
+            def wait_notification(self, method, predicate, timeout=300):
+                params = {
+                    "threadId": "parent-1",
+                    "turn": {
+                        "id": "parent-turn-1",
+                        "status": "completed",
+                        "items": [
+                            {
+                                "type": "agentMessage",
+                                "id": "parent-message-1",
+                                "text": "arbitrary parent response",
+                            }
+                        ],
+                    },
+                }
+                if not predicate(params):
+                    raise AssertionError("test notification did not match")
+                return params
+
+        accepted = FakeServer()
+        self.assertEqual(
+            MODULE._spawn_child(accepted, "parent-1", "grok"),
+            "new-child",
+        )
         self.assertEqual(
             accepted.read_params,
-            {"threadId": "child-1", "includeTurns": True},
+            {"threadId": "new-child", "includeTurns": True},
         )
-
-        with mock.patch.object(MODULE, "_wait_turn"):
-            with self.assertRaisesRegex(
-                MODULE.AcceptanceError, "subagent_response_marker_missing"
-            ):
-                MODULE._spawn_child(
-                    FakeServer("WRONG"), "parent-1", "grok", "CHILD_OK"
-                )
 
     def test_compaction_waits_for_its_exact_terminal_turn(self) -> None:
         class FakeServer:

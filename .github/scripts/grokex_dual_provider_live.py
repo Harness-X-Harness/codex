@@ -522,6 +522,12 @@ def _start_thread(server: AppServer, model: str, workspace: Path) -> tuple[str, 
             "model": model,
             "cwd": str(workspace),
             "approvalPolicy": "never",
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": str(workspace),
+                }
+            ],
         },
     )
     thread = result.get("thread")
@@ -533,8 +539,8 @@ def _start_thread(server: AppServer, model: str, workspace: Path) -> tuple[str, 
     return thread["id"], provider
 
 
-def _start_turn(server: AppServer, thread_id: str, prompt: str) -> None:
-    server.request(
+def _start_turn(server: AppServer, thread_id: str, prompt: str) -> str:
+    result = server.request(
         "turn/start",
         {
             "threadId": thread_id,
@@ -547,35 +553,64 @@ def _start_turn(server: AppServer, thread_id: str, prompt: str) -> None:
             ],
         },
     )
+    turn = result.get("turn")
+    if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+        raise AcceptanceError("turn_start_invalid")
+    return turn["id"]
 
 
 def _wait_turn(
-    server: AppServer, thread_id: str, expected_marker: str | None = None
+    server: AppServer,
+    thread_id: str,
+    turn_id: str,
+    required_item_types: tuple[str, ...] = ("agentMessage",),
 ) -> dict[str, Any]:
     params = server.wait_notification(
-        "turn/completed", lambda value: value.get("threadId") == thread_id
+        "turn/completed",
+        lambda value: value.get("threadId") == thread_id
+        and isinstance(value.get("turn"), dict)
+        and value["turn"].get("id") == turn_id,
     )
     turn = params.get("turn")
     if not isinstance(turn, dict) or turn.get("status") != "completed":
         raise AcceptanceError("turn_did_not_complete")
-    if expected_marker is None:
-        return turn
     items = turn.get("items")
-    if not isinstance(items, list) or not any(
-        isinstance(item, dict)
-        and item.get("type") == "agentMessage"
-        and item.get("text") == expected_marker
-        for item in items
-    ):
-        raise AcceptanceError("turn_response_marker_missing")
+    if not isinstance(items, list):
+        raise AcceptanceError("turn_items_missing")
+    for required_type in required_item_types:
+        if not any(
+            isinstance(item, dict)
+            and item.get("type") == required_type
+            and (
+                required_type != "commandExecution"
+                or (
+                    item.get("source") == "agent"
+                    and item.get("status") == "completed"
+                )
+            )
+            for item in items
+        ):
+            present_types = sorted(
+                {
+                    item_type
+                    for item in items
+                    if isinstance(item, dict)
+                    and isinstance((item_type := item.get("type")), str)
+                    and SAFE_ERROR_FIELD.fullmatch(item_type)
+                }
+            )
+            present = ",".join(present_types) if present_types else "none"
+            raise AcceptanceError(
+                f"turn_item_evidence_missing:{required_type}:present={present}"
+            )
     return turn
 
 
-def _start_marker_turn(server: AppServer, thread_id: str, marker: str) -> None:
-    _start_turn(
+def _start_message_turn(server: AppServer, thread_id: str) -> str:
+    return _start_turn(
         server,
         thread_id,
-        f"Reply with exactly {marker}. Do not call any tool.",
+        "Reply with a brief confirmation. Do not call any tool.",
     )
 
 
@@ -617,16 +652,26 @@ def _compact(server: AppServer, thread_id: str) -> None:
         raise AcceptanceError("compaction_turn_did_not_complete")
 
 
-def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) -> str:
-    _start_turn(
+def _spawn_child(server: AppServer, thread_id: str, provider: str) -> str:
+    existing_children = server.request(
+        "thread/list", {"limit": 20, "parentThreadId": thread_id}
+    ).get("data")
+    if not isinstance(existing_children, list):
+        raise AcceptanceError("subagent_provider_binding_missing")
+    existing_ids = {
+        child["id"]
+        for child in existing_children
+        if isinstance(child, dict) and isinstance(child.get("id"), str)
+    }
+    turn_id = _start_turn(
         server,
         thread_id,
         (
-            "Use spawn_agent to create one reviewer. Tell it to reply with "
-            f"exactly {marker}. Wait for it, then return exactly that marker."
+            "Use spawn_agent to create one reviewer. Ask it to review this request, "
+            "wait for it to complete, and then reply briefly."
         ),
     )
-    _wait_turn(server, thread_id, marker)
+    _wait_turn(server, thread_id, turn_id)
     deadline = time.monotonic() + 300
     while True:
         children = server.request(
@@ -638,6 +683,7 @@ def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) 
             child
             for child in children
             if isinstance(child, dict)
+            and child.get("id") not in existing_ids
             and child.get("modelProvider") == provider
             and isinstance(child.get("id"), str)
         ]
@@ -652,16 +698,16 @@ def _spawn_child(server: AppServer, thread_id: str, provider: str, marker: str) 
                 turns = persisted.get("turns") if isinstance(persisted, dict) else None
                 if not isinstance(turns, list) or not any(
                     isinstance(turn, dict)
+                    and turn.get("status") == "completed"
                     and isinstance(turn.get("items"), list)
                     and any(
                         isinstance(item, dict)
                         and item.get("type") == "agentMessage"
-                        and item.get("text") == marker
                         for item in turn["items"]
                     )
                     for turn in turns
                 ):
-                    raise AcceptanceError("subagent_response_marker_missing")
+                    raise AcceptanceError("subagent_completed_turn_missing")
                 return child["id"]
         if time.monotonic() >= deadline:
             raise AcceptanceError("subagent_did_not_complete")
@@ -726,13 +772,8 @@ def _start_grok_only(
     thread_id, resolved_provider = _start_thread(server, grok_model, workspace)
     if resolved_provider != grok_provider:
         raise AcceptanceError("grok_model_owner_mismatch")
-
-    _start_turn(
-        server,
-        thread_id,
-        "Use the local shell tool to run printf GROKEX_LOCAL_OK. Return only that marker.",
-    )
-    _wait_turn(server, thread_id, "GROKEX_LOCAL_OK")
+    turn_id = _start_message_turn(server, thread_id)
+    _wait_turn(server, thread_id, turn_id)
     return thread_id
 
 
@@ -743,17 +784,15 @@ def _resume_grok_only(
     grok_provider: str,
 ) -> dict[str, Any]:
     _resume(server, thread_id, grok_provider)
-    _start_marker_turn(server, thread_id, "GROKEX_RESUME_OK")
-    _wait_turn(server, thread_id, "GROKEX_RESUME_OK")
+    turn_id = _start_message_turn(server, thread_id)
+    _wait_turn(server, thread_id, turn_id)
 
     fork_id = _fork(server, thread_id, grok_provider)
-    _start_marker_turn(server, fork_id, "GROKEX_FORK_OK")
-    _wait_turn(server, fork_id, "GROKEX_FORK_OK")
+    fork_turn_id = _start_message_turn(server, fork_id)
+    _wait_turn(server, fork_id, fork_turn_id)
 
     _compact(server, thread_id)
-    child_id = _spawn_child(
-        server, thread_id, grok_provider, "GROKEX_SUBAGENT_CHILD_OK"
-    )
+    child_id = _spawn_child(server, thread_id, grok_provider)
 
     _interactive_thread_list_has_bindings(
         server,
@@ -829,14 +868,10 @@ def run(args: argparse.Namespace) -> None:
                     server, grok_thread, openai_model
                 )
 
-                _start_marker_turn(
-                    server, openai_thread, "GROKEX_OPENAI_CONCURRENT_OK"
-                )
-                _start_marker_turn(
-                    server, grok_thread, "GROKEX_GROK_CONCURRENT_OK"
-                )
-                _wait_turn(server, openai_thread, "GROKEX_OPENAI_CONCURRENT_OK")
-                _wait_turn(server, grok_thread, "GROKEX_GROK_CONCURRENT_OK")
+                openai_turn = _start_message_turn(server, openai_thread)
+                grok_turn = _start_message_turn(server, grok_thread)
+                _wait_turn(server, openai_thread, openai_turn)
+                _wait_turn(server, grok_thread, grok_turn)
         finally:
             server.close()
 
@@ -855,10 +890,10 @@ def run(args: argparse.Namespace) -> None:
                 _assert_chatgpt_subscription_visible(server)
                 _resume(server, openai_thread, openai_provider)
                 _resume(server, grok_thread, resolved_grok_provider)
-                _start_marker_turn(server, openai_thread, "GROKEX_OPENAI_RESUME_OK")
-                _start_marker_turn(server, grok_thread, "GROKEX_GROK_RESUME_OK")
-                _wait_turn(server, openai_thread, "GROKEX_OPENAI_RESUME_OK")
-                _wait_turn(server, grok_thread, "GROKEX_GROK_RESUME_OK")
+                openai_turn = _start_message_turn(server, openai_thread)
+                grok_turn = _start_message_turn(server, grok_thread)
+                _wait_turn(server, openai_thread, openai_turn)
+                _wait_turn(server, grok_thread, grok_turn)
                 openai_fork = _fork(server, openai_thread, openai_provider)
                 grok_fork = _fork(server, grok_thread, resolved_grok_provider)
                 _interactive_thread_list_has_bindings(
@@ -870,23 +905,15 @@ def run(args: argparse.Namespace) -> None:
                         grok_fork: resolved_grok_provider,
                     },
                 )
-                _start_marker_turn(server, openai_fork, "GROKEX_OPENAI_FORK_OK")
-                _start_marker_turn(server, grok_fork, "GROKEX_GROK_FORK_OK")
-                _wait_turn(server, openai_fork, "GROKEX_OPENAI_FORK_OK")
-                _wait_turn(server, grok_fork, "GROKEX_GROK_FORK_OK")
+                openai_fork_turn = _start_message_turn(server, openai_fork)
+                grok_fork_turn = _start_message_turn(server, grok_fork)
+                _wait_turn(server, openai_fork, openai_fork_turn)
+                _wait_turn(server, grok_fork, grok_fork_turn)
                 _compact(server, openai_thread)
                 _compact(server, grok_thread)
-                openai_child = _spawn_child(
-                    server,
-                    openai_thread,
-                    openai_provider,
-                    "GROKEX_OPENAI_CHILD_OK",
-                )
+                openai_child = _spawn_child(server, openai_thread, openai_provider)
                 grok_child = _spawn_child(
-                    server,
-                    grok_thread,
-                    resolved_grok_provider,
-                    "GROKEX_GROK_CHILD_OK",
+                    server, grok_thread, resolved_grok_provider
                 )
         finally:
             server.close()
