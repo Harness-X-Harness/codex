@@ -3338,10 +3338,8 @@ dependencies = [
 name = "codex-image-generation-extension"
 version = "0.148.0-alpha.5"
 dependencies = [
- "base64 0.22.1",
  "codex-api",
  "codex-core",
- "codex-exec-server",
  "codex-extension-api",
  "codex-extension-items",
  "codex-login",
@@ -4473,6 +4471,7 @@ name = "codex-utils-image"
 version = "0.148.0-alpha.5"
 dependencies = [
  "base64 0.22.1",
+ "codex-utils-absolute-path",
  "codex-utils-cache",
  "divan",
  "image",

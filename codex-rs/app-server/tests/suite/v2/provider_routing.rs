@@ -5,6 +5,8 @@ use app_test_support::TestAppServer;
 use app_test_support::remote_catalog_model;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ImageGenerationItem;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -12,6 +14,7 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -22,6 +25,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -43,6 +47,12 @@ use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const TINY_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 0,
+    5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 mod runtime;
 
@@ -283,7 +293,7 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
                         "type": "image_generation_call",
                         "status": "completed",
                         "prompt": "Draw a blue circle.",
-                        "result": "data:image/png;base64,AAAA"
+                        "result": TINY_PNG_DATA_URL
                     }
                 }),
                 serde_json::json!({
@@ -293,7 +303,7 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
                         "type": "image_generation_call",
                         "status": "completed",
                         "prompt": "Draw a blue circle.",
-                        "result": "data:image/png;base64,AAAA"
+                        "result": TINY_PNG_DATA_URL
                     }
                 }),
                 responses::ev_assistant_message("grok-image-message", "Done"),
@@ -304,6 +314,7 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
     .await;
     let mut app = fixture.start_app().await?;
     let mut thread_ids = Vec::new();
+    let mut live_image_path = None;
     for prompt in [
         "Exercise Web Search",
         "Exercise X Search",
@@ -315,15 +326,40 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
                 ..Default::default()
             })
             .await?;
-        app.start_turn_and_wait_for_completion(TurnStartParams {
+        let turn_params = TurnStartParams {
             thread_id: started.thread.id.clone(),
             input: vec![UserInput::Text {
                 text: prompt.to_string(),
                 text_elements: Vec::new(),
             }],
             ..Default::default()
-        })
-        .await?;
+        };
+        if prompt == "Exercise Image Generation" {
+            let request_id = app.send_turn_start_request(turn_params).await?;
+            let _: TurnStartResponse =
+                timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+            loop {
+                let completed: ItemCompletedNotification =
+                    timeout(DEFAULT_TIMEOUT, app.read_notification("item/completed")).await??;
+                let ThreadItem::ImageGeneration(ImageGenerationItem {
+                    saved_path: Some(saved_path),
+                    ..
+                }) = completed.item
+                else {
+                    continue;
+                };
+                assert_eq!(std::fs::read(&saved_path)?, TINY_PNG_BYTES);
+                live_image_path = Some(saved_path);
+                break;
+            }
+            timeout(
+                DEFAULT_TIMEOUT,
+                app.read_stream_until_notification_message("turn/completed"),
+            )
+            .await??;
+        } else {
+            app.start_turn_and_wait_for_completion(turn_params).await?;
+        }
         thread_ids.push(started.thread.id);
     }
 
@@ -379,6 +415,17 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
             1,
             "hosted item must be projected and persisted exactly once"
         );
+        if item_type == "imageGeneration" {
+            let image = persisted_items
+                .iter()
+                .find(|item| item["type"] == item_type && item["id"] == item_id)
+                .context("persisted image item should exist")?;
+            assert_eq!(
+                image["savedPath"],
+                serde_json::to_value(live_image_path.as_ref())?,
+                "thread/read must preserve the readable image artifact path"
+            );
+        }
     }
     Ok(())
 }

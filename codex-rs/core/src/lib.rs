@@ -56,6 +56,7 @@ mod git_info_tests;
 mod grok_model_input;
 mod guardian;
 mod hook_runtime;
+mod image_generation_artifacts;
 mod image_preparation;
 mod installation_id;
 pub(crate) mod mcp;

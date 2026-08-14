@@ -1,16 +1,8 @@
-use std::collections::HashSet;
-use std::io;
-
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
-use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
@@ -47,11 +39,13 @@ use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
+use std::collections::HashSet;
 
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
+use crate::artifact::materialize_image_generation_artifact;
 use crate::backend::CodexImagesBackend;
 
 const IMAGE_MODEL: &str = "gpt-image-2";
@@ -191,8 +185,7 @@ impl ImageGenerationTool {
             }
         };
         let saved_path = match self.save_root.as_ref() {
-            Some(save_root) => match save_image_generation_result(
-                LOCAL_FS.as_ref(),
+            Some(save_root) => match materialize_image_generation_artifact(
                 save_root,
                 &self.thread_id,
                 &call.call_id,
@@ -237,30 +230,6 @@ impl ImageGenerationTool {
             output_hint,
         }))
     }
-}
-
-async fn save_image_generation_result(
-    fs: &dyn ExecutorFileSystem,
-    save_root: &AbsolutePathBuf,
-    session_id: &str,
-    call_id: &str,
-    result: &str,
-) -> io::Result<AbsolutePathBuf> {
-    let bytes = BASE64_STANDARD
-        .decode(result.trim().as_bytes())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let path = image_generation_artifact_path(save_root, session_id, call_id);
-    if let Some(parent) = path.parent() {
-        fs.create_directory(
-            &PathUri::from_abs_path(&parent),
-            CreateDirectoryOptions { recursive: true },
-            /*sandbox*/ None,
-        )
-        .await?;
-    }
-    fs.write_file(&PathUri::from_abs_path(&path), bytes, /*sandbox*/ None)
-        .await?;
-    Ok(path)
 }
 
 #[derive(Debug, PartialEq)]

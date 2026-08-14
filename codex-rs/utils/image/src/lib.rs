@@ -20,6 +20,11 @@ use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::imageops::FilterType;
 
+mod artifact;
+
+pub use artifact::image_generation_artifact_path;
+pub use artifact::materialize_image_generation_artifact;
+
 const DATA_URL_PREFIX: &str = "data:";
 pub const PROMPT_IMAGE_PATCH_SIZE: u32 = 32;
 /// Maximum width or height used when resizing images before uploading.

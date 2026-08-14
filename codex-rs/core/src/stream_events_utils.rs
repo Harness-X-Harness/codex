@@ -9,6 +9,7 @@ use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
+use crate::image_generation_artifacts::materialize_image_generation_turn_item;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -443,6 +444,7 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::GrokImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
+            materialize_image_generation_turn_item(sess, &mut turn_item).await;
             finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)
         }
