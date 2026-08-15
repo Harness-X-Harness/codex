@@ -34,9 +34,11 @@ use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_grok_mock_server;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::configure_grok_test_provider;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
@@ -416,8 +418,11 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 async fn grok_web_search_can_interrupt_and_resume_an_assistant_message() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let server = start_grok_mock_server("gpt-5.5").await;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(configure_grok_test_provider)
+        .build(&server)
+        .await?;
 
     let stream = sse(vec![
         ev_response_created("resp-1"),

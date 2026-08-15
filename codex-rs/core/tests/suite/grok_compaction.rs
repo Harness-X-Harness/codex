@@ -1,11 +1,11 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use anyhow::Result;
 use codex_core::compact::SUMMARIZATION_PROMPT;
-use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::configure_grok_test_provider;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -15,7 +15,7 @@ use serde_json::Value;
 async fn grok_compaction_and_follow_up_keep_the_bound_provider_contract() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = responses::start_mock_server().await;
+    let server = responses::start_grok_mock_server("koffing").await;
     let requests = responses::mount_sse_sequence(
         &server,
         vec![
@@ -42,7 +42,7 @@ async fn grok_compaction_and_follow_up_keep_the_bound_provider_contract() -> Res
         .with_model("koffing")
         .with_config(|config| {
             config.model_provider.name = "Grok test provider".to_string();
-            config.model_provider.wire_api = WireApi::GrokResponses;
+            configure_grok_test_provider(config);
             config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
         })
         .build_with_auto_env(&server)

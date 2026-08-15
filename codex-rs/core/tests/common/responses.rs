@@ -1274,6 +1274,34 @@ pub async fn start_mock_server() -> MockServer {
     server
 }
 
+/// Starts a mock Responses server with the authoritative Grok catalog entry needed by the test.
+pub async fn start_grok_mock_server(model: &str) -> MockServer {
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({
+                    "object": "list",
+                    "data": [{
+                        "id": model,
+                        "model": model,
+                        "name": model,
+                        "context_window": 500_000,
+                        "api_backend": "responses",
+                        "supports_backend_search": true
+                    }]
+                })),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
 /// Starts a lightweight WebSocket server for `/v1/responses` tests.
 ///
 /// Each connection consumes a queue of request/event sequences. For each

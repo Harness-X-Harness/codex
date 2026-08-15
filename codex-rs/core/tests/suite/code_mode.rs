@@ -19,7 +19,6 @@ use codex_extension_api::ToolStartInput;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
 use codex_login::CodexAuth;
-use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
@@ -70,6 +69,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
+use core_test_support::test_codex::configure_grok_test_provider;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -741,11 +741,11 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
 async fn grok_code_mode_function_wrapper_replays_function_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = responses::start_mock_server().await;
+    let server = responses::start_grok_mock_server("test-gpt-5.1-codex").await;
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(|config| {
-            config.model_provider.wire_api = WireApi::GrokResponses;
+            configure_grok_test_provider(config);
             config
                 .features
                 .enable(Feature::CodeMode)

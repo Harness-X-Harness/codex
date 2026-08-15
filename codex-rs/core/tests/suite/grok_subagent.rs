@@ -1,14 +1,14 @@
 use anyhow::Result;
 use codex_features::Feature;
-use codex_model_provider_info::WireApi;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
-use core_test_support::responses::start_mock_server;
+use core_test_support::responses::start_grok_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::configure_grok_test_provider;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -120,7 +120,7 @@ fn decoded_request_body(request: &Request) -> Vec<u8> {
 async fn grok_subagent_first_turn_uses_standard_plaintext_model_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
+    let server = start_grok_mock_server("koffing").await;
     let responder = GrokSubagentResponder::default();
     let child_requests = Arc::clone(&responder.child_requests);
     Mock::given(method("POST"))
@@ -134,7 +134,7 @@ async fn grok_subagent_first_turn_uses_standard_plaintext_model_input() -> Resul
         // the model slug, selects the Grok dialect under test.
         .with_model("koffing")
         .with_config(|config| {
-            config.model_provider.wire_api = WireApi::GrokResponses;
+            configure_grok_test_provider(config);
             config
                 .features
                 .enable(Feature::Collab)

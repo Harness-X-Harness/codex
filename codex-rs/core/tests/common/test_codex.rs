@@ -33,7 +33,9 @@ use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderAdapter;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::mcp::ClientMcpExtensions;
@@ -794,6 +796,13 @@ impl TestCodexBuilder {
 
         Ok((config, cwd))
     }
+}
+
+pub fn configure_grok_test_provider(config: &mut Config) {
+    config.model_provider.provider_adapter = Some(ModelProviderAdapter::Grok);
+    config.model_provider.wire_api = WireApi::GrokResponses;
+    config.model_provider.requires_openai_auth = false;
+    config.model_provider.experimental_bearer_token = Some("grok-test-key".to_string());
 }
 
 fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
