@@ -321,8 +321,7 @@ async fn static_catalog_resolves_or_rejects_from_one_snapshot() -> CoreResult<()
     let ModelResolution::Resolved {
         model_info,
         available_models,
-    } = metadata_only
-        .resolve_model_profile(ModelSelection::Exact("missing-model"), &config)
+    } = metadata_only.resolve_model_profile(ModelSelection::Exact("missing-model"), &config)
     else {
         panic!("metadata-only catalog must preserve unconstrained model identifiers");
     };
