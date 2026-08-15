@@ -145,6 +145,32 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     fallback_model_info(slug)
 }
 
+fn grok_4_5_model_info() -> ModelInfo {
+    let mut model = fallback_model_info("grok-4.5");
+    model.display_name = "Grok 4.5".to_string();
+    model.description = Some("SpaceXAI's new frontier model".to_string());
+    model.default_reasoning_level = Some(ReasoningEffort::High);
+    model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Highest implementation quality with extensive reasoning".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: "Balanced effort with standard implementation and testing".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Quick, fast implementations".to_string(),
+        },
+    ];
+    model.context_window = Some(500_000);
+    model.max_context_window = Some(500_000);
+    model.auto_compact_token_limit = Some(400_000);
+    model.used_fallback_model_metadata = false;
+    model
+}
+
 fn fallback_model_info(slug: &str) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
@@ -183,38 +209,14 @@ fn fallback_model_info(slug: &str) -> ModelInfo {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
+        api_backend: None,
+        supports_backend_search: false,
         use_responses_lite: false,
         auto_review_model_override: None,
         model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
     }
-}
-
-fn grok_4_5_model_info() -> ModelInfo {
-    let mut model = fallback_model_info("grok-4.5");
-    model.display_name = "Grok 4.5".to_string();
-    model.description = Some("SpaceXAI's new frontier model".to_string());
-    model.default_reasoning_level = Some(ReasoningEffort::High);
-    model.supported_reasoning_levels = vec![
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::High,
-            description: "Highest implementation quality with extensive reasoning".to_string(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Medium,
-            description: "Balanced effort with standard implementation and testing".to_string(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Low,
-            description: "Quick, fast implementations".to_string(),
-        },
-    ];
-    model.context_window = Some(500_000);
-    model.max_context_window = Some(500_000);
-    model.auto_compact_token_limit = Some(400_000);
-    model.used_fallback_model_metadata = false;
-    model
 }
 
 fn local_model_messages_for_slug(slug: &str) -> ModelMessages {

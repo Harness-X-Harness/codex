@@ -47,6 +47,8 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         input_modalities: codex_protocol::openai_models::default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        api_backend: None,
+        supports_backend_search: false,
         use_responses_lite: false,
         auto_review_model_override: None,
         model_specialty: None,

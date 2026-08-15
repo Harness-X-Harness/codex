@@ -369,6 +369,11 @@ const fn is_true(value: &bool) -> bool {
     *value
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Model metadata returned by the Codex backend `/models` endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
@@ -440,6 +445,12 @@ pub struct ModelInfo {
     pub used_fallback_model_metadata: bool,
     #[serde(default)]
     pub supports_search_tool: bool,
+    /// Provider-reported inference backend for this model, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_backend: Option<String>,
+    /// Whether the selected model advertises Provider-hosted backend search.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub supports_backend_search: bool,
     #[serde(default)]
     pub use_responses_lite: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -854,6 +865,8 @@ mod tests {
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            api_backend: None,
+            supports_backend_search: false,
             use_responses_lite: false,
             auto_review_model_override: None,
             model_specialty: None,

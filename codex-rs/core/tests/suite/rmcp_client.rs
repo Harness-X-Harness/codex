@@ -2231,6 +2231,8 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 input_modalities: vec![InputModality::Text],
                 used_fallback_model_metadata: false,
                 supports_search_tool: false,
+                api_backend: None,
+                supports_backend_search: false,
                 use_responses_lite: false,
                 auto_review_model_override: None,
                 model_specialty: None,
