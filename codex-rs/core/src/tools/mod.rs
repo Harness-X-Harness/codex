@@ -3,7 +3,7 @@ pub(crate) mod code_mode;
 pub(crate) mod context;
 pub(crate) mod events;
 mod executed_tool_calls;
-mod grok_hosted_output;
+pub(crate) mod grok_hosted_output;
 pub(crate) mod handlers;
 pub(crate) mod hook_names;
 pub(crate) mod hosted_spec;
