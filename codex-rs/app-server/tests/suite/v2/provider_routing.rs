@@ -1439,7 +1439,7 @@ async fn turn_rejects_a_model_owned_by_another_provider_before_egress() -> Resul
 
     let request_id = app
         .send_turn_start_request(TurnStartParams {
-            thread_id: started.thread.id,
+            thread_id: started.thread.id.clone(),
             input: vec![UserInput::Text {
                 text: "Keep this thread on its provider".to_string(),
                 text_elements: Vec::new(),
@@ -1502,7 +1502,7 @@ async fn thread_settings_reject_a_model_owned_by_another_provider() -> Result<()
 
     let request_id = app
         .send_thread_settings_update_request(ThreadSettingsUpdateParams {
-            thread_id: started.thread.id,
+            thread_id: started.thread.id.clone(),
             model: Some("grok-model".to_string()),
             ..Default::default()
         })
@@ -1849,12 +1849,12 @@ async fn cold_resume_fails_closed_until_provider_registration_is_restored() -> R
     let registration = "model_provider_registrations = [\"openai\", \"grok\"]";
     assert!(config.contains(registration));
     let config = config.replacen(registration, "model_provider_registrations = []", 1);
-    std::fs::write(config_path, config)?;
+    std::fs::write(&config_path, config)?;
 
     let mut secondary = fixture.start_app().await?;
     let request_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: started.thread.id,
+            thread_id: started.thread.id.clone(),
             ..Default::default()
         })
         .await?;
