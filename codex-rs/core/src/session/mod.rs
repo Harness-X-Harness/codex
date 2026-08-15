@@ -37,6 +37,7 @@ use crate::image_preparation::prepare_response_items as prepare_image_response_i
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
+use crate::session::session::ResolvedTurnModel;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
