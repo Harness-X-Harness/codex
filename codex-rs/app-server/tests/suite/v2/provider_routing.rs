@@ -801,7 +801,12 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
                 .is_some_and(|error| error.message.contains("changed Tool Plan ownership"))
         );
         assert_eq!(response.requests().len(), 1, "must not retry");
-        assert_rollout_omits_tool_output(&rollout_path, "queued-must-not-dispatch").await?;
+        assert_rollout_tool_output_count(
+            &rollout_path,
+            "queued-must-not-dispatch",
+            /*expected*/ 0,
+        )
+        .await?;
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         assert!(
             !dispatch_marker.exists(),
@@ -953,7 +958,8 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
                 .is_some_and(|error| error.message.contains("changed Tool Plan ownership"))
         );
         assert_eq!(response.requests().len(), 1, "must not retry");
-        assert_rollout_omits_tool_output(&rollout_path, "must-not-dispatch").await?;
+        assert_rollout_tool_output_count(&rollout_path, "must-not-dispatch", /*expected*/ 0)
+            .await?;
     }
 
     Ok(())
@@ -962,31 +968,20 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
 #[tokio::test]
 async fn grok_duplicate_ordinary_tool_terminal_dispatches_once() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
-    fixture.replace_config_line(
-        "sandbox_mode = \"read-only\"",
-        "sandbox_mode = \"danger-full-access\"",
-    )?;
-    let dispatch_marker = fixture.codex_home.path().join("duplicate-tool-dispatches");
-    let marker_path = dispatch_marker.to_string_lossy();
-    let command = if cfg!(windows) {
-        format!(
-            "Add-Content -LiteralPath '{}' -Value 'ran'",
-            marker_path.replace('\'', "''")
-        )
-    } else {
-        format!(
-            "printf 'ran\\n' >> '{}'",
-            marker_path.replace('\'', "'\"'\"'")
-        )
-    };
-    let arguments = serde_json::json!({ "command": command }).to_string();
+    let arguments = serde_json::json!({
+        "plan": [{
+            "step": "verify duplicate suppression",
+            "status": "completed"
+        }]
+    })
+    .to_string();
     let duplicate = serde_json::json!({
         "type": "response.output_item.done",
         "item": {
             "id": "ordinary-duplicate",
             "type": "function_call",
             "call_id": "ordinary-duplicate-call",
-            "name": "shell_command",
+            "name": "update_plan",
             "arguments": arguments
         }
     });
@@ -1010,15 +1005,41 @@ async fn grok_duplicate_ordinary_tool_terminal_dispatches_once() -> Result<()> {
             ..Default::default()
         })
         .await?;
+    let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
 
     let completed = app
         .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
         .await?;
 
     assert_eq!(completed.turn.status, TurnStatus::Completed);
-    assert_eq!(responses.requests().len(), 2);
-    let marker = std::fs::read_to_string(&dispatch_marker)?;
-    assert_eq!(marker.lines().collect::<Vec<_>>(), vec!["ran"]);
+    assert_eq!(
+        app.pending_notification_methods()
+            .iter()
+            .filter(|method| method.as_str() == "turn/plan/updated")
+            .count(),
+        1,
+        "duplicate terminal items must dispatch the local tool exactly once"
+    );
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1]
+            .inputs_of_type("function_call_output")
+            .iter()
+            .filter(|item| {
+                item.get("call_id").and_then(serde_json::Value::as_str)
+                    == Some("ordinary-duplicate-call")
+            })
+            .count(),
+        1,
+        "duplicate terminal items must produce exactly one local tool output"
+    );
+    assert_rollout_tool_output_count(
+        &rollout_path,
+        "ordinary-duplicate-call",
+        /*expected*/ 1,
+    )
+    .await?;
     Ok(())
 }
 
@@ -2104,21 +2125,30 @@ async fn assert_rollout_preserves_unknown_custom_item(
     Ok(())
 }
 
-async fn assert_rollout_omits_tool_output(
+async fn assert_rollout_tool_output_count(
     rollout_path: &std::path::Path,
     call_id: &str,
+    expected: usize,
 ) -> Result<()> {
     let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
     let InitialHistory::Resumed(history) = history else {
         anyhow::bail!("expected materialized Grok rollout history");
     };
-    assert!(history.history.iter().all(|item| !matches!(
-        item,
-        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
-            call_id: persisted_call_id,
-            ..
-        }) if persisted_call_id == call_id
-    )));
+    assert_eq!(
+        history
+            .history
+            .iter()
+            .filter(|item| matches!(
+                item,
+                RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                    call_id: persisted_call_id,
+                    ..
+                }) if persisted_call_id == call_id
+            ))
+            .count(),
+        expected,
+        "unexpected durable tool output count for {call_id}"
+    );
     Ok(())
 }
 
