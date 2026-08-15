@@ -408,10 +408,11 @@ fn assert_pre_sampling_switch_compaction_requests(
     compact: &serde_json::Value,
     follow_up: &serde_json::Value,
     previous_model: &str,
+    compact_model: &str,
     next_model: &str,
 ) {
     assert_eq!(first["model"].as_str(), Some(previous_model));
-    assert_eq!(compact["model"].as_str(), Some(previous_model));
+    assert_eq!(compact["model"].as_str(), Some(compact_model));
     assert_eq!(follow_up["model"].as_str(), Some(next_model));
 
     let compact_body = compact.to_string();
@@ -2192,6 +2193,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
         &requests[1].body_json(),
         &requests[2].body_json(),
         previous_model,
+        previous_model,
         next_model,
     );
 
@@ -2293,6 +2295,7 @@ async fn pre_sampling_compact_runs_when_comp_hash_changes() {
         &requests[0].body_json(),
         &requests[1].body_json(),
         &requests[2].body_json(),
+        previous_model,
         previous_model,
         next_model,
     );
@@ -2867,6 +2870,7 @@ async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_
         &requests[1].body_json(),
         &requests[2].body_json(),
         previous_model,
+        previous_model,
         next_model,
     );
 }
@@ -3193,6 +3197,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         &requests[2].body_json(),
         previous_model,
         next_model,
+        next_model,
     );
 }
 
@@ -3323,6 +3328,7 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
         &requests[1].body_json(),
         &requests[2].body_json(),
         previous_model,
+        next_model,
         next_model,
     );
 }

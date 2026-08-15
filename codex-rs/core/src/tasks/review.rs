@@ -27,6 +27,8 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
+use codex_models_manager::manager::ModelSelection;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
@@ -122,6 +124,23 @@ async fn start_review_conversation(
         .clone()
         .unwrap_or_else(|| ctx.model_info.slug.clone());
     sub_agent_config.model = Some(model);
+    let (model_info, available_models) = session
+        .services
+        .provider_runtime
+        .resolve_model_profile(
+            ModelSelection::Exact(
+                sub_agent_config
+                    .model
+                    .as_deref()
+                    .expect("review model was set above"),
+            ),
+            &sub_agent_config.to_models_manager_config(),
+            RefreshStrategy::Offline,
+            sub_agent_config.http_client_factory(),
+        )
+        .await
+        .ok()?;
+    sub_agent_config.model = Some(model_info.slug.clone());
     (run_codex_thread_one_shot(
         sub_agent_config,
         Arc::clone(&session.services.auth_manager),
@@ -132,6 +151,10 @@ async fn start_review_conversation(
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
+        crate::session::session::ResolvedTurnModel {
+            model_info,
+            available_models,
+        },
     )
     .await)
         .ok()

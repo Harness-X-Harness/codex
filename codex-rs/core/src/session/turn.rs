@@ -162,16 +162,17 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
-    sess.services
-        .provider_runtime
-        .validate_model(
-            &turn_context.model_info.slug,
-            RefreshStrategy::OnlineIfUncached,
-            turn_context.config.http_client_factory(),
-        )
-        .await?;
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session = match prewarmed_client_session {
+        Some(client_session)
+            if client_session.matches_request_strategy(&turn_context.request_strategy) =>
+        {
+            client_session
+        }
+        Some(_) | None => sess
+            .services
+            .model_client
+            .new_session_for_strategy(turn_context.request_strategy.clone()),
+    };
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -256,11 +257,14 @@ pub(crate) async fn run_turn(
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        comp_hash: turn_context.model_info.comp_hash.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
+    sess.set_previous_turn(
+        PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            comp_hash: turn_context.model_info.comp_hash.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        },
+        &turn_context,
+    )
     .await;
     for response_item in injection_items {
         sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
@@ -1004,8 +1008,7 @@ async fn run_pre_sampling_compact(
     client_session: &mut ModelClientSession,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session, cancellation_token)
-        .await?;
+    maybe_run_previous_model_inline_compact(sess, turn_context, cancellation_token).await?;
     let token_status =
         super::context_window::context_window_token_status(sess.as_ref(), turn_context.as_ref())
             .await;
@@ -1069,7 +1072,6 @@ async fn capture_current_model_fallback_step_context(
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
@@ -1080,28 +1082,39 @@ async fn maybe_run_previous_model_inline_compact(
         turn_context.model_info.comp_hash.as_deref(),
     );
     let previous_model = previous_turn_settings.model;
-    let previous_model_turn_context = Arc::new(
-        turn_context
-            .with_model(previous_model.clone(), &sess.services.models_manager())
-            .await,
-    );
+    let previous_turn_model = sess.previous_turn_model().await;
+    let has_frozen_previous_model = previous_turn_model.is_some();
+    // Rollouts do not persist Provider model facts. After resume or fork, keep the current Turn's
+    // immutable profile instead of reconstructing old Provider facts from a persisted slug.
+    let previous_model_turn_context = match previous_turn_model {
+        Some(previous_turn_model) => Arc::new(turn_context.with_frozen_model(previous_turn_model)),
+        None => Arc::clone(turn_context),
+    };
+    let mut previous_model_client_session = sess
+        .services
+        .model_client
+        .new_session_for_strategy(previous_model_turn_context.request_strategy.clone());
 
     if should_compact_for_comp_hash_change {
         let step_context = sess
             .capture_step_context(Arc::clone(&previous_model_turn_context), cancellation_token)
             .await?;
-        let fallback_step_context = capture_current_model_fallback_step_context(
-            sess,
-            turn_context,
-            previous_model.as_str(),
-            cancellation_token,
-        )
-        .await?;
+        let fallback_step_context = if has_frozen_previous_model {
+            capture_current_model_fallback_step_context(
+                sess,
+                turn_context,
+                previous_model.as_str(),
+                cancellation_token,
+            )
+            .await?
+        } else {
+            None
+        };
         run_auto_compact(
             sess,
             step_context,
             fallback_step_context,
-            client_session,
+            &mut previous_model_client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::CompHashChanged,
             CompactionPhase::PreTurn,
@@ -1149,7 +1162,7 @@ async fn maybe_run_previous_model_inline_compact(
             sess,
             step_context,
             fallback_step_context,
-            client_session,
+            &mut previous_model_client_session,
             InitialContextInjection::DoNotInject,
             CompactionReason::ModelDownshift,
             CompactionPhase::PreTurn,

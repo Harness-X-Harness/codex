@@ -31,6 +31,8 @@ use crate::ModelProvider;
 use crate::ModelProviderFuture;
 use crate::ProviderAccountResult;
 use crate::ProviderAccountState;
+use crate::ProviderAuthScope;
+use crate::ProviderRequestSetup;
 use crate::SharedModelProvider;
 use crate::create_model_provider;
 
@@ -701,6 +703,14 @@ impl ModelProvider for TestCatalogProviderAdapter {
             account: None,
             requires_openai_auth: false,
         })
+    }
+
+    fn request_setup(
+        &self,
+        scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, CoreResult<ProviderRequestSetup>> {
+        let delegate = create_model_provider(self.info.clone(), /*auth_manager*/ None);
+        Box::pin(async move { delegate.request_setup(scope).await })
     }
 
     fn models_manager(

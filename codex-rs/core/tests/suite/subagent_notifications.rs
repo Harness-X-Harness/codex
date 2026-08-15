@@ -2019,6 +2019,64 @@ async fn spawn_agent_preserves_configured_defaults_through_unrelated_role() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_rejects_unknown_explicit_model_before_child_egress() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let unknown_model = "unknown-child-model";
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "model": unknown_model,
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                MULTI_AGENT_V1_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+    let tool_output = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let (output, _) = tool_output
+        .single_request()
+        .function_call_output_content_and_success(SPAWN_CALL_ID)
+        .expect("spawn_agent output");
+    assert!(
+        output
+            .as_deref()
+            .is_some_and(|output| output.starts_with(&format!("Unknown model `{unknown_model}`")))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_agent_rejects_reasoning_effort_unsupported_by_role_model() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

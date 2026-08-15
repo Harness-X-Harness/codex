@@ -22,6 +22,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::openai_models::ModelsResponse;
 
+use crate::ProviderAuthScope;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth as resolve_configured_provider_auth;
 use crate::provider::ModelProvider;
@@ -30,6 +31,7 @@ use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
 use crate::provider::RemoteCompactionSupport;
+use crate::request_setup::ProviderRequestSetup;
 use auth::resolve_provider_auth as resolve_bedrock_provider_auth;
 use catalog::normalize_bedrock_catalog;
 pub(crate) use catalog::static_model_catalog;
@@ -114,6 +116,36 @@ impl AmazonBedrockModelProvider {
         let managed_auth = self.managed_auth();
         resolve_bedrock_provider_auth(managed_auth.as_ref(), &self.aws).await
     }
+
+    async fn request_setup(&self) -> Result<ProviderRequestSetup> {
+        let auth = self.auth().await;
+        let managed_auth = auth.as_ref().and_then(|auth| match auth {
+            CodexAuth::BedrockApiKey(auth) => Some(auth),
+            CodexAuth::ApiKey(_)
+            | CodexAuth::Chatgpt(_)
+            | CodexAuth::ChatgptAuthTokens(_)
+            | CodexAuth::Headers(_)
+            | CodexAuth::AgentIdentity(_)
+            | CodexAuth::PersonalAccessToken(_) => None,
+        });
+        let mut api_provider_info = self.info.clone();
+        api_provider_info.base_url = match self.info.base_url.clone() {
+            Some(base_url) => Some(base_url),
+            None => Some(bedrock_mantle_runtime_base_url(managed_auth, &self.aws).await?),
+        };
+        let api_provider = api_provider_info.to_api_provider(/*auth_mode*/ None)?;
+        let api_auth = if self.info.has_command_auth() {
+            resolve_configured_provider_auth(auth.as_ref(), &self.info)?
+        } else {
+            resolve_bedrock_provider_auth(managed_auth, &self.aws).await?
+        };
+        Ok(ProviderRequestSetup::new(
+            auth,
+            api_provider,
+            api_auth,
+            /*agent_identity_telemetry*/ None,
+        ))
+    }
 }
 
 impl ModelProvider for AmazonBedrockModelProvider {
@@ -178,6 +210,13 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     fn api_auth(&self) -> ModelProviderFuture<'_, Result<SharedAuthProvider>> {
         Box::pin(AmazonBedrockModelProvider::api_auth(self))
+    }
+
+    fn request_setup(
+        &self,
+        _scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, Result<ProviderRequestSetup>> {
+        Box::pin(AmazonBedrockModelProvider::request_setup(self))
     }
 
     fn models_manager(

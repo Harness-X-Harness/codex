@@ -477,7 +477,14 @@ impl Session {
             *active_turn = Some(ActiveTurn::default());
         }
 
-        let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
+        let turn_context = match self.try_new_default_turn_with_sub_id(sub_id).await {
+            Ok(turn_context) => turn_context,
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to resolve model profile for pending work");
+                *self.active_turn.lock().await = None;
+                return;
+            }
+        };
         self.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
             .await;
         self.start_task(

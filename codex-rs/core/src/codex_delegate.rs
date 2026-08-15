@@ -55,6 +55,7 @@ use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
 use crate::session::emit_subagent_session_started;
+use crate::session::session::ResolvedTurnModel;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_login::AuthManager;
@@ -87,6 +88,7 @@ pub(crate) async fn run_codex_thread_interactive(
     initial_history: Option<InitialHistory>,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
+    resolved_model: ResolvedTurnModel,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -100,6 +102,7 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         provider_runtime: parent_session.services.provider_runtime.clone(),
         allow_provider_model_fallback: false,
+        resolved_model: Some(resolved_model),
         user_instructions,
         installation_id: parent_session.installation_id.clone(),
         auth_manager,
@@ -208,6 +211,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     subagent_source: SubAgentSource,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
+    resolved_model: ResolvedTurnModel,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -223,6 +227,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         initial_history,
         GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+        resolved_model,
     ))
     .await?;
 

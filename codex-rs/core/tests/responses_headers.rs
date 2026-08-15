@@ -138,7 +138,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
-    let mut client_session = client.new_session();
+    let mut client_session = client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -276,7 +279,10 @@ async fn responses_stream_includes_subagent_header_on_other() {
         config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
-    let mut client_session = client.new_session();
+    let mut client_session = client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -399,7 +405,10 @@ async fn responses_respects_model_info_overrides_from_config() {
         config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
-    let mut client_session = client.new_session();
+    let mut client_session = client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {

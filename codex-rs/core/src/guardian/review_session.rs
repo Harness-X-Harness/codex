@@ -81,6 +81,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
     pub(crate) spawn_config: Config,
+    pub(crate) resolved_model: crate::session::session::ResolvedTurnModel,
     pub(crate) request: GuardianApprovalRequest,
     pub(crate) reasons: ApprovalRequestReasons,
     pub(crate) schema: Value,
@@ -340,9 +341,9 @@ impl GuardianReviewSessionManager {
     ) -> BoxFuture<'_, anyhow::Result<()>> {
         // Boxing breaks the Session::new -> Guardian -> Session::new future recursion.
         Box::pin(async move {
-            let spawn_config = guardian_review_session_config(&parent_session, &parent_turn)
-                .await?
-                .spawn_config;
+            let session_config =
+                guardian_review_session_config(&parent_session, &parent_turn).await?;
+            let spawn_config = session_config.spawn_config;
             let parent_history = parent_session.clone_history().await;
             let parent_compaction = spawn_config
                 .features
@@ -364,6 +365,7 @@ impl GuardianReviewSessionManager {
                 spawn_cancel_token.clone(),
                 parent_compaction,
                 /*fork_snapshot*/ None,
+                session_config.resolved_model,
             )
             .await?;
             // A first review or shutdown may win while eager initialization is in flight;
@@ -465,6 +467,7 @@ impl GuardianReviewSessionManager {
                             spawn_cancel_token.clone(),
                             parent_compaction.clone(),
                             /*fork_snapshot*/ None,
+                            params.resolved_model.clone(),
                         )),
                     )
                     .await
@@ -684,6 +687,7 @@ impl GuardianReviewSessionManager {
                 spawn_cancel_token.clone(),
                 parent_compaction,
                 fork_snapshot,
+                params.resolved_model.clone(),
             )),
         )
         .await
@@ -727,6 +731,7 @@ async fn spawn_guardian_review_session(
     cancel_token: CancellationToken,
     parent_compaction: Option<ResponseItem>,
     fork_snapshot: Option<GuardianReviewForkSnapshot>,
+    resolved_model: crate::session::session::ResolvedTurnModel,
 ) -> anyhow::Result<GuardianReviewSession> {
     let (initial_history, prior_review_count, initial_transcript_cursor) = match fork_snapshot {
         Some(fork_snapshot) => (
@@ -751,6 +756,7 @@ async fn spawn_guardian_review_session(
         initial_history,
         GitEnrichmentPolicy::Skip,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
+        resolved_model,
     ))
     .await?;
 
@@ -792,19 +798,7 @@ async fn run_review_on_session(
 
         (send_followup_reminder, prompt_mode)
     };
-    let model_info = params
-        .parent_session
-        .services
-        .models_manager()
-        .get_model_info(
-            params.model.as_str(),
-            &params.spawn_config.to_models_manager_config(),
-        )
-        .await;
-    let guardian_reasoning_effort = params
-        .reasoning_effort
-        .clone()
-        .or_else(|| model_info.default_reasoning_level.clone());
+    let guardian_reasoning_effort = params.reasoning_effort.clone();
     let mut analytics_result =
         GuardianReviewAnalyticsResult::from_session(GuardianReviewSessionAnalyticsParams {
             guardian_thread_id: review_session.session.thread_id().to_string(),
@@ -876,6 +870,10 @@ async fn run_review_on_session(
         .and_then(|environment| environment.cwd().to_abs_path().ok())
         .unwrap_or_else(|| params.parent_turn.config.cwd.clone());
 
+    review_session
+        .session
+        .stage_resolved_model_for_next_turn(params.resolved_model.clone(), params.personality)
+        .await;
     let submission = review_session.io.submit_with_trace(
         Op::UserInput {
             items: prompt_items.items,

@@ -375,7 +375,13 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
         return;
     }
 
-    let turn_context = sess.new_default_turn().await;
+    let turn_context = match sess.try_new_default_turn().await {
+        Ok(turn_context) => turn_context,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to resolve model profile for session-end hooks");
+            return;
+        }
+    };
 
     // SessionEnd is root-only; ThreadSpawn uses SubagentStart/SubagentStop and other subagents
     // are internal implementation details.

@@ -114,6 +114,8 @@ pub enum TryStartTurnIfIdleRejectionReason {
     TaskEndedBeforePersistence,
     /// The initial input could not be durably written to the rollout.
     PersistenceFailed,
+    /// The bound Provider could not resolve an immutable model profile.
+    ModelProfileUnavailable,
 }
 
 /// Rejection returned when an extension asks to start automatic idle work but
@@ -626,7 +628,7 @@ impl CodexThread {
             ));
         }
 
-        let turn_context = self.session.new_default_turn().await;
+        let turn_context = self.session.try_new_default_turn().await?;
         if self.session.reference_context_item().await.is_none() {
             // This history-only API runs without run_turn, so it owns its initial step.
             let step_context = self

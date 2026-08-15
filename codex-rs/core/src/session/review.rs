@@ -13,25 +13,36 @@ pub(super) async fn spawn_review_thread(
         .review_model
         .clone()
         .unwrap_or_else(|| parent_turn_context.model_info.slug.clone());
-    let review_model_info = sess
+    let (review_model_info, available_models) = match sess
         .services
-        .models_manager()
-        .get_model_info(&model, &config.to_models_manager_config())
-        .await;
+        .provider_runtime
+        .resolve_model_profile(
+            ModelSelection::Exact(&model),
+            &config.to_models_manager_config(),
+            RefreshStrategy::OnlineIfUncached,
+            config.http_client_factory(),
+        )
+        .await
+    {
+        Ok(profile) => profile,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: None,
+                }),
+            })
+            .await;
+            return;
+        }
+    };
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
     let _ = review_features.disable(Feature::WebSearchCached);
     let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let available_models = sess
-        .services
-        .models_manager()
-        .list_models(
-            RefreshStrategy::OnlineIfUncached,
-            config.http_client_factory(),
-        )
-        .await;
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
         codex_tools::unified_exec_feature_mode_for_features(review_features.get()),
         crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
@@ -132,6 +143,7 @@ pub(super) async fn spawn_review_thread(
         model_info: model_info.clone(),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
+        request_strategy: parent_turn_context.request_strategy.clone(),
         reasoning_effort,
         reasoning_summary,
         session_source,

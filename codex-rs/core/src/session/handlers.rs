@@ -14,6 +14,7 @@ use crate::session::SteerInputError;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
+use crate::session::turn_context::TurnContext;
 
 use crate::config::Config;
 use crate::review_prompts::resolve_review_request;
@@ -63,6 +64,26 @@ use tracing::warn;
 
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
+}
+
+async fn default_turn_or_emit_error(
+    sess: &Arc<Session>,
+    sub_id: String,
+) -> Option<Arc<TurnContext>> {
+    match sess.try_new_default_turn_with_sub_id(sub_id.clone()).await {
+        Ok(turn_context) => Some(turn_context),
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: None,
+                }),
+            })
+            .await;
+            None
+        }
+    }
 }
 
 pub async fn clean_background_terminals(sess: &Arc<Session>) {
@@ -319,7 +340,9 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
         return;
     }
 
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let Some(turn_context) = default_turn_or_emit_error(sess, sub_id).await else {
+        return;
+    };
     sess.spawn_task(
         Arc::clone(&turn_context),
         Vec::new(),
@@ -442,7 +465,9 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let Some(turn_context) = default_turn_or_emit_error(sess, sub_id).await else {
+        return;
+    };
 
     sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
         .await;
@@ -474,7 +499,9 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         return;
     }
 
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+    let Some(turn_context) = default_turn_or_emit_error(sess, sub_id).await else {
+        return;
+    };
     let live_thread = match sess.live_thread_for_persistence("rollback thread") {
         Ok(live_thread) => live_thread,
         Err(_) => {
@@ -672,7 +699,9 @@ pub async fn review(
     sub_id: String,
     review_request: ReviewRequest,
 ) {
-    let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+    let Some(turn_context) = default_turn_or_emit_error(sess, sub_id.clone()).await else {
+        return;
+    };
     sess.maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
     #[allow(deprecated)]

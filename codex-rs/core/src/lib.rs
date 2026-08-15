@@ -44,6 +44,7 @@ mod command_canonicalization;
 pub mod config;
 pub mod connectors;
 pub mod context;
+mod context_admission;
 mod context_manager;
 mod current_time;
 mod elicitation;
@@ -53,7 +54,6 @@ pub mod exec_env;
 mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;
-mod grok_model_input;
 mod guardian;
 mod hook_runtime;
 mod image_generation_artifacts;

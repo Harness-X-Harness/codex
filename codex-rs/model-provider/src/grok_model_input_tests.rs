@@ -20,7 +20,7 @@ fn plaintext_agent_message_projects_to_standard_user_message() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    let encoded = encode(input).expect("plaintext collaboration history should project");
+    let encoded = project(input).expect("plaintext collaboration history should project");
 
     assert_eq!(
         encoded,
@@ -49,8 +49,10 @@ fn encrypted_agent_message_fails_before_provider_request() {
     }];
 
     assert_eq!(
-        encode(input),
-        Err(GrokModelInputError::EncryptedAgentMessage)
+        project(input)
+            .expect_err("encrypted history must fail")
+            .to_string(),
+        "Grok cannot replay encrypted collaboration history"
     );
 }
 
@@ -66,8 +68,10 @@ fn unsupported_codex_only_history_fails_before_provider_request() {
     }];
 
     assert_eq!(
-        encode(input),
-        Err(GrokModelInputError::UnsupportedItem("tool_search_call"))
+        project(input)
+            .expect_err("unsupported history must fail")
+            .to_string(),
+        "Grok does not support Codex history item `tool_search_call`"
     );
 }
 
@@ -81,7 +85,7 @@ fn image_history_uses_native_grok_wire_shape() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    let encoded = encode(input).expect("Grok image history should project");
+    let encoded = project(input).expect("Grok image history should project");
 
     assert_eq!(
         serde_json::to_value(encoded).expect("request history should serialize"),
@@ -106,7 +110,7 @@ fn x_search_history_replays_exactly() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    let encoded = encode(input).expect("X Search history should pass through");
+    let encoded = project(input).expect("X Search history should pass through");
 
     assert_eq!(
         serde_json::to_value(encoded).expect("X Search history should serialize"),
@@ -131,7 +135,7 @@ fn null_reasoning_content_uses_gateway_accepted_shape() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    let encoded = encode(input).expect("Grok reasoning history should normalize");
+    let encoded = project(input).expect("Grok reasoning history should normalize");
 
     assert_eq!(
         serde_json::to_value(encoded).expect("reasoning history should serialize"),

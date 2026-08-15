@@ -1,10 +1,16 @@
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::AllowPrefixRules;
+use crate::session::session::FrozenTurnModel;
+use crate::session::session::PendingResolvedTurnModel;
+use crate::session::session::ResolvedTurnModel;
 use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_file_system::FileSystemSandboxContext;
+use codex_model_provider::ProviderRequestStrategy;
+#[cfg(test)]
+use codex_model_provider::ResolvedProviderRuntime;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -136,6 +142,7 @@ pub struct TurnContext {
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
+    pub(crate) request_strategy: ProviderRequestStrategy,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
@@ -170,12 +177,23 @@ pub struct TurnContext {
     pub(crate) model_verification_emitted: AtomicBool,
 }
 
+#[derive(Clone, Copy)]
 enum TurnMultiAgentRuntime {
     ResolveAndStore,
     Preview,
 }
 
 impl TurnContext {
+    pub(crate) fn frozen_model(&self) -> FrozenTurnModel {
+        FrozenTurnModel {
+            resolved: ResolvedTurnModel {
+                model_info: self.model_info.clone(),
+                available_models: self.available_models.clone(),
+            },
+            request_strategy: self.request_strategy.clone(),
+        }
+    }
+
     pub(crate) fn skills_snapshot(&self) -> Arc<HostSkillsSnapshot> {
         let Some(snapshot) = self.extension_data.get::<HostSkillsSnapshot>() else {
             unreachable!("every turn has a host skills snapshot");
@@ -274,16 +292,43 @@ impl TurnContext {
             && self.config.orchestrator_mcp_enabled
     }
 
+    #[cfg(test)]
     pub(crate) async fn with_model(
         &self,
         model: String,
-        models_manager: &SharedModelsManager,
-    ) -> Self {
+        provider_runtime: &ResolvedProviderRuntime,
+    ) -> CodexResult<Self> {
         let mut config = (*self.config).clone();
         config.model = Some(model.clone());
-        let model_info = models_manager
-            .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await;
+        let (model_info, available_models) = provider_runtime
+            .resolve_model_profile(
+                ModelSelection::Exact(model.as_str()),
+                &config.to_models_manager_config(),
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
+            )
+            .await?;
+        Ok(self.with_frozen_model(FrozenTurnModel {
+            resolved: ResolvedTurnModel {
+                model_info,
+                available_models,
+            },
+            request_strategy: self.request_strategy.clone(),
+        }))
+    }
+
+    pub(crate) fn with_frozen_model(&self, frozen_model: FrozenTurnModel) -> Self {
+        let FrozenTurnModel {
+            resolved:
+                ResolvedTurnModel {
+                    model_info,
+                    available_models,
+                },
+            request_strategy,
+        } = frozen_model;
+        let model = model_info.slug.clone();
+        let mut config = (*self.config).clone();
+        config.model = Some(model.clone());
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
             .iter()
@@ -307,13 +352,6 @@ impl TurnContext {
         };
         config.model_reasoning_effort = reasoning_effort.clone();
 
-        let available_models = models_manager
-            .list_models(
-                RefreshStrategy::OnlineIfUncached,
-                config.http_client_factory(),
-            )
-            .await;
-
         Self {
             sub_id: self.sub_id.clone(),
             trace_id: self.trace_id.clone(),
@@ -327,6 +365,7 @@ impl TurnContext {
                 .clone()
                 .with_model(model.as_str(), model_info.slug.as_str()),
             provider: self.provider.clone(),
+            request_strategy,
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
@@ -526,6 +565,7 @@ impl Session {
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: SharedModelProvider,
+        request_strategy: ProviderRequestStrategy,
         session_configuration: &SessionConfiguration,
         multi_agent_version: MultiAgentVersion,
         user_shell: &shell::Shell,
@@ -533,7 +573,7 @@ impl Session {
         main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         model_info: ModelInfo,
-        models_manager: &SharedModelsManager,
+        available_models: Vec<ModelPreset>,
         network: Option<NetworkProxy>,
         environments: TurnEnvironmentSnapshot,
         cwd: AbsolutePathBuf,
@@ -551,7 +591,6 @@ impl Session {
         );
         let session_source = session_configuration.session_source.clone();
         let session_telemetry_for_context = session_telemetry;
-        let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
             codex_tools::unified_exec_feature_mode_for_features(per_turn_config.features.get()),
             crate::tools::tool_user_shell_type(user_shell),
@@ -594,6 +633,7 @@ impl Session {
             model_info,
             session_telemetry: session_telemetry_for_context,
             provider,
+            request_strategy,
             reasoning_effort,
             reasoning_summary,
             session_source,
@@ -636,7 +676,7 @@ impl Session {
     ) -> CodexResult<Arc<TurnContext>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
         let update_result: CodexResult<_> = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
                     let mcp_inputs_changed = state.session_configuration.mcp_inputs_differ(&next);
@@ -650,27 +690,16 @@ impl Session {
                     });
                     let new_config = notify_config_contributors
                         .then(|| Self::build_effective_session_config(&next));
-                    let environment_config = next.environment_config();
-                    if updates.environments.is_some() {
-                        self.services
-                            .turn_environments
-                            .update_selections(next.environment_selections(), &environment_config);
-                    } else if state.session_configuration.environment_config() != environment_config
-                    {
-                        self.services
-                            .turn_environments
-                            .update_environment_configs(&environment_config);
-                    }
-                    if mcp_inputs_changed {
-                        self.mark_mcp_runtime_dirty();
-                    }
-                    state.session_configuration = next.clone();
+                    let environment_config_changed =
+                        state.session_configuration.environment_config()
+                            != next.environment_config();
                     Ok((
                         next,
                         mcp_inputs_changed,
                         permission_profile_changed,
                         previous_config,
                         new_config,
+                        environment_config_changed,
                     ))
                 }
                 Err(err) => Err(CodexErr::InvalidRequest(err.to_string())),
@@ -683,6 +712,7 @@ impl Session {
             permission_profile_changed,
             previous_config,
             new_config,
+            environment_config_changed,
         ) = match update_result {
             Ok(update) => update,
             Err(err) => {
@@ -698,6 +728,48 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
+        let pending_resolved_model = self
+            .take_pending_resolved_model(
+                session_configuration.collaboration_mode.model(),
+                session_configuration.personality,
+            )
+            .await;
+        let resolved_model = match match pending_resolved_model {
+            Some(resolved_model) => Ok(resolved_model),
+            None => {
+                self.resolve_model_for_configuration(&session_configuration)
+                    .await
+            }
+        } {
+            Ok(resolved_model) => resolved_model,
+            Err(err) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: None,
+                    }),
+                })
+                .await;
+                return Err(err);
+            }
+        };
+
+        let environment_config = session_configuration.environment_config();
+        if updates.environments.is_some() {
+            self.services.turn_environments.update_selections(
+                session_configuration.environment_selections(),
+                &environment_config,
+            );
+        } else if environment_config_changed {
+            self.services
+                .turn_environments
+                .update_environment_configs(&environment_config);
+        }
+        self.state.lock().await.session_configuration = session_configuration.clone();
+        if mcp_inputs_changed {
+            self.mark_mcp_runtime_dirty();
+        }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         if mcp_inputs_changed {
             self.schedule_mcp_prewarm();
@@ -707,13 +779,91 @@ impl Session {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;
         }
-        Ok(self
-            .new_turn_from_configuration(
-                sub_id,
-                session_configuration,
-                updates.final_output_json_schema,
+        self.new_turn_from_configuration(
+            sub_id,
+            session_configuration,
+            updates.final_output_json_schema,
+            Some(resolved_model),
+        )
+        .await
+    }
+
+    async fn resolve_model_for_configuration(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> CodexResult<ResolvedTurnModel> {
+        let config =
+            Self::build_per_turn_config(session_configuration, session_configuration.cwd().clone());
+        let (model_info, available_models) = self
+            .services
+            .provider_runtime
+            .resolve_model_profile(
+                ModelSelection::Exact(session_configuration.collaboration_mode.model()),
+                &config.to_models_manager_config(),
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
             )
-            .await)
+            .await?;
+        Ok(ResolvedTurnModel {
+            model_info,
+            available_models,
+        })
+    }
+
+    async fn take_pending_resolved_model(
+        &self,
+        model: &str,
+        personality: Option<Personality>,
+    ) -> Option<ResolvedTurnModel> {
+        let mut state = self.state.lock().await;
+        if state
+            .pending_resolved_model
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.resolved.model_info.slug == model && pending.personality == personality
+            })
+        {
+            state
+                .pending_resolved_model
+                .take()
+                .map(|pending| pending.resolved)
+        } else {
+            None
+        }
+    }
+
+    async fn pending_resolved_model_for_turn(
+        &self,
+        model: &str,
+        personality: Option<Personality>,
+        multi_agent_runtime: TurnMultiAgentRuntime,
+    ) -> Option<ResolvedTurnModel> {
+        match multi_agent_runtime {
+            TurnMultiAgentRuntime::ResolveAndStore => {
+                self.take_pending_resolved_model(model, personality).await
+            }
+            TurnMultiAgentRuntime::Preview => self
+                .state
+                .lock()
+                .await
+                .pending_resolved_model
+                .as_ref()
+                .filter(|pending| {
+                    pending.resolved.model_info.slug == model && pending.personality == personality
+                })
+                .map(|pending| pending.resolved.clone()),
+        }
+    }
+
+    pub(crate) async fn stage_resolved_model_for_next_turn(
+        &self,
+        resolved_model: ResolvedTurnModel,
+        personality: Option<Personality>,
+    ) {
+        self.state.lock().await.pending_resolved_model = Some(PendingResolvedTurnModel {
+            resolved: resolved_model,
+            personality,
+        });
     }
 
     async fn new_turn_from_configuration(
@@ -721,13 +871,15 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-    ) -> Arc<TurnContext> {
+        resolved_model: Option<ResolvedTurnModel>,
+    ) -> CodexResult<Arc<TurnContext>> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             final_output_json_schema,
             TurnMultiAgentRuntime::ResolveAndStore,
             self.git_enrichment_policy,
+            resolved_model,
         )
         .await
     }
@@ -736,13 +888,14 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
-    ) -> Arc<TurnContext> {
+    ) -> CodexResult<Arc<TurnContext>> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
             TurnMultiAgentRuntime::Preview,
             GitEnrichmentPolicy::Skip,
+            /*resolved_model*/ None,
         )
         .await
     }
@@ -755,7 +908,8 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
         multi_agent_runtime: TurnMultiAgentRuntime,
         git_enrichment_policy: GitEnrichmentPolicy,
-    ) -> Arc<TurnContext> {
+        resolved_model: Option<ResolvedTurnModel>,
+    ) -> CodexResult<Arc<TurnContext>> {
         let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary();
         // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so
@@ -765,14 +919,38 @@ impl Session {
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
-        let model_info = self
-            .services
-            .models_manager()
-            .get_model_info(
+        let pending_resolved_model = if resolved_model.is_some() {
+            let mut state = self.state.lock().await;
+            state.pending_resolved_model = None;
+            None
+        } else {
+            self.pending_resolved_model_for_turn(
                 session_configuration.collaboration_mode.model(),
-                &per_turn_config.to_models_manager_config(),
+                session_configuration.personality,
+                multi_agent_runtime,
             )
-            .await;
+            .await
+        };
+        let resolved_model = match resolved_model.or(pending_resolved_model) {
+            Some(resolved_model) => resolved_model,
+            None => {
+                let (model_info, available_models) = self
+                    .services
+                    .provider_runtime
+                    .resolve_model_profile(
+                        ModelSelection::Exact(session_configuration.collaboration_mode.model()),
+                        &per_turn_config.to_models_manager_config(),
+                        RefreshStrategy::OnlineIfUncached,
+                        per_turn_config.http_client_factory(),
+                    )
+                    .await?;
+                ResolvedTurnModel {
+                    model_info,
+                    available_models,
+                }
+            }
+        };
+        let model_info = &resolved_model.model_info;
         self.services
             .thread_extension_data
             .insert(model_info.clone());
@@ -810,20 +988,26 @@ impl Session {
             .skills_service
             .snapshot_for_config(&skills_input, fs)
             .await;
+        let request_strategy = self
+            .services
+            .model_client
+            .resolve_request_strategy()
+            .await?;
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
+            request_strategy,
             &session_configuration,
             multi_agent_version,
             self.services.user_shell.as_ref(),
             self.services.shell_zsh_path.as_ref(),
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
-            model_info,
-            &self.services.models_manager(),
+            resolved_model.model_info,
+            resolved_model.available_models,
             self.services
                 .network_proxy
                 .load_full()
@@ -855,7 +1039,7 @@ impl Session {
         {
             turn_context.turn_metadata_state.spawn_git_enrichment_task();
         }
-        turn_context
+        Ok(turn_context)
     }
 
     pub(crate) async fn maybe_emit_model_warnings_for_turn(&self, tc: &TurnContext) {
@@ -895,17 +1079,21 @@ impl Session {
         }
     }
 
-    pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
-        self.new_default_turn_with_sub_id(self.next_internal_sub_id())
+    pub(crate) async fn try_new_default_turn(&self) -> CodexResult<Arc<TurnContext>> {
+        self.try_new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
     }
 
-    pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
+    pub(crate) async fn try_new_default_turn_with_sub_id(
+        &self,
+        sub_id: String,
+    ) -> CodexResult<Arc<TurnContext>> {
         let session_configuration = self.default_turn_configuration().await;
         self.new_turn_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*resolved_model*/ None,
         )
         .await
     }
@@ -913,7 +1101,7 @@ impl Session {
     pub(crate) async fn new_startup_prewarm_turn_with_sub_id(
         &self,
         sub_id: String,
-    ) -> Arc<TurnContext> {
+    ) -> CodexResult<Arc<TurnContext>> {
         let session_configuration = self.default_turn_configuration().await;
         self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
             .await

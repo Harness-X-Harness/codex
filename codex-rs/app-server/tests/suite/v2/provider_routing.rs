@@ -226,6 +226,36 @@ async fn thread_start_resolves_grok_model_to_provider_runtime() -> Result<()> {
 }
 
 #[tokio::test]
+async fn grok_model_without_backend_search_omits_web_and_x_tools() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    fixture.grok_server.reset().await;
+    mount_grok_models_with_backend_search(&fixture.grok_server, &["grok-model"], false).await;
+    let response = mount_completion(&fixture.grok_server, "grok-no-search").await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    app.start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+
+    let body = response.single_request().body_json();
+    let tool_types = body["tools"]
+        .as_array()
+        .context("Grok request tools should be an array")?
+        .iter()
+        .filter_map(|tool| tool.get("type").and_then(serde_json::Value::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!tool_types.contains("web_search"));
+    assert!(!tool_types.contains("x_search"));
+    assert!(tool_types.contains("image_generation"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let mut app = fixture.start_app().await?;
@@ -497,6 +527,78 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
 }
 
 #[tokio::test]
+async fn oversized_grok_image_replay_fails_before_second_egress() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let large_result = "A".repeat(400_000);
+    let grok_responses = mount_sse_once_match(
+        &fixture.grok_server,
+        header("authorization", "Bearer grok-test-key"),
+        responses::sse(vec![
+            responses::ev_response_created("grok-large-image-response"),
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "large-image-1",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "prompt": "Generate a large test artifact.",
+                    "result": large_result
+                }
+            }),
+            responses::ev_assistant_message("grok-large-image-message", "Done"),
+            responses::ev_completed("grok-large-image-response"),
+        ]),
+    )
+    .await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let first = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(first.turn.status, TurnStatus::Completed);
+    assert_eq!(grok_responses.requests().len(), 1);
+
+    let second = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(second.turn.status, TurnStatus::Failed);
+    assert_eq!(
+        grok_responses.requests().len(),
+        1,
+        "oversized projected history must not reach the Provider"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_model_without_context_window_fails_before_egress() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    fixture.grok_server.reset().await;
+    mount_grok_models_without_context_window(&fixture.grok_server, &["grok-model"]).await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let turn = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+
+    assert_eq!(turn.turn.status, TurnStatus::Failed);
+    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn incomplete_grok_hosted_item_fails_without_partial_persistence() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let grok_responses = mount_sse_once_match(
@@ -578,6 +680,14 @@ async fn turn_rejects_a_model_owned_by_another_provider_before_egress() -> Resul
     assert!(error.error.message.contains("new thread"));
     assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
     assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
+
+    let response = mount_completion(&fixture.openai_server, "openai-after-rejected-settings").await;
+    app.start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(
+        response.single_request().body_json()["model"],
+        "openai-model"
+    );
     Ok(())
 }
 
@@ -629,6 +739,14 @@ async fn thread_settings_reject_a_model_owned_by_another_provider() -> Result<()
     assert!(error.error.message.contains("new thread"));
     assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
     assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
+
+    let response = mount_completion(&fixture.openai_server, "openai-after-rejected-settings").await;
+    app.start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(
+        response.single_request().body_json()["model"],
+        "openai-model"
+    );
     Ok(())
 }
 
@@ -1140,9 +1258,48 @@ async fn mount_models_repeating(server: &MockServer, body: ModelsResponse) {
 }
 
 async fn mount_grok_models_repeating(server: &MockServer, model_ids: &[&str]) {
+    mount_grok_models_with_backend_search(server, model_ids, true).await;
+}
+
+async fn mount_grok_models_with_backend_search(
+    server: &MockServer,
+    model_ids: &[&str],
+    supports_backend_search: bool,
+) {
     let data = model_ids
         .iter()
-        .map(|id| serde_json::json!({"id": id, "object": "model", "owned_by": "xai"}))
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "object": "model",
+                "owned_by": "xai",
+                "context_window": 272000,
+                "supports_backend_search": supports_backend_search,
+            })
+        })
+        .collect::<Vec<_>>();
+    Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({"object": "list", "data": data})),
+        )
+        .mount(server)
+        .await;
+}
+
+async fn mount_grok_models_without_context_window(server: &MockServer, model_ids: &[&str]) {
+    let data = model_ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "object": "model",
+                "owned_by": "xai",
+                "supports_backend_search": true,
+            })
+        })
         .collect::<Vec<_>>();
     Mock::given(method("GET"))
         .and(path_regex(".*/models$"))

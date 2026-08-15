@@ -69,8 +69,7 @@ async fn handle_spawn_agent(
         config.service_tier = Some(service_tier.clone());
     }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
-    apply_requested_spawn_agent_model_overrides(
-        &session,
+    let requested_model = apply_requested_spawn_agent_model_overrides(
         turn.as_ref(),
         &mut config,
         args.model.as_deref(),
@@ -78,25 +77,32 @@ async fn handle_spawn_agent(
     )
     .await?;
     if !is_full_history_fork || role_name.is_some() {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+        apply_spawn_agent_role(turn.as_ref(), &mut config, role_name).await?;
         if is_full_history_fork && config.developer_instructions.is_none() {
             config
                 .developer_instructions
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(
-        &session,
-        &mut config,
-        turn.config.service_tier.as_deref(),
-        args.service_tier.as_deref(),
-    )
-    .await?;
     apply_spawn_agent_runtime_overrides(
         &mut config,
         turn.as_ref(),
         step_context.environments.primary(),
     )?;
+    let resolved_model = resolve_spawn_agent_model(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        requested_model.as_deref(),
+    )
+    .await?;
+    apply_spawn_agent_service_tier(
+        &resolved_model,
+        &mut config,
+        turn.config.service_tier.as_deref(),
+        args.service_tier.as_deref(),
+    )
+    .await?;
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -137,6 +143,7 @@ async fn handle_spawn_agent(
                     parent_thread_id: Some(session.thread_id),
                     parent_turn_id: Some(turn.sub_id.clone()),
                     environments: Some(step_context.environments.to_selections()),
+                    resolved_model: Some(resolved_model),
                 },
             ),
     )

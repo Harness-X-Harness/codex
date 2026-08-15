@@ -1,5 +1,9 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_login::ExternalAuth;
+use codex_login::ExternalAuthFuture;
+use codex_login::ExternalAuthRefreshContext;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
@@ -18,9 +22,23 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+
+#[derive(Clone)]
+struct StaticExternalAuth(CodexAuth);
+
+impl ExternalAuth for StaticExternalAuth {
+    fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+
+    fn refresh(&self, _context: ExternalAuthRefreshContext) -> ExternalAuthFuture<'_, CodexAuth> {
+        Box::pin(async { Ok(self.0.clone()) })
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Result<()> {
@@ -204,6 +222,63 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
             .expect("turn metadata"),
     )?;
     assert_eq!(turn_metadata["request_kind"].as_str(), Some("turn"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_first_turn_discards_prewarm_when_request_strategy_changes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("warm-a"), ev_completed("warm-a")],
+            vec![
+                ev_response_created("wrong-route-a"),
+                ev_assistant_message("wrong-route-a-message", "wrong route"),
+                ev_completed("wrong-route-a"),
+            ],
+        ],
+        vec![vec![
+            ev_response_created("turn-b"),
+            ev_assistant_message("turn-b-message", "correct route"),
+            ev_completed("turn-b"),
+        ]],
+    ])
+    .await;
+    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("route-a"));
+    let test = builder.build_with_websocket_server(&server).await?;
+    server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+
+    test.thread_manager
+        .auth_manager()
+        .set_external_auth(Arc::new(StaticExternalAuth(CodexAuth::from_api_key(
+            "route-b",
+        ))))
+        .await?;
+    test.submit_turn_with_policy("hello", test.config.legacy_sandbox_policy())
+        .await?;
+
+    let handshakes = server.handshakes();
+    assert_eq!(handshakes.len(), 2);
+    assert_eq!(
+        handshakes[0].header("authorization"),
+        Some("Bearer route-a".to_string())
+    );
+    assert_eq!(
+        handshakes[1].header("authorization"),
+        Some("Bearer route-b".to_string())
+    );
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    assert_eq!(connections[0].len(), 1);
+    assert_eq!(connections[1].len(), 1);
+    let first_turn = connections[1][0].body_json();
+    assert_eq!(first_turn["type"].as_str(), Some("response.create"));
+    assert_eq!(first_turn.get("previous_response_id"), None);
 
     server.shutdown().await;
     Ok(())

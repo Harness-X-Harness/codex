@@ -193,10 +193,12 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         TestCodexResponsesRequestKind::Turn,
     );
 
+    let request_strategy = client.resolve_request_strategy().await?;
     let output = client
         .compact_conversation_history(
             &prompt,
             &test_model_info(),
+            &request_strategy,
             /*turn_state*/ None,
             CompactConversationRequestSettings {
                 effort: None,

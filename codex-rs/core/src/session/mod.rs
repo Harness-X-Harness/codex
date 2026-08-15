@@ -74,8 +74,8 @@ use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpRuntimeInput;
+use codex_models_manager::manager::ModelSelection;
 use codex_models_manager::manager::RefreshStrategy;
-use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
@@ -424,6 +424,7 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) config: Config,
     pub(crate) provider_runtime: ResolvedProviderRuntime,
     pub(crate) allow_provider_model_fallback: bool,
+    pub(crate) resolved_model: Option<ResolvedTurnModel>,
     pub(crate) user_instructions: LoadedUserInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -520,6 +521,7 @@ impl Session {
             mut config,
             provider_runtime,
             allow_provider_model_fallback,
+            resolved_model,
             user_instructions,
             installation_id,
             auth_manager,
@@ -564,7 +566,6 @@ impl Session {
             )));
         }
         let provider = provider_runtime.provider();
-        let models_manager = provider_runtime.models_manager();
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -613,24 +614,41 @@ impl Session {
         } else {
             codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
         };
-        if config.model.is_none()
-            || !matches!(
-                refresh_strategy,
-                codex_models_manager::manager::RefreshStrategy::Offline
-            )
-        {
-            let _ = models_manager
-                .list_models(refresh_strategy, config.http_client_factory())
-                .await;
-        }
-        let model = models_manager
-            .get_default_model(
-                &config.model,
-                allow_provider_model_fallback,
-                refresh_strategy,
-                config.http_client_factory(),
-            )
-            .await;
+        let ResolvedTurnModel {
+            model_info,
+            available_models,
+        } = match resolved_model {
+            Some(resolved_model) => {
+                if config.model.as_deref() != Some(resolved_model.model_info.slug.as_str()) {
+                    return Err(CodexErr::InvalidRequest(
+                        "resolved child model does not match the final session configuration"
+                            .to_string(),
+                    ));
+                }
+                resolved_model
+            }
+            None => {
+                let initial_model_selection =
+                    match (config.model.as_deref(), allow_provider_model_fallback) {
+                        (Some(model), true) => ModelSelection::PreferRequested(model),
+                        (Some(model), false) => ModelSelection::Exact(model),
+                        (None, _) => ModelSelection::ProviderDefault,
+                    };
+                let (model_info, available_models) = provider_runtime
+                    .resolve_model_profile(
+                        initial_model_selection,
+                        &config.to_models_manager_config(),
+                        refresh_strategy,
+                        config.http_client_factory(),
+                    )
+                    .await?;
+                ResolvedTurnModel {
+                    model_info,
+                    available_models,
+                }
+            }
+        };
+        let model = model_info.slug.clone();
         let trusted_guardian_reviewer =
             crate::guardian::is_guardian_reviewer_source(&session_source)
                 && !matches!(conversation_history, InitialHistory::Resumed(_));
@@ -687,9 +705,6 @@ impl Session {
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
         // 3. rendered instructions_template for current model
-        let model_info = models_manager
-            .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await;
         let configured_config = Arc::clone(&config);
         if config.config_lock_export_dir.is_some()
             && config.config_lock_save_fields_resolved_from_model_catalog
@@ -780,7 +795,10 @@ impl Session {
             installation_id,
             auth_manager.clone(),
             provider_runtime,
-            model_info,
+            session::ResolvedTurnModel {
+                model_info,
+                available_models,
+            },
             exec_policy,
             tx_event.clone(),
             agent_status_tx.clone(),
@@ -1343,7 +1361,10 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    async fn record_initial_history(&self, conversation_history: InitialHistory) {
+    async fn record_initial_history(
+        &self,
+        conversation_history: InitialHistory,
+    ) -> CodexResult<()> {
         let (is_subagent, is_paginated_subagent) = {
             let state = self.state.lock().await;
             let session_configuration = &state.session_configuration;
@@ -1371,7 +1392,7 @@ impl Session {
                     .await;
             }
             InitialHistory::Resumed(resumed_history) => {
-                let turn_context = self.new_default_turn().await;
+                let turn_context = self.try_new_default_turn().await?;
                 let rollout_items = resumed_history.history;
                 if matches!(
                     rollout_items.iter().rev().find_map(|item| match item {
@@ -1420,7 +1441,7 @@ impl Session {
                 }
             }
             InitialHistory::Forked(mut rollout_items) => {
-                let turn_context = self.new_default_turn().await;
+                let turn_context = self.try_new_default_turn().await?;
                 Self::assign_missing_rollout_response_item_ids(&mut rollout_items);
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -1467,6 +1488,7 @@ impl Session {
                 }
             }
         }
+        Ok(())
     }
 
     #[instrument(
@@ -1568,6 +1590,11 @@ impl Session {
         state.previous_turn_settings()
     }
 
+    async fn previous_turn_model(&self) -> Option<crate::session::session::FrozenTurnModel> {
+        let state = self.state.lock().await;
+        state.previous_turn_model()
+    }
+
     #[tracing::instrument(level = "trace", skip_all)]
     pub(crate) async fn set_previous_turn_settings(
         &self,
@@ -1575,6 +1602,15 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.set_previous_turn_settings(previous_turn_settings);
+    }
+
+    pub(crate) async fn set_previous_turn(
+        &self,
+        previous_turn_settings: PreviousTurnSettings,
+        turn_context: &TurnContext,
+    ) {
+        let mut state = self.state.lock().await;
+        state.set_previous_turn(previous_turn_settings, turn_context.frozen_model());
     }
 
     pub(crate) async fn update_settings(

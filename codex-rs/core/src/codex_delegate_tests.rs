@@ -201,6 +201,10 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
         crate::session::tests::make_session_and_context_with_rx().await;
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
+    let resolved_model = crate::session::session::ResolvedTurnModel {
+        model_info: parent_ctx.model_info.clone(),
+        available_models: parent_ctx.available_models.clone(),
+    };
 
     let result = timeout(
         Duration::from_secs(/*secs*/ 1),
@@ -214,6 +218,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             /*initial_history*/ None,
             crate::session::GitEnrichmentPolicy::Fresh,
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+            resolved_model,
         ),
     )
     .await

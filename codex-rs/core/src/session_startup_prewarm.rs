@@ -254,7 +254,7 @@ async fn schedule_startup_prewarm_inner(
     let prewarm_started_at = Instant::now();
     let startup_turn_context = session
         .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
-        .await;
+        .await?;
     startup_turn_context.session_telemetry.record_startup_phase(
         "startup_prewarm_create_turn_context",
         prewarm_started_at.elapsed(),
@@ -311,7 +311,10 @@ async fn schedule_startup_prewarm_inner(
             window_id,
             CodexResponsesRequestKind::Prewarm,
         );
-    let mut client_session = session.services.model_client.new_session();
+    let mut client_session = session
+        .services
+        .model_client
+        .new_session_for_strategy(startup_turn_context.request_strategy.clone());
     let websocket_warmup_started_at = Instant::now();
     client_session
         .prewarm_websocket(

@@ -11,7 +11,7 @@ use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 
-use super::ModelAvailability;
+use super::ModelResolution;
 use super::ModelsEndpointClient;
 use super::ModelsEndpointFuture;
 use super::ModelsManager;
@@ -23,6 +23,7 @@ use crate::cache::ModelsCacheEntry;
 use crate::cache::ModelsCacheError;
 use crate::cache::ModelsCacheFuture;
 use crate::cache::ModelsCatalogIdentity;
+use crate::config::ModelsManagerConfig;
 use crate::model_info::model_info_from_slug;
 
 const AUTHORITY: &str = "test-authority";
@@ -217,7 +218,92 @@ async fn successful_empty_authoritative_catalog_is_not_unavailable() {
 }
 
 #[tokio::test]
-async fn static_catalog_declares_whether_it_constrains_model_availability() -> CoreResult<()> {
+async fn authoritative_resolution_returns_model_and_picker_from_one_fetch() -> CoreResult<()> {
+    let endpoint = TestEndpoint::available(vec![model_info_from_slug("catalog-model")]);
+    let manager = OpenAiModelsManager::new_without_cache(endpoint.clone(), None);
+
+    let ModelResolution::Resolved {
+        model_info,
+        available_models,
+    } = manager
+        .resolve_model_profile(
+            ModelSelection::Exact("catalog-model"),
+            &ModelsManagerConfig::default(),
+            RefreshStrategy::Online,
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("authoritative catalog contains the requested model");
+    };
+
+    assert_eq!(model_info.slug, "catalog-model");
+    assert_eq!(available_models.len(), 1);
+    assert_eq!(available_models[0].model, "catalog-model");
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn authoritative_default_selection_and_profile_use_one_fetch() -> CoreResult<()> {
+    let mut default_model = model_info_from_slug("catalog-default");
+    default_model.priority = 0;
+    let mut other_model = model_info_from_slug("catalog-other");
+    other_model.priority = 1;
+    let endpoint = TestEndpoint::available(vec![other_model, default_model]);
+    let manager = OpenAiModelsManager::new_without_cache(endpoint.clone(), None);
+
+    let ModelResolution::Resolved {
+        model_info,
+        available_models,
+    } = manager
+        .resolve_model_profile(
+            ModelSelection::ProviderDefault,
+            &ModelsManagerConfig::default(),
+            RefreshStrategy::Online,
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("authoritative catalog should provide a default model");
+    };
+
+    assert_eq!(model_info.slug, "catalog-default");
+    assert_eq!(available_models.len(), 2);
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn authoritative_preferred_model_falls_back_within_one_snapshot() -> CoreResult<()> {
+    let mut default_model = model_info_from_slug("catalog-default");
+    default_model.priority = 0;
+    let endpoint = TestEndpoint::available(vec![default_model]);
+    let manager = OpenAiModelsManager::new_without_cache(endpoint.clone(), None);
+
+    let ModelResolution::Resolved {
+        model_info,
+        available_models,
+    } = manager
+        .resolve_model_profile(
+            ModelSelection::PreferRequested("retired-model"),
+            &ModelsManagerConfig::default(),
+            RefreshStrategy::Online,
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("provider fallback should select the observed default model");
+    };
+
+    assert_eq!(model_info.slug, "catalog-default");
+    assert_eq!(available_models.len(), 1);
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn static_catalog_resolves_or_rejects_from_one_snapshot() -> CoreResult<()> {
     let catalog = ModelsResponse {
         models: vec![model_info_from_slug("catalog-model")],
     };
@@ -225,25 +311,34 @@ async fn static_catalog_declares_whether_it_constrains_model_availability() -> C
     let metadata_only =
         StaticModelsManager::new_unconstrained(/*auth_manager*/ None, catalog.clone());
 
-    assert_eq!(
+    let config = ModelsManagerConfig::default();
+    assert!(matches!(
         authoritative
-            .model_availability(
-                "missing-model",
+            .resolve_model_profile(
+                ModelSelection::Exact("missing-model"),
+                &config,
                 RefreshStrategy::Offline,
                 HTTP_CLIENT_FACTORY,
             )
             .await?,
-        ModelAvailability::Unavailable
-    );
-    assert_eq!(
-        metadata_only
-            .model_availability(
-                "missing-model",
-                RefreshStrategy::Offline,
-                HTTP_CLIENT_FACTORY,
-            )
-            .await?,
-        ModelAvailability::Unconstrained
-    );
+        ModelResolution::Unavailable { model } if model == "missing-model"
+    ));
+    let ModelResolution::Resolved {
+        model_info,
+        available_models,
+    } = metadata_only
+        .resolve_model_profile(
+            ModelSelection::Exact("missing-model"),
+            &config,
+            RefreshStrategy::Offline,
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("metadata-only catalog must preserve unconstrained model identifiers");
+    };
+    assert_eq!(model_info.slug, "missing-model");
+    assert!(model_info.used_fallback_model_metadata);
+    assert_eq!(available_models.len(), 1);
     Ok(())
 }

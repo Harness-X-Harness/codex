@@ -11,10 +11,20 @@ use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::test_support::with_parent_turn;
 use codex_features::Feature;
 use codex_http_client::OutboundProxyPolicy;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
+use codex_model_provider::ModelProvider;
+use codex_model_provider::ModelProviderFuture;
+use codex_model_provider::ProviderAccountResult;
+use codex_model_provider::ProviderAuthScope;
+use codex_model_provider::ProviderRequestSetup;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
+use codex_model_provider::unauthenticated_auth_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
@@ -31,6 +41,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelServiceTier;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -61,6 +72,8 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Instrument;
@@ -116,6 +129,60 @@ struct WebsocketTestHarness {
     session_telemetry: SessionTelemetry,
 }
 
+#[derive(Debug)]
+struct RouteSwitchingProvider {
+    inner: SharedModelProvider,
+    routes: [codex_api::Provider; 2],
+    active_route: AtomicUsize,
+}
+
+impl RouteSwitchingProvider {
+    fn switch_route(&self) {
+        self.active_route.store(1, Ordering::SeqCst);
+    }
+}
+
+impl ModelProvider for RouteSwitchingProvider {
+    fn info(&self) -> &ModelProviderInfo {
+        self.inner.info()
+    }
+
+    fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        None
+    }
+
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+        Box::pin(async { None })
+    }
+
+    fn account_state(&self) -> ProviderAccountResult {
+        self.inner.account_state()
+    }
+
+    fn request_setup(
+        &self,
+        _scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderRequestSetup>> {
+        let api_provider = self.routes[self.active_route.load(Ordering::SeqCst)].clone();
+        Box::pin(async move {
+            Ok(ProviderRequestSetup::new(
+                None,
+                api_provider,
+                unauthenticated_auth_provider(),
+                None,
+            ))
+        })
+    }
+
+    fn models_manager(
+        &self,
+        codex_home: std::path::PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        self.inner.models_manager(codex_home, config_model_catalog)
+    }
+}
+
 fn responses_metadata(
     harness: &WebsocketTestHarness,
     turn_id: Option<&str>,
@@ -163,7 +230,11 @@ async fn responses_websocket_streams_request() {
     .await;
 
     let harness = websocket_harness_for_codex_backend(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -237,7 +308,11 @@ async fn responses_websocket_omits_routing_hint_for_provider_with_own_credential
         Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )
     .await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -269,7 +344,11 @@ async fn responses_websocket_omits_unprefixed_item_ids_without_mutating_prompt()
         /*enabled_features*/ &[],
     )
     .await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let mut prefixed = message_item("prefixed");
     prefixed.set_id(Some(ResponseItemId::with_suffix("msg", "existing")));
     let unprefixed = serde_json::from_value(json!({
@@ -316,7 +395,11 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -348,7 +431,11 @@ async fn responses_websocket_streams_with_system_proxy_feature() {
         harness.outbound_proxy_policy,
         OutboundProxyPolicy::RespectSystemProxy
     );
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -376,7 +463,11 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     let prompt_two = prompt_with_input(vec![message_item("again")]);
 
     let first_trace = {
-        let mut client_session = harness.client.new_session();
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("test request strategy should resolve");
         async {
             let expected_trace =
                 current_span_w3c_trace_context().expect("current span should have trace context");
@@ -388,7 +479,11 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     };
 
     let second_trace = {
-        let mut client_session = harness.client.new_session();
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("test request strategy should resolve");
         async {
             let expected_trace =
                 current_span_w3c_trace_context().expect("current span should have trace context");
@@ -444,7 +539,11 @@ async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
         .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
@@ -481,7 +580,11 @@ async fn responses_websocket_preconnect_reuses_connection() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
         .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
@@ -524,7 +627,11 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         /*enabled_features*/ &[],
     )
     .await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
     client_session
@@ -596,7 +703,11 @@ async fn responses_websocket_request_prewarm_uses_caller_supplied_metadata() {
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
     client_session
@@ -639,7 +750,11 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let prewarm_responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
 
@@ -751,17 +866,106 @@ async fn responses_websocket_reuses_connection_after_session_drop() {
     let prompt_two = prompt_with_input(vec![message_item("again")]);
 
     {
-        let mut client_session = harness.client.new_session();
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("test request strategy should resolve");
         stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     }
 
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     stream_until_complete(&mut client_session, &harness, &prompt_two).await;
 
     assert_eq!(server.handshakes().len(), 1);
     assert_eq!(server.single_connection().len(), 2);
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_cache_is_scoped_to_request_strategy() {
+    skip_if_no_network!();
+
+    let first_server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-first"),
+        ev_completed("resp-first"),
+    ]]])
+    .await;
+    let second_server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-second"),
+        ev_completed("resp-second"),
+    ]]])
+    .await;
+    let first_info = websocket_provider(&first_server);
+    let second_info = websocket_provider(&second_server);
+    let provider = Arc::new(RouteSwitchingProvider {
+        inner: create_model_provider(first_info.clone(), /*auth_manager*/ None),
+        routes: [
+            first_info
+                .to_api_provider(/*auth_mode*/ None)
+                .expect("first route should resolve"),
+            second_info
+                .to_api_provider(/*auth_mode*/ None)
+                .expect("second route should resolve"),
+        ],
+        active_route: AtomicUsize::new(0),
+    });
+    let harness = websocket_harness_with_model_provider(
+        provider.clone(),
+        /*client_auth_manager*/ None,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+    )
+    .await;
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    {
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("first request strategy should resolve");
+        stream_until_complete_with_model_info(
+            &mut client_session,
+            &harness,
+            &prompt,
+            &harness.model_info,
+            "resp-first",
+        )
+        .await;
+    }
+    provider.switch_route();
+    {
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("second request strategy should resolve");
+        stream_until_complete_with_model_info(
+            &mut client_session,
+            &harness,
+            &prompt,
+            &harness.model_info,
+            "resp-second",
+        )
+        .await;
+    }
+
+    assert_eq!(first_server.single_connection().len(), 1);
+    let second_connection = second_server.single_connection();
+    assert_eq!(second_connection.len(), 1);
+    assert!(
+        second_connection[0].body_json()["previous_response_id"].is_null(),
+        "a new request strategy must not inherit incremental state"
+    );
+    first_server.shutdown().await;
+    second_server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -779,7 +983,11 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
     let normal_model_info = harness.model_info.clone();
     let mut lite_model_info = normal_model_info.clone();
     lite_model_info.use_responses_lite = true;
-    let mut session = harness.client.new_session();
+    let mut session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
 
     stream_until_complete_with_model_info(
         &mut session,
@@ -853,7 +1061,11 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let preconnect_metadata = websocket_connection_metadata(&harness);
     client_session
         .preconnect_websocket(&harness.session_telemetry, &preconnect_metadata)
@@ -898,7 +1110,11 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let prewarm_responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
     client_session
@@ -973,7 +1189,11 @@ async fn responses_websocket_prewarm_includes_model_and_tier_routing_hint() {
         name: "Fast".to_string(),
         description: "Priority processing".to_string(),
     });
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
     client_session
@@ -1019,7 +1239,11 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = prewarm_metadata(&harness, /*turn_id*/ None);
     client_session
@@ -1077,7 +1301,11 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
         .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
@@ -1131,7 +1359,11 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -1204,7 +1436,11 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     // Turn one: initiate
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     {
-        let mut client_session = harness.client.new_session();
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("test request strategy should resolve");
         stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     }
 
@@ -1219,7 +1455,11 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     ]);
 
     {
-        let mut client_session = harness.client.new_session();
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("test request strategy should resolve");
         stream_until_complete(&mut client_session, &harness, &prompt_two).await;
     }
 
@@ -1236,7 +1476,11 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     ]);
 
     {
-        let mut client_session = harness.client.new_session();
+        let mut client_session = harness
+            .client
+            .new_session()
+            .await
+            .expect("test request strategy should resolve");
         stream_until_complete(&mut client_session, &harness, &prompt_three).await;
     }
 
@@ -1280,7 +1524,11 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
     .await;
 
     let harness = websocket_harness_with_options(&server, /*runtime_metrics_enabled*/ false).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -1327,7 +1575,11 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
 
     let harness = websocket_harness(&server).await;
     harness.session_telemetry.reset_runtime_metrics();
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -1370,7 +1622,11 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     let harness =
         websocket_harness_with_runtime_metrics(&server, /*runtime_metrics_enabled*/ true).await;
     harness.session_telemetry.reset_runtime_metrics();
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -1408,7 +1664,11 @@ async fn responses_websocket_omits_timing_metrics_header_when_runtime_metrics_di
 
     let harness =
         websocket_harness_with_runtime_metrics(&server, /*runtime_metrics_enabled*/ false).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
@@ -1435,7 +1695,11 @@ async fn responses_websocket_emits_reasoning_included_event() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
 
@@ -1510,7 +1774,11 @@ async fn responses_websocket_emits_rate_limit_events() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
 
@@ -1799,7 +2067,11 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -1847,7 +2119,11 @@ async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_c
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let mut prior_assistant_output = assistant_message_item("1", "assistant output");
     prior_assistant_output.set_turn_id_if_missing("turn-123");
@@ -1928,7 +2204,11 @@ async fn responses_websocket_sends_canonical_turn_metadata() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let responses_metadata = turn_metadata(&harness, Some("turn-123"));
 
@@ -1978,7 +2258,11 @@ async fn responses_websocket_uses_previous_response_id_when_prefix_after_complet
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -2004,6 +2288,58 @@ async fn responses_websocket_uses_previous_response_id_when_prefix_after_complet
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_admits_full_history_before_sending_incremental_delta() {
+    skip_if_no_network!();
+
+    let oversized_item = "A".repeat(40_000);
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_assistant_message("msg_1", &oversized_item),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        assistant_message_item("1", &oversized_item),
+        message_item("second"),
+    ]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    let responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
+    let error = match client_session
+        .stream(
+            &prompt_two,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            &responses_metadata,
+            &InferenceTraceContext::disabled(),
+        )
+        .await
+    {
+        Ok(_) => panic!("oversized full history must fail before an incremental send"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error.details(),
+        codex_protocol::error::CodexErrorDetails::ContextWindowExceeded
+    ));
+    assert_eq!(server.single_connection().len(), 1);
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_creates_on_non_prefix() {
     skip_if_no_network!();
 
@@ -2014,7 +2350,11 @@ async fn responses_websocket_creates_on_non_prefix() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("different")]);
 
@@ -2047,7 +2387,11 @@ async fn responses_websocket_creates_when_non_input_request_fields_change() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    let mut client_session = harness.client.new_session();
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one =
         prompt_with_input_and_instructions(vec![message_item("hello")], "base instructions one");
     let prompt_two = prompt_with_input_and_instructions(
@@ -2087,7 +2431,11 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     .await;
 
     let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -2126,7 +2474,11 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
     .await;
 
     let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one =
         prompt_with_input_and_instructions(vec![message_item("hello")], "base instructions one");
     let prompt_two = prompt_with_input_and_instructions(
@@ -2173,7 +2525,11 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     .await;
 
     let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
     let prompt_three = prompt_with_input(vec![
@@ -2267,7 +2623,11 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
     .await;
 
     let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
 
@@ -2315,7 +2675,11 @@ async fn responses_websocket_v2_sets_openai_beta_header() {
     .await;
 
     let harness = websocket_harness_with_v2(&server, /*runtime_metrics_enabled*/ true).await;
-    let mut session = harness.client.new_session();
+    let mut session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
     stream_until_complete(&mut session, &harness, &prompt).await;
@@ -2466,6 +2830,25 @@ async fn websocket_harness_with_provider_options_and_auth(
     enabled_features: &[Feature],
     auth: Option<CodexAuth>,
 ) -> WebsocketTestHarness {
+    let client_auth_manager = auth.map(codex_core::test_support::auth_manager_from_auth);
+    let model_provider = create_model_provider(provider, client_auth_manager.clone());
+    websocket_harness_with_model_provider(
+        model_provider,
+        client_auth_manager,
+        runtime_metrics_enabled,
+        concurrent_reasoning_summaries_enabled,
+        enabled_features,
+    )
+    .await
+}
+
+async fn websocket_harness_with_model_provider(
+    model_provider: SharedModelProvider,
+    client_auth_manager: Option<Arc<AuthManager>>,
+    runtime_metrics_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
+    enabled_features: &[Feature],
+) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
@@ -2494,7 +2877,6 @@ async fn websocket_harness_with_provider_options_and_auth(
     let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
     let thread_id = ThreadId::new();
     let session_id = SessionId::new();
-    let client_auth_manager = auth.map(codex_core::test_support::auth_manager_from_auth);
     let auth_manager = client_auth_manager.clone().unwrap_or_else(|| {
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"))
     });
@@ -2519,11 +2901,10 @@ async fn websocket_harness_with_provider_options_and_auth(
     .with_metrics(metrics);
     let effort = None;
     let summary = ReasoningSummary::Auto;
-    let client = ModelClient::new(
-        client_auth_manager,
+    let client = ModelClient::new_with_provider(
+        model_provider,
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
-        provider.clone(),
         SessionSource::Exec,
         "test_originator".to_string(),
         config.model_verbosity,

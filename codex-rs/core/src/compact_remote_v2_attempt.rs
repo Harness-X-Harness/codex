@@ -93,7 +93,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let mut owned_client_session = None;
     let client_session = match client_session {
         Some(client_session) => client_session,
-        None => owned_client_session.insert(sess.services.model_client.new_session()),
+        None => owned_client_session.insert(
+            sess.services
+                .model_client
+                .new_session_for_strategy(turn_context.request_strategy.clone()),
+        ),
     };
     let compaction_output_result = run_remote_compaction_request_v2(
         sess,

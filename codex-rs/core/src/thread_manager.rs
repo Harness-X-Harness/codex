@@ -256,6 +256,7 @@ struct ThreadSpawnRequest {
     inherited_environments: Option<TurnEnvironmentSnapshot>,
     inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     user_shell_override: Option<crate::shell::Shell>,
+    resolved_model: Option<crate::session::session::ResolvedTurnModel>,
 }
 
 impl ThreadSpawnRequest {
@@ -274,6 +275,7 @@ impl ThreadSpawnRequest {
             inherited_environments: None,
             inherited_exec_policy: None,
             user_shell_override: None,
+            resolved_model: None,
         }
     }
 }
@@ -1612,6 +1614,7 @@ impl ThreadManagerState {
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
+            /*resolved_model*/ None,
         ))
         .await
     }
@@ -1630,6 +1633,7 @@ impl ThreadManagerState {
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
+        resolved_model: Option<crate::session::session::ResolvedTurnModel>,
     ) -> CodexResult<NewThread> {
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
@@ -1647,6 +1651,7 @@ impl ThreadManagerState {
         request.forked_from_thread_id = forked_from_thread_id;
         request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
+        request.resolved_model = resolved_model;
         Box::pin(self.spawn_thread(request)).await
     }
 
@@ -1695,6 +1700,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         thread_extension_init: ExtensionDataInit,
+        resolved_model: Option<crate::session::session::ResolvedTurnModel>,
     ) -> CodexResult<NewThread> {
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let options = StartThreadOptions {
@@ -1713,6 +1719,7 @@ impl ThreadManagerState {
         request.forked_from_thread_id = forked_from_thread_id;
         request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
+        request.resolved_model = resolved_model;
         Box::pin(self.spawn_thread(request)).await
     }
 
@@ -1741,6 +1748,7 @@ impl ThreadManagerState {
             inherited_environments,
             inherited_exec_policy,
             user_shell_override,
+            resolved_model,
         } = request;
         let StartThreadOptions {
             mut config,
@@ -1864,6 +1872,7 @@ impl ThreadManagerState {
             git_enrichment_policy: GitEnrichmentPolicy::Fresh,
             windows_sandbox_proxy_settings_mode:
                 codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+            resolved_model,
         }))
         .await?;
         let new_thread = self

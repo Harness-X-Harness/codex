@@ -1522,7 +1522,10 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
         config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
-    let mut client_session = client.new_session();
+    let mut client_session = client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Message {
         id: None,
@@ -3102,7 +3105,10 @@ async fn azure_responses_request_includes_store_and_prefixed_item_ids() {
         config.http_client_factory(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
-    let mut client_session = client.new_session();
+    let mut client_session = client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {

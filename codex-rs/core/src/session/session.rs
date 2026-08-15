@@ -13,6 +13,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
+use codex_model_provider::ProviderRequestStrategy;
 use codex_model_provider::ResolvedProviderRuntime;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
@@ -20,6 +21,8 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -64,6 +67,24 @@ pub(crate) struct Session {
     pub(super) git_enrichment_policy: GitEnrichmentPolicy,
     pub(super) fork_persistence: ForkPersistence,
     pub(super) next_internal_sub_id: AtomicU64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedTurnModel {
+    pub(crate) model_info: ModelInfo,
+    pub(crate) available_models: Vec<ModelPreset>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingResolvedTurnModel {
+    pub(crate) resolved: ResolvedTurnModel,
+    pub(crate) personality: Option<Personality>,
+}
+
+#[derive(Clone)]
+pub(crate) struct FrozenTurnModel {
+    pub(crate) resolved: ResolvedTurnModel,
+    pub(crate) request_strategy: ProviderRequestStrategy,
 }
 
 #[derive(Clone)]
@@ -580,7 +601,7 @@ impl Session {
         installation_id: String,
         auth_manager: Arc<AuthManager>,
         provider_runtime: ResolvedProviderRuntime,
-        model_info: ModelInfo,
+        resolved_model: ResolvedTurnModel,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
@@ -606,6 +627,7 @@ impl Session {
         git_enrichment_policy: GitEnrichmentPolicy,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
     ) -> anyhow::Result<Arc<Self>> {
+        let model_info = &resolved_model.model_info;
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.collaboration_mode.model(),
@@ -1114,6 +1136,10 @@ impl Session {
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
             );
+            state.pending_resolved_model = Some(PendingResolvedTurnModel {
+                resolved: resolved_model,
+                personality: session_configuration.personality,
+            });
             state.base_instructions_provenance = base_instructions_provenance.clone();
             let managed_network_requirements_configured = config
                 .config_layer_stack
@@ -1420,7 +1446,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(sess.record_initial_history(initial_history)).await?;
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(
                     /*window_number*/ 0,

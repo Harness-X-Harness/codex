@@ -1,14 +1,23 @@
 use super::*;
 
-/// Provider-owned availability result for one requested model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelAvailability {
-    /// This catalog supplies metadata but does not constrain accepted model identifiers.
-    Unconstrained,
-    /// The authoritative catalog contains the requested model.
-    Available,
+/// Provider-owned resolution result for one requested model.
+#[derive(Debug, Clone)]
+pub enum ModelResolution {
+    /// The requested model and picker metadata resolved from one catalog snapshot.
+    Resolved {
+        model_info: ModelInfo,
+        available_models: Vec<ModelPreset>,
+    },
     /// The authoritative catalog was loaded successfully and omits the requested model.
-    Unavailable,
+    Unavailable { model: String },
+}
+
+/// Model selection policy evaluated against one catalog generation.
+#[derive(Debug, Clone, Copy)]
+pub enum ModelSelection<'a> {
+    Exact(&'a str),
+    ProviderDefault,
+    PreferRequested(&'a str),
 }
 
 impl OpenAiModelsManager {
@@ -31,29 +40,39 @@ impl OpenAiModelsManager {
         })
     }
 
-    pub(super) async fn model_availability(
+    pub(super) async fn resolve_model_profile(
         &self,
-        model: &str,
+        selection: ModelSelection<'_>,
+        config: &ModelsManagerConfig,
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
-    ) -> CoreResult<ModelAvailability> {
-        if !self.endpoint_client.remote_catalog_is_authoritative() {
-            return Ok(ModelAvailability::Unconstrained);
-        }
+    ) -> CoreResult<ModelResolution> {
         let catalog = self
             .load_catalog(refresh_strategy, http_client_factory)
             .await?;
-        Ok(
-            if catalog
-                .models
-                .iter()
-                .any(|candidate| candidate.slug == model && candidate.supported_in_api)
-            {
-                ModelAvailability::Available
-            } else {
-                ModelAvailability::Unavailable
-            },
-        )
+        let available_models = self.build_available_models(catalog.models.clone());
+        let model = select_model(
+            selection,
+            &available_models,
+            self.endpoint_client.remote_catalog_is_authoritative(),
+        );
+        if self.endpoint_client.remote_catalog_is_authoritative() {
+            return Ok(
+                match catalog.models.iter().find(|candidate| {
+                    candidate.slug == model.as_str() && candidate.supported_in_api
+                }) {
+                    Some(candidate) => ModelResolution::Resolved {
+                        model_info: model_info::with_config_overrides(candidate.clone(), config),
+                        available_models,
+                    },
+                    None => ModelResolution::Unavailable { model },
+                },
+            );
+        }
+        Ok(ModelResolution::Resolved {
+            model_info: construct_model_info_from_candidates(&model, &catalog.models, config),
+            available_models,
+        })
     }
 }
 
@@ -79,18 +98,33 @@ impl StaticModelsManager {
         }
     }
 
-    pub(super) fn model_availability(&self, model: &str) -> ModelAvailability {
-        if !self.constrains_model_availability {
-            return ModelAvailability::Unconstrained;
+    pub(super) fn resolve_model_profile(
+        &self,
+        selection: ModelSelection<'_>,
+        config: &ModelsManagerConfig,
+    ) -> ModelResolution {
+        let available_models = self.build_available_models(self.remote_models.clone());
+        let model = select_model(
+            selection,
+            &available_models,
+            self.constrains_model_availability,
+        );
+        if self.constrains_model_availability {
+            return match self
+                .remote_models
+                .iter()
+                .find(|candidate| candidate.slug == model.as_str() && candidate.supported_in_api)
+            {
+                Some(candidate) => ModelResolution::Resolved {
+                    model_info: model_info::with_config_overrides(candidate.clone(), config),
+                    available_models,
+                },
+                None => ModelResolution::Unavailable { model },
+            };
         }
-        if self
-            .remote_models
-            .iter()
-            .any(|candidate| candidate.slug == model && candidate.supported_in_api)
-        {
-            ModelAvailability::Available
-        } else {
-            ModelAvailability::Unavailable
+        ModelResolution::Resolved {
+            model_info: construct_model_info_from_candidates(&model, &self.remote_models, config),
+            available_models,
         }
     }
 }
@@ -108,13 +142,18 @@ impl ModelsManager for StaticModelsManager {
         })
     }
 
-    fn model_availability<'a>(
+    fn resolve_model_profile<'a>(
         &'a self,
-        model: &'a str,
+        selection: ModelSelection<'a>,
+        config: &'a ModelsManagerConfig,
         _refresh_strategy: RefreshStrategy,
         _http_client_factory: HttpClientFactory,
-    ) -> ModelsManagerFuture<'a, CoreResult<ModelAvailability>> {
-        Box::pin(async move { Ok(StaticModelsManager::model_availability(self, model)) })
+    ) -> ModelsManagerFuture<'a, CoreResult<ModelResolution>> {
+        Box::pin(async move {
+            Ok(StaticModelsManager::resolve_model_profile(
+                self, selection, config,
+            ))
+        })
     }
 
     fn get_default_model<'a>(
@@ -187,5 +226,23 @@ impl ModelsManager for StaticModelsManager {
         _http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, ()> {
         Box::pin(async {})
+    }
+}
+
+fn select_model(
+    selection: ModelSelection<'_>,
+    available_models: &[ModelPreset],
+    constrains_model_availability: bool,
+) -> String {
+    match selection {
+        ModelSelection::Exact(model) => model.to_string(),
+        ModelSelection::ProviderDefault => default_model_from_available(available_models),
+        ModelSelection::PreferRequested(model)
+            if !constrains_model_availability
+                || requested_model_is_available(Some(model), available_models) =>
+        {
+            model.to_string()
+        }
+        ModelSelection::PreferRequested(_) => default_model_from_available(available_models),
     }
 }

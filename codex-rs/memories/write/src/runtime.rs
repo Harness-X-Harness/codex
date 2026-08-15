@@ -259,7 +259,7 @@ impl MemoryStartupContext {
             config.http_client_factory(),
         );
 
-        let mut client_session = model_client.new_session();
+        let mut client_session = model_client.new_session().await?;
         let window_id = format!("{}:0", self.thread_id);
         let permission_profile = config.permissions.effective_permission_profile();
         let responses_metadata = detached_memory_responses_metadata(

@@ -455,8 +455,9 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
     };
     let turn_context = Arc::new(
         turn_context
-            .with_model(next_model.to_string(), &session.services.models_manager())
-            .await,
+            .with_model(next_model.to_string(), &session.services.provider_runtime)
+            .await
+            .expect("test model profile must resolve"),
     );
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
     builder.prompt_contributor(Arc::new(WorldStateMetricsRecorder));
@@ -506,7 +507,7 @@ async fn regular_turn_emits_turn_started_with_trace_id_without_waiting_for_start
     let (_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(async move {
         let _ = startup_prewarm_rx.await;
-        Ok(test_model_client_session())
+        Ok(test_model_client_session().await)
     });
 
     sess.set_session_startup_prewarm(
@@ -579,7 +580,7 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
     let (_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
     let handle = tokio::spawn(async move {
         let _ = startup_prewarm_rx.await;
-        Ok(test_model_client_session())
+        Ok(test_model_client_session().await)
     });
 
     sess.set_session_startup_prewarm(
@@ -635,7 +636,7 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
     assert!(duration_ms.is_some());
 }
 
-fn test_model_client_session() -> crate::client::ModelClientSession {
+async fn test_model_client_session() -> crate::client::ModelClientSession {
     let thread_id = ThreadId::try_from("00000000-0000-4000-8000-000000000001")
         .expect("test thread id should be valid");
     crate::client::ModelClient::new(
@@ -654,6 +655,8 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     )
     .new_session()
+    .await
+    .expect("test request strategy should resolve")
 }
 
 fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
@@ -1186,7 +1189,10 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
     })
     .await?;
 
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert!(turn_context.network.is_none());
     Ok(())
 }
@@ -1280,7 +1286,10 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
     })
     .await?;
 
-    let turn = session.new_default_turn().await;
+    let turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert!(turn.network.is_none());
 
     let mut orchestrator = crate::tools::orchestrator::ToolOrchestrator::new();
@@ -1331,7 +1340,10 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
     })
     .await?;
 
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert!(turn_context.network.is_some());
     Ok(())
 }
@@ -1357,7 +1369,10 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
     })
     .await?;
 
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert!(turn_context.network.is_some());
 
     #[cfg(windows)]
@@ -1393,7 +1408,10 @@ async fn user_shell_commands_remain_login_shells_when_model_login_shells_are_dis
         config.permissions.allow_login_shell = false;
     })
     .await?;
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let command = "echo managed-login-shell".to_string();
     let expected_command = session
         .user_shell()
@@ -1975,7 +1993,10 @@ async fn reconstruct_history_matches_live_compactions() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
-    let reconstruction_turn = session.new_default_turn().await;
+    let reconstruction_turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let reconstructed = session
         .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
         .await;
@@ -2051,7 +2072,8 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
             history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
@@ -2119,7 +2141,8 @@ async fn grok_hosted_items_round_trip_through_rollout_resume() {
     let (resumed_session, _) = make_session_and_context().await;
     resumed_session
         .record_initial_history(InitialHistory::Resumed(resumed))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     assert_eq!(resumed_session.clone_history().await.raw_items(), expected);
 }
@@ -2260,7 +2283,8 @@ async fn record_inter_agent_communication_sets_turn_id_in_rollout_and_resume() {
     let (resumed_session, _resumed_turn_context) = make_session_and_context().await;
     resumed_session
         .record_initial_history(InitialHistory::Resumed(resumed))
-        .await;
+        .await
+        .expect("test model profile must resolve");
     assert_eq!(
         strip_response_item_ids(resumed_session.clone_history().await.raw_items()),
         strip_response_item_ids(std::slice::from_ref(&expected_item))
@@ -2324,7 +2348,8 @@ async fn record_inter_agent_communication_preserves_item_id_in_rollout_and_resum
         .await;
     resumed_session
         .record_initial_history(InitialHistory::Resumed(resumed))
-        .await;
+        .await
+        .expect("test model profile must resolve");
     let resumed_history = resumed_session.clone_history().await;
     let [resumed_item] = resumed_history.raw_items() else {
         panic!("expected exactly one resumed history item");
@@ -2430,7 +2455,8 @@ async fn prepares_resumed_history_before_installing_it() {
             history: Arc::new(vec![RolloutItem::ResponseItem(resumed_item)]),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     assert_eq!(
         session.state.lock().await.clone_history().raw_items(),
@@ -2525,7 +2551,10 @@ fn resolve_multi_agent_version_handles_unset_and_legacy_history() {
 async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let (session, _turn_context) = make_session_and_context().await;
 
-    session.record_initial_history(InitialHistory::New).await;
+    session
+        .record_initial_history(InitialHistory::New)
+        .await
+        .expect("test model profile must resolve");
 
     let history = session.clone_history().await;
     assert_eq!(history.raw_items().to_vec(), Vec::<ResponseItem>::new());
@@ -2560,7 +2589,8 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
             history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let history_before_seed = session.state.lock().await.clone_history();
     assert_eq!(expected, history_before_seed.raw_items());
@@ -2668,7 +2698,8 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
             history: Arc::new(rollout_items),
             rollout_path: Some(PathBuf::from("/tmp/resume.jsonl")),
         }))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let actual = session.state.lock().await.token_info();
     assert_eq!(actual, Some(info2));
@@ -3188,7 +3219,8 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(
@@ -3226,7 +3258,8 @@ async fn grok_hosted_items_survive_fork_history_reconstruction() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     assert_eq!(session.clone_history().await.raw_items(), hosted_items);
 }
@@ -3308,7 +3341,8 @@ async fn record_initial_history_assigns_and_persists_id_for_forked_response_item
         .record_initial_history(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
             response_item,
         )]))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let live_history = session.clone_history().await;
     let [live_item] = live_history.raw_items() else {
@@ -3554,7 +3588,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let history = session.clone_history().await;
     assert_eq!(
@@ -4419,8 +4454,9 @@ async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
     let updated = turn_context
-        .with_model("gpt-5.4".to_string(), &session.services.models_manager())
-        .await;
+        .with_model("gpt-5.4".to_string(), &session.services.provider_runtime)
+        .await
+        .expect("test model profile must resolve");
     let expected_model_info = session
         .services
         .models_manager()
@@ -5306,8 +5342,9 @@ enabled = false
     }
 
     let child_turn = session
-        .new_default_turn_with_sub_id("role-skill-turn".to_string())
-        .await;
+        .try_new_default_turn_with_sub_id("role-skill-turn".to_string())
+        .await
+        .expect("test model profile must resolve");
     let skills_snapshot = child_turn.skills_snapshot();
     let child_skill = skills_snapshot
         .outcome()
@@ -5422,7 +5459,10 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
         )
     };
     let config = session.get_config().await;
-    let next_turn = session.new_default_turn().await;
+    let next_turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
 
     assert_eq!(session_cwd, updated_cwd);
     assert_eq!(stored_environments, expected_environments);
@@ -5464,7 +5504,10 @@ async fn permission_profile_updates_apply_to_next_turn_environment() {
                 .update_settings(updates)
                 .await
                 .expect("permission profile update should succeed");
-            session.new_default_turn().await
+            session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve")
         };
         let next_environment = next_turn
             .environments
@@ -5666,7 +5709,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
-        model_info,
+        session::ResolvedTurnModel {
+            model_info,
+            available_models: Vec::new(),
+        },
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
@@ -5957,7 +6003,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services.main_execve_wrapper_exe.as_ref(),
         per_turn_config,
         model_info,
-        &models_manager,
+        models_manager
+            .try_list_models()
+            .expect("test model catalog lock must be available"),
         /*network*/ None,
         resolved_turn_environments,
         session_configuration.cwd().clone(),
@@ -6092,7 +6140,10 @@ async fn make_session_with_config_and_rx(
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
-        model_info,
+        session::ResolvedTurnModel {
+            model_info,
+            available_models: Vec::new(),
+        },
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
@@ -6207,7 +6258,10 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
         models_manager,
-        model_info,
+        session::ResolvedTurnModel {
+            model_info,
+            available_models: Vec::new(),
+        },
         Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
@@ -7000,7 +7054,10 @@ async fn new_default_turn_captures_current_span_trace_id() {
             .span_context()
             .trace_id()
             .to_string();
-        let turn_context = session.new_default_turn().await;
+        let turn_context = session
+            .try_new_default_turn()
+            .await
+            .expect("test model profile must resolve");
         assert_eq!(turn_context.trace_id, Some(expected_trace_id));
         turn_context.trace_id.clone()
     }
@@ -7205,7 +7262,10 @@ async fn turn_environments_set_primary_environment() {
         &turn_environment.environment
     ));
 
-    let default_turn = session.new_default_turn().await;
+    let default_turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert!(Arc::ptr_eq(
         &stored_environment,
         &default_turn
@@ -7235,7 +7295,10 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
         state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
     }
 
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
 
     let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.turn_environments().count(), 1);
@@ -7274,7 +7337,10 @@ async fn default_turn_honors_empty_stored_thread_environments() {
         state.session_configuration.environments.environments = Vec::new();
     }
 
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
 
     assert!(turn_context.environments.primary().is_none());
     assert!(
@@ -7341,6 +7407,110 @@ async fn primary_environment_uses_first_turn_environment() {
             .cwd(),
         &second_cwd_uri
     );
+}
+
+#[tokio::test]
+async fn first_turn_consumes_the_pre_resolved_model_profile() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let mut model_info = turn_context.model_info.clone();
+    model_info.display_name = "pre-resolved profile".to_string();
+    session
+        .stage_resolved_model_for_next_turn(
+            session::ResolvedTurnModel {
+                model_info,
+                available_models: turn_context.available_models.clone(),
+            },
+            None,
+        )
+        .await;
+
+    let preview_configuration = session.state.lock().await.session_configuration.clone();
+    let preview = session
+        .new_startup_prewarm_turn_from_configuration(
+            "pre-resolved-preview".to_string(),
+            preview_configuration,
+        )
+        .await
+        .expect("preview should borrow the pre-resolved profile");
+    assert_eq!(preview.model_info.display_name, "pre-resolved profile");
+    assert!(session.state.lock().await.pending_resolved_model.is_some());
+
+    let next_turn = session
+        .new_turn_with_sub_id(
+            "pre-resolved-turn".to_string(),
+            SessionSettingsUpdate::default(),
+        )
+        .await
+        .expect("turn should use its pre-resolved profile");
+
+    assert_eq!(next_turn.model_info.display_name, "pre-resolved profile");
+    assert!(session.state.lock().await.pending_resolved_model.is_none());
+}
+
+#[tokio::test]
+async fn first_turn_re_resolves_profile_after_personality_change() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let mut model_info = turn_context.model_info.clone();
+    model_info.display_name = "stale pre-resolved profile".to_string();
+    session
+        .stage_resolved_model_for_next_turn(
+            session::ResolvedTurnModel {
+                model_info,
+                available_models: turn_context.available_models.clone(),
+            },
+            None,
+        )
+        .await;
+
+    let next_turn = session
+        .new_turn_with_sub_id(
+            "personality-change".to_string(),
+            SessionSettingsUpdate {
+                personality: Some(Personality::Friendly),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should re-resolve model facts for the new personality");
+
+    assert_ne!(
+        next_turn.model_info.display_name,
+        "stale pre-resolved profile"
+    );
+    assert!(session.state.lock().await.pending_resolved_model.is_none());
+}
+
+#[tokio::test]
+async fn first_turn_consumes_profile_resolved_for_the_final_personality() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let mut model_info = turn_context.model_info.clone();
+    model_info.display_name = "profile resolved with final personality".to_string();
+    session
+        .stage_resolved_model_for_next_turn(
+            session::ResolvedTurnModel {
+                model_info,
+                available_models: turn_context.available_models.clone(),
+            },
+            Some(Personality::Friendly),
+        )
+        .await;
+
+    let next_turn = session
+        .new_turn_with_sub_id(
+            "resolved-final-personality".to_string(),
+            SessionSettingsUpdate {
+                personality: Some(Personality::Friendly),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("turn should consume the profile resolved for its final personality");
+
+    assert_eq!(
+        next_turn.model_info.display_name,
+        "profile resolved with final personality"
+    );
+    assert!(session.state.lock().await.pending_resolved_model.is_none());
 }
 
 #[tokio::test]
@@ -8187,7 +8357,9 @@ where
         services.main_execve_wrapper_exe.as_ref(),
         per_turn_config,
         model_info,
-        &models_manager,
+        models_manager
+            .try_list_models()
+            .expect("test model catalog lock must be available"),
         /*network*/ None,
         resolved_turn_environments,
         session_configuration.cwd().clone(),
@@ -8285,7 +8457,10 @@ async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
     }
     session.mark_mcp_runtime_dirty();
 
-    let next_turn = session.new_default_turn().await;
+    let next_turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let new_step = session
         .capture_step_context(next_turn, &CancellationToken::new())
         .await
@@ -8399,7 +8574,10 @@ async fn refreshed_mcp_binding_captures_current_approval_authority() {
         previous_policy
     );
 
-    let new_turn = session.new_default_turn().await;
+    let new_turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert_eq!(new_turn.approval_policy(), AskForApproval::Never);
     assert_eq!(
         new_turn.config.permissions.approval_policy.value(),
@@ -8870,9 +9048,10 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
 
     let mut config = (*current_context.config).clone();
     let mut requirements = config.config_layer_stack.requirements().clone();
@@ -8926,9 +9105,10 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
     let cwd = test_path_buf("/new-repo").abs();
     let environment = current_context
         .environments
@@ -8979,9 +9159,10 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
     let environment = current_context
         .environments
         .primary()
@@ -9030,9 +9211,10 @@ async fn record_context_updates_emits_environment_item_for_time_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
     current_context.timezone = Some("Europe/Berlin".to_string());
 
     let update_items =
@@ -9054,9 +9236,10 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
     let mut config = (*current_context.config).clone();
     config.include_environment_context = false;
     current_context.config = Arc::new(config);
@@ -9115,9 +9298,10 @@ async fn record_context_updates_emits_realtime_start_when_session_becomes_live()
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
     current_context.realtime_active = true;
 
     let update_items =
@@ -9139,9 +9323,10 @@ async fn record_context_updates_emits_realtime_end_when_session_stops_being_live
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager(),
+            &session.services.provider_runtime,
         )
-        .await;
+        .await
+        .expect("test model profile must resolve");
     current_context.realtime_active = false;
 
     let update_items =
@@ -9800,8 +9985,9 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         "gpt-5.4"
     };
     let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager())
-        .await;
+        .with_model(next_model.to_string(), &session.services.provider_runtime)
+        .await
+        .expect("test model profile must resolve");
     let rollout_path = attach_thread_persistence(&mut session).await;
 
     session
@@ -10932,7 +11118,10 @@ async fn steer_input_rejects_non_regular_turns() {
             }],
             client_id: None,
         }];
-        let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
+        let turn_context = sess
+            .try_new_default_turn_with_sub_id("turn".to_string())
+            .await
+            .expect("test model profile must resolve");
         sess.spawn_task(
             turn_context,
             input,
@@ -11433,7 +11622,10 @@ async fn sample_rollout(
 
     // Use the same turn_context source as record_initial_history so model_info (and thus
     // personality_spec) matches reconstruction.
-    let reconstruction_turn = session.new_default_turn().await;
+    let reconstruction_turn = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let mut initial_context = build_initial_context(session, &reconstruction_turn).await;
     // Ensure personality_spec is present when Personality is enabled, so expected matches
     // what reconstruction produces (build_initial_context may omit it when baked into model).
@@ -11714,7 +11906,10 @@ async fn shell_tool_cancellation_waits_for_runtime_cleanup() -> anyhow::Result<(
             .expect("test setup should allow sandbox policy");
     })
     .await?;
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let temp_dir = tempfile::TempDir::new()?;

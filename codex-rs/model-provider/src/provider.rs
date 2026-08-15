@@ -18,6 +18,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -25,9 +26,11 @@ use crate::auth::ProviderAuthScope;
 use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
-use crate::auth::resolve_provider_auth_for_scope;
 use crate::grok_provider::GrokModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::request_setup::ProviderRequestSetup;
+use crate::request_setup::configured_provider_request_setup;
+use crate::request_setup::provider_uses_first_party_auth_path;
 
 /// Remote context-compaction protocols supported by a model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +218,19 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         codex_api::map_api_error(error)
     }
 
+    /// Projects canonical durable history into this Provider's ModelInput wire shape.
+    fn project_model_input(&self, input: Vec<ResponseItem>) -> Result<Vec<ResponseItem>, CodexErr> {
+        Ok(input)
+    }
+
+    /// Resolves route and credentials for one request attempt.
+    ///
+    /// Implementations must derive both from one credential snapshot.
+    fn request_setup(
+        &self,
+        scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderRequestSetup>>;
+
     /// Returns provider configuration adapted for the API client.
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
@@ -297,14 +313,6 @@ pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
-
-fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
-    provider.requires_openai_auth
-        && provider.env_key.is_none()
-        && provider.experimental_bearer_token.is_none()
-        && provider.auth.is_none()
-        && provider.aws.is_none()
-}
 
 /// Creates the default runtime model provider for configured provider metadata.
 pub fn create_model_provider(
@@ -410,6 +418,17 @@ impl ModelProvider for ConfiguredModelProvider {
                 requires_openai_auth: false,
             })
         }
+    }
+
+    fn request_setup(
+        &self,
+        scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderRequestSetup>> {
+        Box::pin(configured_provider_request_setup(
+            &self.info,
+            self.auth_manager.as_ref(),
+            scope,
+        ))
     }
 
     fn models_manager(

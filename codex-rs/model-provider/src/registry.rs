@@ -7,11 +7,14 @@ use std::path::PathBuf;
 
 use codex_http_client::HttpClientFactory;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
-use codex_models_manager::manager::ModelAvailability;
+use codex_models_manager::config::ModelsManagerConfig;
+use codex_models_manager::manager::ModelResolution;
+use codex_models_manager::manager::ModelSelection;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 
@@ -92,24 +95,45 @@ impl ResolvedProviderRuntime {
         self.models_manager.clone()
     }
 
-    /// Validates a model against this Provider's exclusive catalog before egress.
+    /// Resolves one immutable model profile from this Provider's catalog.
+    pub async fn resolve_model_profile(
+        &self,
+        selection: ModelSelection<'_>,
+        config: &ModelsManagerConfig,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<(ModelInfo, Vec<ModelPreset>)> {
+        let resolution = self
+            .models_manager
+            .resolve_model_profile(selection, config, refresh_strategy, http_client_factory)
+            .await
+            .map_err(|_| authority_unavailable(&self.provider_id))?;
+        match resolution {
+            ModelResolution::Resolved {
+                model_info,
+                available_models,
+            } => Ok((model_info, available_models)),
+            ModelResolution::Unavailable { model } => {
+                Err(model_unavailable(Some(&self.provider_id), &model))
+            }
+        }
+    }
+
+    /// Validates a model against this Provider's exclusive catalog.
     pub async fn validate_model(
         &self,
         model: &str,
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<()> {
-        let availability = self
-            .models_manager
-            .model_availability(model, refresh_strategy, http_client_factory)
-            .await
-            .map_err(|_| authority_unavailable(&self.provider_id))?;
-        match availability {
-            ModelAvailability::Unconstrained | ModelAvailability::Available => Ok(()),
-            ModelAvailability::Unavailable => {
-                Err(model_unavailable(Some(&self.provider_id), model))
-            }
-        }
+        self.resolve_model_profile(
+            ModelSelection::Exact(model),
+            &ModelsManagerConfig::default(),
+            refresh_strategy,
+            http_client_factory,
+        )
+        .await
+        .map(|_| ())
     }
 }
 

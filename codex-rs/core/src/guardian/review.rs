@@ -7,6 +7,8 @@ use codex_analytics::GuardianReviewTrackContext;
 use codex_analytics::GuardianReviewedAction;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_extension_api::ThreadIdleCause;
+use codex_models_manager::manager::ModelSelection;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::protocol::AskForApproval;
@@ -726,6 +728,7 @@ pub(crate) fn spawn_approval_request_review(
 
 pub(super) struct GuardianReviewSessionConfig {
     pub(super) spawn_config: crate::config::Config,
+    pub(super) resolved_model: crate::session::session::ResolvedTurnModel,
     model: String,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     default_review_model_id: String,
@@ -743,14 +746,6 @@ pub(super) async fn guardian_review_session_config(
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
-    let available_models = session
-        .services
-        .models_manager()
-        .list_models(
-            codex_models_manager::manager::RefreshStrategy::Offline,
-            turn.config.http_client_factory(),
-        )
-        .await;
     let default_review_model_id = turn.provider.approval_review_preferred_model();
     let preferred_reasoning_effort = |supports_low: bool, fallback| {
         if supports_low {
@@ -761,55 +756,48 @@ pub(super) async fn guardian_review_session_config(
     };
     let model_override = turn.model_info.auto_review_model_override.as_deref();
     let review_model_id = model_override.unwrap_or(default_review_model_id);
-    let review_model = available_models
-        .iter()
-        .find(|preset| preset.model == review_model_id);
+    let selection = match model_override {
+        Some(model_override) => model_override,
+        None if turn
+            .available_models
+            .iter()
+            .any(|preset| preset.model == review_model_id) =>
+        {
+            review_model_id
+        }
+        None => turn.model_info.slug.as_str(),
+    };
+    let (model_info, available_models) = session
+        .services
+        .provider_runtime
+        .resolve_model_profile(
+            ModelSelection::Exact(selection),
+            &turn.config.to_models_manager_config(),
+            RefreshStrategy::Offline,
+            turn.config.http_client_factory(),
+        )
+        .await?;
     let guardian_catalog_contains_auto_review = available_models
         .iter()
         .any(|preset| preset.model == default_review_model_id);
     let guardian_review_model_overridden = model_override.is_some();
     let guardian_review_model_override = model_override.map(str::to_string);
-    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
-        let reasoning_effort = preferred_reasoning_effort(
-            preset
-                .supported_reasoning_efforts
-                .iter()
-                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            Some(preset.default_reasoning_effort.clone()),
-        );
-        (review_model_id.to_string(), reasoning_effort)
-    } else {
-        let reasoning_effort = preferred_reasoning_effort(
-            turn.model_info
-                .supported_reasoning_levels
-                .iter()
-                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            turn.reasoning_effort
-                .clone()
-                .or_else(|| turn.model_info.default_reasoning_level.clone()),
-        );
-        (
-            model_override
-                .unwrap_or(turn.model_info.slug.as_str())
-                .to_string(),
-            reasoning_effort,
-        )
-    };
+    let guardian_model = model_info.slug.clone();
+    let guardian_reasoning_effort = preferred_reasoning_effort(
+        model_info
+            .supported_reasoning_levels
+            .iter()
+            .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+        model_info.default_reasoning_level.clone(),
+    );
 
-    let guardian_model_info = session
-        .services
-        .models_manager()
-        .get_model_info(
-            guardian_model.as_str(),
-            &turn.config.to_models_manager_config(),
-        )
-        .await;
+    let guardian_model_messages = model_info.model_messages.as_ref();
     let mut spawn_config = build_guardian_review_session_config(
         turn.config.as_ref(),
         live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
-        guardian_model_info.model_messages.as_ref(),
+        guardian_model_messages,
     )?;
     if guardian_model != turn.model_info.slug {
         spawn_config.model_context_window = None;
@@ -817,6 +805,10 @@ pub(super) async fn guardian_review_session_config(
     }
     Ok(GuardianReviewSessionConfig {
         spawn_config,
+        resolved_model: crate::session::session::ResolvedTurnModel {
+            model_info,
+            available_models,
+        },
         model: guardian_model,
         reasoning_effort: guardian_reasoning_effort,
         default_review_model_id: default_review_model_id.to_string(),
@@ -866,6 +858,7 @@ async fn run_guardian_review_session_before_deadline(
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
                 spawn_config: session_config.spawn_config,
+                resolved_model: session_config.resolved_model,
                 request,
                 reasons,
                 schema,

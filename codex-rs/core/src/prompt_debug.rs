@@ -81,7 +81,7 @@ pub(crate) async fn build_prompt_input_from_session(
     sess: &Arc<Session>,
     input: Vec<UserInput>,
 ) -> CodexResult<Vec<ResponseItem>> {
-    let turn_context = sess.new_default_turn().await;
+    let turn_context = sess.try_new_default_turn().await?;
     // Prompt debugging builds a standalone request without entering run_turn.
     let step_context = sess
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())

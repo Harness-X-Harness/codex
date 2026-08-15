@@ -115,6 +115,7 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::context_admission::ensure_projected_request_fits;
 use crate::feedback_tags;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::subagent_header_value;
@@ -126,6 +127,8 @@ use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_model_provider::AgentIdentitySessionFallback;
 use codex_model_provider::ProviderAuthScope;
+use codex_model_provider::ProviderRequestSetup;
+use codex_model_provider::ProviderRequestStrategy;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 #[cfg(test)]
@@ -214,20 +217,18 @@ struct ModelClientState {
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     agent_identity_session_fallback: AgentIdentitySessionFallback,
-    cached_websocket_session: StdMutex<WebsocketSession>,
+    cached_websocket_session: StdMutex<Option<CachedWebsocketSession>>,
+}
+
+struct CachedWebsocketSession {
+    request_strategy: ProviderRequestStrategy,
+    websocket_session: WebsocketSession,
 }
 
 /// Resolved API client setup for a single request attempt.
 ///
 /// Keeping this as a single bundle ensures prewarm and normal request paths
 /// share the same auth/provider setup flow.
-struct CurrentClientSetup {
-    auth: Option<CodexAuth>,
-    api_provider: ApiProvider,
-    api_auth: SharedAuthProvider,
-    agent_identity_telemetry: Option<AgentIdentityTelemetry>,
-}
-
 #[derive(Clone, Copy)]
 struct RequestRouteTelemetry {
     endpoint: &'static str,
@@ -273,6 +274,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
+    request_strategy: ProviderRequestStrategy,
     websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
@@ -496,7 +498,7 @@ impl ModelClient {
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                cached_websocket_session: StdMutex::new(None),
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
@@ -520,12 +522,22 @@ impl ModelClient {
 
     /// Creates a fresh turn-scoped streaming session.
     ///
-    /// This constructor does not perform network I/O itself; the session opens a websocket lazily
-    /// when the first stream request is issued.
-    pub fn new_session(&self) -> ModelClientSession {
+    /// Resolves the initial non-secret request strategy now; the session opens a websocket lazily
+    /// when the first stream request is issued. Turn execution should prefer
+    /// [`Self::new_session_for_strategy`] with the strategy already frozen in `TurnContext`.
+    pub async fn new_session(&self) -> Result<ModelClientSession> {
+        let request_strategy = self.resolve_request_strategy().await?;
+        Ok(self.new_session_for_strategy(request_strategy))
+    }
+
+    pub(crate) fn new_session_for_strategy(
+        &self,
+        request_strategy: ProviderRequestStrategy,
+    ) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
-            websocket_session: self.take_cached_websocket_session(),
+            websocket_session: self.take_cached_websocket_session(&request_strategy),
+            request_strategy,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -534,21 +546,36 @@ impl ModelClient {
         self.state.provider.auth_manager()
     }
 
-    fn take_cached_websocket_session(&self) -> WebsocketSession {
+    fn take_cached_websocket_session(
+        &self,
+        request_strategy: &ProviderRequestStrategy,
+    ) -> WebsocketSession {
         let mut cached_websocket_session = self
             .state
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::mem::take(&mut *cached_websocket_session)
+        match cached_websocket_session.take() {
+            Some(cached) if cached.request_strategy == *request_strategy => {
+                cached.websocket_session
+            }
+            Some(_) | None => WebsocketSession::default(),
+        }
     }
 
-    fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
+    fn store_cached_websocket_session(
+        &self,
+        request_strategy: ProviderRequestStrategy,
+        websocket_session: WebsocketSession,
+    ) {
         *self
             .state
             .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CachedWebsocketSession {
+            request_strategy,
+            websocket_session,
+        });
     }
 
     pub(crate) fn force_http_fallback(
@@ -568,7 +595,11 @@ impl ModelClient {
             );
         }
 
-        self.store_cached_websocket_session(WebsocketSession::default());
+        *self
+            .state
+            .cached_websocket_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         activated
     }
 
@@ -584,6 +615,7 @@ impl ModelClient {
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        request_strategy: &ProviderRequestStrategy,
         turn_state: Option<Arc<OnceLock<String>>>,
         settings: CompactConversationRequestSettings,
         session_telemetry: &SessionTelemetry,
@@ -593,7 +625,9 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup().await?;
+        let client_setup = self
+            .current_client_setup_for_strategy(request_strategy)
+            .await?;
         let transport =
             self.build_api_transport(&client_setup.api_provider, RESPONSES_COMPACT_ENDPOINT)?;
         let request_telemetry = Self::build_request_telemetry(
@@ -640,6 +674,7 @@ impl ModelClient {
             prompt_cache_key: prompt_cache_key.as_deref(),
             text,
         };
+        ensure_projected_request_fits(&payload, &input, model_info)?;
 
         let mut extra_headers = ApiHeaderMap::new();
         if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.installation_id) {
@@ -990,12 +1025,7 @@ impl ModelClient {
         &self,
         input: Vec<ResponseItem>,
     ) -> Result<Vec<ResponseItem>> {
-        let mut input = if self.state.provider.info().wire_api == WireApi::GrokResponses {
-            crate::grok_model_input::encode(input)
-                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?
-        } else {
-            input
-        };
+        let mut input = self.state.provider.project_model_input(input)?;
         for item in &mut input {
             if item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
@@ -1021,24 +1051,34 @@ impl ModelClient {
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
-    async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = self.state.provider.auth().await;
-        let api_provider = self.state.provider.api_provider().await?;
-        let resolved_auth = self
-            .state
+    async fn current_client_setup(&self) -> Result<ProviderRequestSetup> {
+        self.state
             .provider
-            .api_auth_for_scope(ProviderAuthScope {
+            .request_setup(ProviderAuthScope {
                 agent_identity_policy: self.agent_identity_policy,
                 session_source: self.state.session_source.clone(),
                 agent_identity_session_fallback: self.state.agent_identity_session_fallback.clone(),
             })
-            .await?;
-        Ok(CurrentClientSetup {
-            auth,
-            api_provider,
-            api_auth: resolved_auth.auth,
-            agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
-        })
+            .await
+    }
+
+    /// Resolves the non-secret route and credential strategy selected for a Turn.
+    pub(crate) async fn resolve_request_strategy(&self) -> Result<ProviderRequestStrategy> {
+        Ok(self.current_client_setup().await?.strategy)
+    }
+
+    async fn current_client_setup_for_strategy(
+        &self,
+        expected: &ProviderRequestStrategy,
+    ) -> Result<ProviderRequestSetup> {
+        let setup = self.current_client_setup().await?;
+        if &setup.strategy != expected {
+            return Err(CodexErr::InvalidRequest(
+                "model provider route or authentication strategy changed during the active turn"
+                    .to_string(),
+            ));
+        }
+        Ok(setup)
     }
 
     fn build_routing_hint_header(
@@ -1216,11 +1256,15 @@ impl Drop for ModelClientSession {
     fn drop(&mut self) {
         let websocket_session = std::mem::take(&mut self.websocket_session);
         self.client
-            .store_cached_websocket_session(websocket_session);
+            .store_cached_websocket_session(self.request_strategy.clone(), websocket_session);
     }
 }
 
 impl ModelClientSession {
+    pub(crate) fn matches_request_strategy(&self, expected: &ProviderRequestStrategy) -> bool {
+        &self.request_strategy == expected
+    }
+
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
     }
@@ -1232,6 +1276,12 @@ impl ModelClientSession {
         self.websocket_session.last_response_from_untraced_warmup = false;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
+    }
+
+    async fn current_client_setup(&self) -> Result<ProviderRequestSetup> {
+        self.client
+            .current_client_setup_for_strategy(&self.request_strategy)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1367,7 +1417,7 @@ impl ModelClientSession {
             return Ok(());
         }
 
-        let client_setup = self.client.current_client_setup().await.map_err(|err| {
+        let client_setup = self.current_client_setup().await.map_err(|err| {
             ApiError::Stream(format!(
                 "failed to build websocket prewarm client setup: {err}"
             ))
@@ -1509,7 +1559,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = self.current_client_setup().await?;
             let transport = self
                 .client
                 .build_api_transport(&client_setup.api_provider, RESPONSES_ENDPOINT)?;
@@ -1555,6 +1605,7 @@ impl ModelClientSession {
             request.input = self
                 .client
                 .prepare_response_items_for_request(request.input)?;
+            ensure_projected_request_fits(&request, &request.input, model_info)?;
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             let inference_trace_attempt = inference_trace.start_attempt();
@@ -1649,7 +1700,7 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = self.current_client_setup().await?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1683,6 +1734,20 @@ impl ModelClientSession {
             if let Some(turn_state) = self.turn_state.get() {
                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
             }
+            let projected_full_input = self
+                .client
+                .prepare_response_items_for_request(request.input.clone())?;
+            let admission_payload = ResponseCreateWsRequest {
+                previous_response_id: None,
+                input: &projected_full_input,
+                generate: if warmup { Some(false) } else { None },
+                client_metadata: response_create_client_metadata(
+                    Some(client_metadata.clone()),
+                    request_trace.as_ref(),
+                ),
+                ..ResponseCreateWsRequest::from(&request)
+            };
+            ensure_projected_request_fits(&admission_payload, &projected_full_input, model_info)?;
             match self
                 .websocket_connection(WebsocketConnectParams {
                     session_telemetry,

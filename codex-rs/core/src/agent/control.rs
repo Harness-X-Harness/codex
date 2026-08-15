@@ -75,6 +75,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) parent_turn_id: Option<String>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) resolved_model: Option<crate::session::session::ResolvedTurnModel>,
 }
 
 #[derive(Clone, Debug)]

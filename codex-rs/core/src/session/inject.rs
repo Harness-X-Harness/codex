@@ -88,9 +88,20 @@ impl Session {
             ));
         }
 
-        let turn_context = self
-            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
+        let turn_context = match self
+            .try_new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
+            .await
+        {
+            Ok(turn_context) => turn_context,
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to resolve model profile for idle turn");
+                self.clear_reserved_idle_turn(&turn_state).await;
+                return Err(TryStartTurnIfIdleError::new(
+                    TryStartTurnIfIdleRejectionReason::ModelProfileUnavailable,
+                    input,
+                ));
+            }
+        };
         if !has_user_input && turn_context.mode == ModeKind::Plan {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
@@ -182,7 +193,13 @@ impl Session {
         let turn_context = match current_turn_context {
             Some(turn_context) => turn_context,
             None => {
-                default_turn_context = self.new_default_turn().await;
+                default_turn_context = match self.try_new_default_turn().await {
+                    Ok(turn_context) => turn_context,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to resolve model profile for injected history");
+                        return;
+                    }
+                };
                 default_turn_context.as_ref()
             }
         };

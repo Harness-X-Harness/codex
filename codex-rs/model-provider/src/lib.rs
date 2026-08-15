@@ -1,11 +1,13 @@
 mod amazon_bedrock;
 mod auth;
 mod bearer_auth_provider;
+mod grok_model_input;
 mod grok_models_endpoint;
 mod grok_provider;
 mod models_endpoint;
 mod provider;
 mod registry;
+mod request_setup;
 
 pub use amazon_bedrock::is_supported_amazon_bedrock_region;
 pub use auth::AgentIdentitySessionFallback;
@@ -34,3 +36,5 @@ pub use registry::ProviderRegistration;
 pub use registry::ResolvedProviderRuntime;
 pub use registry::ResolvedProviderSelection;
 pub use registry::provider_models_home;
+pub use request_setup::ProviderRequestSetup;
+pub use request_setup::ProviderRequestStrategy;

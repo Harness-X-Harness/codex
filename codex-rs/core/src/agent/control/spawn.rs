@@ -488,6 +488,7 @@ impl AgentControl {
                     inheritance.environments,
                     inheritance.exec_policy,
                     options.environments.clone(),
+                    options.resolved_model.clone(),
                 ))
                 .await?
             }
@@ -632,8 +633,8 @@ impl AgentControl {
             {
                 let parent_developer_instructions = match parent_thread
                     .session
-                    .new_default_turn()
-                    .await
+                    .try_new_default_turn()
+                    .await?
                     .developer_instructions
                     .clone()
                 {
@@ -844,6 +845,7 @@ impl AgentControl {
                 inherited_exec_policy,
                 options.environments.clone(),
                 thread_extension_init,
+                options.resolved_model.clone(),
             )
             .await
     }

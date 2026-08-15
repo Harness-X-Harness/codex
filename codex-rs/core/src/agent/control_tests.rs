@@ -741,8 +741,9 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
             reloaded_child.config_snapshot().await.model_provider_id,
             reloaded_child
                 .session
-                .new_default_turn()
+                .try_new_default_turn()
                 .await
+                .expect("test model profile must resolve")
                 .provider
                 .info()
                 .clone(),
@@ -985,7 +986,11 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
     parent_thread
         .inject_user_message_without_turn("paginated parent context".to_string())
         .await;
-    let turn_context = parent_thread.session.new_default_turn().await;
+    let turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-paginated".to_string();
     parent_thread
         .session
@@ -1311,7 +1316,11 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .first()
         .cloned()
         .expect("parent seed should be recorded");
-    let turn_context = parent_thread.session.new_default_turn().await;
+    let turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-history".to_string();
     let trigger_message = InterAgentCommunication::new(
         AgentPath::root(),
@@ -1584,7 +1593,11 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history() {
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
     let parent_thread = new_thread.thread;
-    let turn_context = parent_thread.session.new_default_turn().await;
+    let turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-compacted-usage-hints".to_string();
     let parent_task = InterAgentCommunication::new(
         AgentPath::root(),
@@ -1748,7 +1761,11 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
         .expect("start parent thread");
     let parent_thread_id = new_thread.thread_id;
     let parent_thread = new_thread.thread;
-    let turn_context = parent_thread.session.new_default_turn().await;
+    let turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-compacted-stale-instructions".to_string();
     let replacement_history = vec![
         ResponseItem::Message {
@@ -1892,7 +1909,11 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             .expect("start parent thread");
         let parent_thread_id = new_thread.thread_id;
         let parent_thread = new_thread.thread;
-        let turn_context = parent_thread.session.new_default_turn().await;
+        let turn_context = parent_thread
+            .session
+            .try_new_default_turn()
+            .await
+            .expect("test model profile must resolve");
         let parent_spawn_call_id = match parent_developer_instructions {
             Some(_) => "spawn-call-legacy-compact-with-parent",
             None => "spawn-call-legacy-compact-without-parent",
@@ -2027,7 +2048,11 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
 async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let turn_context = parent_thread.session.new_default_turn().await;
+    let turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-unflushed".to_string();
     parent_thread
         .session
@@ -2099,7 +2124,11 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         "queued message".to_string(),
         /*trigger_turn*/ false,
     );
-    let queued_turn_context = parent_thread.session.new_default_turn().await;
+    let queued_turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     parent_thread
         .session
         .record_conversation_items(
@@ -2115,7 +2144,11 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         "triggered context".to_string(),
         /*trigger_turn*/ true,
     );
-    let triggered_turn_context = parent_thread.session.new_default_turn().await;
+    let triggered_turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     parent_thread
         .session
         .record_conversation_items(
@@ -2126,7 +2159,11 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
     parent_thread
         .inject_user_message_without_turn("current parent task".to_string())
         .await;
-    let spawn_turn_context = parent_thread.session.new_default_turn().await;
+    let spawn_turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-last-n".to_string();
     parent_thread
         .session
@@ -2236,7 +2273,11 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .expect("start parent thread");
     let parent_thread_id = parent.thread_id;
     let parent_thread = parent.thread;
-    let startup_turn_context = parent_thread.session.new_default_turn().await;
+    let startup_turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     parent_thread
         .session
         .record_conversation_items(
@@ -2255,7 +2296,11 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
     parent_thread
         .inject_user_message_without_turn("current parent task".to_string())
         .await;
-    let spawn_turn_context = parent_thread.session.new_default_turn().await;
+    let spawn_turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-last-n-under-limit".to_string();
     parent_thread
         .session
@@ -2356,7 +2401,11 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
     parent_thread
         .inject_user_message_without_turn("parent task".to_string())
         .await;
-    let turn_context = parent_thread.session.new_default_turn().await;
+    let turn_context = parent_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let parent_spawn_call_id = "spawn-call-last-n-usage-hints".to_string();
     parent_thread
         .session
@@ -2773,7 +2822,11 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
         .get_thread(tester_thread_id)
         .await
         .expect("tester thread should exist");
-    let tester_turn = tester_thread.session.new_default_turn().await;
+    let tester_turn = tester_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     tester_thread
         .session
         .send_event(
@@ -2860,7 +2913,11 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         tester_path.to_string(),
         Some(tester_path.clone()),
     );
-    let tester_turn = tester_thread.session.new_default_turn().await;
+    let tester_turn = tester_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     tester_thread
         .session
         .send_event(

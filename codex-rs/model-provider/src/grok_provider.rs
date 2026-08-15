@@ -7,8 +7,11 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 
+use crate::ProviderAuthScope;
+use crate::grok_model_input;
 use crate::grok_models_endpoint::GrokModelsEndpoint;
 use crate::provider::ConfiguredModelProvider;
 use crate::provider::ModelProvider;
@@ -17,6 +20,7 @@ use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderAccountState;
 use crate::provider::ProviderCapabilities;
 use crate::provider::RemoteCompactionSupport;
+use crate::request_setup::ProviderRequestSetup;
 
 /// Official Grok Gateway Provider Adapter.
 ///
@@ -74,6 +78,20 @@ impl ModelProvider for GrokModelProvider {
             account: None,
             requires_openai_auth: false,
         })
+    }
+
+    fn project_model_input(
+        &self,
+        input: Vec<ResponseItem>,
+    ) -> Result<Vec<ResponseItem>, codex_protocol::error::CodexErr> {
+        grok_model_input::project(input)
+    }
+
+    fn request_setup(
+        &self,
+        scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderRequestSetup>> {
+        self.common.request_setup(scope)
     }
 
     fn models_manager(

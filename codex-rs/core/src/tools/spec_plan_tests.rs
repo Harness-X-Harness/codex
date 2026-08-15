@@ -429,6 +429,7 @@ async fn grok_plan_is_authoritative_for_visible_local_tools_and_registry_ownersh
 async fn grok_plan_owns_native_hosted_declarations_without_local_handlers() {
     let plan = probe(|turn| {
         use_grok_provider(turn);
+        turn.model_info.supports_backend_search = true;
         enable_grok_x_search(turn);
         set_web_search_mode(turn, WebSearchMode::Live);
         set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
@@ -455,6 +456,21 @@ async fn grok_plan_owns_native_hosted_declarations_without_local_handlers() {
         ])
     );
     plan.assert_registered_lacks(&["web_search", "x_search", "image_generation"]);
+}
+
+#[tokio::test]
+async fn grok_model_backend_search_gate_does_not_enable_unrelated_hosted_tools() {
+    let plan = probe(|turn| {
+        use_grok_provider(turn);
+        turn.model_info.supports_backend_search = false;
+        enable_grok_x_search(turn);
+        set_web_search_mode(turn, WebSearchMode::Live);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+    })
+    .await;
+
+    plan.assert_visible_lacks(&["web_search", "x_search"]);
+    plan.assert_visible_contains(&["image_generation"]);
 }
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {

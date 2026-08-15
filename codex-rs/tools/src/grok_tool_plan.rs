@@ -127,13 +127,6 @@ impl GrokToolPlan {
     }
 }
 
-pub fn is_evidence_backed_x_search_name(name: &str) -> bool {
-    matches!(
-        name,
-        "x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch"
-    )
-}
-
 pub fn plan_grok_tools(local_tools: Vec<GrokLocalTool>) -> Result<GrokToolPlan, GrokToolPlanError> {
     let mut declarations = Vec::with_capacity(local_tools.len());
     let mut local_routes = BTreeMap::new();

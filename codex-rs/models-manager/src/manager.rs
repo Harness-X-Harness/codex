@@ -29,7 +29,8 @@ use tracing::info;
 
 #[path = "authority.rs"]
 mod authority;
-pub use authority::ModelAvailability;
+pub use authority::ModelResolution;
+pub use authority::ModelSelection;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -105,13 +106,18 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, CoreResult<ModelsResponse>>;
 
-    /// Resolves whether this Manager's Authority permits one model identifier.
-    fn model_availability<'a>(
+    /// Resolves one model from a single catalog snapshot.
+    ///
+    /// An authoritative catalog returns `ModelResolution::Unavailable` only after a successful
+    /// load omits the requested model. Non-authoritative managers may compose existing Codex
+    /// fallback metadata.
+    fn resolve_model_profile<'a>(
         &'a self,
-        model: &'a str,
+        selection: ModelSelection<'a>,
+        config: &'a ModelsManagerConfig,
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
-    ) -> ModelsManagerFuture<'a, CoreResult<ModelAvailability>>;
+    ) -> ModelsManagerFuture<'a, CoreResult<ModelResolution>>;
 
     /// List all available models, refreshing according to the specified strategy.
     ///
@@ -333,15 +339,17 @@ impl ModelsManager for OpenAiModelsManager {
         ))
     }
 
-    fn model_availability<'a>(
+    fn resolve_model_profile<'a>(
         &'a self,
-        model: &'a str,
+        selection: ModelSelection<'a>,
+        config: &'a ModelsManagerConfig,
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
-    ) -> ModelsManagerFuture<'a, CoreResult<ModelAvailability>> {
-        Box::pin(OpenAiModelsManager::model_availability(
+    ) -> ModelsManagerFuture<'a, CoreResult<ModelResolution>> {
+        Box::pin(OpenAiModelsManager::resolve_model_profile(
             self,
-            model,
+            selection,
+            config,
             refresh_strategy,
             http_client_factory,
         ))
@@ -617,7 +625,8 @@ fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
     Ok(crate::bundled_models_response()?.models)
 }
 
-fn default_model_from_available(available: Vec<ModelPreset>) -> String {
+fn default_model_from_available(available: impl AsRef<[ModelPreset]>) -> String {
+    let available = available.as_ref();
     available
         .iter()
         .find(|model| model.is_default)

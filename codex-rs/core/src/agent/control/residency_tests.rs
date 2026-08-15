@@ -153,13 +153,18 @@ async fn spawn_v2_subagent(
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
+            /*resolved_model*/ None,
         )
         .await
         .expect("spawn v2 subagent")
 }
 
 async fn mark_thread_completed(thread: &CodexThread) {
-    let turn = thread.session.new_default_turn().await;
+    let turn = thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     thread
         .session
         .send_event(
@@ -179,7 +184,11 @@ async fn mark_thread_completed(thread: &CodexThread) {
 }
 
 async fn mark_thread_interrupted(thread: &CodexThread) {
-    let turn = thread.session.new_default_turn().await;
+    let turn = thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     thread
         .session
         .send_event(

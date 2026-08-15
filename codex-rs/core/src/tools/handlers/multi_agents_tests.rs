@@ -1467,7 +1467,11 @@ async fn multi_agent_v2_list_agents_returns_completed_status() {
         .get_thread(agent_id)
         .await
         .expect("child thread should exist");
-    let child_turn = child_thread.session.new_default_turn().await;
+    let child_turn = child_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     child_thread
         .session
         .send_event(
@@ -1871,7 +1875,11 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .expect("root thread should start");
     // Production spawn_agent calls happen after the parent turn has resolved
     // and stored its runtime; mirror that before using the synthetic handler.
-    root.thread.session.new_default_turn().await;
+    root.thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     session.services.agent_control = manager.agent_control();
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
@@ -1901,7 +1909,11 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .expect("worker thread should exist");
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
 
-    let first_turn = thread.session.new_default_turn().await;
+    let first_turn = thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     thread
         .session
         .send_event(
@@ -1943,7 +1955,11 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             )
     }));
 
-    let second_turn = thread.session.new_default_turn().await;
+    let second_turn = thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     thread
         .session
         .send_event(
@@ -2106,7 +2122,11 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
         .await
         .expect("worker thread should exist");
 
-    let aborted_turn = thread.session.new_default_turn().await;
+    let aborted_turn = thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     thread
         .session
         .send_event(
@@ -2326,7 +2346,11 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .get_thread(agent_id)
         .await
         .expect("spawned agent thread should exist");
-    let child_turn = child_thread.session.new_default_turn().await;
+    let child_turn = child_thread
+        .session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     assert_eq!(
         child_turn.file_system_sandbox_policy(),
         expected_file_system_sandbox_policy
@@ -3809,7 +3833,10 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             worker_session.clone(),
-            worker_session.new_default_turn().await,
+            worker_session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve"),
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect a child task",
@@ -4237,7 +4264,10 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_thread_id = parent.thread_id;
     let parent_session = parent.thread.session.clone();
 
-    let child_turn = parent_session.new_default_turn().await;
+    let child_turn = parent_session
+        .try_new_default_turn()
+        .await
+        .expect("test model profile must resolve");
     let child_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             parent_session.clone(),
@@ -4266,7 +4296,10 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let grandchild_spawn_output = SpawnAgentHandler::default()
         .handle(invocation(
             child_session.clone(),
-            child_session.new_default_turn().await,
+            child_session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve"),
             "spawn_agent",
             function_payload(json!({"message": "hello grandchild"})),
         ))
@@ -4286,7 +4319,10 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let close_output = CloseAgentHandler
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            parent_session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve"),
             "close_agent",
             function_payload(json!({"target": child_thread_id.to_string()})),
         ))
@@ -4312,7 +4348,10 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let child_resume_output = ResumeAgentHandler
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            parent_session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve"),
             "resume_agent",
             function_payload(json!({"id": child_thread_id.to_string()})),
         ))
@@ -4338,7 +4377,10 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let close_again_output = CloseAgentHandler
         .handle(invocation(
             parent_session.clone(),
-            parent_session.new_default_turn().await,
+            parent_session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve"),
             "close_agent",
             function_payload(json!({"target": child_thread_id.to_string()})),
         ))
@@ -4380,7 +4422,12 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let parent_resume_output = ResumeAgentHandler
         .handle(invocation(
             operator_session,
-            operator.thread.session.new_default_turn().await,
+            operator
+                .thread
+                .session
+                .try_new_default_turn()
+                .await
+                .expect("test model profile must resolve"),
             "resume_agent",
             function_payload(json!({"id": parent_thread_id.to_string()})),
         ))

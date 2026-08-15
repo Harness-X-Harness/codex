@@ -15,6 +15,8 @@ use codex_login::CodexAuth;
 use codex_model_provider::ModelProvider;
 use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::ProviderAccountResult;
+use codex_model_provider::ProviderAuthScope;
+use codex_model_provider::ProviderRequestSetup;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -702,6 +704,13 @@ impl ModelProvider for MockMemoryModelProvider {
 
     fn account_state(&self) -> ProviderAccountResult {
         self.delegate.account_state()
+    }
+
+    fn request_setup(
+        &self,
+        scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderRequestSetup>> {
+        self.delegate.request_setup(scope)
     }
 
     fn models_manager(
