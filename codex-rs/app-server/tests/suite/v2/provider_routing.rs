@@ -5,6 +5,7 @@ use app_test_support::TestAppServer;
 use app_test_support::remote_catalog_model;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
@@ -318,7 +319,7 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
 
     let request_id = app
         .send_turn_start_request(TurnStartParams {
-            thread_id: started.thread.id,
+            thread_id: started.thread.id.clone(),
             input: vec![UserInput::Text {
                 text: "Do not egress without an authoritative model".to_string(),
                 text_elements: Vec::new(),
@@ -326,14 +327,13 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
             ..Default::default()
         })
         .await?;
-    let error = timeout(
-        DEFAULT_TIMEOUT,
-        app.read_stream_until_error_message(RequestId::Integer(request_id)),
-    )
-    .await??;
+    let _: TurnStartResponse = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    let error: ErrorNotification =
+        timeout(DEFAULT_TIMEOUT, app.read_notification("error")).await??;
 
-    assert_eq!(error.error.code, -32600);
     assert!(error.error.message.contains("AuthorityUnavailable"));
+    assert!(!error.will_retry);
+    assert_eq!(error.thread_id, started.thread.id);
     assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
     Ok(())
 }
