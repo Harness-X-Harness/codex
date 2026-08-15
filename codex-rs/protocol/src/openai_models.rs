@@ -735,10 +735,15 @@ where
 impl From<ModelInfo> for ModelPreset {
     fn from(info: ModelInfo) -> Self {
         let supports_personality = info.supports_personality();
+        let display_name = if info.display_name.trim().is_empty() {
+            info.slug.clone()
+        } else {
+            info.display_name
+        };
         ModelPreset {
             id: info.slug.clone(),
             model: info.slug.clone(),
-            display_name: info.display_name,
+            display_name,
             description: info.description.unwrap_or_default(),
             model_specialty: info.model_specialty,
             default_reasoning_effort: info
@@ -1562,6 +1567,16 @@ mod tests {
             preset.default_service_tier,
             Some(ServiceTier::Fast.request_value().to_string())
         );
+    }
+
+    #[test]
+    fn model_preset_uses_slug_only_as_presentation_when_display_name_is_unknown() {
+        let preset = ModelPreset::from(ModelInfo {
+            display_name: String::new(),
+            ..test_model(/*spec*/ None)
+        });
+
+        assert_eq!(preset.display_name, "test-model");
     }
 
     #[test]

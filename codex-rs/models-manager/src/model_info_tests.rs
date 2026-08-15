@@ -6,7 +6,6 @@ use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::PermissionMessages;
-use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
 fn config_with_personality(personality: Option<Personality>) -> ModelsManagerConfig {
@@ -15,31 +14,6 @@ fn config_with_personality(personality: Option<Personality>) -> ModelsManagerCon
         personality,
         ..Default::default()
     }
-}
-
-#[test]
-fn grok_4_5_uses_evidence_backed_model_metadata() {
-    let model = model_info_from_slug("grok-4.5");
-
-    assert_eq!(model.slug, "grok-4.5");
-    assert_eq!(model.display_name, "Grok 4.5");
-    assert_eq!(model.context_window, Some(500_000));
-    assert_eq!(model.max_context_window, Some(500_000));
-    assert_eq!(model.auto_compact_token_limit, Some(400_000));
-    assert_eq!(model.default_reasoning_level, Some(ReasoningEffort::High));
-    assert_eq!(
-        model
-            .supported_reasoning_levels
-            .iter()
-            .map(|preset| preset.effort.clone())
-            .collect::<Vec<_>>(),
-        vec![
-            ReasoningEffort::High,
-            ReasoningEffort::Medium,
-            ReasoningEffort::Low,
-        ]
-    );
-    assert!(!model.used_fallback_model_metadata);
 }
 
 #[test]

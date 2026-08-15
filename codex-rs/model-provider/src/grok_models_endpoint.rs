@@ -387,3 +387,7 @@ fn parse_reasoning_effort_options(values: &[Value]) -> Vec<DecodedReasoningEffor
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "grok_models_endpoint_tests.rs"]
+mod tests;

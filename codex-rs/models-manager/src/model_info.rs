@@ -5,8 +5,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
@@ -138,37 +136,8 @@ fn is_h1_heading(line: &str) -> bool {
 
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
 pub fn model_info_from_slug(slug: &str) -> ModelInfo {
-    if slug == "grok-4.5" {
-        return grok_4_5_model_info();
-    }
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
     fallback_model_info(slug)
-}
-
-fn grok_4_5_model_info() -> ModelInfo {
-    let mut model = fallback_model_info("grok-4.5");
-    model.display_name = "Grok 4.5".to_string();
-    model.description = Some("SpaceXAI's new frontier model".to_string());
-    model.default_reasoning_level = Some(ReasoningEffort::High);
-    model.supported_reasoning_levels = vec![
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::High,
-            description: "Highest implementation quality with extensive reasoning".to_string(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Medium,
-            description: "Balanced effort with standard implementation and testing".to_string(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Low,
-            description: "Quick, fast implementations".to_string(),
-        },
-    ];
-    model.context_window = Some(500_000);
-    model.max_context_window = Some(500_000);
-    model.auto_compact_token_limit = Some(400_000);
-    model.used_fallback_model_metadata = false;
-    model
 }
 
 fn fallback_model_info(slug: &str) -> ModelInfo {
