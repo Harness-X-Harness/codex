@@ -479,11 +479,15 @@ def _assert_chatgpt_subscription_visible(server: AppServer) -> None:
         "type"
     ) != "chatgpt":
         raise AcceptanceError("chatgpt_subscription_not_visible")
+    if account.get("requiresOpenaiAuth") is not False:
+        raise AcceptanceError("requires_openai_auth_not_stable")
     auth_status = server.request(
         "getAuthStatus", {"includeToken": False, "refreshToken": False}
     )
     if auth_status.get("authMethod") != "chatgpt":
         raise AcceptanceError("chatgpt_auth_method_not_visible")
+    if auth_status.get("requiresOpenaiAuth") is not False:
+        raise AcceptanceError("requires_openai_auth_not_stable")
 
 
 def _models(server: AppServer) -> dict[str, str]:
@@ -968,17 +972,30 @@ def _finish(
 ) -> None:
     if args.evidence_output is not None:
         evidence = {
-            "schema": "grokex_dual_provider_live/v1",
+            "schema": "grokex_dual_provider_live/v2",
             "started_at_unix": started_at,
             "completed_at_unix": time.time(),
-            "openai": openai,
-            "grok": grok,
+            "openai": None
+            if openai is None
+            else {
+                "provider_binding": "passed",
+                "thread_count": len(openai["thread_ids"]),
+            },
+            "grok": {
+                "provider_binding": "passed",
+                "thread_count": len(grok["thread_ids"]),
+            },
+            "chatgpt_application_auth_contract": "not_run"
+            if openai is None
+            else "passed",
+            "grok_hosted_gateway_live": "passed",
         }
         _write_evidence(args.evidence_output, evidence)
 
     print("live_mode=" + ("dual_provider" if openai is not None else "grok_only"))
     if openai is not None:
         print("chatgpt_provider_binding=passed")
+        print("chatgpt_application_auth_contract=passed")
     print("grok_provider_binding=passed")
     print("grok_hosted_gateway_live=passed")
     print("mini_accounting_gate=requires_operator_usage_evidence")

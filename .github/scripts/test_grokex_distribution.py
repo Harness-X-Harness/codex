@@ -174,6 +174,36 @@ class GrokexDistributionTest(unittest.TestCase):
         self.assertTrue(driver.is_file())
         self.assertTrue(driver_test.is_file())
 
+    def test_acceptance_helper_changes_do_not_rebuild_product_artifacts(self) -> None:
+        release_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "grokex-release.yml"
+        ).read_text(encoding="utf-8")
+        helper_workflow = (
+            REPO_ROOT
+            / ".github"
+            / "workflows"
+            / "grokex-acceptance-helper.yml"
+        ).read_text(encoding="utf-8")
+        helper_paths = (
+            ".github/workflows/grokex-acceptance-helper.yml",
+            ".github/scripts/grokex_dual_provider_live.py",
+            ".github/scripts/test_grokex_distribution.py",
+            ".github/scripts/test_grokex_dual_provider_live.py",
+        )
+
+        for path in helper_paths:
+            self.assertIn(f'- "{path}"', release_workflow)
+            self.assertIn(f'- "{path}"', helper_workflow)
+        self.assertIn(
+            "python3 .github/scripts/test_grokex_dual_provider_live.py",
+            helper_workflow,
+        )
+        self.assertIn(
+            "python3 .github/scripts/test_grokex_distribution.py",
+            helper_workflow,
+        )
+        self.assertNotIn("cargo ", helper_workflow)
+
     def test_native_live_uses_the_shared_app_server_driver(self) -> None:
         script = (
             REPO_ROOT / ".github" / "scripts" / "grokex-live-acceptance.sh"

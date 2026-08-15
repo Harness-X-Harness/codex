@@ -1,0 +1,29 @@
+name: Grokex acceptance helper
+
+on:
+  push:
+    branches:
+      - grok-backend
+    paths:
+      - ".github/workflows/grokex-acceptance-helper.yml"
+      - ".github/scripts/grokex_dual_provider_live.py"
+      - ".github/scripts/test_grokex_distribution.py"
+      - ".github/scripts/test_grokex_dual_provider_live.py"
+
+permissions:
+  contents: read
+
+jobs:
+  helper-contract:
+    name: Python acceptance helper contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify Grokex acceptance helper
+        run: |
+          python3 .github/scripts/test_grokex_dual_provider_live.py
+          python3 .github/scripts/test_grokex_distribution.py

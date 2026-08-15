@@ -108,6 +108,31 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                 )
             )
 
+        unstable_contracts = [
+            (
+                {
+                    "account": {"type": "chatgpt", "planType": "pro"},
+                    "requiresOpenaiAuth": True,
+                },
+                {"authMethod": "chatgpt", "requiresOpenaiAuth": False},
+            ),
+            (
+                {
+                    "account": {"type": "chatgpt", "planType": "pro"},
+                    "requiresOpenaiAuth": False,
+                },
+                {"authMethod": "chatgpt", "requiresOpenaiAuth": True},
+            ),
+        ]
+        for account, auth_status in unstable_contracts:
+            with self.subTest(account=account, auth_status=auth_status):
+                with self.assertRaisesRegex(
+                    MODULE.AcceptanceError, "requires_openai_auth_not_stable"
+                ):
+                    MODULE._assert_chatgpt_subscription_visible(
+                        FakeServer(account, auth_status)
+                    )
+
     def test_wait_turn_uses_exact_identity_and_typed_message_evidence(self) -> None:
         class FakeServer:
             def wait_notification(self, method, predicate, timeout=300):
@@ -533,32 +558,54 @@ requires_openai_auth = false
     def test_evidence_writer_is_exclusive_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "evidence.json"
-            evidence = {
-                "schema": "grokex_dual_provider_live/v1",
-                "started_at_unix": 1,
-                "completed_at_unix": 2,
-                "openai": {
-                    "provider": "openai",
-                    "model": "gpt-model",
-                    "thread_ids": ["openai-id"],
-                },
-                "grok": {
-                    "provider": "xai",
-                    "model": "grok-model",
-                    "thread_ids": ["grok-id"],
-                },
-            }
-
-            MODULE._write_evidence(path, evidence)
+            args = MODULE.argparse.Namespace(evidence_output=path)
+            stdout = io.StringIO()
+            with mock.patch.object(MODULE.time, "time", return_value=2):
+                with mock.patch("sys.stdout", new=stdout):
+                    MODULE._finish(
+                        args,
+                        1,
+                        {
+                            "provider": "openai",
+                            "model": "gpt-model",
+                            "thread_ids": ["openai-id"],
+                        },
+                        {
+                            "provider": "xai",
+                            "model": "grok-model",
+                            "thread_ids": ["grok-id"],
+                        },
+                    )
 
             self.assertEqual(
-                MODULE.json.loads(path.read_text(encoding="utf-8")), evidence
+                MODULE.json.loads(path.read_text(encoding="utf-8")),
+                {
+                    "schema": "grokex_dual_provider_live/v2",
+                    "started_at_unix": 1,
+                    "completed_at_unix": 2,
+                    "openai": {
+                        "provider_binding": "passed",
+                        "thread_count": 1,
+                    },
+                    "grok": {
+                        "provider_binding": "passed",
+                        "thread_count": 1,
+                    },
+                    "chatgpt_application_auth_contract": "passed",
+                    "grok_hosted_gateway_live": "passed",
+                },
             )
+            self.assertIn(
+                "chatgpt_application_auth_contract=passed",
+                stdout.getvalue().splitlines(),
+            )
+            self.assertNotIn("openai-id", path.read_text(encoding="utf-8"))
+            self.assertNotIn("grok-id", path.read_text(encoding="utf-8"))
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             with self.assertRaisesRegex(
                 MODULE.AcceptanceError, "evidence_output_unavailable"
             ):
-                MODULE._write_evidence(path, evidence)
+                MODULE._finish(args, 1, None, {"thread_ids": []})
 
     def test_provider_binding_error_requires_the_expected_code_and_message(self) -> None:
         message = {
