@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repository="${GROKEX_REPOSITORY:-weavertech-group/codex}"
+repository="${GROKEX_REPOSITORY:-Harness-X-Harness/codex}"
 version="${GROKEX_VERSION:-0.148.0-alpha.5}"
 tag="grokex-v${version}"
 

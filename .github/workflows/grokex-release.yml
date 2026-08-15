@@ -603,7 +603,7 @@ jobs:
       - bazel-lock
       - checksums
     if: >-
-      github.repository == 'weavertech-group/codex' &&
+      github.repository == 'Harness-X-Harness/codex' &&
       github.ref == 'refs/heads/grok-backend' &&
       needs.source.outputs.includes_linux_x64 == 'true'
     runs-on: ubuntu-24.04

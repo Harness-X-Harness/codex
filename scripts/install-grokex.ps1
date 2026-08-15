@@ -1,6 +1,6 @@
 param(
     [string]$Version = "0.148.0-alpha.5",
-    [string]$Repository = "weavertech-group/codex",
+    [string]$Repository = "Harness-X-Harness/codex",
     [string]$InstallRoot = "$env:LOCALAPPDATA\Grokex",
     [string]$CodexHome = "$HOME\.codex-grok"
 )
