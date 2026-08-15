@@ -1057,6 +1057,94 @@ supports_websockets = true
     ));
 }
 
+#[tokio::test]
+async fn provider_registrations_are_explicit_and_include_the_default_provider() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider_registrations = ["openai", "xai"]
+
+[model_providers.xai]
+name = "Grok"
+base_url = "https://grok.example.com/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+"#,
+    )
+    .expect("provider config should deserialize");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg.clone(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(
+        config.model_provider_registration_ids,
+        vec!["openai".to_string(), "xai".to_string()]
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            model_provider: Some("xai".to_string()),
+            ..Default::default()
+        },
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("selecting a registered provider must preserve the registration set");
+    assert_eq!(
+        config.model_provider_registration_ids,
+        vec!["openai".to_string(), "xai".to_string()]
+    );
+
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+model_provider_registrations = ["xai"]
+
+[model_providers.xai]
+name = "Grok"
+base_url = "https://grok.example.com/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+"#,
+    )
+    .expect("provider config should deserialize");
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect_err("explicit registrations must contain the selected provider");
+    assert!(error.to_string().contains(
+        "Selected model provider `openai` is not registered in `model_provider_registrations`"
+    ));
+
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.dormant]
+name = "Dormant"
+base_url = "https://dormant.example.com/v1"
+wire_api = "responses"
+"#,
+    )
+    .expect("dormant provider config should deserialize");
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+    assert_eq!(
+        config.model_provider_registration_ids,
+        vec!["openai".to_string()]
+    );
+}
+
 #[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"

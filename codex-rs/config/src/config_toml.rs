@@ -157,6 +157,11 @@ pub struct ConfigToml {
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
 
+    /// Ordered Provider IDs to expose in unified model selection.
+    /// An empty list preserves the selected Provider as the only registration.
+    #[serde(default)]
+    pub model_provider_registrations: Vec<String>,
+
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 

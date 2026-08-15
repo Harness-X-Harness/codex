@@ -5664,6 +5664,14 @@
       "description": "Provider to use from the model_providers map.",
       "type": "string"
     },
+    "model_provider_registrations": {
+      "default": [],
+      "description": "Ordered Provider IDs to expose in unified model selection. An empty list preserves the selected Provider as the only registration.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "model_providers": {
       "additionalProperties": {
         "$ref": "#/definitions/ModelProviderInfo"

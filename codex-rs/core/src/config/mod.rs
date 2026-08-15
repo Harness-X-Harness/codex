@@ -868,6 +868,9 @@ pub struct Config {
     /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
+    /// Effective ordered Provider IDs registered for unified model selection.
+    pub model_provider_registration_ids: Vec<String>,
+
     /// Maximum total bytes of project instruction content across all selected environments.
     pub project_doc_max_bytes: usize,
 
@@ -3773,6 +3776,31 @@ impl Config {
                 std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
             .clone();
+        let model_provider_registration_ids = if cfg.model_provider_registrations.is_empty() {
+            vec![model_provider_id.clone()]
+        } else {
+            let mut registrations = Vec::new();
+            for provider_id in cfg.model_provider_registrations {
+                if !model_providers.contains_key(&provider_id) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Registered model provider `{provider_id}` not found"),
+                    ));
+                }
+                if !registrations.contains(&provider_id) {
+                    registrations.push(provider_id);
+                }
+            }
+            if !registrations.contains(&model_provider_id) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "Selected model provider `{model_provider_id}` is not registered in `model_provider_registrations`"
+                    ),
+                ));
+            }
+            registrations
+        };
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -4172,6 +4200,7 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
+            model_provider_registration_ids,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
