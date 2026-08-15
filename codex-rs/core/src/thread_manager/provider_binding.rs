@@ -99,7 +99,7 @@ impl ThreadManagerState {
         let runtime = self
             .provider_registry
             .resolve_runtime(&source_binding.provider_id)?;
-        config.model_provider = runtime.provider.info().clone();
+        config.model_provider = runtime.provider().info().clone();
         Ok(())
     }
 

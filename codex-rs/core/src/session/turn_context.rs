@@ -767,7 +767,7 @@ impl Session {
         let per_turn_config = Self::build_per_turn_config(&session_configuration, cwd.clone());
         let model_info = self
             .services
-            .models_manager
+            .models_manager()
             .get_model_info(
                 session_configuration.collaboration_mode.model(),
                 &per_turn_config.to_models_manager_config(),

@@ -4423,7 +4423,7 @@ async fn turn_context_with_model_updates_model_fields() {
         .await;
     let expected_model_info = session
         .services
-        .models_manager
+        .models_manager()
         .get_model_info(
             "gpt-5.4",
             &updated.config.as_ref().to_models_manager_config(),

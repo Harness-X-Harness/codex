@@ -606,7 +606,6 @@ impl Session {
         git_enrichment_policy: GitEnrichmentPolicy,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
     ) -> anyhow::Result<Arc<Self>> {
-        let models_manager = provider_runtime.models_manager();
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.collaboration_mode.model(),
