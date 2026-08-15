@@ -305,15 +305,15 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
         })
         .await?;
 
-    std::fs::remove_file(
-        provider_models_home(fixture.codex_home.path(), "grok").join("models_cache.json"),
-    )?;
     fixture.grok_server.reset().await;
     Mock::given(method("GET"))
         .and(path_regex(".*/models$"))
         .respond_with(ResponseTemplate::new(503))
         .mount(&fixture.grok_server)
         .await;
+    std::fs::remove_file(
+        provider_models_home(fixture.codex_home.path(), "grok").join("models_cache.json"),
+    )?;
 
     let completed = app
         .start_turn_and_wait_for_completion(TurnStartParams {
@@ -733,24 +733,13 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
 
     {
         let fixture = ProviderRoutingFixture::new().await?;
-        fixture.replace_config_line(
-            "sandbox_mode = \"read-only\"",
-            "sandbox_mode = \"danger-full-access\"",
-        )?;
-        let dispatch_marker = fixture.codex_home.path().join("queued-tool-dispatched");
-        let marker_path = dispatch_marker.to_string_lossy();
-        let command = if cfg!(windows) {
-            format!(
-                "Set-Content -LiteralPath '{}' -Value 'must-not-run'",
-                marker_path.replace('\'', "''")
-            )
-        } else {
-            format!(
-                "printf must-not-run > '{}'",
-                marker_path.replace('\'', "'\"'\"'")
-            )
-        };
-        let arguments = serde_json::json!({ "command": command }).to_string();
+        let arguments = serde_json::json!({
+            "plan": [{
+                "step": "must not dispatch after ownership changes",
+                "status": "completed"
+            }]
+        })
+        .to_string();
         let response = mount_sse_once_match(
             &fixture.grok_server,
             header("authorization", "Bearer grok-test-key"),
@@ -762,7 +751,7 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
                         "id": "shared-owner-reverse",
                         "type": "function_call",
                         "call_id": "queued-must-not-dispatch",
-                        "name": "shell_command",
+                        "name": "update_plan",
                         "arguments": arguments
                     }
                 }),
@@ -807,15 +796,25 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
             /*expected*/ 0,
         )
         .await?;
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        assert!(
-            !dispatch_marker.exists(),
+        assert_eq!(
+            app.pending_notification_methods()
+                .iter()
+                .filter(|method| method.as_str() == "turn/plan/updated")
+                .count(),
+            0,
             "a rejected Grok response must not dispatch an already queued local tool"
         );
     }
 
     {
         let fixture = ProviderRoutingFixture::new().await?;
+        let arguments = serde_json::json!({
+            "plan": [{
+                "step": "must not dispatch after hosted ownership",
+                "status": "completed"
+            }]
+        })
+        .to_string();
         let response = mount_sse_once_match(
             &fixture.grok_server,
             header("authorization", "Bearer grok-test-key"),
@@ -930,8 +929,8 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
                         "id": "shared-owner",
                         "type": "function_call",
                         "call_id": "must-not-dispatch",
-                        "name": "shell_command",
-                        "arguments": "{\"command\":\"echo must-not-run\"}"
+                        "name": "update_plan",
+                        "arguments": arguments
                     }
                 }),
                 responses::ev_completed("changed-owner-response"),
@@ -960,6 +959,14 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
         assert_eq!(response.requests().len(), 1, "must not retry");
         assert_rollout_tool_output_count(&rollout_path, "must-not-dispatch", /*expected*/ 0)
             .await?;
+        assert_eq!(
+            app.pending_notification_methods()
+                .iter()
+                .filter(|method| method.as_str() == "turn/plan/updated")
+                .count(),
+            0,
+            "a hosted ownership mismatch must fail before local dispatch"
+        );
     }
 
     Ok(())
@@ -1256,6 +1263,7 @@ async fn multiple_grok_images_survive_cold_resume_and_fork_with_bounded_projecti
         .clone()
         .context("forked Grok image thread must have a rollout path")?;
     materialize_thread(&mut resumed_app, &forked.thread.id).await?;
+    timeout(DEFAULT_TIMEOUT, resumed_app.shutdown_gracefully()).await??;
 
     let requests = grok_responses.requests();
     assert_eq!(requests.len(), 3);
