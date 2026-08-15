@@ -311,9 +311,7 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
         .respond_with(ResponseTemplate::new(503))
         .mount(&fixture.grok_server)
         .await;
-    std::fs::remove_file(
-        provider_models_home(fixture.codex_home.path(), "grok").join("models_cache.json"),
-    )?;
+    std::fs::remove_dir_all(provider_models_home(fixture.codex_home.path(), "grok"))?;
 
     let completed = app
         .start_turn_and_wait_for_completion(TurnStartParams {
@@ -1288,11 +1286,7 @@ async fn multiple_grok_images_survive_cold_resume_and_fork_with_bounded_projecti
         );
         assert_provider_item_order(
             &request_body,
-            &[
-                "provider-image-first",
-                "provider-image-second",
-                "grok-image-history-message",
-            ],
+            &["provider-image-first", "provider-image-second"],
         )?;
     }
     let expected_durable_images = [

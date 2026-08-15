@@ -3406,6 +3406,26 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
+    /// Preserve an unrecognized provider terminal item exactly before failing the turn.
+    ///
+    /// This bypasses normal response-item ID assignment and client projection because the raw
+    /// terminal shape is durable diagnostic evidence, not a valid model or UI lifecycle item.
+    pub(crate) async fn record_provider_terminal_evidence(
+        &self,
+        turn_context: &TurnContext,
+        item: &ResponseItem,
+    ) {
+        {
+            let mut state = self.state.lock().await;
+            state.record_items(
+                std::iter::once(item),
+                turn_context.model_info.truncation_policy.into(),
+            );
+        }
+        self.persist_rollout_response_items(std::slice::from_ref(item))
+            .await;
+    }
+
     pub fn enabled(&self, feature: Feature) -> bool {
         self.features.enabled(feature)
     }

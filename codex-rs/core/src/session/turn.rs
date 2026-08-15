@@ -2328,17 +2328,13 @@ async fn try_run_sampling_request(
                                 GrokHostedOutputOwner::UnknownCustom,
                                 raw_item_kind,
                             ) {
-                                record_completed_response_item(
-                                    sess.as_ref(),
-                                    turn_context.as_ref(),
-                                    &item,
-                                )
-                                .await;
+                                sess.record_provider_terminal_evidence(&turn_context, &item)
+                                    .await;
                                 discard_pending_tool_futures = true;
                                 break Err(CodexErr::Fatal(error.to_string()));
                             }
                         }
-                        record_completed_response_item(sess.as_ref(), turn_context.as_ref(), &item)
+                        sess.record_provider_terminal_evidence(&turn_context, &item)
                             .await;
                         discard_pending_tool_futures = true;
                         break Err(CodexErr::Fatal(reason.clone()));
