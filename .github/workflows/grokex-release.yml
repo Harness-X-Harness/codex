@@ -319,6 +319,18 @@ jobs:
         working-directory: codex-rs
         run: cargo fmt --all -- --config imports_granularity=Item --check
 
+      - name: Build Code Mode host for integration contracts
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p codex-code-mode-host
+          target_dir="$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '.target_directory')"
+          host_path="${target_dir}/debug/codex-code-mode-host"
+          test -x "$host_path"
+          echo "CARGO_BIN_EXE_codex_code_mode_host=$host_path" >> "$GITHUB_ENV"
+
       - name: Run unified provider tracer contract
         working-directory: codex-rs
         env:
@@ -334,9 +346,10 @@ jobs:
             cargo test --locked -p codex-app-server --test all \
               suite::v2::provider_routing::runtime::grok_subagent_inherits_parent_provider_binding_and_auth \
               -- --exact
-          timeout --signal=TERM --kill-after=15s 10m \
+          timeout --signal=TERM --kill-after=15s 20m \
             cargo test --locked -p codex-app-server --test all \
               suite::v2::provider_routing -- \
+              --test-threads=1 \
               --skip suite::v2::provider_routing::runtime::grok_compaction_and_follow_up_keep_provider_binding_and_auth \
               --skip suite::v2::provider_routing::runtime::grok_subagent_inherits_parent_provider_binding_and_auth
 
@@ -354,18 +367,6 @@ jobs:
             -p codex-models-manager \
             -p codex-extension-items \
             -p codex-app-server-protocol
-
-      - name: Build Code Mode host for integration contracts
-        working-directory: codex-rs
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --locked -p codex-code-mode-host
-          target_dir="$(cargo metadata --locked --no-deps --format-version 1 \
-            | jq -r '.target_directory')"
-          host_path="${target_dir}/debug/codex-code-mode-host"
-          test -x "$host_path"
-          echo "CARGO_BIN_EXE_codex_code_mode_host=$host_path" >> "$GITHUB_ENV"
 
       - name: Run Grok harness and persistence contracts
         working-directory: codex-rs
