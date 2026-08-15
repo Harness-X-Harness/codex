@@ -20,6 +20,8 @@ use crate::session::step_context::StepContext;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::grok_hosted_output::GrokHostedOutput;
+use crate::tools::grok_hosted_output::GrokHostedOutputEventPhase;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
@@ -77,16 +79,20 @@ impl ToolCallRuntime {
         self.step_context.tool_router.route_tool_call(item)
     }
 
-    pub(crate) fn allows_x_search_projection(&self, item: &ResponseItem) -> bool {
+    pub(crate) fn classify_grok_hosted_output<'a>(
+        &self,
+        item: &'a ResponseItem,
+        phase: GrokHostedOutputEventPhase,
+    ) -> Result<GrokHostedOutput<'a>, FunctionCallError> {
         self.step_context
             .tool_router
-            .allows_x_search_projection(item)
+            .classify_grok_hosted_output(item, phase)
     }
 
-    pub(crate) fn is_declared_x_search_item(&self, item: &ResponseItem) -> bool {
+    pub(crate) fn defers_local_tool_dispatch_until_response_validated(&self) -> bool {
         self.step_context
             .tool_router
-            .is_declared_x_search_item(item)
+            .defers_local_tool_dispatch_until_response_validated()
     }
 
     #[instrument(level = "trace", skip_all)]

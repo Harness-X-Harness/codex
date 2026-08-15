@@ -332,7 +332,12 @@ fn apply_patch_freeform_round_trips_through_function_wrapper() {
         plan.declarations,
         vec![ToolSpec::Function(ResponsesApiTool {
             name: "apply_patch".to_string(),
-            description: "Apply a patch locally.".to_string(),
+            description: concat!(
+                "Apply a patch locally.\n\n",
+                "Local Codex freeform grammar metadata (descriptive only; the Grok Gateway does not enforce this grammar):\n",
+                r#"{"type":"grammar","syntax":"lark","definition":"start: PATCH"}"#,
+            )
+            .to_string(),
             strict: true,
             defer_loading: None,
             parameters: expected_parameters,
@@ -479,10 +484,86 @@ fn exec_and_generic_freeform_round_trip_exact_string_inputs() {
             .iter()
             .all(|tool| matches!(tool, ToolSpec::Function(_)))
     );
+    for (tool_name, original_description) in [
+        ("exec", "Run exec locally."),
+        ("extension_freeform", "Run extension_freeform locally."),
+    ] {
+        let description = plan
+            .declarations
+            .iter()
+            .find_map(|tool| match tool {
+                ToolSpec::Function(tool) if tool.name == tool_name => Some(&tool.description),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing projected declaration for {tool_name}"));
+        assert!(description.starts_with(original_description));
+        assert!(description.contains("descriptive only"));
+        assert!(
+            description
+                .contains(r#"{"type":"grammar","syntax":"lark","definition":"start: /.+/s"}"#)
+        );
+    }
     let wire = serde_json::to_string(&plan.declarations).expect("serialize planned declarations");
     assert!(!wire.contains("\"type\":\"custom\""));
     assert!(!wire.contains("\"type\":\"tool_search\""));
     assert!(!wire.contains("\"type\":\"namespace\""));
+}
+
+#[test]
+fn freeform_description_preserves_boundary_and_complete_grammar_metadata() {
+    let description =
+        "Original description.\n\nMetadata-like text: {\"type\":\"not authoritative\"}.";
+    let format = FreeformToolFormat {
+        r#type: "grammar\"type".to_string(),
+        syntax: "lark\n未来".to_string(),
+        definition: "start: \"quoted\"\n  | /雪+/".to_string(),
+    };
+    let plan = plan_grok_tools(vec![GrokLocalTool {
+        identity: ToolName::plain("extension_freeform"),
+        spec: ToolSpec::Freeform(FreeformTool {
+            name: "extension_freeform".to_string(),
+            description: description.to_string(),
+            defer_loading: None,
+            format: format.clone(),
+        }),
+    }])
+    .expect("complete freeform metadata should be representable");
+
+    let ToolSpec::Function(projected) = &plan.declarations[0] else {
+        panic!("freeform projection must be model-visible as one function");
+    };
+    let serialized_format = serde_json::to_string(&format).expect("test format should serialize");
+    assert_eq!(
+        projected.description,
+        format!(
+            "{description}\n\nLocal Codex freeform grammar metadata (descriptive only; the Grok Gateway does not enforce this grammar):\n{serialized_format}"
+        )
+    );
+}
+
+#[test]
+fn oversized_freeform_grammar_fails_closed_without_truncation() {
+    let error = plan_grok_tools(vec![GrokLocalTool {
+        identity: ToolName::plain("oversized_freeform"),
+        spec: ToolSpec::Freeform(FreeformTool {
+            name: "oversized_freeform".to_string(),
+            description: "Must remain complete.".to_string(),
+            defer_loading: None,
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "x".repeat(8_001),
+            },
+        }),
+    }])
+    .expect_err("an oversized model-visible grammar must not be truncated or emitted");
+
+    assert!(matches!(
+        error,
+        GrokToolPlanError::UnsupportedLocalTool { identity, reason }
+            if identity == ToolName::plain("oversized_freeform")
+                && reason.contains("maximum is 8000")
+    ));
 }
 
 #[test]

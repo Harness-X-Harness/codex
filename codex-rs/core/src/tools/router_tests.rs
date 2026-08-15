@@ -5,6 +5,9 @@ use crate::config::Config;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
+use crate::tools::grok_hosted_output::GrokHostedOutput;
+use crate::tools::grok_hosted_output::GrokHostedOutputEventPhase;
+use crate::tools::grok_hosted_output::GrokHostedOutputOwner;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
@@ -28,6 +31,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
 use codex_tools::GrokLocalInputProjection;
 use codex_tools::GrokLocalTool;
 use codex_tools::GrokLocalToolRoute;
@@ -53,6 +58,16 @@ fn grok_router_with_x_search() -> ToolRouter {
         Default::default(),
         GrokToolPlan {
             declarations: vec![ToolSpec::XSearch],
+            local_routes: Default::default(),
+        },
+    )
+}
+
+fn grok_router_with(declarations: Vec<ToolSpec>) -> ToolRouter {
+    ToolRouter::from_grok_plan(
+        Default::default(),
+        GrokToolPlan {
+            declarations,
             local_routes: Default::default(),
         },
     )
@@ -85,21 +100,31 @@ fn grok_declared_x_search_custom_call_never_routes_to_local_dispatch() {
 #[test]
 fn grok_x_search_projection_requires_the_current_authoritative_plan() {
     let declared = grok_router_with_x_search();
-    let undeclared = ToolRouter::from_grok_plan(
-        Default::default(),
-        GrokToolPlan {
-            declarations: Vec::new(),
-            local_routes: Default::default(),
-        },
-    );
+    let undeclared = grok_router_with(Vec::new());
     let mut in_progress = grok_custom_call("x_keyword_search");
     let ResponseItem::CustomToolCall { status, .. } = &mut in_progress else {
         unreachable!("fixture is a custom tool call");
     };
     *status = Some("in_progress".to_string());
 
-    assert!(declared.allows_x_search_projection(&in_progress));
-    assert!(!undeclared.allows_x_search_projection(&in_progress));
+    assert!(matches!(
+        declared.classify_grok_hosted_output(&in_progress, GrokHostedOutputEventPhase::Added,),
+        Ok(GrokHostedOutput::Hosted {
+            item_id: "ct_x",
+            owner: GrokHostedOutputOwner::XSearch,
+            projects_custom_output: true,
+        })
+    ));
+    assert!(matches!(
+        undeclared.classify_grok_hosted_output(
+            &in_progress,
+            GrokHostedOutputEventPhase::Added,
+        ),
+        Ok(GrokHostedOutput::UnknownCustom {
+            item_id: Some("ct_x"),
+            reason,
+        }) if reason.contains("was not declared")
+    ));
 }
 
 #[test]
@@ -116,12 +141,20 @@ fn grok_x_search_projection_rejects_invalid_gateway_shape() {
     };
     call_id.clear();
 
-    assert!(!router.allows_x_search_projection(&namespaced));
-    assert!(!router.allows_x_search_projection(&missing_call_id));
+    for item in [&namespaced, &missing_call_id] {
+        assert!(matches!(
+            router.classify_grok_hosted_output(item, GrokHostedOutputEventPhase::Added),
+            Err(codex_tools::FunctionCallError::Fatal(_))
+        ));
+        assert!(matches!(
+            router.classify_grok_hosted_output(item, GrokHostedOutputEventPhase::Done),
+            Ok(GrokHostedOutput::UnknownCustom { .. })
+        ));
+    }
 }
 
 #[test]
-fn grok_x_search_started_item_can_be_remote_owned_before_it_is_projectable() {
+fn grok_x_search_started_item_requires_the_complete_evidence_backed_shape() {
     let router = grok_router_with_x_search();
     let mut partial = grok_custom_call("x_keyword_search");
     let ResponseItem::CustomToolCall {
@@ -137,22 +170,158 @@ fn grok_x_search_started_item_can_be_remote_owned_before_it_is_projectable() {
     *status = Some("in_progress".to_string());
     call_id.clear();
 
-    assert!(router.is_declared_x_search_item(&partial));
-    assert!(!router.allows_x_search_projection(&partial));
+    assert!(matches!(
+        router.classify_grok_hosted_output(&partial, GrokHostedOutputEventPhase::Added),
+        Err(codex_tools::FunctionCallError::Fatal(message))
+            if message.contains("missing provider item_id")
+    ));
+}
+
+#[test]
+fn grok_web_and_image_output_require_the_exact_active_declaration() {
+    let web = ResponseItem::WebSearchCall {
+        id: Some(codex_protocol::ResponseItemId::with_suffix(
+            "ws", "declared",
+        )),
+        status: Some("failed".to_string()),
+        action: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let image = ResponseItem::GrokImageGenerationCall {
+        id: Some(codex_protocol::ResponseItemId::with_suffix(
+            "ig", "declared",
+        )),
+        status: "failed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let web_router = grok_router_with(vec![ToolSpec::WebSearch {
+        external_web_access: None,
+        indexed_web_access: None,
+        filters: None,
+        user_location: None,
+        search_context_size: None,
+        search_content_types: None,
+    }]);
+    let image_router = grok_router_with(vec![ToolSpec::ImageGeneration]);
+    let undeclared = grok_router_with(Vec::new());
+
+    assert!(matches!(
+        web_router.classify_grok_hosted_output(&web, GrokHostedOutputEventPhase::Done),
+        Ok(GrokHostedOutput::Hosted {
+            item_id: "ws_declared",
+            owner: GrokHostedOutputOwner::WebSearch,
+            projects_custom_output: false,
+        })
+    ));
+    assert!(matches!(
+        image_router.classify_grok_hosted_output(&image, GrokHostedOutputEventPhase::Done),
+        Ok(GrokHostedOutput::Hosted {
+            item_id: "ig_declared",
+            owner: GrokHostedOutputOwner::ImageGeneration,
+            projects_custom_output: false,
+        })
+    ));
+    for item in [&web, &image] {
+        assert!(matches!(
+            undeclared.classify_grok_hosted_output(item, GrokHostedOutputEventPhase::Done),
+            Err(codex_tools::FunctionCallError::Fatal(message))
+                if message.contains("was not declared")
+        ));
+    }
 }
 
 #[test]
 fn grok_unknown_custom_output_fails_closed() {
     let router = grok_router_with_x_search();
+    let item = grok_custom_call("unknown_remote_tool");
+    let mut added = item.clone();
+    let ResponseItem::CustomToolCall { status, .. } = &mut added else {
+        unreachable!("fixture is a custom tool call");
+    };
+    *status = Some("in_progress".to_string());
+
+    assert!(matches!(
+        router.classify_grok_hosted_output(&added, GrokHostedOutputEventPhase::Added),
+        Ok(GrokHostedOutput::UnknownCustom {
+            item_id: Some("ct_x"),
+            reason,
+        }) if reason.contains("unknown Grok hosted custom output")
+    ));
+    assert!(matches!(
+        router.classify_grok_hosted_output(&item, GrokHostedOutputEventPhase::Done),
+        Ok(GrokHostedOutput::UnknownCustom { reason, .. })
+            if reason.contains("unknown Grok hosted custom output")
+    ));
 
     let error = router
-        .route_tool_call(grok_custom_call("unknown_remote_tool"))
+        .route_tool_call(item)
         .expect_err("unknown custom output must not reach local dispatch");
     assert!(matches!(
         error,
         codex_tools::FunctionCallError::Fatal(message)
             if message.contains("unknown Grok hosted custom output")
     ));
+}
+
+#[test]
+fn grok_freeform_planned_entry_owns_description_identity_and_exact_decoder() {
+    let plan = plan_grok_tools(vec![GrokLocalTool {
+        identity: ToolName::namespaced("extension", "render"),
+        spec: ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "extension".to_string(),
+            description: "Extension tools.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Custom(FreeformTool {
+                name: "render".to_string(),
+                description: "Render exact source locally.".to_string(),
+                defer_loading: None,
+                format: FreeformToolFormat {
+                    r#type: "grammar".to_string(),
+                    syntax: "lark".to_string(),
+                    definition: "start: /.+/s".to_string(),
+                },
+            })],
+        }),
+    }])
+    .expect("namespaced freeform tool should produce one reversible planned entry");
+    let ToolSpec::Function(declaration) = &plan.declarations[0] else {
+        panic!("Grok wire declaration must be one function");
+    };
+    assert!(
+        declaration
+            .description
+            .starts_with("Render exact source locally.")
+    );
+    assert!(
+        declaration
+            .description
+            .contains(r#"{"type":"grammar","syntax":"lark","definition":"start: /.+/s"}"#)
+    );
+    let wire_name = declaration.name.clone();
+    let router = ToolRouter::from_grok_plan(Default::default(), plan);
+    let exact_input = "第一行\n\"quoted\"\\tail";
+
+    let call = router
+        .route_tool_call(ResponseItem::FunctionCall {
+            id: None,
+            name: wire_name,
+            namespace: None,
+            arguments: serde_json::json!({"input": exact_input}).to_string(),
+            encrypted_function_args: None,
+            call_id: "freeform-1".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .expect("planned function must decode")
+        .expect("planned freeform function is Local Codex-owned");
+
+    assert_eq!(call.tool_name, ToolName::namespaced("extension", "render"));
+    assert_eq!(
+        call.payload,
+        ToolPayload::Custom {
+            input: exact_input.to_string(),
+        }
+    );
 }
 
 #[test]

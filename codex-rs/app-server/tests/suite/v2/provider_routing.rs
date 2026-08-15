@@ -181,6 +181,35 @@ enable_request_compression = false
             .build_initialized()
             .await
     }
+
+    fn disable_grok_x_search(&self) -> Result<()> {
+        self.replace_config_line("x_search = true", "x_search = false")
+    }
+
+    fn enable_code_mode(&self) -> Result<()> {
+        self.replace_config_line(
+            "[features]\nenable_request_compression = false",
+            "[features]\ncode_mode = true\nenable_request_compression = false",
+        )
+    }
+
+    fn disable_image_generation(&self) -> Result<()> {
+        self.replace_config_line(
+            "[features]\nenable_request_compression = false",
+            "[features]\nimage_generation = false\nenable_request_compression = false",
+        )
+    }
+
+    fn replace_config_line(&self, current: &str, replacement: &str) -> Result<()> {
+        let path = self.codex_home.path().join("config.toml");
+        let config = std::fs::read_to_string(&path)?;
+        anyhow::ensure!(
+            config.contains(current),
+            "test config does not contain the expected Grok gate"
+        );
+        std::fs::write(path, config.replacen(current, replacement, 1))?;
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -527,6 +556,463 @@ async fn grok_app_turn_declares_and_persists_native_hosted_tools() -> Result<()>
 }
 
 #[tokio::test]
+async fn grok_app_request_preserves_complete_freeform_grammar_metadata() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    fixture.enable_code_mode()?;
+    let response = mount_sse_once_match(
+        &fixture.grok_server,
+        header("authorization", "Bearer grok-test-key"),
+        responses::sse(vec![
+            responses::ev_assistant_message("grok-freeform-message", "Done"),
+            responses::ev_completed("grok-freeform-response"),
+        ]),
+    )
+    .await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let completed = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    let body = response.single_request().body_json();
+    let exec_description = body["tools"]
+        .as_array()
+        .context("Grok request tools should be an array")?
+        .iter()
+        .find(|tool| tool["type"] == "function" && tool["name"] == "exec")
+        .and_then(|tool| tool["description"].as_str())
+        .context("Grok request should contain the projected code-mode exec tool")?;
+    let (_, serialized_format) = exec_description
+        .rsplit_once("Local Codex freeform grammar metadata (descriptive only; the Grok Gateway does not enforce this grammar):\n")
+        .context("exec description should contain the descriptive grammar boundary")?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(serialized_format)?,
+        serde_json::json!({
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "\nstart: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/\n"
+        })
+    );
+    assert!(exec_description.len() <= 8_000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch() -> Result<()> {
+    {
+        let fixture = ProviderRoutingFixture::new().await?;
+        fixture.grok_server.reset().await;
+        mount_grok_models_with_backend_search(&fixture.grok_server, &["grok-model"], false).await;
+        let response = mount_sse_once_match(
+            &fixture.grok_server,
+            header("authorization", "Bearer grok-test-key"),
+            responses::sse(vec![
+                responses::ev_response_created("undeclared-web-response"),
+                responses::ev_web_search_call_done("web-undeclared", "completed", "not-owned"),
+                responses::ev_completed("undeclared-web-response"),
+            ]),
+        )
+        .await;
+        let mut app = fixture.start_app().await?;
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
+
+        let completed = app
+            .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(
+            completed
+                .turn
+                .error
+                .is_some_and(|error| error.message.contains("was not declared"))
+        );
+        assert_eq!(
+            response.requests().len(),
+            1,
+            "must not retry or dispatch locally"
+        );
+        assert!(!request_declares_tool(
+            &response.single_request().body_json(),
+            "web_search"
+        ));
+        assert_rollout_omits_hosted_item(&rollout_path, "web-undeclared").await?;
+    }
+
+    {
+        let fixture = ProviderRoutingFixture::new().await?;
+        fixture.disable_grok_x_search()?;
+        let response = mount_sse_once_match(
+            &fixture.grok_server,
+            header("authorization", "Bearer grok-test-key"),
+            responses::sse(vec![
+                responses::ev_response_created("undeclared-x-response"),
+                serde_json::json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "x-undeclared",
+                        "type": "custom_tool_call",
+                        "status": "in_progress",
+                        "call_id": "x-call-undeclared",
+                        "name": "x_keyword_search",
+                        "input": ""
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "x-undeclared",
+                        "type": "custom_tool_call",
+                        "status": "completed",
+                        "call_id": "x-call-undeclared",
+                        "name": "x_keyword_search",
+                        "input": "{\"query\":\"preserve me\"}"
+                    }
+                }),
+                responses::ev_completed("undeclared-x-response"),
+            ]),
+        )
+        .await;
+        let mut app = fixture.start_app().await?;
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
+
+        let completed = app
+            .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(
+            completed
+                .turn
+                .error
+                .is_some_and(|error| error.message.contains("was not declared"))
+        );
+        assert_eq!(
+            response.requests().len(),
+            1,
+            "must not retry or dispatch locally"
+        );
+        assert!(!request_declares_tool(
+            &response.single_request().body_json(),
+            "x_search"
+        ));
+        assert_rollout_preserves_unknown_custom_item(
+            &rollout_path,
+            Some("x-undeclared"),
+            "x-call-undeclared",
+        )
+        .await?;
+    }
+
+    {
+        let fixture = ProviderRoutingFixture::new().await?;
+        fixture.replace_config_line(
+            "sandbox_mode = \"read-only\"",
+            "sandbox_mode = \"danger-full-access\"",
+        )?;
+        let dispatch_marker = fixture.codex_home.path().join("queued-tool-dispatched");
+        let marker_path = dispatch_marker.to_string_lossy();
+        let command = if cfg!(windows) {
+            format!(
+                "Set-Content -LiteralPath '{}' -Value 'must-not-run'",
+                marker_path.replace('\'', "''")
+            )
+        } else {
+            format!(
+                "printf must-not-run > '{}'",
+                marker_path.replace('\'', "'\"'\"'")
+            )
+        };
+        let arguments = serde_json::json!({ "command": command }).to_string();
+        let response = mount_sse_once_match(
+            &fixture.grok_server,
+            header("authorization", "Bearer grok-test-key"),
+            responses::sse(vec![
+                responses::ev_response_created("ordinary-to-hosted-owner-change"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "shared-owner-reverse",
+                        "type": "function_call",
+                        "call_id": "queued-must-not-dispatch",
+                        "name": "shell_command",
+                        "arguments": arguments
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "shared-owner-reverse",
+                        "type": "custom_tool_call",
+                        "status": "in_progress",
+                        "call_id": "x-owner-change-call",
+                        "name": "x_keyword_search",
+                        "input": ""
+                    }
+                }),
+                responses::ev_completed("ordinary-to-hosted-owner-change"),
+            ]),
+        )
+        .await;
+        let mut app = fixture.start_app().await?;
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
+
+        let completed = app
+            .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(
+            completed
+                .turn
+                .error
+                .is_some_and(|error| error.message.contains("changed Tool Plan ownership"))
+        );
+        assert_eq!(response.requests().len(), 1, "must not retry");
+        assert_rollout_omits_tool_output(&rollout_path, "queued-must-not-dispatch").await?;
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        assert!(
+            !dispatch_marker.exists(),
+            "a rejected Grok response must not dispatch an already queued local tool"
+        );
+    }
+
+    {
+        let fixture = ProviderRoutingFixture::new().await?;
+        let response = mount_sse_once_match(
+            &fixture.grok_server,
+            header("authorization", "Bearer grok-test-key"),
+            responses::sse(vec![
+                responses::ev_response_created("malformed-x-response"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "custom_tool_call",
+                        "status": "completed",
+                        "call_id": "x-call-missing-id",
+                        "name": "x_keyword_search",
+                        "input": "{\"query\":\"preserve exact terminal\"}"
+                    }
+                }),
+                responses::ev_completed("malformed-x-response"),
+            ]),
+        )
+        .await;
+        let mut app = fixture.start_app().await?;
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
+
+        let completed = app
+            .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(
+            completed
+                .turn
+                .error
+                .is_some_and(|error| error.message.contains("missing provider item_id"))
+        );
+        assert_eq!(
+            response.requests().len(),
+            1,
+            "must not retry or dispatch locally"
+        );
+        assert_rollout_preserves_unknown_custom_item(&rollout_path, None, "x-call-missing-id")
+            .await?;
+    }
+
+    {
+        let fixture = ProviderRoutingFixture::new().await?;
+        fixture.disable_image_generation()?;
+        let response = mount_sse_once_match(
+            &fixture.grok_server,
+            header("authorization", "Bearer grok-test-key"),
+            responses::sse(vec![
+                responses::ev_response_created("undeclared-image-response"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "image-undeclared",
+                        "type": "image_generation_call",
+                        "status": "completed",
+                        "prompt": "Draw a forbidden circle.",
+                        "result": TINY_PNG_DATA_URL
+                    }
+                }),
+                responses::ev_completed("undeclared-image-response"),
+            ]),
+        )
+        .await;
+        let mut app = fixture.start_app().await?;
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
+
+        let completed = app
+            .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(
+            completed
+                .turn
+                .error
+                .is_some_and(|error| error.message.contains("was not declared"))
+        );
+        assert_eq!(
+            response.requests().len(),
+            1,
+            "must not retry or dispatch locally"
+        );
+        assert!(!request_declares_tool(
+            &response.single_request().body_json(),
+            "image_generation",
+        ));
+        assert_rollout_omits_hosted_item(&rollout_path, "image-undeclared").await?;
+    }
+
+    {
+        let fixture = ProviderRoutingFixture::new().await?;
+        let response = mount_sse_once_match(
+            &fixture.grok_server,
+            header("authorization", "Bearer grok-test-key"),
+            responses::sse(vec![
+                responses::ev_response_created("changed-owner-response"),
+                responses::ev_web_search_call_added_partial("shared-owner", "in_progress"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "shared-owner",
+                        "type": "function_call",
+                        "call_id": "must-not-dispatch",
+                        "name": "shell_command",
+                        "arguments": "{\"command\":\"echo must-not-run\"}"
+                    }
+                }),
+                responses::ev_completed("changed-owner-response"),
+            ]),
+        )
+        .await;
+        let mut app = fixture.start_app().await?;
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started.thread.path.clone().context("Grok rollout path")?;
+
+        let completed = app
+            .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(
+            completed
+                .turn
+                .error
+                .is_some_and(|error| error.message.contains("changed Tool Plan ownership"))
+        );
+        assert_eq!(response.requests().len(), 1, "must not retry");
+        assert_rollout_omits_tool_output(&rollout_path, "must-not-dispatch").await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_duplicate_ordinary_tool_terminal_dispatches_once() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    fixture.replace_config_line(
+        "sandbox_mode = \"read-only\"",
+        "sandbox_mode = \"danger-full-access\"",
+    )?;
+    let dispatch_marker = fixture.codex_home.path().join("duplicate-tool-dispatches");
+    let marker_path = dispatch_marker.to_string_lossy();
+    let command = if cfg!(windows) {
+        format!(
+            "Add-Content -LiteralPath '{}' -Value 'ran'",
+            marker_path.replace('\'', "''")
+        )
+    } else {
+        format!(
+            "printf 'ran\\n' >> '{}'",
+            marker_path.replace('\'', "'\"'\"'")
+        )
+    };
+    let arguments = serde_json::json!({ "command": command }).to_string();
+    let duplicate = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "id": "ordinary-duplicate",
+            "type": "function_call",
+            "call_id": "ordinary-duplicate-call",
+            "name": "shell_command",
+            "arguments": arguments
+        }
+    });
+    let responses = responses::mount_sse_sequence(
+        &fixture.grok_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("ordinary-duplicate-response"),
+                duplicate.clone(),
+                duplicate,
+                responses::ev_completed("ordinary-duplicate-response"),
+            ]),
+            completion_sse("ordinary-duplicate-follow-up"),
+        ],
+    )
+    .await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let completed = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(responses.requests().len(), 2);
+    let marker = std::fs::read_to_string(&dispatch_marker)?;
+    assert_eq!(marker.lines().collect::<Vec<_>>(), vec!["ran"]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn oversized_grok_image_replay_fails_before_second_egress() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let large_result = "A".repeat(400_000);
@@ -599,57 +1085,79 @@ async fn grok_model_without_context_window_fails_before_egress() -> Result<()> {
 }
 
 #[tokio::test]
-async fn incomplete_grok_hosted_item_fails_without_partial_persistence() -> Result<()> {
+async fn incomplete_grok_hosted_items_fail_without_partial_persistence() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
-    let grok_responses = mount_sse_once_match(
+    let grok_responses = responses::mount_sse_sequence(
         &fixture.grok_server,
-        header("authorization", "Bearer grok-test-key"),
-        responses::sse(vec![
-            responses::ev_response_created("grok-incomplete-response"),
-            responses::ev_web_search_call_added_partial("web-incomplete", "in_progress"),
-            responses::ev_completed("grok-incomplete-response"),
-        ]),
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("grok-incomplete-web-response"),
+                responses::ev_web_search_call_added_partial("web-incomplete", "in_progress"),
+                responses::ev_completed("grok-incomplete-web-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("grok-incomplete-x-response"),
+                serde_json::json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "x-incomplete",
+                        "type": "custom_tool_call",
+                        "status": "in_progress",
+                        "call_id": "x-call-incomplete",
+                        "name": "x_semantic_search",
+                        "input": ""
+                    }
+                }),
+                responses::ev_completed("grok-incomplete-x-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("grok-incomplete-image-response"),
+                serde_json::json!({
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": "image-incomplete",
+                        "type": "image_generation_call",
+                        "status": "in_progress",
+                        "result": null
+                    }
+                }),
+                responses::ev_completed("grok-incomplete-image-response"),
+            ]),
+        ],
     )
     .await;
     let mut app = fixture.start_app().await?;
-    let started = app
-        .start_thread(ThreadStartParams {
-            model: Some("grok-model".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let rollout_path = started
-        .thread
-        .path
-        .clone()
-        .context("started Grok thread must have a rollout path")?;
-
-    let completed = app
-        .start_turn_and_wait_for_completion(TurnStartParams {
-            thread_id: started.thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "Exercise incomplete hosted lifecycle".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    assert_eq!(completed.turn.status, TurnStatus::Failed);
-    assert!(completed.turn.error.is_some());
-    assert_eq!(grok_responses.requests().len(), 1, "must not retry");
-
-    let history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-    let InitialHistory::Resumed(history) = history else {
-        anyhow::bail!("expected materialized Grok rollout history");
-    };
-    assert!(
-        history.history.iter().all(|item| !matches!(
-            item,
-            RolloutItem::ResponseItem(ResponseItem::WebSearchCall { id: Some(id), .. })
-                if id.as_str() == "web-incomplete"
-        )),
-        "an incomplete hosted item must not enter durable history"
-    );
+    for (prompt, item_id) in [
+        ("Exercise incomplete Web lifecycle", "web-incomplete"),
+        ("Exercise incomplete X lifecycle", "x-incomplete"),
+        ("Exercise incomplete Image lifecycle", "image-incomplete"),
+    ] {
+        let started = app
+            .start_thread(ThreadStartParams {
+                model: Some("grok-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let rollout_path = started
+            .thread
+            .path
+            .clone()
+            .context("started Grok thread must have a rollout path")?;
+        let completed = app
+            .start_turn_and_wait_for_completion(TurnStartParams {
+                thread_id: started.thread.id,
+                input: vec![UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(completed.turn.status, TurnStatus::Failed);
+        assert!(completed.turn.error.is_some());
+        assert_rollout_omits_hosted_item(&rollout_path, item_id).await?;
+    }
+    assert_eq!(grok_responses.requests().len(), 3, "must not retry");
     Ok(())
 }
 
@@ -1255,6 +1763,93 @@ async fn mount_models_repeating(server: &MockServer, body: ModelsResponse) {
         )
         .mount(server)
         .await;
+}
+
+fn request_declares_tool(body: &serde_json::Value, tool_type: &str) -> bool {
+    body["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool["type"].as_str() == Some(tool_type))
+    })
+}
+
+async fn assert_rollout_omits_hosted_item(
+    rollout_path: &std::path::Path,
+    item_id: &str,
+) -> Result<()> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let InitialHistory::Resumed(history) = history else {
+        anyhow::bail!("expected materialized Grok rollout history");
+    };
+    assert!(history.history.iter().all(|item| {
+        !matches!(
+            item,
+            RolloutItem::ResponseItem(response_item)
+                if response_item.id().is_some_and(|id| id.as_str() == item_id)
+        )
+    }));
+    Ok(())
+}
+
+async fn assert_rollout_preserves_unknown_custom_item(
+    rollout_path: &std::path::Path,
+    item_id: Option<&str>,
+    call_id: &str,
+) -> Result<()> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let InitialHistory::Resumed(history) = history else {
+        anyhow::bail!("expected materialized Grok rollout history");
+    };
+    assert_eq!(
+        history
+            .history
+            .iter()
+            .filter(|item| {
+                let RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
+                    id,
+                    call_id: persisted_call_id,
+                    ..
+                }) = item
+                else {
+                    return false;
+                };
+                persisted_call_id == call_id
+                    && match (item_id, id.as_ref()) {
+                        (Some(item_id), Some(id)) => id.as_str() == item_id,
+                        (None, None) => true,
+                        _ => false,
+                    }
+            })
+            .count(),
+        1,
+        "unknown provider custom output must remain exact durable evidence"
+    );
+    assert!(history.history.iter().all(|item| !matches!(
+        item,
+        RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+            call_id: persisted_call_id,
+            ..
+        }) if persisted_call_id == call_id
+    )));
+    Ok(())
+}
+
+async fn assert_rollout_omits_tool_output(
+    rollout_path: &std::path::Path,
+    call_id: &str,
+) -> Result<()> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let InitialHistory::Resumed(history) = history else {
+        anyhow::bail!("expected materialized Grok rollout history");
+    };
+    assert!(history.history.iter().all(|item| !matches!(
+        item,
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            call_id: persisted_call_id,
+            ..
+        }) if persisted_call_id == call_id
+    )));
+    Ok(())
 }
 
 async fn mount_grok_models_repeating(server: &MockServer, model_ids: &[&str]) {

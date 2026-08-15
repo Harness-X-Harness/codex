@@ -151,7 +151,7 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         TurnItemContributorPolicy::Skip,
         &item,
         /*plan_mode*/ false,
-        /*allow_x_search_projection*/ false,
+        /*allow_hosted_custom_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -198,7 +198,7 @@ async fn grok_x_search_projection_requires_authoritative_plan_approval() {
                 TurnItemContributorPolicy::Skip,
                 &item,
                 /*plan_mode*/ false,
-                /*allow_x_search_projection*/ false,
+                /*allow_hosted_custom_projection*/ false,
             )
             .await
             .is_none()
@@ -208,7 +208,7 @@ async fn grok_x_search_projection_requires_authoritative_plan_approval() {
             TurnItemContributorPolicy::Skip,
             &item,
             /*plan_mode*/ false,
-            /*allow_x_search_projection*/ true,
+            /*allow_hosted_custom_projection*/ true,
         )
         .await;
         assert!(matches!(projected, Some(TurnItem::WebSearch(_))));
@@ -235,7 +235,7 @@ async fn grok_image_variant_uses_the_common_non_tool_projection_path() {
             TurnItemContributorPolicy::Skip,
             &item,
             /*plan_mode*/ false,
-            /*allow_x_search_projection*/ false,
+            /*allow_hosted_custom_projection*/ false,
         )
         .await;
         assert!(matches!(projected, Some(TurnItem::ImageGeneration(_))));
@@ -303,7 +303,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         TurnItemContributorPolicy::Skip,
         &item,
         /*plan_mode*/ false,
-        /*allow_x_search_projection*/ false,
+        /*allow_hosted_custom_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -319,7 +319,7 @@ async fn handle_non_tool_response_item_runs_turn_item_contributors_only_when_req
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
-        /*allow_x_search_projection*/ false,
+        /*allow_hosted_custom_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -367,9 +367,12 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
         cancellation_token: CancellationToken::new(),
     };
 
-    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
-        .await
-        .expect("assistant message should complete");
+    let output = handle_output_item_done(
+        &mut ctx, item, /*previously_active_item*/ None,
+        /*allow_hosted_custom_projection*/ false,
+    )
+    .await
+    .expect("assistant message should complete");
 
     assert_eq!(
         output.last_agent_message.as_deref(),
@@ -412,7 +415,11 @@ async fn grok_unknown_custom_output_is_persisted_before_failing_closed() {
         cancellation_token: CancellationToken::new(),
     };
 
-    let error = match handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None).await
+    let error = match handle_output_item_done(
+        &mut ctx, item, /*previously_active_item*/ None,
+        /*allow_hosted_custom_projection*/ false,
+    )
+    .await
     {
         Ok(_) => panic!("unknown hosted output must fail closed"),
         Err(error) => error,
@@ -440,7 +447,7 @@ async fn finalized_turn_item_defers_mailbox_for_contributed_visible_text() {
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
-        /*allow_x_search_projection*/ false,
+        /*allow_hosted_custom_projection*/ false,
     )
     .await
     .expect("assistant message should parse");
@@ -466,7 +473,7 @@ async fn finalized_turn_item_keeps_mailbox_open_for_commentary_text() {
         TurnItemContributorPolicy::Run(&turn_store),
         &item,
         /*plan_mode*/ false,
-        /*allow_x_search_projection*/ false,
+        /*allow_hosted_custom_projection*/ false,
     )
     .await
     .expect("assistant message should parse");

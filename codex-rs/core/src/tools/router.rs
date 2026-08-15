@@ -6,6 +6,9 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::grok_hosted_output::GrokHostedOutput;
+use crate::tools::grok_hosted_output::GrokHostedOutputEventPhase;
+use crate::tools::grok_hosted_output::classify_grok_hosted_output;
 #[cfg(test)]
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
@@ -21,7 +24,6 @@ use codex_tools::GrokLocalToolInput;
 use codex_tools::GrokToolPlan;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use codex_tools::is_evidence_backed_x_search_name;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -147,36 +149,16 @@ impl ToolRouter {
         self.registry.create_diff_consumer(tool_name)
     }
 
-    pub(crate) fn allows_x_search_projection(&self, item: &ResponseItem) -> bool {
-        let ResponseItem::CustomToolCall {
-            id,
-            status,
-            call_id,
-            ..
-        } = item
-        else {
-            return false;
-        };
-        self.is_declared_x_search_item(item)
-            && id.is_some()
-            && !call_id.is_empty()
-            && matches!(
-                status.as_deref(),
-                Some("in_progress" | "completed" | "failed")
-            )
+    pub(crate) fn classify_grok_hosted_output<'a>(
+        &self,
+        item: &'a ResponseItem,
+        phase: GrokHostedOutputEventPhase,
+    ) -> Result<GrokHostedOutput<'a>, FunctionCallError> {
+        classify_grok_hosted_output(self.grok_tool_plan.as_ref(), item, phase)
     }
 
-    pub(crate) fn is_declared_x_search_item(&self, item: &ResponseItem) -> bool {
-        let Some(plan) = &self.grok_tool_plan else {
-            return false;
-        };
-        let ResponseItem::CustomToolCall {
-            name, namespace, ..
-        } = item
-        else {
-            return false;
-        };
-        plan.declares_x_search() && is_evidence_backed_x_search_name(name) && namespace.is_none()
+    pub(crate) fn defers_local_tool_dispatch_until_response_validated(&self) -> bool {
+        self.grok_tool_plan.is_some()
     }
 
     pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
@@ -262,14 +244,18 @@ impl ToolRouter {
         let Some(plan) = &self.grok_tool_plan else {
             return Self::build_tool_call(item);
         };
-        if let ResponseItem::CustomToolCall { status, name, .. } = &item {
-            let terminal_status = matches!(status.as_deref(), Some("completed" | "failed"));
-            if self.allows_x_search_projection(&item) && terminal_status {
-                return Ok(None);
-            }
-            return Err(FunctionCallError::Fatal(format!(
-                "unknown Grok hosted custom output `{name}`"
-            )));
+        if matches!(item, ResponseItem::CustomToolCall { .. }) {
+            return match self
+                .classify_grok_hosted_output(&item, GrokHostedOutputEventPhase::Done)?
+            {
+                GrokHostedOutput::Hosted { .. } => Ok(None),
+                GrokHostedOutput::UnknownCustom { reason, .. } => {
+                    Err(FunctionCallError::Fatal(reason))
+                }
+                GrokHostedOutput::Ordinary => Err(FunctionCallError::Fatal(
+                    "Grok custom output did not resolve under the active Tool Plan".to_string(),
+                )),
+            };
         }
         let ResponseItem::FunctionCall {
             name,

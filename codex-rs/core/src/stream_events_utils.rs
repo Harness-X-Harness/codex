@@ -249,14 +249,14 @@ pub(crate) async fn finalize_non_tool_response_item(
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
-    allow_x_search_projection: bool,
+    allow_hosted_custom_projection: bool,
 ) -> Option<FinalizedTurnItem> {
     let turn_item = handle_non_tool_response_item(
         sess,
         contributor_policy,
         item,
         plan_mode,
-        allow_x_search_projection,
+        allow_hosted_custom_projection,
     )
     .await?;
     let (memory_citation, last_agent_message, defers_mailbox_delivery_to_next_turn) =
@@ -300,11 +300,17 @@ pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
+    allow_hosted_custom_projection: bool,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.mode == ModeKind::Plan;
 
-    match ctx.tool_runtime.route_tool_call(item.clone()) {
+    let routed_call = if allow_hosted_custom_projection {
+        Ok(None)
+    } else {
+        ctx.tool_runtime.route_tool_call(item.clone())
+    };
+    match routed_call {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess
@@ -327,24 +333,34 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
+            let tool_runtime = ctx.tool_runtime.clone();
+            let tool_future: InFlightFuture<'static> =
+                if tool_runtime.defers_local_tool_dispatch_until_response_validated() {
+                    // Calling `handle_tool_call` synchronously starts the handler
+                    // task. Keep that call inside the lazy future so Grok can
+                    // validate later provider items before any side effect.
+                    Box::pin(async move {
+                        tool_runtime
+                            .handle_tool_call(call, cancellation_token)
+                            .await
+                    })
+                } else {
+                    // Preserve stock Codex streaming concurrency: local tools may
+                    // start before response.completed arrives.
+                    Box::pin(tool_runtime.handle_tool_call(call, cancellation_token))
+                };
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            let allow_x_search_projection = ctx.tool_runtime.allows_x_search_projection(&item);
             let finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
                 plan_mode,
-                allow_x_search_projection,
+                allow_hosted_custom_projection,
             )
             .await;
             let finalized_facts = finalized_turn_item
@@ -409,7 +425,7 @@ pub(crate) async fn handle_non_tool_response_item(
     contributor_policy: TurnItemContributorPolicy<'_>,
     item: &ResponseItem,
     plan_mode: bool,
-    allow_x_search_projection: bool,
+    allow_hosted_custom_projection: bool,
 ) -> Option<TurnItem> {
     let item_type = match item {
         ResponseItem::AdditionalTools { .. } => "additional_tools",
@@ -448,7 +464,7 @@ pub(crate) async fn handle_non_tool_response_item(
             finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)
         }
-        ResponseItem::CustomToolCall { .. } if allow_x_search_projection => {
+        ResponseItem::CustomToolCall { .. } if allow_hosted_custom_projection => {
             let mut turn_item = parse_turn_item(item)?;
             finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)

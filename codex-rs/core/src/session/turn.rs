@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -23,9 +22,7 @@ use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
 use crate::hosted_tool_lifecycle::HostedToolCompletion;
-use crate::hosted_tool_lifecycle::HostedToolEventPhase;
 use crate::hosted_tool_lifecycle::HostedToolLifecycle;
-use crate::hosted_tool_lifecycle::validate_grok_hosted_item;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -52,10 +49,14 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
+use crate::stream_events_utils::record_completed_response_item;
 use crate::stream_events_utils::record_completed_response_item_with_finalized_facts;
 use crate::tasks::emit_compact_metric;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::grok_hosted_output::GrokHostedOutput;
+use crate::tools::grok_hosted_output::GrokHostedOutputEventPhase;
+use crate::tools::grok_hosted_output::GrokHostedOutputOwner;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolSuggestCandidates;
@@ -82,7 +83,6 @@ use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_login::CodexAuth;
 use codex_model_provider::RemoteCompactionSupport;
-use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
@@ -2086,7 +2086,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             TurnItemContributorPolicy::Run(turn_store),
             item,
             /*plan_mode*/ true,
-            /*allow_x_search_projection*/ false,
+            /*allow_hosted_custom_projection*/ false,
         )
         .await
         {
@@ -2238,7 +2238,7 @@ async fn try_run_sampling_request(
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
     let mut hosted_tool_lifecycle = HostedToolLifecycle::default();
-    let grok_dialect = turn_context.provider.info().wire_api == WireApi::GrokResponses;
+    let mut discard_pending_tool_futures = false;
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -2278,6 +2278,7 @@ async fn try_run_sampling_request(
                     .close_incomplete(sess.as_ref(), &turn_context)
                     .await;
                 if incomplete_count > 0 {
+                    discard_pending_tool_futures = true;
                     break Err(CodexErr::Fatal(
                         "hosted tool stream failed before output_item.done".to_string(),
                     ));
@@ -2289,6 +2290,7 @@ async fn try_run_sampling_request(
                     .close_incomplete(sess.as_ref(), &turn_context)
                     .await;
                 if incomplete_count > 0 {
+                    discard_pending_tool_futures = true;
                     break Err(CodexErr::Fatal(
                         "hosted tool stream closed before output_item.done".to_string(),
                     ));
@@ -2307,23 +2309,99 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(mut item) => {
-                let declared_x_search = tool_runtime.is_declared_x_search_item(&item);
-                let hosted_item_id = if grok_dialect {
-                    match validate_grok_hosted_item(
-                        &item,
-                        declared_x_search,
-                        HostedToolEventPhase::Done,
-                    ) {
-                        Ok(item_id) => item_id.map(str::to_string),
-                        Err(message) => break Err(CodexErr::Fatal(message.to_string())),
+                let raw_item_id = item.id().map(|item_id| item_id.as_str().to_string());
+                let raw_item_kind = item.id_prefix().unwrap_or("unknown");
+                let (hosted_item_id, hosted_completion, project_hosted_custom_output) = {
+                    let hosted_output = match tool_runtime
+                        .classify_grok_hosted_output(&item, GrokHostedOutputEventPhase::Done)
+                    {
+                        Ok(output) => output,
+                        Err(error) => {
+                            discard_pending_tool_futures = true;
+                            break Err(CodexErr::Fatal(error.to_string()));
+                        }
+                    };
+                    if let GrokHostedOutput::UnknownCustom { item_id, reason } = &hosted_output {
+                        if let Some(item_id) = item_id {
+                            if let Err(error) = hosted_tool_lifecycle.record_completed(
+                                item_id,
+                                GrokHostedOutputOwner::UnknownCustom,
+                                raw_item_kind,
+                            ) {
+                                record_completed_response_item(
+                                    sess.as_ref(),
+                                    turn_context.as_ref(),
+                                    &item,
+                                )
+                                .await;
+                                discard_pending_tool_futures = true;
+                                break Err(CodexErr::Fatal(error.to_string()));
+                            }
+                        }
+                        record_completed_response_item(sess.as_ref(), turn_context.as_ref(), &item)
+                            .await;
+                        discard_pending_tool_futures = true;
+                        break Err(CodexErr::Fatal(reason.clone()));
                     }
-                } else {
-                    None
+                    match hosted_output {
+                        GrokHostedOutput::Hosted {
+                            item_id,
+                            owner,
+                            projects_custom_output,
+                        } => {
+                            let completion = match hosted_tool_lifecycle.record_completed(
+                                item_id,
+                                owner,
+                                raw_item_kind,
+                            ) {
+                                Ok(completion) => completion,
+                                Err(error) => {
+                                    record_completed_response_item(
+                                        sess.as_ref(),
+                                        turn_context.as_ref(),
+                                        &item,
+                                    )
+                                    .await;
+                                    discard_pending_tool_futures = true;
+                                    break Err(CodexErr::Fatal(error.to_string()));
+                                }
+                            };
+                            (
+                                Some(item_id.to_string()),
+                                Some(completion),
+                                projects_custom_output,
+                            )
+                        }
+                        GrokHostedOutput::Ordinary => {
+                            if tool_runtime.defers_local_tool_dispatch_until_response_validated()
+                                && let Some(item_id) = raw_item_id.as_deref()
+                            {
+                                let completion = match hosted_tool_lifecycle.record_completed(
+                                    item_id,
+                                    GrokHostedOutputOwner::Ordinary,
+                                    raw_item_kind,
+                                ) {
+                                    Ok(completion) => completion,
+                                    Err(error) => {
+                                        record_completed_response_item(
+                                            sess.as_ref(),
+                                            turn_context.as_ref(),
+                                            &item,
+                                        )
+                                        .await;
+                                        discard_pending_tool_futures = true;
+                                        break Err(CodexErr::Fatal(error.to_string()));
+                                    }
+                                };
+                                (None, Some(completion), false)
+                            } else {
+                                (None, None, false)
+                            }
+                        }
+                        GrokHostedOutput::UnknownCustom { .. } => unreachable!(),
+                    }
                 };
                 assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
-                let hosted_completion = hosted_item_id
-                    .as_deref()
-                    .map(|item_id| hosted_tool_lifecycle.record_completed(item_id));
                 if matches!(&hosted_completion, Some(HostedToolCompletion::Duplicate)) {
                     continue;
                 }
@@ -2443,14 +2521,18 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
-                let output_result =
-                    match handle_output_item_done(&mut ctx, item, previously_streamed_item)
-                        .instrument(handle_responses)
-                        .await
-                    {
-                        Ok(output_result) => output_result,
-                        Err(err) => break Err(err),
-                    };
+                let output_result = match handle_output_item_done(
+                    &mut ctx,
+                    item,
+                    previously_streamed_item,
+                    project_hosted_custom_output,
+                )
+                .instrument(handle_responses)
+                .await
+                {
+                    Ok(output_result) => output_result,
+                    Err(err) => break Err(err),
+                };
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }
@@ -2474,35 +2556,78 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemAdded(mut item) => {
-                let declared_x_search = tool_runtime.is_declared_x_search_item(&item);
-                let hosted_item_id = if grok_dialect {
-                    match validate_grok_hosted_item(
-                        &item,
-                        declared_x_search,
-                        HostedToolEventPhase::Added,
-                    ) {
-                        Ok(item_id) => item_id.map(str::to_string),
-                        Err(message) => break Err(CodexErr::Fatal(message.to_string())),
+                let raw_item_id = item.id().map(|item_id| item_id.as_str().to_string());
+                let raw_item_kind = item.id_prefix().unwrap_or("unknown");
+                let (hosted_item_id, project_hosted_custom_output) = {
+                    let hosted_output = match tool_runtime
+                        .classify_grok_hosted_output(&item, GrokHostedOutputEventPhase::Added)
+                    {
+                        Ok(output) => output,
+                        Err(error) => {
+                            discard_pending_tool_futures = true;
+                            break Err(CodexErr::Fatal(error.to_string()));
+                        }
+                    };
+                    if let GrokHostedOutput::UnknownCustom {
+                        item_id: Some(item_id),
+                        ..
+                    } = &hosted_output
+                    {
+                        if let Err(error) = hosted_tool_lifecycle.record_added(
+                            item_id,
+                            GrokHostedOutputOwner::UnknownCustom,
+                            raw_item_kind,
+                        ) {
+                            discard_pending_tool_futures = true;
+                            break Err(CodexErr::Fatal(error.to_string()));
+                        }
+                        continue;
                     }
-                } else {
-                    None
+                    match hosted_output {
+                        GrokHostedOutput::Hosted {
+                            item_id,
+                            owner,
+                            projects_custom_output,
+                        } => {
+                            let inserted = match hosted_tool_lifecycle.record_added(
+                                item_id,
+                                owner,
+                                raw_item_kind,
+                            ) {
+                                Ok(inserted) => inserted,
+                                Err(error) => {
+                                    discard_pending_tool_futures = true;
+                                    break Err(CodexErr::Fatal(error.to_string()));
+                                }
+                            };
+                            if !inserted {
+                                continue;
+                            }
+                            (Some(item_id.to_string()), projects_custom_output)
+                        }
+                        GrokHostedOutput::Ordinary => {
+                            if tool_runtime.defers_local_tool_dispatch_until_response_validated()
+                                && let Some(item_id) = raw_item_id.as_deref()
+                            {
+                                match hosted_tool_lifecycle.record_added(
+                                    item_id,
+                                    GrokHostedOutputOwner::Ordinary,
+                                    raw_item_kind,
+                                ) {
+                                    Ok(true) => {}
+                                    Ok(false) => continue,
+                                    Err(error) => {
+                                        discard_pending_tool_futures = true;
+                                        break Err(CodexErr::Fatal(error.to_string()));
+                                    }
+                                }
+                            }
+                            (None, false)
+                        }
+                        GrokHostedOutput::UnknownCustom { .. } => unreachable!(),
+                    }
                 };
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
-                let x_search_like = matches!(
-                    &item,
-                    ResponseItem::CustomToolCall { name, .. }
-                        if codex_tools::is_evidence_backed_x_search_name(name)
-                );
-                let remote_x_search_lifecycle =
-                    x_search_like && tool_runtime.is_declared_x_search_item(&item);
-                let project_added_item =
-                    !x_search_like || tool_runtime.allows_x_search_projection(&item);
-                if hosted_item_id
-                    .as_deref()
-                    .is_some_and(|item_id| hosted_tool_lifecycle.has_seen(item_id))
-                {
-                    continue;
-                }
                 let interrupts_agent_message = !matches!(
                     &item,
                     ResponseItem::Message {
@@ -2525,7 +2650,7 @@ async fn try_run_sampling_request(
                     ..
                 } = &item
                 {
-                    active_tool_argument_diff_consumer = if x_search_like {
+                    active_tool_argument_diff_consumer = if project_hosted_custom_output {
                         None
                     } else {
                         let tool_name = ToolName::new(namespace.clone(), name.as_str());
@@ -2536,15 +2661,14 @@ async fn try_run_sampling_request(
                 } else if matches!(&item, ResponseItem::FunctionCall { .. }) {
                     active_tool_argument_diff_consumer = None;
                 }
-                if project_added_item
-                    && let Some(turn_item) = handle_non_tool_response_item(
-                        sess.as_ref(),
-                        TurnItemContributorPolicy::Skip,
-                        &item,
-                        plan_mode,
-                        x_search_like && project_added_item,
-                    )
-                    .await
+                if let Some(turn_item) = handle_non_tool_response_item(
+                    sess.as_ref(),
+                    TurnItemContributorPolicy::Skip,
+                    &item,
+                    plan_mode,
+                    project_hosted_custom_output,
+                )
+                .await
                 {
                     let mut turn_item = turn_item;
                     let stream_item_to_client = !defer_streamed_turn_items_for_contributors;
@@ -2597,18 +2721,17 @@ async fn try_run_sampling_request(
                         }
                     }
                     if let Some(hosted_item_id) = hosted_item_id.as_deref() {
-                        let inserted = hosted_tool_lifecycle.record_started(
+                        hosted_tool_lifecycle.attach_started_item(
                             hosted_item_id,
                             turn_item.clone(),
                             stream_item_to_client,
                         );
-                        debug_assert!(inserted);
                     }
                     active_item = Some(turn_item);
                     active_hosted_item_id = hosted_item_id;
                     active_item_is_streaming_to_client = stream_item_to_client;
                 } else if suspended_for_added
-                    && !remote_x_search_lifecycle
+                    && hosted_item_id.is_none()
                     && let Some((item, streaming_to_client)) = suspended_agent_message.take()
                 {
                     active_item = Some(item);
@@ -2681,6 +2804,7 @@ async fn try_run_sampling_request(
                     .await
                     > 0
                 {
+                    discard_pending_tool_futures = true;
                     break Err(CodexErr::Fatal(
                         "response completed before a hosted tool reached output_item.done".into(),
                     ));
@@ -2875,6 +2999,14 @@ async fn try_run_sampling_request(
             }
         }
     };
+    if outcome.is_err() {
+        hosted_tool_lifecycle
+            .close_incomplete(sess.as_ref(), &turn_context)
+            .await;
+        if discard_pending_tool_futures {
+            in_flight.clear();
+        }
+    }
     drop(sampling_timing_guard);
 
     flush_assistant_text_segments_all(
