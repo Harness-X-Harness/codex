@@ -16,6 +16,7 @@ class GrokexDistributionTest(unittest.TestCase):
         self.assertNotIn("model", config)
         self.assertNotIn("model_provider", config)
         self.assertEqual(config["web_search"], "live")
+        self.assertEqual(config["model_provider_registrations"], ["openai", "mini_grok"])
         self.assertEqual(
             config["model_providers"],
             {

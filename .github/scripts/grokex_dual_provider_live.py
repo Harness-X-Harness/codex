@@ -100,6 +100,7 @@ def _write_isolated_config(source: Path, target: Path) -> str:
 
     lines = [
         'web_search = "live"',
+        f'model_provider_registrations = ["openai", {_toml_string(provider_id)}]',
         "",
         "[features]",
         "multi_agent_v2 = true",

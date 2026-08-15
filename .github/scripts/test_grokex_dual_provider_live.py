@@ -492,6 +492,7 @@ requires_openai_auth = false
             self.assertNotIn("model", config)
             self.assertNotIn("model_provider", config)
             self.assertNotIn("model_catalog_json", config)
+            self.assertEqual(config["model_provider_registrations"], ["openai", "xai"])
             self.assertTrue(config["features"]["multi_agent_v2"])
             self.assertEqual(set(config["model_providers"]), {"xai"})
             self.assertEqual(

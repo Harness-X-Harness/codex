@@ -2,6 +2,7 @@
 # Run `grokex login` for ChatGPT. Keep the Mini end-user key in GROK_API_KEY.
 # With no top-level model or model_provider override, ChatGPT stays the default.
 web_search = "live"
+model_provider_registrations = ["openai", "mini_grok"]
 
 [model_providers.mini_grok]
 name = "Grok"
