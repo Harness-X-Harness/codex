@@ -7439,12 +7439,8 @@ async fn first_turn_consumes_the_pre_resolved_model_profile() {
         )
         .await;
 
-    let preview_configuration = session.state.lock().await.session_configuration.clone();
     let preview = session
-        .new_startup_prewarm_turn_from_configuration(
-            "pre-resolved-preview".to_string(),
-            preview_configuration,
-        )
+        .new_startup_prewarm_turn_with_sub_id("pre-resolved-preview".to_string())
         .await
         .expect("preview should borrow the pre-resolved profile");
     assert_eq!(preview.model_info.display_name, "pre-resolved profile");
