@@ -5640,11 +5640,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     let config = Arc::new(config);
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = models_manager_with_provider(
-        config.codex_home.to_path_buf(),
-        auth_manager.clone(),
-        config.model_provider.clone(),
-    );
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
@@ -5702,13 +5697,21 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let provider_runtime = codex_model_provider::ModelProviderRegistry::single(
+        config.model_provider_id.clone(),
+        session_configuration.provider.clone(),
+        config.codex_home.to_path_buf(),
+        config.model_catalog.clone(),
+    )
+    .resolve_runtime(&config.model_provider_id)
+    .expect("single-provider runtime");
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
         /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
-        models_manager,
+        provider_runtime,
         session::ResolvedTurnModel {
             model_info,
             available_models: Vec::new(),
@@ -5990,12 +5993,18 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .skills_service
         .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
         .await;
+    let request_strategy = services
+        .model_client
+        .resolve_request_strategy()
+        .await
+        .expect("test provider request strategy should resolve");
     let turn_context = Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
+        request_strategy,
         &session_configuration,
         config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),
@@ -6069,11 +6078,6 @@ async fn make_session_with_config_and_rx(
     mutator(&mut config);
     let config = Arc::new(config);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = models_manager_with_provider(
-        config.codex_home.to_path_buf(),
-        auth_manager.clone(),
-        config.model_provider.clone(),
-    );
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
@@ -6132,6 +6136,14 @@ async fn make_session_with_config_and_rx(
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let provider_runtime = codex_model_provider::ModelProviderRegistry::single(
+        config.model_provider_id.clone(),
+        session_configuration.provider.clone(),
+        config.codex_home.to_path_buf(),
+        config.model_catalog.clone(),
+    )
+    .resolve_runtime(&config.model_provider_id)
+    .expect("single-provider runtime");
 
     let session = Session::new(
         session_configuration,
@@ -6139,7 +6151,7 @@ async fn make_session_with_config_and_rx(
         /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
-        models_manager,
+        provider_runtime,
         session::ResolvedTurnModel {
             model_info,
             available_models: Vec::new(),
@@ -6187,11 +6199,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     config.ephemeral = true;
     let config = Arc::new(config);
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = models_manager_with_provider(
-        config.codex_home.to_path_buf(),
-        auth_manager.clone(),
-        config.model_provider.clone(),
-    );
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
@@ -6250,6 +6257,14 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         /*bundled_skills_enabled*/ true,
     ));
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+    let provider_runtime = codex_model_provider::ModelProviderRegistry::single(
+        config.model_provider_id.clone(),
+        session_configuration.provider.clone(),
+        config.codex_home.to_path_buf(),
+        config.model_catalog.clone(),
+    )
+    .resolve_runtime(&config.model_provider_id)
+    .expect("single-provider runtime");
 
     let session = Session::new(
         session_configuration,
@@ -6257,7 +6272,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         /*user_instructions*/ None,
         "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
-        models_manager,
+        provider_runtime,
         session::ResolvedTurnModel {
             model_info,
             available_models: Vec::new(),
@@ -8344,12 +8359,18 @@ where
         .skills_service
         .snapshot_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
         .await;
+    let request_strategy = services
+        .model_client
+        .resolve_request_strategy()
+        .await
+        .expect("test provider request strategy should resolve");
     let turn_context = Arc::new(Session::make_turn_context(
         thread_id,
         SessionId::from(thread_id),
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
+        request_strategy,
         &session_configuration,
         config.multi_agent_version_from_features(),
         services.user_shell.as_ref(),

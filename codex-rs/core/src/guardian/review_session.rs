@@ -1305,6 +1305,10 @@ mod tests {
 
         GuardianReviewSessionParams {
             parent_session: Arc::new(session),
+            resolved_model: crate::session::session::ResolvedTurnModel {
+                model_info: turn.model_info.clone(),
+                available_models: turn.available_models.clone(),
+            },
             parent_turn: Arc::new(turn),
             spawn_config,
             request: GuardianApprovalRequest::Shell {
