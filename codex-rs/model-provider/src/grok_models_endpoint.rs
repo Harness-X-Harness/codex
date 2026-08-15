@@ -6,6 +6,7 @@ use codex_api::map_api_error;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::cache::ModelsCatalogIdentity;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
@@ -29,6 +30,9 @@ use tokio::time::timeout;
 use crate::models_endpoint::MODELS_REFRESH_TIMEOUT;
 use crate::models_endpoint::ModelsEndpointRequest;
 use crate::models_endpoint::PreparedModelsRequest;
+
+const GROK_MODELS_AUTHORITY: &str = "official-grok-gateway-model-catalog";
+const GROK_MODELS_DECODER_VERSION: &str = "codex-grok-models-v1";
 
 /// Grok Gateway `/models` strategy selected by the explicit Grok Provider Adapter.
 #[derive(Debug)]
@@ -100,6 +104,14 @@ impl GrokModelsEndpoint {
 }
 
 impl ModelsEndpointClient for GrokModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        ModelsCatalogIdentity::new(
+            self.request
+                .catalog_authority_identity(GROK_MODELS_AUTHORITY),
+            GROK_MODELS_DECODER_VERSION,
+        )
+    }
+
     fn has_command_auth(&self) -> bool {
         self.request.has_command_auth()
     }

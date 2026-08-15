@@ -12,6 +12,7 @@ use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::cache::ModelsCacheEntry;
 use codex_models_manager::cache::ModelsCacheError;
 use codex_models_manager::cache::ModelsCacheFuture;
+use codex_models_manager::cache::ModelsCatalogIdentity;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -48,6 +49,7 @@ impl ModelsCache for TestModelsCache {
     fn load<'a>(
         &'a self,
         _client_version: &'a str,
+        _catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>> {
         Box::pin(async move {
             if self.load_error {
@@ -74,6 +76,7 @@ impl ModelsCache for TestModelsCache {
     fn refresh_ttl<'a>(
         &'a self,
         _client_version: &'a str,
+        _catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
         Box::pin(async move {
             let mut entry = self
@@ -106,6 +109,10 @@ impl TestModelsEndpoint {
 }
 
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        ModelsCatalogIdentity::new("test-authority", "test-decoder-v1")
+    }
+
     fn has_command_auth(&self) -> bool {
         false
     }
@@ -221,6 +228,10 @@ async fn injected_cache_hit_drives_agent_model_selection() -> Result<()> {
             fetched_at: Utc::now(),
             etag: None,
             client_version: Some(codex_models_manager::client_version_to_whole()),
+            catalog_identity: Some(ModelsCatalogIdentity::new(
+                "test-authority",
+                "test-decoder-v1",
+            )),
             models: vec![remote_model(model_slug)],
         }),
         load_error: false,

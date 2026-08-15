@@ -22,6 +22,7 @@ use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::cache::ModelsCatalogIdentity;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_otel::TelemetryAuthMode;
@@ -32,6 +33,8 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
+use sha2::Digest;
+use sha2::Sha256;
 use tokio::time::timeout;
 
 use crate::auth::agent_identity_telemetry;
@@ -39,6 +42,8 @@ use crate::auth::resolve_provider_auth;
 
 pub(crate) const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
+const OPENAI_MODELS_AUTHORITY: &str = "openai-compatible-model-catalog";
+const OPENAI_MODELS_DECODER_VERSION: &str = "codex-openai-models-v1";
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
@@ -88,6 +93,14 @@ impl OpenAiModelsEndpoint {
 }
 
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        ModelsCatalogIdentity::new(
+            self.request
+                .catalog_authority_identity(OPENAI_MODELS_AUTHORITY),
+            OPENAI_MODELS_DECODER_VERSION,
+        )
+    }
+
     fn has_command_auth(&self) -> bool {
         self.request.has_command_auth()
     }
@@ -200,6 +213,61 @@ impl ModelsEndpointRequest {
             || self.provider_info.experimental_bearer_token.is_some()
             || self.provider_info.auth.is_some()
     }
+
+    pub(crate) fn catalog_authority_identity(&self, authority: &str) -> String {
+        let auth_mode = self
+            .auth_manager
+            .as_ref()
+            .and_then(|manager| manager.auth_cached())
+            .as_ref()
+            .map(CodexAuth::auth_mode);
+        self.catalog_authority_identity_for_auth_mode(authority, auth_mode)
+    }
+
+    fn catalog_authority_identity_for_auth_mode(
+        &self,
+        authority: &str,
+        auth_mode: Option<codex_protocol::auth::AuthMode>,
+    ) -> String {
+        let (base_url, query_params, headers) = match self.provider_info.to_api_provider(auth_mode)
+        {
+            Ok(provider) => (provider.base_url, provider.query_params, provider.headers),
+            Err(_) => (
+                self.provider_info.base_url.clone().unwrap_or_default(),
+                self.provider_info.query_params.clone(),
+                HeaderMap::new(),
+            ),
+        };
+        let mut hasher = Sha256::new();
+        hasher.update(b"codex-model-catalog-authority-route-v1\0");
+        update_digest_field(&mut hasher, base_url.as_bytes());
+        let mut query_params = query_params
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        query_params.sort_unstable();
+        hasher.update((query_params.len() as u64).to_be_bytes());
+        for (key, value) in query_params {
+            update_digest_field(&mut hasher, key.as_bytes());
+            update_digest_field(&mut hasher, value.as_bytes());
+        }
+        let mut headers = headers
+            .iter()
+            .map(|(name, value)| (name.as_str().as_bytes(), value.as_bytes()))
+            .collect::<Vec<_>>();
+        headers.sort_unstable();
+        hasher.update((headers.len() as u64).to_be_bytes());
+        for (name, value) in headers {
+            update_digest_field(&mut hasher, name);
+            update_digest_field(&mut hasher, value);
+        }
+        format!("{authority}:route-v1:{:x}", hasher.finalize())
+    }
+}
+
+fn update_digest_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }
 
 pub(crate) struct PreparedModelsRequest {
@@ -337,6 +405,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::num::NonZeroU64;
     use std::sync::Mutex;
 
@@ -410,6 +479,68 @@ mod tests {
         );
 
         assert!(!endpoint.has_command_auth());
+    }
+
+    #[test]
+    fn catalog_identity_partitions_routes_without_exposing_the_url() {
+        let first_url = "https://first.example.test/private-token";
+        let second_url = "https://second.example.test/private-token";
+        let first = OpenAiModelsEndpoint::new(
+            ModelProviderInfo::create_openai_provider(Some(first_url.to_string())),
+            /*auth_manager*/ None,
+        );
+        let second = OpenAiModelsEndpoint::new(
+            ModelProviderInfo::create_openai_provider(Some(second_url.to_string())),
+            /*auth_manager*/ None,
+        );
+
+        assert_ne!(first.catalog_identity(), second.catalog_identity());
+        assert!(!first.catalog_identity().authority.contains(first_url));
+    }
+
+    #[test]
+    fn catalog_identity_partitions_header_selected_authorities_without_exposing_values() {
+        let first_tenant = "private-project-one";
+        let second_tenant = "private-project-two";
+        let mut first_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        first_info.http_headers = Some(HashMap::from([(
+            "OpenAI-Project".to_string(),
+            first_tenant.to_string(),
+        )]));
+        let mut second_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        second_info.http_headers = Some(HashMap::from([(
+            "OpenAI-Project".to_string(),
+            second_tenant.to_string(),
+        )]));
+        let first = OpenAiModelsEndpoint::new(first_info, /*auth_manager*/ None);
+        let second = OpenAiModelsEndpoint::new(second_info, /*auth_manager*/ None);
+
+        assert_ne!(first.catalog_identity(), second.catalog_identity());
+        assert!(!first.catalog_identity().authority.contains(first_tenant));
+    }
+
+    #[test]
+    fn catalog_identity_uses_the_effective_auth_route() {
+        let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        provider_info.http_headers = None;
+        provider_info.env_http_headers = None;
+        let request = ModelsEndpointRequest::new(provider_info, /*auth_manager*/ None);
+
+        let api = request.catalog_authority_identity_for_auth_mode(
+            OPENAI_MODELS_AUTHORITY,
+            /*auth_mode*/ None,
+        );
+        let chatgpt = request.catalog_authority_identity_for_auth_mode(
+            OPENAI_MODELS_AUTHORITY,
+            Some(codex_protocol::auth::AuthMode::Chatgpt),
+        );
+
+        assert_ne!(api, chatgpt);
+        assert_eq!(
+            api,
+            "openai-compatible-model-catalog:route-v1:\
+             500bbe9d5a630e6bdc661015983010e51a7dfcd06fb7cce0585a2296b951b650"
+        );
     }
 
     #[tokio::test]

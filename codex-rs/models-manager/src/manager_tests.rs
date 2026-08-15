@@ -5,6 +5,7 @@ use crate::cache::ModelsCache;
 use crate::cache::ModelsCacheEntry;
 use crate::cache::ModelsCacheError;
 use crate::cache::ModelsCacheFuture;
+use crate::cache::ModelsCatalogIdentity;
 use chrono::Utc;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -32,6 +33,10 @@ mod model_info_overrides_tests;
 
 const DEFAULT_HTTP_CLIENT_FACTORY: HttpClientFactory =
     HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+
+fn test_catalog_identity() -> ModelsCatalogIdentity {
+    ModelsCatalogIdentity::new("test-authority", "test-decoder-v1")
+}
 
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
     remote_model_with_visibility(slug, display, priority, "list")
@@ -133,6 +138,7 @@ impl ModelsCache for TestModelsCache {
     fn load<'a>(
         &'a self,
         _client_version: &'a str,
+        _catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>> {
         Box::pin(async move {
             if self.load_error {
@@ -165,6 +171,7 @@ impl ModelsCache for TestModelsCache {
     fn refresh_ttl<'a>(
         &'a self,
         _client_version: &'a str,
+        _catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
         Box::pin(async move {
             let refreshed = {
@@ -260,6 +267,10 @@ impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
 }
 
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        test_catalog_identity()
+    }
+
     fn has_command_auth(&self) -> bool {
         self.has_command_auth
     }
@@ -312,7 +323,7 @@ where
     let client_version = crate::client_version_to_whole();
     let cache = FileModelsCache::new(codex_home.join(MODEL_CACHE_FILE), DEFAULT_MODEL_CACHE_TTL);
     let mut entry = cache
-        .load(&client_version)
+        .load(&client_version, &test_catalog_identity())
         .await
         .expect("cache load succeeds")
         .expect("cache entry exists");
@@ -336,6 +347,7 @@ async fn file_cache_implements_models_cache_contract() {
         fetched_at: Utc::now(),
         etag: Some("file-etag".to_string()),
         client_version: Some(client_version.clone()),
+        catalog_identity: Some(test_catalog_identity()),
         models: vec![remote_model(
             "file-cached",
             "File Cached",
@@ -347,7 +359,7 @@ async fn file_cache_implements_models_cache_contract() {
 
     assert_eq!(
         cache
-            .load(&client_version)
+            .load(&client_version, &test_catalog_identity())
             .await
             .expect("cache load succeeds"),
         Some(entry)
@@ -367,6 +379,7 @@ async fn file_cache_refresh_ttl_renews_expired_entry_without_serving_it_stale() 
         fetched_at: expired_at,
         etag: Some("expired-etag".to_string()),
         client_version: Some(client_version.clone()),
+        catalog_identity: Some(test_catalog_identity()),
         models: vec![remote_model(
             "expired-file-cache",
             "Expired File Cache",
@@ -377,7 +390,7 @@ async fn file_cache_refresh_ttl_renews_expired_entry_without_serving_it_stale() 
 
     assert_eq!(
         cache
-            .load(&client_version)
+            .load(&client_version, &test_catalog_identity())
             .await
             .expect("cache load succeeds"),
         None,
@@ -385,12 +398,12 @@ async fn file_cache_refresh_ttl_renews_expired_entry_without_serving_it_stale() 
     );
 
     cache
-        .refresh_ttl(&client_version)
+        .refresh_ttl(&client_version, &test_catalog_identity())
         .await
         .expect("TTL refresh succeeds");
 
     let refreshed = cache
-        .load(&client_version)
+        .load(&client_version, &test_catalog_identity())
         .await
         .expect("cache load succeeds")
         .expect("revalidated entry is fresh");
@@ -437,6 +450,7 @@ async fn injected_cache_hit_avoids_remote_fetch() {
         fetched_at: Utc::now(),
         etag: Some("cached-etag".to_string()),
         client_version: Some(crate::client_version_to_whole()),
+        catalog_identity: Some(test_catalog_identity()),
         models: cached_models.clone(),
     });
     let endpoint = TestModelsEndpoint::new(vec![vec![remote_model(
@@ -490,6 +504,7 @@ async fn injected_cache_read_error_falls_back_and_persists_remote_models() {
             fetched_at: stored_entries[0].fetched_at,
             etag: None,
             client_version: Some(crate::client_version_to_whole()),
+            catalog_identity: Some(test_catalog_identity()),
             models: remote_models,
         }]
     );
@@ -527,6 +542,7 @@ async fn injected_cache_ttl_refresh_preserves_cached_payload() {
         fetched_at: cached_at,
         etag: Some("cached-etag".to_string()),
         client_version: Some(crate::client_version_to_whole()),
+        catalog_identity: Some(test_catalog_identity()),
         models: cached_models.clone(),
     });
     let manager = OpenAiModelsManager::new_with_cache(
@@ -1259,6 +1275,10 @@ impl TestAuthAwareModelsEndpoint {
 }
 
 impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        test_catalog_identity()
+    }
+
     fn has_command_auth(&self) -> bool {
         false
     }

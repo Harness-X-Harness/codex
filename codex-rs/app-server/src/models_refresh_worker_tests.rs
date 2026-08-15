@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_models_manager::cache::ModelsCatalogIdentity;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -46,6 +47,10 @@ impl TestModelsEndpoint {
 }
 
 impl ModelsEndpointClient for TestModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        ModelsCatalogIdentity::new("test-authority", "test-decoder-v1")
+    }
+
     fn has_command_auth(&self) -> bool {
         true
     }

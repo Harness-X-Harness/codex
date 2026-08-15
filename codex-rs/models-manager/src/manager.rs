@@ -1,6 +1,7 @@
 use super::cache::FileModelsCache;
 use crate::cache::ModelsCache;
 use crate::cache::ModelsCacheEntry;
+use crate::cache::ModelsCatalogIdentity;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
@@ -35,6 +36,9 @@ const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 /// manager owns refresh policy, cache behavior, and catalog merging; it calls
 /// this endpoint only when it decides a remote refresh should happen.
 pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
+    /// Returns the Authority and decoder contract for this canonical catalog projection.
+    fn catalog_identity(&self) -> ModelsCatalogIdentity;
+
     /// Returns whether this provider can authenticate command-scoped requests.
     fn has_command_auth(&self) -> bool;
 
@@ -87,6 +91,13 @@ type SharedModelsEndpointClient = Arc<dyn ModelsEndpointClient>;
 
 /// Coordinates model discovery plus cached metadata on disk.
 pub trait ModelsManager: fmt::Debug + Send + Sync {
+    /// Load a catalog while preserving an unavailable Authority as an explicit error.
+    fn load_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, CoreResult<ModelsResponse>>;
+
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
@@ -304,6 +315,18 @@ impl StaticModelsManager {
 }
 
 impl ModelsManager for OpenAiModelsManager {
+    fn load_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, CoreResult<ModelsResponse>> {
+        Box::pin(OpenAiModelsManager::load_model_catalog(
+            self,
+            refresh_strategy,
+            http_client_factory,
+        ))
+    }
+
     fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
@@ -346,13 +369,25 @@ impl ModelsManager for OpenAiModelsManager {
 }
 
 impl OpenAiModelsManager {
+    async fn load_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CoreResult<ModelsResponse> {
+        self.refresh_available_models(refresh_strategy, &http_client_factory)
+            .await?;
+        Ok(ModelsResponse {
+            models: self.get_remote_models().await,
+        })
+    }
+
     async fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> ModelsResponse {
         if let Err(err) = self
-            .refresh_available_models(refresh_strategy, &http_client_factory)
+            .load_model_catalog(refresh_strategy, http_client_factory)
             .await
         {
             error!("failed to refresh available models: {err}");
@@ -366,7 +401,12 @@ impl OpenAiModelsManager {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Some(cache) = self.cache.as_ref()
-                && let Err(err) = cache.refresh_ttl(&crate::client_version_to_whole()).await
+                && let Err(err) = cache
+                    .refresh_ttl(
+                        &crate::client_version_to_whole(),
+                        &self.endpoint_client.catalog_identity(),
+                    )
+                    .await
             {
                 error!("failed to renew cache TTL: {err}");
             }
@@ -396,14 +436,35 @@ impl OpenAiModelsManager {
             return Ok(());
         }
 
+        if !self.endpoint_client.remote_catalog_is_authoritative() {
+            return match refresh_strategy {
+                RefreshStrategy::Offline => {
+                    self.try_load_cache().await;
+                    Ok(())
+                }
+                RefreshStrategy::OnlineIfUncached => {
+                    if self.try_load_cache().await {
+                        info!("models cache: using cached models for OnlineIfUncached");
+                        return Ok(());
+                    }
+                    info!("models cache: cache miss, fetching remote models");
+                    self.fetch_and_update_models(http_client_factory).await
+                }
+                RefreshStrategy::Online => self.fetch_and_update_models(http_client_factory).await,
+            };
+        }
+
         match refresh_strategy {
             RefreshStrategy::Offline => {
-                // Only try to load from cache, never fetch
-                self.try_load_cache().await;
-                Ok(())
+                if self.try_load_cache().await {
+                    Ok(())
+                } else {
+                    Err(CodexErr::InvalidRequest(
+                        "authoritative model catalog cache is unavailable".to_string(),
+                    ))
+                }
             }
             RefreshStrategy::OnlineIfUncached => {
-                // Try cache first, fall back to online if unavailable
                 if self.try_load_cache().await {
                     info!("models cache: using cached models for OnlineIfUncached");
                     return Ok(());
@@ -412,8 +473,17 @@ impl OpenAiModelsManager {
                 self.fetch_and_update_models(http_client_factory).await
             }
             RefreshStrategy::Online => {
-                // Always fetch from network
-                self.fetch_and_update_models(http_client_factory).await
+                match self.fetch_and_update_models(http_client_factory).await {
+                    Ok(()) => Ok(()),
+                    Err(fetch_error) => {
+                        if self.try_load_cache().await {
+                            info!("models cache: using eligible cache after refresh failure");
+                            Ok(())
+                        } else {
+                            Err(fetch_error)
+                        }
+                    }
+                }
             }
         }
     }
@@ -434,6 +504,7 @@ impl OpenAiModelsManager {
                 fetched_at: Utc::now(),
                 etag,
                 client_version: Some(client_version),
+                catalog_identity: Some(self.endpoint_client.catalog_identity()),
                 models,
             };
             if let Err(err) = cache.store(&entry).await {
@@ -497,10 +568,11 @@ impl OpenAiModelsManager {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let client_version = crate::client_version_to_whole();
+        let catalog_identity = self.endpoint_client.catalog_identity();
         info!(client_version, "models cache: evaluating cache eligibility");
         // TODO(celia-oai): Include provider identity in cache eligibility so switching
         // providers does not reuse a fresh models_cache.json entry from another provider.
-        let cache_entry = match cache.load(&client_version).await {
+        let cache_entry = match cache.load(&client_version, &catalog_identity).await {
             Ok(Some(cache_entry)) => cache_entry,
             Ok(None) => {
                 info!("models cache: no usable cache entry");
@@ -519,6 +591,10 @@ impl OpenAiModelsManager {
             );
             return false;
         }
+        if cache_entry.catalog_identity.as_ref() != Some(&catalog_identity) {
+            info!("models cache: catalog identity mismatch");
+            return false;
+        }
         let models = cache_entry.models.clone();
         *self.etag.write().await = cache_entry.etag.clone();
         self.apply_remote_models(models.clone()).await;
@@ -532,6 +608,18 @@ impl OpenAiModelsManager {
 }
 
 impl ModelsManager for StaticModelsManager {
+    fn load_model_catalog(
+        &self,
+        _refresh_strategy: RefreshStrategy,
+        _http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, CoreResult<ModelsResponse>> {
+        Box::pin(async move {
+            Ok(ModelsResponse {
+                models: self.get_remote_models().await,
+            })
+        })
+    }
+
     fn get_default_model<'a>(
         &'a self,
         model: &'a Option<String>,

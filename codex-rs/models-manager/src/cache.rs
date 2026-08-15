@@ -31,6 +31,7 @@ pub trait ModelsCache: fmt::Debug + Send + Sync {
     fn load<'a>(
         &'a self,
         client_version: &'a str,
+        catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>>;
 
     /// Stores `entry`, replacing the snapshot for this cache implementation's lookup identity.
@@ -52,11 +53,31 @@ pub trait ModelsCache: fmt::Debug + Send + Sync {
     fn refresh_ttl<'a>(
         &'a self,
         client_version: &'a str,
+        catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>>;
 }
 
 /// Boxed future returned by [`ModelsCache`] implementations.
 pub type ModelsCacheFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Provider Adapter identity for one canonical catalog projection.
+///
+/// Provider identity is enforced by the cache implementation's lookup partition. These fields
+/// prevent a different Authority or decoder contract from reusing that Provider's old entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelsCatalogIdentity {
+    pub authority: String,
+    pub decoder_version: String,
+}
+
+impl ModelsCatalogIdentity {
+    pub fn new(authority: impl Into<String>, decoder_version: impl Into<String>) -> Self {
+        Self {
+            authority: authority.into(),
+            decoder_version: decoder_version.into(),
+        }
+    }
+}
 
 /// Serialized model catalog and validation metadata stored in a [`ModelsCache`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,6 +92,11 @@ pub struct ModelsCacheEntry {
     /// The models manager rejects entries whose value is absent or differs from its current version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_version: Option<String>,
+    /// Authority and decoder contract that produced this canonical projection.
+    ///
+    /// Legacy entries have no identity and are intentionally ineligible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_identity: Option<ModelsCatalogIdentity>,
     /// Models returned by the catalog endpoint.
     #[serde(
         deserialize_with = "codex_protocol::openai_models::deserialize_model_infos_with_legacy_base"
@@ -136,10 +162,17 @@ impl ModelsCache for FileModelsCache {
     fn load<'a>(
         &'a self,
         client_version: &'a str,
+        catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>> {
-        Box::pin(
-            async move { load_fresh_file(&self.cache_path, self.cache_ttl, client_version).await },
-        )
+        Box::pin(async move {
+            load_fresh_file(
+                &self.cache_path,
+                self.cache_ttl,
+                client_version,
+                catalog_identity,
+            )
+            .await
+        })
     }
 
     fn store<'a>(
@@ -151,13 +184,19 @@ impl ModelsCache for FileModelsCache {
 
     fn refresh_ttl<'a>(
         &'a self,
-        _client_version: &'a str,
+        client_version: &'a str,
+        catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
         Box::pin(async move {
             let mut entry = load_file(&self.cache_path)
                 .await
                 .map_err(cache_error)?
                 .ok_or_else(|| ModelsCacheError::new("cache not found"))?;
+            if entry.client_version.as_deref() != Some(client_version)
+                || entry.catalog_identity.as_ref() != Some(catalog_identity)
+            {
+                return Err(ModelsCacheError::new("cache identity mismatch"));
+            }
             if entry.is_fresh(self.cache_ttl / 2) {
                 return Ok(());
             }
@@ -171,6 +210,7 @@ async fn load_fresh_file(
     cache_path: &PathBuf,
     cache_ttl: Duration,
     expected_version: &str,
+    expected_catalog_identity: &ModelsCatalogIdentity,
 ) -> Result<Option<ModelsCacheEntry>, ModelsCacheError> {
     info!(
         cache_path = %cache_path.display(),
@@ -192,6 +232,13 @@ async fn load_fresh_file(
             expected_version,
             cached_version = ?cache.client_version,
             "models cache: cache version mismatch"
+        );
+        return Ok(None);
+    }
+    if cache.catalog_identity.as_ref() != Some(expected_catalog_identity) {
+        info!(
+            cache_path = %cache_path.display(),
+            "models cache: catalog identity mismatch"
         );
         return Ok(None);
     }
