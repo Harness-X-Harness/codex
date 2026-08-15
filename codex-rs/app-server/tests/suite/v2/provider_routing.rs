@@ -316,8 +316,8 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
         .await;
     std::fs::remove_dir_all(provider_models_home(fixture.codex_home.path(), "grok"))?;
 
-    let completed = app
-        .start_turn_and_wait_for_completion(TurnStartParams {
+    let request_id = app
+        .send_turn_start_request(TurnStartParams {
             thread_id: started.thread.id,
             input: vec![UserInput::Text {
                 text: "Do not egress without an authoritative model".to_string(),
@@ -326,14 +326,14 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
             ..Default::default()
         })
         .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
 
-    assert_eq!(completed.turn.status, TurnStatus::Failed);
-    assert!(
-        completed
-            .turn
-            .error
-            .is_some_and(|error| error.message.contains("AuthorityUnavailable"))
-    );
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("AuthorityUnavailable"));
     assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
     Ok(())
 }
