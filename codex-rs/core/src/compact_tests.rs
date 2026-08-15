@@ -27,9 +27,9 @@ fn remote_compaction_keeps_hosted_grok_items_but_not_local_custom_calls() {
     };
     let image = ResponseItem::GrokImageGenerationCall {
         id: Some(ResponseItemId::with_suffix("ig", "1")),
-        status: "failed".to_string(),
+        status: "completed".to_string(),
         prompt: Some("Draw a fox.".to_string()),
-        result: None,
+        result: Some("durable-inline-result".to_string()),
         internal_chat_message_metadata_passthrough: None,
     };
 

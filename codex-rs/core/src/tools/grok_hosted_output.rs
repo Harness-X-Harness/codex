@@ -112,15 +112,14 @@ pub(super) fn classify_grok_hosted_output<'a>(
                     "X Search",
                 )
             });
-            if let Some(Ok(item_id)) = validation {
-                return Ok(GrokHostedOutput::Hosted {
-                    item_id,
-                    owner: GrokHostedOutputOwner::XSearch,
-                    projects_custom_output: true,
-                });
-            }
-
             let reason = match validation {
+                Some(Ok(item_id)) => {
+                    return Ok(GrokHostedOutput::Hosted {
+                        item_id,
+                        owner: GrokHostedOutputOwner::XSearch,
+                        projects_custom_output: true,
+                    });
+                }
                 Some(Err(FunctionCallError::Fatal(reason))) => reason,
                 Some(Err(other)) => other.to_string(),
                 None if !declared => {

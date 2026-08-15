@@ -70,8 +70,7 @@ fn decode_grok_response_item(item: Value) -> Result<ResponseItem, serde_json::Er
         ResponseItem::ImageGenerationCall { .. } => {
             unsupported_grok_output("openai_image_generation_call")
         }
-        ResponseItem::GrokImageGenerationCall { .. }
-        | ResponseItem::GrokImageGenerationWireCall { .. } => {
+        ResponseItem::GrokImageGenerationCall { .. } => {
             unsupported_grok_output("internal_grok_image_generation_call")
         }
         ResponseItem::Compaction { .. } => unsupported_grok_output("compaction"),

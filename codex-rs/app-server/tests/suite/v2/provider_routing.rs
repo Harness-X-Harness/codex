@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -197,6 +198,15 @@ enable_request_compression = false
         self.replace_config_line(
             "[features]\nenable_request_compression = false",
             "[features]\nimage_generation = false\nenable_request_compression = false",
+        )
+    }
+
+    fn enable_auto_compaction(&self, token_limit: i64) -> Result<()> {
+        self.replace_config_line(
+            "approval_policy = \"never\"",
+            &format!(
+                "approval_policy = \"never\"\ncompact_prompt = \"Summarize the conversation.\"\nmodel_auto_compact_token_limit = {token_limit}"
+            ),
         )
     }
 
@@ -1013,27 +1023,29 @@ async fn grok_duplicate_ordinary_tool_terminal_dispatches_once() -> Result<()> {
 }
 
 #[tokio::test]
-async fn oversized_grok_image_replay_fails_before_second_egress() -> Result<()> {
+async fn large_grok_image_result_uses_bounded_second_request_projection() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let large_result = "A".repeat(400_000);
-    let grok_responses = mount_sse_once_match(
+    let grok_responses = responses::mount_sse_sequence(
         &fixture.grok_server,
-        header("authorization", "Bearer grok-test-key"),
-        responses::sse(vec![
-            responses::ev_response_created("grok-large-image-response"),
-            serde_json::json!({
-                "type": "response.output_item.done",
-                "item": {
-                    "id": "large-image-1",
-                    "type": "image_generation_call",
-                    "status": "completed",
-                    "prompt": "Generate a large test artifact.",
-                    "result": large_result
-                }
-            }),
-            responses::ev_assistant_message("grok-large-image-message", "Done"),
-            responses::ev_completed("grok-large-image-response"),
-        ]),
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("grok-large-image-response"),
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "id": "large-image-1",
+                        "type": "image_generation_call",
+                        "status": "completed",
+                        "prompt": "Generate a large test artifact.",
+                        "result": large_result
+                    }
+                }),
+                responses::ev_assistant_message("grok-large-image-message", "Done"),
+                responses::ev_completed("grok-large-image-response"),
+            ]),
+            completion_sse("grok-large-image-follow-up"),
+        ],
     )
     .await;
     let mut app = fixture.start_app().await?;
@@ -1053,11 +1065,269 @@ async fn oversized_grok_image_replay_fails_before_second_egress() -> Result<()> 
     let second = app
         .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
         .await?;
+    assert_eq!(second.turn.status, TurnStatus::Completed);
+    let requests = grok_responses.requests();
+    assert_eq!(requests.len(), 2);
+    let second_body = requests[1].body_json();
+    let image_history = second_body["input"]
+        .as_array()
+        .context("second Grok request input should be an array")?
+        .iter()
+        .find(|item| item["id"] == "large-image-1")
+        .context("second Grok request should retain bounded image history")?;
+    assert_eq!(image_history["type"], "image_generation_call");
+    assert_eq!(image_history["status"], "completed");
+    assert_eq!(image_history["prompt"], "Generate a large test artifact.");
+    assert!(
+        image_history.get("result").is_none(),
+        "request projection must omit the durable inline image result"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_grok_image_is_visible_and_replays_with_the_exact_terminal_shape() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let grok_responses = responses::mount_sse_sequence(
+        &fixture.grok_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("grok-failed-image-response"),
+                grok_image_failed_done_event("failed-image-1", "Failed image prompt"),
+                responses::ev_assistant_message("grok-failed-image-message", "Unable to draw"),
+                responses::ev_completed("grok-failed-image-response"),
+            ]),
+            completion_sse("grok-failed-image-follow-up"),
+        ],
+    )
+    .await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let rollout_path = started
+        .thread
+        .path
+        .clone()
+        .context("failed Grok image thread must have a rollout path")?;
+
+    let request_id = app
+        .send_turn_start_request(turn_for_thread(&started.thread.id))
+        .await?;
+    let _: TurnStartResponse = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
+    let failed_image = loop {
+        let completed: ItemCompletedNotification =
+            timeout(DEFAULT_TIMEOUT, app.read_notification("item/completed")).await??;
+        if let ThreadItem::ImageGeneration(image) = completed.item {
+            break image;
+        }
+    };
+    assert_eq!(failed_image.id, "failed-image-1");
+    assert_eq!(failed_image.status, "failed");
+    assert_eq!(failed_image.prompt.as_deref(), Some("Failed image prompt"));
+    assert_eq!(failed_image.result, "");
+    assert!(failed_image.saved_path.is_none());
+    timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let follow_up = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(follow_up.turn.status, TurnStatus::Completed);
+    let requests = grok_responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        projected_grok_images(&requests[1].body_json()),
+        vec![serde_json::json!({
+            "id": "failed-image-1",
+            "type": "image_generation_call",
+            "status": "failed",
+            "prompt": "Failed image prompt"
+        })]
+    );
+    assert_rollout_preserves_failed_grok_image(
+        &rollout_path,
+        "failed-image-1",
+        "Failed image prompt",
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn multiple_grok_images_survive_cold_resume_and_fork_with_bounded_projection() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let grok_responses = responses::mount_sse_sequence(
+        &fixture.grok_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("grok-image-history-seed"),
+                grok_image_done_event(
+                    "provider-image-first",
+                    "First image prompt",
+                    TINY_PNG_DATA_URL,
+                ),
+                grok_image_done_event(
+                    "provider-image-second",
+                    "Second image prompt",
+                    TINY_PNG_DATA_URL,
+                ),
+                responses::ev_assistant_message("grok-image-history-message", "Done"),
+                responses::ev_completed("grok-image-history-seed"),
+            ]),
+            completion_sse("grok-image-resumed-follow-up"),
+            completion_sse("grok-image-fork-follow-up"),
+        ],
+    )
+    .await;
+    let mut primary = fixture.start_app().await?;
+    let started = primary
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let rollout_path = started
+        .thread
+        .path
+        .clone()
+        .context("Grok image thread must have a rollout path")?;
+
+    materialize_thread(&mut primary, &started.thread.id).await?;
+    timeout(DEFAULT_TIMEOUT, primary.shutdown_gracefully()).await??;
+
+    let mut resumed_app = fixture.start_app().await?;
+    let resume_id = resumed_app
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        resumed_app.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let resumed = to_response::<ThreadResumeResponse>(response)?;
+    materialize_thread(&mut resumed_app, &resumed.thread.id).await?;
+
+    let fork_id = resumed_app
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: resumed.thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        resumed_app.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let forked = to_response::<ThreadForkResponse>(response)?;
+    let fork_rollout_path = forked
+        .thread
+        .path
+        .clone()
+        .context("forked Grok image thread must have a rollout path")?;
+    materialize_thread(&mut resumed_app, &forked.thread.id).await?;
+
+    let requests = grok_responses.requests();
+    assert_eq!(requests.len(), 3);
+    for request in &requests[1..] {
+        let request_body = request.body_json();
+        assert_eq!(
+            projected_grok_images(&request_body),
+            vec![
+                serde_json::json!({
+                    "id": "provider-image-first",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "prompt": "First image prompt"
+                }),
+                serde_json::json!({
+                    "id": "provider-image-second",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "prompt": "Second image prompt"
+                }),
+            ]
+        );
+        assert_provider_item_order(
+            &request_body,
+            &[
+                "provider-image-first",
+                "provider-image-second",
+                "grok-image-history-message",
+            ],
+        )?;
+    }
+    let expected_durable_images = [
+        (
+            "provider-image-first",
+            "First image prompt",
+            TINY_PNG_DATA_URL,
+        ),
+        (
+            "provider-image-second",
+            "Second image prompt",
+            TINY_PNG_DATA_URL,
+        ),
+    ];
+    assert_rollout_preserves_grok_images(&rollout_path, &expected_durable_images).await?;
+    assert_rollout_preserves_grok_images(&fork_rollout_path, &expected_durable_images).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_bounded_grok_image_projection_fails_before_second_egress() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let oversized_prompt = "P".repeat(400_000);
+    let grok_responses = mount_sse_once_match(
+        &fixture.grok_server,
+        header("authorization", "Bearer grok-test-key"),
+        responses::sse(vec![
+            responses::ev_response_created("grok-oversized-image-prompt-response"),
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "oversized-image-prompt-1",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "prompt": oversized_prompt,
+                    "result": "durable-result"
+                }
+            }),
+            responses::ev_assistant_message("grok-oversized-image-prompt-message", "Done"),
+            responses::ev_completed("grok-oversized-image-prompt-response"),
+        ]),
+    )
+    .await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let first = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+    assert_eq!(first.turn.status, TurnStatus::Completed);
+
+    let second = app
+        .start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
     assert_eq!(second.turn.status, TurnStatus::Failed);
     assert_eq!(
         grok_responses.requests().len(),
         1,
-        "oversized projected history must not reach the Provider"
+        "a projected request that exceeds the model budget must not reach the Provider"
     );
     Ok(())
 }
@@ -1849,6 +2119,134 @@ async fn assert_rollout_omits_tool_output(
             ..
         }) if persisted_call_id == call_id
     )));
+    Ok(())
+}
+
+fn grok_image_done_event(item_id: &str, prompt: &str, result: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "id": item_id,
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": prompt,
+            "result": result
+        }
+    })
+}
+
+fn grok_image_failed_done_event(item_id: &str, prompt: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "id": item_id,
+            "type": "image_generation_call",
+            "status": "failed",
+            "prompt": prompt
+        }
+    })
+}
+
+fn projected_grok_images(request_body: &serde_json::Value) -> Vec<serde_json::Value> {
+    request_body["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "image_generation_call")
+        .cloned()
+        .collect()
+}
+
+fn assert_provider_item_order(
+    request_body: &serde_json::Value,
+    expected_ids: &[&str],
+) -> Result<()> {
+    let input = request_body["input"]
+        .as_array()
+        .context("Grok request input should be an array")?;
+    let positions = expected_ids
+        .iter()
+        .map(|expected_id| {
+            input
+                .iter()
+                .position(|item| item["id"].as_str() == Some(expected_id))
+                .with_context(|| format!("Grok request is missing provider item `{expected_id}`"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "Grok request changed provider item order: {positions:?}"
+    );
+    Ok(())
+}
+
+async fn assert_rollout_preserves_grok_images(
+    rollout_path: &std::path::Path,
+    expected: &[(&str, &str, &str)],
+) -> Result<()> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let InitialHistory::Resumed(history) = history else {
+        anyhow::bail!("expected materialized Grok rollout history");
+    };
+    let actual = history
+        .history
+        .iter()
+        .filter_map(|item| {
+            let RolloutItem::ResponseItem(ResponseItem::GrokImageGenerationCall {
+                id: Some(id),
+                status,
+                prompt: Some(prompt),
+                result: Some(result),
+                ..
+            }) = item
+            else {
+                return None;
+            };
+            Some((
+                id.as_str(),
+                status.as_str(),
+                prompt.as_str(),
+                result.as_str(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let expected = expected
+        .iter()
+        .map(|(id, prompt, result)| (*id, "completed", *prompt, *result))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+async fn assert_rollout_preserves_failed_grok_image(
+    rollout_path: &std::path::Path,
+    expected_id: &str,
+    expected_prompt: &str,
+) -> Result<()> {
+    let history = RolloutRecorder::get_rollout_history(rollout_path).await?;
+    let InitialHistory::Resumed(history) = history else {
+        anyhow::bail!("expected materialized Grok rollout history");
+    };
+    assert_eq!(
+        history
+            .history
+            .iter()
+            .filter(|item| matches!(
+                item,
+                RolloutItem::ResponseItem(ResponseItem::GrokImageGenerationCall {
+                    id: Some(id),
+                    status,
+                    prompt: Some(prompt),
+                    result: None,
+                    ..
+                }) if id.as_str() == expected_id
+                    && status == "failed"
+                    && prompt == expected_prompt
+            ))
+            .count(),
+        1,
+        "failed Grok image terminal evidence must remain durable exactly once"
+    );
     Ok(())
 }
 

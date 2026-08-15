@@ -22,6 +22,7 @@ use codex_model_provider::ProviderRequestSetup;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider::unauthenticated_auth_provider;
+use codex_model_provider_info::ModelProviderAdapter;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::SharedModelsManager;
@@ -2282,6 +2283,82 @@ async fn responses_websocket_uses_previous_response_id_when_prefix_after_complet
     assert_eq!(
         second["input"],
         serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental input")
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_websocket_sends_the_full_bounded_image_projection() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-1"),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "provider-image-id",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "prompt": "Draw a fox.",
+                    "result": "durable-inline-result"
+                }
+            }),
+            ev_completed("resp-1"),
+        ],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let mut provider = websocket_provider(&server);
+    provider.wire_api = WireApi::GrokResponses;
+    provider.provider_adapter = Some(ModelProviderAdapter::Grok);
+    provider.experimental_bearer_token = Some("grok-test-key".to_string());
+    let harness = websocket_harness_with_provider_options(
+        provider,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+    )
+    .await;
+    let mut client_session = harness
+        .client
+        .new_session()
+        .await
+        .expect("test request strategy should resolve");
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::from_server("provider-image-id".to_string())),
+            status: "completed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: Some("durable-inline-result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        message_item("second"),
+    ]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let second = connection.get(1).expect("missing request").body_json();
+    assert!(second["previous_response_id"].is_null());
+    assert_eq!(
+        second["input"],
+        json!([
+            serde_json::to_value(message_item("hello")).expect("serialize first message"),
+            {
+                "id": "provider-image-id",
+                "type": "image_generation_call",
+                "status": "completed",
+                "prompt": "Draw a fox."
+            },
+            serde_json::to_value(message_item("second")).expect("serialize second message")
+        ])
     );
 
     server.shutdown().await;

@@ -281,7 +281,6 @@ fn response_item_type(item: &ResponseItem) -> &'static str {
         ResponseItem::WebSearchCall { .. } => "response.web_search_call",
         ResponseItem::ImageGenerationCall { .. } => "response.image_generation_call",
         ResponseItem::GrokImageGenerationCall { .. } => "response.grok_image_generation_call",
-        ResponseItem::GrokImageGenerationWireCall { .. } => "response.image_generation_call",
         ResponseItem::Compaction { .. } => "response.compaction",
         ResponseItem::CompactionTrigger { .. } => "response.compaction_trigger",
         ResponseItem::ContextCompaction { .. } => "response.context_compaction",

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_api::ResponsesApiInput;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -83,7 +84,7 @@ impl ModelProvider for GrokModelProvider {
     fn project_model_input(
         &self,
         input: Vec<ResponseItem>,
-    ) -> Result<Vec<ResponseItem>, codex_protocol::error::CodexErr> {
+    ) -> Result<ResponsesApiInput, codex_protocol::error::CodexErr> {
         grok_model_input::project(input)
     }
 

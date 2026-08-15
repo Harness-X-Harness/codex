@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -23,11 +24,69 @@ use tokio::sync::mpsc;
 pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
 pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
 
+/// Request-only ModelInput with canonical items for client bookkeeping and an
+/// optional Provider-owned wire projection for serialization.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResponsesApiInput {
+    items: Vec<ResponseItem>,
+    wire_items: Option<Vec<Value>>,
+}
+
+impl ResponsesApiInput {
+    pub fn from_projected(items: Vec<ResponseItem>, wire_items: Vec<Value>) -> Option<Self> {
+        (items.len() == wire_items.len()).then_some(Self {
+            items,
+            wire_items: Some(wire_items),
+        })
+    }
+
+    pub fn into_items(self) -> Vec<ResponseItem> {
+        self.items
+    }
+
+    pub fn wire_items(&self) -> Option<&[Value]> {
+        self.wire_items.as_deref()
+    }
+
+    pub fn has_wire_projection(&self) -> bool {
+        self.wire_items.is_some()
+    }
+}
+
+impl From<Vec<ResponseItem>> for ResponsesApiInput {
+    fn from(items: Vec<ResponseItem>) -> Self {
+        Self {
+            items,
+            wire_items: None,
+        }
+    }
+}
+
+impl Deref for ResponsesApiInput {
+    type Target = [ResponseItem];
+
+    fn deref(&self) -> &Self::Target {
+        &self.items
+    }
+}
+
+impl Serialize for ResponsesApiInput {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.wire_items {
+            Some(wire_items) => wire_items.serialize(serializer),
+            None => self.items.serialize(serializer),
+        }
+    }
+}
+
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompactionInput<'a> {
     pub model: &'a str,
-    pub input: &'a [ResponseItem],
+    pub input: &'a ResponsesApiInput,
     #[serde(skip_serializing_if = "str::is_empty")]
     pub instructions: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -253,7 +312,7 @@ pub struct ResponsesApiRequest {
     pub model: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
-    pub input: Vec<ResponseItem>,
+    pub input: ResponsesApiInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ResponsesApiTools>,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -306,7 +365,7 @@ pub struct ResponseCreateWsRequest<'a> {
     pub instructions: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
-    pub input: &'a [ResponseItem],
+    pub input: &'a ResponsesApiInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<&'a RawValue>,
     #[serde(skip_serializing_if = "str::is_empty")]

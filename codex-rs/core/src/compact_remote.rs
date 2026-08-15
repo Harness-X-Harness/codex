@@ -368,7 +368,6 @@ pub(crate) fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::GrokImageGenerationWireCall { .. }
         | ResponseItem::Other => false,
         ResponseItem::GrokImageGenerationCall { .. } => true,
     }

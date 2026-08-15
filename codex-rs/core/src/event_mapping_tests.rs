@@ -666,6 +666,13 @@ fn projects_grok_x_search_and_image_items_without_changing_durable_shapes() {
         result: Some("opaque-image-result".to_string()),
         internal_chat_message_metadata_passthrough: None,
     };
+    let failed_image_item = ResponseItem::GrokImageGenerationCall {
+        id: Some(ResponseItemId::with_suffix("ig", "failed")),
+        status: "failed".to_string(),
+        prompt: Some("Draw a failed fox.".to_string()),
+        result: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
 
     let Some(TurnItem::WebSearch(x_search)) = parse_turn_item(&x_item) else {
         panic!("expected X Search UI projection");
@@ -691,6 +698,20 @@ fn projects_grok_x_search_and_image_items_without_changing_durable_shapes() {
             revised_prompt: None,
             prompt: Some("Draw a fox.".to_string()),
             result: "opaque-image-result".to_string(),
+            saved_path: None,
+        }
+    );
+    let Some(TurnItem::ImageGeneration(failed_image)) = parse_turn_item(&failed_image_item) else {
+        panic!("expected failed Grok image UI projection");
+    };
+    assert_eq!(
+        failed_image,
+        codex_protocol::items::ImageGenerationItem {
+            id: "ig_failed".to_string(),
+            status: "failed".to_string(),
+            revised_prompt: None,
+            prompt: Some("Draw a failed fox.".to_string()),
+            result: String::new(),
             saved_path: None,
         }
     );

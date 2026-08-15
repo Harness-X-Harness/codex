@@ -84,7 +84,6 @@ use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_login::CodexAuth;
 use codex_model_provider::RemoteCompactionSupport;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
@@ -2414,8 +2413,7 @@ async fn try_run_sampling_request(
                         | ResponseItem::LocalShellCall { call_id, .. } => call_id.as_deref(),
                         ResponseItem::WebSearchCall { id, .. }
                         | ResponseItem::ImageGenerationCall { id, .. }
-                        | ResponseItem::GrokImageGenerationCall { id, .. }
-                        | ResponseItem::GrokImageGenerationWireCall { id, .. } => {
+                        | ResponseItem::GrokImageGenerationCall { id, .. } => {
                             id.as_ref().map(codex_protocol::ResponseItemId::as_str)
                         }
                         _ => None,
@@ -2515,7 +2513,6 @@ async fn try_run_sampling_request(
                     | ResponseItem::WebSearchCall { .. }
                     | ResponseItem::ImageGenerationCall { .. }
                     | ResponseItem::GrokImageGenerationCall { .. }
-                    | ResponseItem::GrokImageGenerationWireCall { .. }
                     | ResponseItem::Compaction { .. }
                     | ResponseItem::CompactionTrigger { .. }
                     | ResponseItem::ContextCompaction { .. }

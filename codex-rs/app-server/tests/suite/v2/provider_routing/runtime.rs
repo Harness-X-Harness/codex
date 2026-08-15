@@ -233,7 +233,16 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
     let grok_responses = responses::mount_sse_sequence(
         &fixture.grok_server,
         vec![
-            completion_sse("grok-before-compact"),
+            responses::sse(vec![
+                responses::ev_response_created("grok-before-compact"),
+                grok_image_done_event(
+                    "provider-image-before-compact",
+                    "Compaction image prompt",
+                    TINY_PNG_DATA_URL,
+                ),
+                responses::ev_assistant_message("grok-before-compact-message", "Done"),
+                responses::ev_completed("grok-before-compact"),
+            ]),
             completion_sse("grok-compact-summary"),
             completion_sse("grok-after-compact"),
         ],
@@ -246,6 +255,11 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
             ..Default::default()
         })
         .await?;
+    let rollout_path = grok_thread
+        .thread
+        .path
+        .clone()
+        .context("Grok compaction thread must have a rollout path")?;
     timeout(
         DEFAULT_TIMEOUT,
         materialize_thread(&mut app, &grok_thread.thread.id),
@@ -314,13 +328,102 @@ async fn grok_compaction_and_follow_up_keep_provider_binding_and_auth() -> Resul
 
     let requests = grok_responses.requests();
     assert_eq!(requests.len(), 3);
-    for request in requests {
+    assert_eq!(
+        projected_grok_images(&requests[1].body_json()),
+        vec![json!({
+            "id": "provider-image-before-compact",
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": "Compaction image prompt"
+        })],
+        "the compaction request must use the same bounded image projection"
+    );
+    for request in &requests {
         assert_eq!(
             request.header("authorization").as_deref(),
             Some("Bearer grok-test-key")
         );
         assert_eq!(request.body_json()["model"], "grok-model");
+        assert!(
+            projected_grok_images(&request.body_json())
+                .iter()
+                .all(|image| image.get("result").is_none()),
+            "no Grok request may reinsert the durable inline image result"
+        );
     }
+    assert_rollout_preserves_grok_images(
+        &rollout_path,
+        &[(
+            "provider-image-before-compact",
+            "Compaction image prompt",
+            TINY_PNG_DATA_URL,
+        )],
+    )
+    .await?;
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_auto_compaction_uses_the_same_bounded_image_projection() -> Result<()> {
+    let fixture = ProviderRoutingFixture::with_implicit_openai_default().await?;
+    fixture.enable_auto_compaction(/*token_limit*/ 1_000)?;
+    let grok_responses = responses::mount_sse_sequence(
+        &fixture.grok_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("grok-before-auto-compact"),
+                grok_image_done_event(
+                    "provider-image-before-auto-compact",
+                    "Auto compaction image prompt",
+                    TINY_PNG_DATA_URL,
+                ),
+                responses::ev_assistant_message("grok-auto-compact-message", "Done"),
+                responses::ev_completed_with_tokens(
+                    "grok-before-auto-compact",
+                    /*total_tokens*/ 70_000,
+                ),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("grok-auto-compact-summary"),
+                responses::ev_assistant_message("grok-auto-compact-summary-message", "Summary"),
+                responses::ev_completed_with_tokens(
+                    "grok-auto-compact-summary",
+                    /*total_tokens*/ 200,
+                ),
+            ]),
+            completion_sse("grok-after-auto-compact"),
+        ],
+    )
+    .await;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    materialize_thread(&mut app, &started.thread.id).await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+
+    let requests = grok_responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        projected_grok_images(&requests[1].body_json()),
+        vec![json!({
+            "id": "provider-image-before-auto-compact",
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": "Auto compaction image prompt"
+        })],
+        "automatic compaction must use the Adapter's bounded image projection"
+    );
+    assert!(requests.iter().all(|request| {
+        projected_grok_images(&request.body_json())
+            .iter()
+            .all(|image| image.get("result").is_none())
+    }));
     assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
     Ok(())
 }

@@ -48,6 +48,7 @@ use codex_api::ReasoningContext;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
+use codex_api::ResponsesApiInput;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
@@ -220,6 +221,7 @@ struct ModelClientState {
     cached_websocket_session: StdMutex<Option<CachedWebsocketSession>>,
 }
 
+#[derive(Debug)]
 struct CachedWebsocketSession {
     request_strategy: ProviderRequestStrategy,
     websocket_session: WebsocketSession,
@@ -662,7 +664,7 @@ impl ModelClient {
             text,
             ..
         } = request;
-        let input = self.prepare_response_items_for_request(input)?;
+        let input = self.prepare_response_items_for_request(input.into_items())?;
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -1000,7 +1002,7 @@ impl ModelClient {
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions,
-            input,
+            input: input.into(),
             tools,
             tool_choice: Self::tool_choice_for_responses(
                 self.state.provider.info().wire_api,
@@ -1024,14 +1026,8 @@ impl ModelClient {
     fn prepare_response_items_for_request(
         &self,
         input: Vec<ResponseItem>,
-    ) -> Result<Vec<ResponseItem>> {
-        let mut input = self.state.provider.project_model_input(input)?;
-        for item in &mut input {
-            if item.id().is_some_and(|id| !id.is_prefixed()) {
-                item.set_id(/*new_id*/ None);
-            }
-        }
-        Ok(input)
+    ) -> Result<ResponsesApiInput> {
+        self.state.provider.project_model_input(input)
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
@@ -1602,9 +1598,9 @@ impl ModelClientSession {
                     .extra_headers
                     .insert(X_CODEX_ROUTING_HINT_HEADER, header_value);
             }
-            request.input = self
-                .client
-                .prepare_response_items_for_request(request.input)?;
+            request.input = self.client.prepare_response_items_for_request(
+                std::mem::take(&mut request.input).into_items(),
+            )?;
             ensure_projected_request_fits(&request, &request.input, model_info)?;
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
@@ -1707,7 +1703,7 @@ impl ModelClientSession {
                 client_setup.agent_identity_telemetry.clone(),
                 pending_retry,
             );
-            let mut request = self.client.build_responses_request(
+            let request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1736,7 +1732,7 @@ impl ModelClientSession {
             }
             let projected_full_input = self
                 .client
-                .prepare_response_items_for_request(request.input.clone())?;
+                .prepare_response_items_for_request(request.input.clone().into_items())?;
             let admission_payload = ResponseCreateWsRequest {
                 previous_response_id: None,
                 input: &projected_full_input,
@@ -1784,8 +1780,15 @@ impl ModelClientSession {
                 Err(err) => return Err(self.client.state.provider.map_api_error(err)),
             }
 
+            // A Provider-owned projection must be the exact history representation sent on the
+            // wire. Reusing `previous_response_id` would instead leave the prior Provider-side
+            // history implicit and bypass that projection.
             let (incremental_request, previous_response_id_from_untraced_warmup) =
-                self.prepare_websocket_request(&request);
+                if projected_full_input.has_wire_projection() {
+                    (None, false)
+                } else {
+                    self.prepare_websocket_request(&request)
+                };
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
                 // model inference attempt that should appear in rollout traces.
@@ -1800,29 +1803,19 @@ impl ModelClientSession {
                 inference_trace_attempt.record_started(&request);
             }
 
-            let (previous_response_id, mut incremental_items) = match incremental_request {
+            let (previous_response_id, incremental_items) = match incremental_request {
                 Some((response_id, items)) => (Some(response_id), Some(items)),
                 None => (None, None),
             };
-            let original_item_ids = if let Some(incremental_items) = &mut incremental_items {
-                *incremental_items = self
+            let projected_request_input = match incremental_items {
+                Some(incremental_items) => self
                     .client
-                    .prepare_response_items_for_request(std::mem::take(incremental_items))?;
-                None
-            } else {
-                let original_item_ids = request
-                    .input
-                    .iter()
-                    .map(|item| item.id().cloned())
-                    .collect::<Vec<_>>();
-                request.input = self
-                    .client
-                    .prepare_response_items_for_request(request.input)?;
-                Some(original_item_ids)
+                    .prepare_response_items_for_request(incremental_items)?,
+                None => projected_full_input,
             };
             let ws_payload = ResponseCreateWsRequest {
                 previous_response_id,
-                input: incremental_items.as_deref().unwrap_or(&request.input),
+                input: &projected_request_input,
                 generate: if warmup { Some(false) } else { None },
                 client_metadata: response_create_client_metadata(
                     Some(client_metadata),
@@ -1849,11 +1842,6 @@ impl ModelClientSession {
                     Some(Arc::clone(&self.turn_state)),
                 )
                 .await;
-            if let Some(original_item_ids) = original_item_ids {
-                for (item, original_item_id) in request.input.iter_mut().zip(original_item_ids) {
-                    item.set_id(original_item_id);
-                }
-            }
             self.websocket_session.last_request = Some(request);
             self.websocket_session.last_response_from_untraced_warmup = warmup;
             let stream_result = stream_result.map_err(|err| {

@@ -1022,7 +1022,7 @@ pub enum ResponseItem {
     },
     /// Durable representation of the official Grok Gateway image-generation shape.
     /// The internal tag differs from the Gateway tag so `prompt` is never coerced to
-    /// OpenAI's `revised_prompt`; the Grok codec restores the native tag on replay.
+    /// OpenAI's `revised_prompt`; the Grok Provider Adapter owns its request projection.
     GrokImageGenerationCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1036,20 +1036,6 @@ pub enum ResponseItem {
         result: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
-    },
-    #[serde(rename = "image_generation_call", skip_deserializing)]
-    #[schemars(skip)]
-    #[ts(skip)]
-    GrokImageGenerationWireCall {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<ResponseItemId>,
-        status: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        prompt: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        result: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     },
     #[serde(alias = "compaction_summary")]
@@ -1102,7 +1088,6 @@ impl ResponseItem {
             | Self::Reasoning { id, .. }
             | Self::ImageGenerationCall { id, .. }
             | Self::GrokImageGenerationCall { id, .. }
-            | Self::GrokImageGenerationWireCall { id, .. }
             | Self::Compaction { id, .. }
             | Self::ContextCompaction { id, .. } => id.as_ref(),
             Self::CompactionTrigger { .. } | Self::Other => None,
@@ -1126,7 +1111,6 @@ impl ResponseItem {
             | Self::Reasoning { id, .. }
             | Self::ImageGenerationCall { id, .. }
             | Self::GrokImageGenerationCall { id, .. }
-            | Self::GrokImageGenerationWireCall { id, .. }
             | Self::Compaction { id, .. }
             | Self::ContextCompaction { id, .. } => *id = new_id,
             Self::CompactionTrigger { .. } | Self::Other => {}
@@ -1148,9 +1132,7 @@ impl ResponseItem {
             Self::CustomToolCallOutput { .. } => Some("ctco"),
             Self::ToolSearchOutput { .. } => Some("tso"),
             Self::WebSearchCall { .. } => Some("ws"),
-            Self::ImageGenerationCall { .. }
-            | Self::GrokImageGenerationCall { .. }
-            | Self::GrokImageGenerationWireCall { .. } => Some("ig"),
+            Self::ImageGenerationCall { .. } | Self::GrokImageGenerationCall { .. } => Some("ig"),
             Self::Compaction { .. } | Self::ContextCompaction { .. } => Some("cmp"),
             Self::CompactionTrigger { .. } | Self::Other => None,
         }
@@ -1235,10 +1217,6 @@ impl ResponseItem {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             }
-            | Self::GrokImageGenerationWireCall {
-                internal_chat_message_metadata_passthrough: metadata,
-                ..
-            }
             | Self::Compaction {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
@@ -1304,10 +1282,6 @@ impl ResponseItem {
                 ..
             }
             | Self::GrokImageGenerationCall {
-                internal_chat_message_metadata_passthrough: metadata,
-                ..
-            }
-            | Self::GrokImageGenerationWireCall {
                 internal_chat_message_metadata_passthrough: metadata,
                 ..
             }

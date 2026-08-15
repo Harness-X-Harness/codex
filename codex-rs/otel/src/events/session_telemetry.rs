@@ -1242,8 +1242,7 @@ impl SessionTelemetry {
             ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
             ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::GrokImageGenerationCall { .. }
-            | ResponseItem::GrokImageGenerationWireCall { .. } => "image_generation_call".into(),
+            | ResponseItem::GrokImageGenerationCall { .. } => "image_generation_call".into(),
             ResponseItem::Compaction { .. } => "compaction".into(),
             ResponseItem::CompactionTrigger { .. } => "compaction_trigger".into(),
             ResponseItem::ContextCompaction { .. } => "context_compaction".into(),

@@ -442,7 +442,6 @@ pub(crate) async fn handle_non_tool_response_item(
         ResponseItem::WebSearchCall { .. } => "web_search_call",
         ResponseItem::ImageGenerationCall { .. } => "image_generation_call",
         ResponseItem::GrokImageGenerationCall { .. } => "grok_image_generation_call",
-        ResponseItem::GrokImageGenerationWireCall { .. } => "image_generation_call",
         ResponseItem::Compaction { .. } => "compaction",
         ResponseItem::CompactionTrigger { .. } => "compaction_trigger",
         ResponseItem::ContextCompaction { .. } => "context_compaction",

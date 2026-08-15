@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use codex_api::ApiError;
 use codex_api::Provider;
+use codex_api::ResponsesApiInput;
 use codex_api::SharedAuthProvider;
 use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
@@ -220,8 +221,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     }
 
     /// Projects canonical durable history into this Provider's ModelInput wire shape.
-    fn project_model_input(&self, input: Vec<ResponseItem>) -> Result<Vec<ResponseItem>, CodexErr> {
-        Ok(input)
+    fn project_model_input(
+        &self,
+        mut input: Vec<ResponseItem>,
+    ) -> Result<ResponsesApiInput, CodexErr> {
+        for item in &mut input {
+            clear_unprefixed_item_id(item);
+        }
+        Ok(input.into())
     }
 
     /// Resolves route and credentials for one request attempt.
@@ -307,6 +314,12 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     ) -> SharedModelsManager {
         drop(cache);
         self.models_manager_without_cache(config_model_catalog)
+    }
+}
+
+pub(crate) fn clear_unprefixed_item_id(item: &mut ResponseItem) {
+    if item.id().is_some_and(|id| !id.is_prefixed()) {
+        item.set_id(/*new_id*/ None);
     }
 }
 

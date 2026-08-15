@@ -23,7 +23,7 @@ fn plaintext_agent_message_projects_to_standard_user_message() {
     let encoded = project(input).expect("plaintext collaboration history should project");
 
     assert_eq!(
-        encoded,
+        encoded.into_items(),
         vec![ResponseItem::Message {
             id: Some(ResponseItemId::with_suffix("amsg", "child")),
             role: "user".to_string(),
@@ -96,6 +96,158 @@ fn image_history_uses_native_grok_wire_shape() {
             "prompt": "Draw a fox."
         }])
     );
+}
+
+#[test]
+fn completed_image_history_omits_result_only_from_request_projection() {
+    let durable_result = "opaque-image-result".repeat(100);
+    let input = vec![ResponseItem::GrokImageGenerationCall {
+        id: Some(ResponseItemId::with_suffix("ig", "123")),
+        status: "completed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: Some(durable_result.clone()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    let projected = project(input).expect("completed Grok image history should project");
+
+    assert_eq!(
+        serde_json::to_value(&projected).expect("request history should serialize"),
+        json!([{
+            "id": "ig_123",
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": "Draw a fox."
+        }])
+    );
+    assert_eq!(
+        projected.into_items(),
+        vec![ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "123")),
+            status: "completed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: Some(durable_result),
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+}
+
+#[test]
+fn image_history_preserves_the_exact_provider_item_id() {
+    let input = vec![ResponseItem::GrokImageGenerationCall {
+        id: Some(ResponseItemId::from_server("provider-image-id".to_string())),
+        status: "completed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: Some("opaque-image-result".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    let projected = project(input.clone()).expect("completed Grok image history should project");
+
+    assert_eq!(
+        serde_json::to_value(&projected).expect("request history should serialize"),
+        json!([{
+            "id": "provider-image-id",
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": "Draw a fox."
+        }])
+    );
+    assert_eq!(projected.into_items(), input);
+}
+
+#[test]
+fn multiple_completed_images_preserve_order_and_omit_each_wire_result() {
+    let input = vec![
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "first")),
+            status: "completed".to_string(),
+            prompt: Some("First".to_string()),
+            result: Some("first-result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "second")),
+            status: "completed".to_string(),
+            prompt: Some("Second".to_string()),
+            result: Some("second-result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let projected = project(input.clone()).expect("multiple Grok images should project");
+
+    assert_eq!(
+        serde_json::to_value(&projected).expect("request history should serialize"),
+        json!([
+            {
+                "id": "ig_first",
+                "type": "image_generation_call",
+                "status": "completed",
+                "prompt": "First"
+            },
+            {
+                "id": "ig_second",
+                "type": "image_generation_call",
+                "status": "completed",
+                "prompt": "Second"
+            }
+        ])
+    );
+    assert_eq!(projected.into_items(), input);
+}
+
+#[test]
+fn image_history_requires_the_evidence_backed_terminal_shape() {
+    for item in [
+        ResponseItem::GrokImageGenerationCall {
+            id: None,
+            status: "completed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: Some("result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::from_server(String::new())),
+            status: "completed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: Some("result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "prompt")),
+            status: "completed".to_string(),
+            prompt: None,
+            result: Some("result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "status")),
+            status: "in_progress".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix(
+                "ig",
+                "completed-without-result",
+            )),
+            status: "completed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::GrokImageGenerationCall {
+            id: Some(ResponseItemId::with_suffix("ig", "failed-with-result")),
+            status: "failed".to_string(),
+            prompt: Some("Draw a fox.".to_string()),
+            result: Some("unexpected-result".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ] {
+        project(vec![item]).expect_err("incomplete image history must fail before egress");
+    }
 }
 
 #[test]

@@ -1,10 +1,12 @@
 use super::*;
+use codex_api::ResponsesApiInput;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use serde::Serialize;
 
 #[derive(Serialize)]
 struct TestPayload<'a> {
-    input: &'a [ResponseItem],
+    input: &'a ResponsesApiInput,
 }
 
 fn model_with_context_window(context_window: i64) -> ModelInfo {
@@ -16,7 +18,7 @@ fn model_with_context_window(context_window: i64) -> ModelInfo {
 
 #[test]
 fn ordinary_projected_input_within_budget_is_admitted() {
-    let input = vec![ResponseItem::Message {
+    let input: ResponsesApiInput = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -24,7 +26,8 @@ fn ordinary_projected_input_within_budget_is_admitted() {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }];
+    }]
+    .into();
 
     ensure_projected_request_fits(
         &TestPayload { input: &input },
@@ -35,21 +38,24 @@ fn ordinary_projected_input_within_budget_is_admitted() {
 }
 
 #[test]
-fn inline_grok_image_result_uses_conservative_replay_cost() {
-    let input = vec![ResponseItem::GrokImageGenerationWireCall {
+fn ordinary_input_keeps_the_existing_item_cap() {
+    let input: ResponsesApiInput = vec![ResponseItem::Message {
         id: None,
-        status: "completed".to_string(),
-        prompt: None,
-        result: Some("A".repeat(1_000)),
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "A".repeat(40_100),
+        }],
+        phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }];
+    }]
+    .into();
 
     let error = ensure_projected_request_fits(
         &TestPayload { input: &input },
         &input,
-        &model_with_context_window(900),
+        &model_with_context_window(100_000),
     )
-    .expect_err("opaque inline replay must not use the ordinary four-byte estimate");
+    .expect_err("canonical Provider input must keep the existing per-item cap");
 
     assert!(matches!(
         error.details(),
@@ -58,14 +64,50 @@ fn inline_grok_image_result_uses_conservative_replay_cost() {
 }
 
 #[test]
+fn bounded_grok_image_projection_does_not_charge_durable_inline_result() {
+    let items = vec![ResponseItem::GrokImageGenerationCall {
+        id: None,
+        status: "completed".to_string(),
+        prompt: Some("Draw a fox.".to_string()),
+        result: Some("A".repeat(100_000)),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+    let input = ResponsesApiInput::from_projected(
+        items,
+        vec![serde_json::json!({
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": "Draw a fox."
+        })],
+    )
+    .expect("one wire item must correspond to one canonical item");
+
+    ensure_projected_request_fits(
+        &TestPayload { input: &input },
+        &input,
+        &model_with_context_window(1_000),
+    )
+    .expect("admission must evaluate the bounded request projection");
+}
+
+#[test]
 fn projected_item_over_hard_limit_is_rejected_even_when_request_fits_window() {
-    let input = vec![ResponseItem::GrokImageGenerationWireCall {
+    let items = vec![ResponseItem::GrokImageGenerationCall {
         id: None,
         status: "completed".to_string(),
         prompt: None,
-        result: Some("A".repeat(10_001)),
+        result: Some("durable".to_string()),
         internal_chat_message_metadata_passthrough: None,
     }];
+    let input = ResponsesApiInput::from_projected(
+        items,
+        vec![serde_json::json!({
+            "type": "image_generation_call",
+            "status": "completed",
+            "prompt": "A".repeat(40_100)
+        })],
+    )
+    .expect("one wire item must correspond to one canonical item");
 
     let error = ensure_projected_request_fits(
         &TestPayload { input: &input },
@@ -82,7 +124,7 @@ fn projected_item_over_hard_limit_is_rejected_even_when_request_fits_window() {
 
 #[test]
 fn missing_context_window_fails_closed() {
-    let input = vec![ResponseItem::Message {
+    let input: ResponsesApiInput = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -90,7 +132,8 @@ fn missing_context_window_fails_closed() {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }];
+    }]
+    .into();
     let mut model_info = model_with_context_window(1_000);
     model_info.context_window = None;
     model_info.max_context_window = None;
