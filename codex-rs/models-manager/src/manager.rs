@@ -698,3 +698,7 @@ pub(crate) fn construct_model_info_from_candidates(
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "authority_tests.rs"]
+mod authority_tests;
