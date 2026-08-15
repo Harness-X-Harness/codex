@@ -31,11 +31,6 @@ class AcceptanceError(RuntimeError):
     pass
 
 
-class HostedProbeTerminalItemMissing(AcceptanceError):
-    def __init__(self, tool_type: str) -> None:
-        super().__init__(f"hosted_probe_terminal_item_missing:{tool_type}")
-
-
 GROK_LIVE_MODEL = "grok-4.5"
 X_SEARCH_NAMES = {
     "x_keyword_search",
@@ -45,7 +40,6 @@ X_SEARCH_NAMES = {
 }
 HOSTED_PROBE_MAX_EVENT_BYTES = 64 * 1024 * 1024
 HOSTED_PROBE_ERROR_BYTES = 64 * 1024
-HOSTED_PROBE_MAX_ATTEMPTS = 3
 SAFE_ERROR_FIELD = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 
 
@@ -272,24 +266,7 @@ def _probe_hosted_tool(
     except (urllib.error.URLError, TimeoutError) as error:
         raise AcceptanceError(f"hosted_probe_transport:{tool_type}") from error
     if not completed:
-        raise HostedProbeTerminalItemMissing(tool_type)
-
-
-def _probe_hosted_tool_with_retry(
-    endpoint: str,
-    token: str,
-    user_agent: str,
-    model: str,
-    tool_type: str,
-) -> None:
-    for attempt in range(1, HOSTED_PROBE_MAX_ATTEMPTS + 1):
-        try:
-            _probe_hosted_tool(endpoint, token, user_agent, model, tool_type)
-            return
-        except HostedProbeTerminalItemMissing:
-            if attempt == HOSTED_PROBE_MAX_ATTEMPTS:
-                raise
-            time.sleep(attempt)
+        raise AcceptanceError(f"hosted_probe_terminal_item_missing:{tool_type}")
 
 
 def _run_gateway_hosted_live(source: Path, binary: Path, model: str) -> None:
@@ -302,7 +279,7 @@ def _run_gateway_hosted_live(source: Path, binary: Path, model: str) -> None:
     endpoint = profile["base_url"].rstrip("/") + "/responses"
     user_agent = _codex_live_user_agent(binary)
     for tool_type in ("web_search", "x_search", "image_generation"):
-        _probe_hosted_tool_with_retry(endpoint, token, user_agent, model, tool_type)
+        _probe_hosted_tool(endpoint, token, user_agent, model, tool_type)
 
 
 class AppServer:

@@ -742,69 +742,39 @@ requires_openai_auth = false
         )
         self.assertEqual(request.get_header("Originator"), "codex_cli_rs")
 
-    def test_hosted_probe_retries_only_missing_terminal_items(self) -> None:
-        attempts = [
-            MODULE.HostedProbeTerminalItemMissing("x_search"),
-            MODULE.HostedProbeTerminalItemMissing("x_search"),
-            None,
-        ]
+    def test_hosted_probe_missing_terminal_is_not_retried(self) -> None:
         with mock.patch.object(
             MODULE,
-            "_probe_hosted_tool",
-            side_effect=attempts,
-        ) as probe, mock.patch.object(MODULE.time, "sleep") as sleep:
-            MODULE._probe_hosted_tool_with_retry(
-                "https://example.test/v1/responses",
-                "private-token",
-                "codex_cli_rs/0.148.0-alpha.5 (grokex_live_acceptance)",
-                "grok-4.5",
-                "x_search",
-            )
-
-        self.assertEqual(probe.call_count, 3)
-        self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,)])
-
-    def test_hosted_probe_fails_closed_after_bounded_retries(self) -> None:
-        with mock.patch.object(
+            "_codex_live_user_agent",
+            return_value="codex_cli_rs/1.2.3 (grokex_live_acceptance)",
+        ), mock.patch.object(
+            MODULE,
+            "_grok_profile",
+            return_value=(
+                "grok",
+                {
+                    "base_url": "https://example.test/v1",
+                    "wire_api": "grok_responses",
+                    "experimental_bearer_token": "private-token",
+                },
+                "experimental_bearer_token",
+            ),
+        ), mock.patch.object(
             MODULE,
             "_probe_hosted_tool",
-            side_effect=MODULE.HostedProbeTerminalItemMissing("x_search"),
-        ) as probe, mock.patch.object(MODULE.time, "sleep") as sleep:
-            with self.assertRaisesRegex(
-                MODULE.HostedProbeTerminalItemMissing,
-                r"^hosted_probe_terminal_item_missing:x_search$",
-            ):
-                MODULE._probe_hosted_tool_with_retry(
-                    "https://example.test/v1/responses",
-                    "private-token",
-                    "codex_cli_rs/0.148.0-alpha.5 (grokex_live_acceptance)",
-                    "grok-4.5",
-                    "x_search",
-                )
-
-        self.assertEqual(probe.call_count, MODULE.HOSTED_PROBE_MAX_ATTEMPTS)
-        self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,)])
-
-    def test_hosted_probe_does_not_retry_non_terminal_errors(self) -> None:
-        with mock.patch.object(
-            MODULE,
-            "_probe_hosted_tool",
-            side_effect=MODULE.AcceptanceError("hosted_probe_http_status:x_search"),
-        ) as probe, mock.patch.object(MODULE.time, "sleep") as sleep:
+            side_effect=MODULE.AcceptanceError(
+                "hosted_probe_terminal_item_missing:web_search"
+            ),
+        ) as probe:
             with self.assertRaisesRegex(
                 MODULE.AcceptanceError,
-                r"^hosted_probe_http_status:x_search$",
+                r"^hosted_probe_terminal_item_missing:web_search$",
             ):
-                MODULE._probe_hosted_tool_with_retry(
-                    "https://example.test/v1/responses",
-                    "private-token",
-                    "codex_cli_rs/0.148.0-alpha.5 (grokex_live_acceptance)",
-                    "grok-4.5",
-                    "x_search",
+                MODULE._run_gateway_hosted_live(
+                    Path("config.toml"), Path("codex"), "grok-4.5"
                 )
 
         probe.assert_called_once()
-        sleep.assert_not_called()
 
     def test_all_hosted_probes_share_the_codex_client_identity(self) -> None:
         calls = []
@@ -826,7 +796,7 @@ requires_openai_auth = false
             ),
         ), mock.patch.object(
             MODULE,
-            "_probe_hosted_tool_with_retry",
+            "_probe_hosted_tool",
             side_effect=lambda *args: calls.append(args),
         ):
             MODULE._run_gateway_hosted_live(
