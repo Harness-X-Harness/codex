@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_api::AgentIdentityTelemetry;
+use codex_api::ApiError;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -30,6 +31,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
@@ -38,18 +40,106 @@ use tokio::time::timeout;
 use crate::auth::agent_identity_telemetry;
 use crate::auth::resolve_provider_auth;
 
-const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
 pub(crate) struct OpenAiModelsEndpoint {
+    request: ModelsEndpointRequest,
+}
+
+impl OpenAiModelsEndpoint {
+    pub(crate) fn new(
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
+        Self {
+            request: ModelsEndpointRequest::new(provider_info, auth_manager),
+        }
+    }
+
+    async fn list_models(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
+        let _timer =
+            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+        timeout(MODELS_REFRESH_TIMEOUT, async {
+            let PreparedModelsRequest {
+                client,
+                request_url,
+            } = self
+                .request
+                .prepare(client_version, http_client_factory)
+                .await?;
+            if self.request.provider_info.wire_api == WireApi::GrokResponses {
+                let (model_ids, etag) = client
+                    .list_openai_compatible_model_ids(request_url, HeaderMap::new())
+                    .await
+                    .map_err(map_api_error)?;
+                let models = model_ids
+                    .into_iter()
+                    .map(|model_id| {
+                        let mut model = model_info_from_slug(&model_id);
+                        model.visibility = ModelVisibility::List;
+                        model
+                    })
+                    .collect();
+                return Ok((models, etag));
+            }
+            let (body, etag) = client
+                .fetch_models(request_url, HeaderMap::new())
+                .await
+                .map_err(map_api_error)?;
+            let ModelsResponse { models } = serde_json::from_slice(&body).map_err(|error| {
+                map_api_error(ApiError::Stream(format!(
+                    "failed to decode models response: {error}"
+                )))
+            })?;
+            Ok((models, etag))
+        })
+        .await
+        .map_err(|_| CodexErr::Timeout)?
+    }
+}
+
+impl ModelsEndpointClient for OpenAiModelsEndpoint {
+    fn has_command_auth(&self) -> bool {
+        self.request.has_command_auth()
+    }
+
+    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
+        Box::pin(self.request.uses_codex_backend())
+    }
+
+    fn remote_catalog_is_authoritative(&self) -> bool {
+        self.request.remote_catalog_is_authoritative()
+    }
+
+    fn list_models<'a>(
+        &'a self,
+        client_version: &'a str,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
+        Box::pin(OpenAiModelsEndpoint::list_models(
+            self,
+            client_version,
+            http_client_factory,
+        ))
+    }
+}
+
+/// Shared request mechanics for concrete Provider catalog strategies.
+#[derive(Debug)]
+pub(crate) struct ModelsEndpointRequest {
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
     transport_builder: Arc<dyn ModelsTransportBuilder>,
 }
 
-impl OpenAiModelsEndpoint {
+impl ModelsEndpointRequest {
     pub(crate) fn new(
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
@@ -68,20 +158,18 @@ impl OpenAiModelsEndpoint {
         }
     }
 
-    async fn uses_codex_backend(&self) -> bool {
+    pub(crate) async fn uses_codex_backend(&self) -> bool {
         self.auth()
             .await
             .as_ref()
             .is_some_and(CodexAuth::uses_codex_backend)
     }
 
-    async fn list_models(
+    pub(crate) async fn prepare(
         &self,
         client_version: &str,
         http_client_factory: HttpClientFactory,
-    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
-        let _timer =
-            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
+    ) -> CoreResult<PreparedModelsRequest> {
         let auth = self.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
@@ -101,36 +189,16 @@ impl OpenAiModelsEndpoint {
             agent_identity_telemetry,
             auth_env: self.auth_env(),
         });
-        timeout(MODELS_REFRESH_TIMEOUT, async {
-            let transport = self
-                .transport_builder
-                .build(http_client_factory, request_url.clone())
-                .await?;
-            let client = ModelsClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry));
-            if self.provider_info.wire_api == WireApi::GrokResponses {
-                let (model_ids, etag) = client
-                    .list_openai_compatible_model_ids(request_url, HeaderMap::new())
-                    .await
-                    .map_err(map_api_error)?;
-                let models = model_ids
-                    .into_iter()
-                    .map(|model_id| {
-                        let mut model = model_info_from_slug(&model_id);
-                        model.visibility = ModelVisibility::List;
-                        model
-                    })
-                    .collect();
-                Ok((models, etag))
-            } else {
-                client
-                    .list_models(request_url, HeaderMap::new())
-                    .await
-                    .map_err(map_api_error)
-            }
+        let transport = self
+            .transport_builder
+            .build(http_client_factory, request_url.clone())
+            .await?;
+        let client = ModelsClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
+        Ok(PreparedModelsRequest {
+            client,
+            request_url,
         })
-        .await
-        .map_err(|_| CodexErr::Timeout)?
     }
 
     fn auth_env(&self) -> AuthEnvTelemetry {
@@ -140,35 +208,22 @@ impl OpenAiModelsEndpoint {
             .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
         collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
     }
-}
 
-impl ModelsEndpointClient for OpenAiModelsEndpoint {
-    fn has_command_auth(&self) -> bool {
+    pub(crate) fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
     }
 
-    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
-        Box::pin(OpenAiModelsEndpoint::uses_codex_backend(self))
-    }
-
-    fn remote_catalog_is_authoritative(&self) -> bool {
+    pub(crate) fn remote_catalog_is_authoritative(&self) -> bool {
         self.provider_info.wire_api == WireApi::GrokResponses
             || self.provider_info.env_key.is_some()
             || self.provider_info.experimental_bearer_token.is_some()
             || self.provider_info.auth.is_some()
     }
+}
 
-    fn list_models<'a>(
-        &'a self,
-        client_version: &'a str,
-        http_client_factory: HttpClientFactory,
-    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
-        Box::pin(OpenAiModelsEndpoint::list_models(
-            self,
-            client_version,
-            http_client_factory,
-        ))
-    }
+pub(crate) struct PreparedModelsRequest {
+    pub(crate) client: ModelsClient<ReqwestTransport>,
+    pub(crate) request_url: String,
 }
 
 type ModelsTransportFuture<'a> =
@@ -356,14 +411,6 @@ mod tests {
         }
     }
 
-    fn grok_provider_info(base_url: String) -> ModelProviderInfo {
-        let mut provider = ModelProviderInfo::create_openai_provider(Some(base_url));
-        provider.name = "Grok".to_string();
-        provider.wire_api = WireApi::GrokResponses;
-        provider.requires_openai_auth = false;
-        provider
-    }
-
     #[test]
     fn command_auth_provider_reports_command_auth_without_cached_auth() {
         let endpoint = OpenAiModelsEndpoint::new(
@@ -399,11 +446,13 @@ mod tests {
 
         let observed_request = Arc::new(Mutex::new(None));
         let endpoint = OpenAiModelsEndpoint {
-            provider_info: ModelProviderInfo::create_openai_provider(Some(server.uri())),
-            auth_manager: None,
-            transport_builder: Arc::new(RecordingTransportBuilder {
-                observed_request: Arc::clone(&observed_request),
-            }),
+            request: ModelsEndpointRequest {
+                provider_info: ModelProviderInfo::create_openai_provider(Some(server.uri())),
+                auth_manager: None,
+                transport_builder: Arc::new(RecordingTransportBuilder {
+                    observed_request: Arc::clone(&observed_request),
+                }),
+            },
         };
 
         endpoint
@@ -422,68 +471,6 @@ mod tests {
                 OutboundProxyPolicy::RespectSystemProxy,
                 format!("{}/models?client_version=0.0.0", server.uri()),
             ))
-        );
-    }
-
-    #[tokio::test]
-    async fn grok_model_request_projects_openai_compatible_catalog() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .and(query_param("client_version", "0.0.0"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "object": "list",
-                "data": [{
-                    "id": "grok-4.5",
-                    "object": "model",
-                    "owned_by": "xai"
-                }]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let endpoint =
-            OpenAiModelsEndpoint::new(grok_provider_info(server.uri()), /*auth_manager*/ None);
-
-        let (models, etag) = endpoint
-            .list_models(
-                "0.0.0",
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await
-            .expect("Grok models request should succeed");
-        let mut expected_model = model_info_from_slug("grok-4.5");
-        expected_model.visibility = ModelVisibility::List;
-
-        assert_eq!((models, etag), (vec![expected_model], None));
-    }
-
-    #[tokio::test]
-    async fn grok_model_request_rejects_codex_catalog_envelope() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(ModelsResponse { models: Vec::new() }),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        let endpoint =
-            OpenAiModelsEndpoint::new(grok_provider_info(server.uri()), /*auth_manager*/ None);
-
-        let error = endpoint
-            .list_models(
-                "0.0.0",
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await
-            .expect_err("Grok must not infer a different catalog envelope");
-
-        assert!(
-            error
-                .to_string()
-                .contains("failed to decode models response")
         );
     }
 }

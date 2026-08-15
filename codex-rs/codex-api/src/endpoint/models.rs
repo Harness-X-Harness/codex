@@ -4,8 +4,6 @@ use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
-use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
@@ -55,40 +53,30 @@ impl<T: HttpTransport> ModelsClient<T> {
         request.url
     }
 
-    pub async fn list_models(
+    /// Fetch the raw `/models` response for decoding by the selected Provider Adapter.
+    pub async fn fetch_models(
         &self,
         request_url: String,
         extra_headers: HeaderMap,
-    ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
+    ) -> Result<(Vec<u8>, Option<String>), ApiError> {
         let resp = self.execute(request_url, extra_headers).await?;
         let header_etag = response_etag(&resp.headers);
-
-        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
-            .map_err(|e| {
-                ApiError::Stream(format!(
-                    "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&resp.body)
-                ))
-            })?;
-
-        Ok((models, header_etag))
+        Ok((resp.body.to_vec(), header_etag))
     }
 
     /// List model identifiers from the standard OpenAI-compatible catalog envelope.
     ///
-    /// Provider code chooses this decoder explicitly. It does not auto-detect an envelope from
-    /// response fields, so a provider cannot silently switch catalog contracts.
+    /// This compatibility decoder remains available until a concrete Provider Adapter takes
+    /// ownership of the catalog contract.
     pub async fn list_openai_compatible_model_ids(
         &self,
         request_url: String,
         extra_headers: HeaderMap,
     ) -> Result<(Vec<String>, Option<String>), ApiError> {
-        let resp = self.execute(request_url, extra_headers).await?;
-        let header_etag = response_etag(&resp.headers);
-        let response =
-            serde_json::from_slice::<OpenAiModelsResponse>(&resp.body).map_err(|error| {
-                ApiError::Stream(format!("failed to decode models response: {error}"))
-            })?;
+        let (body, etag) = self.fetch_models(request_url, extra_headers).await?;
+        let response = serde_json::from_slice::<OpenAiModelsResponse>(&body).map_err(|error| {
+            ApiError::Stream(format!("failed to decode models response: {error}"))
+        })?;
         if response.object != "list" {
             return Err(ApiError::Stream(
                 "failed to decode models response: expected object=list".to_string(),
@@ -104,7 +92,7 @@ impl<T: HttpTransport> ModelsClient<T> {
                 "failed to decode models response: model id must not be empty".to_string(),
             ));
         }
-        Ok((ids, header_etag))
+        Ok((ids, etag))
     }
 
     async fn execute(
@@ -142,6 +130,7 @@ mod tests {
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use codex_protocol::openai_models::ModelsResponse;
     use http::HeaderMap;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
@@ -226,12 +215,12 @@ mod tests {
         let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.99.0");
         let client = ModelsClient::new(transport.clone(), provider, Arc::new(DummyAuth));
 
-        let (models, _) = client
-            .list_models(request_url, HeaderMap::new())
+        let (body, _) = client
+            .fetch_models(request_url, HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(models.len(), 0);
+        assert_eq!(body, serde_json::to_vec(&response).unwrap());
 
         let url = transport
             .last_request
@@ -248,7 +237,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parses_models_response() {
+    async fn fetch_models_preserves_provider_owned_response_body() {
         let response = ModelsResponse {
             models: vec![
                 serde_json::from_value(json!({
@@ -286,15 +275,12 @@ mod tests {
         let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.99.0");
         let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
 
-        let (models, _) = client
-            .list_models(request_url, HeaderMap::new())
+        let (body, _) = client
+            .fetch_models(request_url, HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].slug, "gpt-test");
-        assert_eq!(models[0].supported_in_api, true);
-        assert_eq!(models[0].priority, 1);
+        assert_eq!(body, serde_json::to_vec(&response).unwrap());
     }
 
     #[tokio::test]
@@ -311,12 +297,12 @@ mod tests {
         let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.1.0");
         let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
 
-        let (models, etag) = client
-            .list_models(request_url, HeaderMap::new())
+        let (body, etag) = client
+            .fetch_models(request_url, HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(models.len(), 0);
+        assert_eq!(body, serde_json::to_vec(&response).unwrap());
         assert_eq!(etag, Some("\"abc\"".to_string()));
     }
 }

@@ -103,6 +103,8 @@ async fn models_client_hits_models_endpoint() {
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            api_backend: None,
+            supports_backend_search: false,
             use_responses_lite: false,
             auto_review_model_override: None,
             model_specialty: None,
@@ -130,10 +132,11 @@ async fn models_client_hits_models_endpoint() {
     let request_url = ModelsClient::<ReqwestTransport>::request_url(&provider, "0.1.0");
     let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
 
-    let (models, _) = client
-        .list_models(request_url, HeaderMap::new())
+    let (body, _) = client
+        .fetch_models(request_url, HeaderMap::new())
         .await
         .expect("models request should succeed");
+    let ModelsResponse { models } = serde_json::from_slice(&body).expect("valid test response");
 
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].slug, "gpt-test");
