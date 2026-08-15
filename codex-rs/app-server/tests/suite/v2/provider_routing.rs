@@ -144,6 +144,7 @@ openai_base_url = "{}/v1"
 name = "Grok"
 base_url = "{}/v1"
 env_key = "GROK_API_KEY"
+provider_adapter = "grok"
 wire_api = "grok_responses"
 x_search = true
 

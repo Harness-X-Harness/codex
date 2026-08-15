@@ -1067,6 +1067,7 @@ model_provider_registrations = ["openai", "xai"]
 name = "Grok"
 base_url = "https://grok.example.com/v1"
 env_key = "GROK_API_KEY"
+provider_adapter = "grok"
 wire_api = "grok_responses"
 "#,
     )
@@ -1108,6 +1109,7 @@ model_provider_registrations = ["xai"]
 name = "Grok"
 base_url = "https://grok.example.com/v1"
 env_key = "GROK_API_KEY"
+provider_adapter = "grok"
 wire_api = "grok_responses"
 "#,
     )

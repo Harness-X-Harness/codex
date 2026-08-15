@@ -22,15 +22,12 @@ use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
-use codex_models_manager::model_info::model_info_from_slug;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
@@ -74,21 +71,6 @@ impl OpenAiModelsEndpoint {
                 .request
                 .prepare(client_version, http_client_factory)
                 .await?;
-            if self.request.provider_info.wire_api == WireApi::GrokResponses {
-                let (model_ids, etag) = client
-                    .list_openai_compatible_model_ids(request_url, HeaderMap::new())
-                    .await
-                    .map_err(map_api_error)?;
-                let models = model_ids
-                    .into_iter()
-                    .map(|model_id| {
-                        let mut model = model_info_from_slug(&model_id);
-                        model.visibility = ModelVisibility::List;
-                        model
-                    })
-                    .collect();
-                return Ok((models, etag));
-            }
             let (body, etag) = client
                 .fetch_models(request_url, HeaderMap::new())
                 .await
@@ -214,8 +196,7 @@ impl ModelsEndpointRequest {
     }
 
     pub(crate) fn remote_catalog_is_authoritative(&self) -> bool {
-        self.provider_info.wire_api == WireApi::GrokResponses
-            || self.provider_info.env_key.is_some()
+        self.provider_info.env_key.is_some()
             || self.provider_info.experimental_bearer_token.is_some()
             || self.provider_info.auth.is_some()
     }

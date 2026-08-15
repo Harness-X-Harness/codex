@@ -9,6 +9,7 @@ name = "Grok"
 base_url = "https://grok.trustedtunnel.app/v1"
 env_key = "GROK_API_KEY"
 env_key_instructions = "Set GROK_API_KEY to your Mini end-user API key."
+provider_adapter = "grok"
 wire_api = "grok_responses"
 # X Search can derive remote queries from Thread context. Enable it explicitly.
 x_search = false

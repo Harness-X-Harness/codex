@@ -27,6 +27,7 @@ class GrokexDistributionTest(unittest.TestCase):
                     "env_key_instructions": (
                         "Set GROK_API_KEY to your Mini end-user API key."
                     ),
+                    "provider_adapter": "grok",
                     "wire_api": "grok_responses",
                     "x_search": False,
                     "requires_openai_auth": False,

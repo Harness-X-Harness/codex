@@ -20,6 +20,7 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        provider_adapter: None,
         x_search: false,
         query_params: None,
         http_headers: None,
@@ -54,6 +55,7 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        provider_adapter: None,
         x_search: false,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
@@ -92,6 +94,7 @@ supports_standalone_web_search = true
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        provider_adapter: None,
         x_search: false,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
@@ -136,6 +139,11 @@ wire_api = "grok_responses"
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.wire_api, WireApi::GrokResponses);
+    assert_eq!(provider.provider_adapter, None);
+    assert_eq!(
+        provider.validate(),
+        Err("wire_api = \"grok_responses\" requires an explicit provider_adapter".to_string())
+    );
     assert_eq!(
         provider
             .to_api_provider(/*auth_mode*/ None)
@@ -148,12 +156,42 @@ wire_api = "grok_responses"
 }
 
 #[test]
+fn grok_adapter_is_explicit_and_requires_the_grok_dialect() {
+    let grok: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Grok"
+base_url = "https://grok.example/v1"
+provider_adapter = "grok"
+wire_api = "grok_responses"
+        "#,
+    )
+    .expect("Grok adapter should deserialize");
+    assert_eq!(grok.provider_adapter, Some(ModelProviderAdapter::Grok));
+    assert_eq!(grok.validate(), Ok(()));
+
+    let wrong_dialect: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Other"
+base_url = "https://example.test/v1"
+provider_adapter = "grok"
+wire_api = "responses"
+        "#,
+    )
+    .expect("provider shape should deserialize before semantic validation");
+    assert_eq!(
+        wrong_dialect.validate(),
+        Err("provider_adapter = \"grok\" requires wire_api = \"grok_responses\"".to_string())
+    );
+}
+
+#[test]
 fn test_x_search_is_explicit_and_grok_only() {
     let grok: ModelProviderInfo = toml::from_str(
         r#"
 name = "Grok"
 base_url = "https://grok.example/v1"
 wire_api = "grok_responses"
+provider_adapter = "grok"
 x_search = true
         "#,
     )
@@ -299,6 +337,7 @@ fn test_create_amazon_bedrock_provider() {
                 region: None,
             }),
             wire_api: WireApi::Responses,
+            provider_adapter: None,
             x_search: false,
             query_params: None,
             http_headers: Some(maplit::hashmap! {

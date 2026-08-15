@@ -7,19 +7,7 @@ use codex_client::RequestTelemetry;
 use http::HeaderMap;
 use http::Method;
 use http::header::ETAG;
-use serde::Deserialize;
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-struct OpenAiModelsResponse {
-    object: String,
-    data: Vec<OpenAiModel>,
-}
-
-#[derive(Deserialize)]
-struct OpenAiModel {
-    id: String,
-}
 
 pub struct ModelsClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -62,37 +50,6 @@ impl<T: HttpTransport> ModelsClient<T> {
         let resp = self.execute(request_url, extra_headers).await?;
         let header_etag = response_etag(&resp.headers);
         Ok((resp.body.to_vec(), header_etag))
-    }
-
-    /// List model identifiers from the standard OpenAI-compatible catalog envelope.
-    ///
-    /// This compatibility decoder remains available until a concrete Provider Adapter takes
-    /// ownership of the catalog contract.
-    pub async fn list_openai_compatible_model_ids(
-        &self,
-        request_url: String,
-        extra_headers: HeaderMap,
-    ) -> Result<(Vec<String>, Option<String>), ApiError> {
-        let (body, etag) = self.fetch_models(request_url, extra_headers).await?;
-        let response = serde_json::from_slice::<OpenAiModelsResponse>(&body).map_err(|error| {
-            ApiError::Stream(format!("failed to decode models response: {error}"))
-        })?;
-        if response.object != "list" {
-            return Err(ApiError::Stream(
-                "failed to decode models response: expected object=list".to_string(),
-            ));
-        }
-        let ids = response
-            .data
-            .into_iter()
-            .map(|model| model.id)
-            .collect::<Vec<_>>();
-        if ids.iter().any(String::is_empty) {
-            return Err(ApiError::Stream(
-                "failed to decode models response: model id must not be empty".to_string(),
-            ));
-        }
-        Ok((ids, etag))
     }
 
     async fn execute(

@@ -10,6 +10,7 @@ use codex_api::SharedAuthProvider;
 use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderAdapter;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -25,6 +26,7 @@ use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
+use crate::grok_provider::GrokModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
 /// Remote context-compaction protocols supported by a model provider.
@@ -312,19 +314,32 @@ pub fn create_model_provider(
     if provider_info.is_amazon_bedrock() {
         Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
     } else {
-        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+        match provider_info
+            .provider_adapter
+            .unwrap_or(ModelProviderAdapter::Configured)
+        {
+            ModelProviderAdapter::Configured => {
+                Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+            }
+            ModelProviderAdapter::Grok => {
+                Arc::new(GrokModelProvider::new(provider_info, auth_manager))
+            }
+        }
     }
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
 #[derive(Clone, Debug)]
-struct ConfiguredModelProvider {
+pub(crate) struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl ConfiguredModelProvider {
-    fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
+    pub(crate) fn new(
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
         let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
             info: provider_info,
@@ -407,17 +422,14 @@ impl ModelProvider for ConfiguredModelProvider {
                 self.auth_manager.clone(),
                 model_catalog,
             )),
-            None => {
-                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+            None => Arc::new(OpenAiModelsManager::new(
+                codex_home,
+                Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
-                ));
-                Arc::new(OpenAiModelsManager::new(
-                    codex_home,
-                    endpoint,
-                    self.auth_manager.clone(),
-                ))
-            }
+                )),
+                self.auth_manager.clone(),
+            )),
         }
     }
 
@@ -430,16 +442,13 @@ impl ModelProvider for ConfiguredModelProvider {
                 self.auth_manager.clone(),
                 model_catalog,
             )),
-            None => {
-                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+            None => Arc::new(OpenAiModelsManager::new_without_cache(
+                Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
-                ));
-                Arc::new(OpenAiModelsManager::new_without_cache(
-                    endpoint,
-                    self.auth_manager.clone(),
-                ))
-            }
+                )),
+                self.auth_manager.clone(),
+            )),
         }
     }
 
@@ -453,17 +462,14 @@ impl ModelProvider for ConfiguredModelProvider {
                 self.auth_manager.clone(),
                 model_catalog,
             )),
-            None => {
-                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+            None => Arc::new(OpenAiModelsManager::new_with_cache(
+                cache,
+                Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
-                ));
-                Arc::new(OpenAiModelsManager::new_with_cache(
-                    cache,
-                    endpoint,
-                    self.auth_manager.clone(),
-                ))
-            }
+                )),
+                self.auth_manager.clone(),
+            )),
         }
     }
 }
@@ -528,6 +534,7 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            provider_adapter: Default::default(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,

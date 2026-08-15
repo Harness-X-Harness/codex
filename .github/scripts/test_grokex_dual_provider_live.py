@@ -477,6 +477,7 @@ model_catalog_json = "/private/catalog.json"
 name = "Private label"
 base_url = "https://private.example/v1"
 experimental_bearer_token = "private-token"
+provider_adapter = "grok"
 wire_api = "grok_responses"
 x_search = true
 requires_openai_auth = false
@@ -499,6 +500,9 @@ requires_openai_auth = false
                 config["model_providers"]["xai"]["experimental_bearer_token"],
                 "private-token",
             )
+            self.assertEqual(
+                config["model_providers"]["xai"]["provider_adapter"], "grok"
+            )
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
     def test_env_key_profile_requires_the_credential_environment(self) -> None:
@@ -511,6 +515,7 @@ requires_openai_auth = false
 [model_providers.xai]
 base_url = "https://private.example/v1"
 env_key = "GROKEX_TEST_KEY"
+provider_adapter = "grok"
 wire_api = "grok_responses"
 requires_openai_auth = false
 """.strip()

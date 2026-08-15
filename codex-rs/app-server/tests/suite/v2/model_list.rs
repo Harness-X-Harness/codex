@@ -277,7 +277,16 @@ async fn list_models_unifies_openai_and_grok_provider_catalogs() -> Result<()> {
         .and(wiremock::matchers::path_regex(".*/models$"))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
             "object": "list",
-            "data": [{"id": "grok-model", "object": "model", "owned_by": "xai"}]
+            "data": [{
+                "id": "grok-4.6",
+                "name": "Grok 4.6",
+                "supports_reasoning_effort": true,
+                "reasoning_effort": "high",
+                "reasoning_efforts": [
+                    {"value": "xhigh", "description": "Deep"},
+                    {"value": "high", "description": "High"}
+                ]
+            }]
         })))
         .expect(1)
         .mount(&grok_server)
@@ -299,6 +308,7 @@ model_provider_registrations = ["openai", "grok"]
 name = "Grok"
 base_url = "{}/v1"
 env_key = "GROK_API_KEY"
+provider_adapter = "grok"
 wire_api = "grok_responses"
 "#,
             openai_server.uri(),
@@ -330,6 +340,30 @@ wire_api = "grok_responses"
             },
         })
         .await?;
+    let grok_model = response
+        .data
+        .iter()
+        .find(|model| model.model == "grok-4.6")
+        .expect("Grok catalog model should be listed");
+    assert_eq!(grok_model.display_name, "Grok · Grok 4.6");
+    assert_eq!(
+        grok_model.supported_reasoning_efforts,
+        vec![
+            ReasoningEffortOption {
+                reasoning_effort: "xhigh".parse().map_err(Error::msg)?,
+                description: "Deep".to_string(),
+            },
+            ReasoningEffortOption {
+                reasoning_effort: "high".parse().map_err(Error::msg)?,
+                description: "High".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        grok_model.default_reasoning_effort,
+        "high".parse().map_err(Error::msg)?
+    );
+    assert!(grok_model.input_modalities.is_empty());
     let returned_models = response
         .data
         .into_iter()
@@ -338,7 +372,7 @@ wire_api = "grok_responses"
 
     assert_eq!(
         returned_models,
-        vec!["openai-model".to_string(), "grok-model".to_string()]
+        vec!["openai-model".to_string(), "grok-4.6".to_string()]
     );
     assert_eq!(openai_models_mock.requests().len(), 1);
     assert_eq!(

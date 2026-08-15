@@ -75,7 +75,7 @@ def _grok_profile(source: Path) -> tuple[str, dict[str, Any], str]:
     grok_profiles = [
         (provider_id, profile)
         for provider_id, profile in providers.items()
-        if isinstance(profile, dict) and profile.get("wire_api") == "grok_responses"
+        if isinstance(profile, dict) and profile.get("provider_adapter") == "grok"
     ]
     if len(grok_profiles) != 1:
         raise AcceptanceError("configuration_requires_one_grok_profile")
@@ -108,6 +108,7 @@ def _write_isolated_config(source: Path, target: Path) -> str:
         f"[model_providers.{_toml_string(provider_id)}]",
         'name = "Grok"',
         f"base_url = {_toml_string(profile['base_url'])}",
+        'provider_adapter = "grok"',
         'wire_api = "grok_responses"',
         f"x_search = {str(bool(profile.get('x_search', False))).lower()}",
         "requires_openai_auth = false",
@@ -783,8 +784,11 @@ def _assert_openai_does_not_target_grok(config: Path) -> None:
     if "model" in data or "model_provider" in data:
         raise AcceptanceError("isolated_config_has_top_level_provider_override")
     openai = data.get("model_providers", {}).get("openai")
-    if isinstance(openai, dict) and openai.get("wire_api") == "grok_responses":
-        raise AcceptanceError("openai_profile_uses_grok_dialect")
+    if isinstance(openai, dict) and (
+        openai.get("provider_adapter") == "grok"
+        or openai.get("wire_api") == "grok_responses"
+    ):
+        raise AcceptanceError("openai_profile_uses_grok_adapter_or_dialect")
 
 
 def _start_grok_only(

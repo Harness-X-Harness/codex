@@ -63,6 +63,16 @@ pub enum WireApi {
     GrokResponses,
 }
 
+/// Runtime Provider Adapter selected by a Provider Registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelProviderAdapter {
+    /// The ordinary configured OpenAI-compatible Provider implementation.
+    Configured,
+    /// The official Grok Gateway Provider implementation.
+    Grok,
+}
+
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
@@ -117,6 +127,9 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
+    /// Which runtime Provider Adapter owns this Provider's external facts and policies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_adapter: Option<ModelProviderAdapter>,
     /// Whether this Grok provider may declare the Gateway-owned X Search tool.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub x_search: bool,
@@ -166,6 +179,26 @@ pub struct ModelProviderAwsAuthInfo {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.provider_adapter.is_none() && self.wire_api == WireApi::GrokResponses {
+            return Err(
+                "wire_api = \"grok_responses\" requires an explicit provider_adapter".to_string(),
+            );
+        }
+        if self.provider_adapter == Some(ModelProviderAdapter::Grok)
+            && self.wire_api != WireApi::GrokResponses
+        {
+            return Err(
+                "provider_adapter = \"grok\" requires wire_api = \"grok_responses\"".to_string(),
+            );
+        }
+        if self.provider_adapter == Some(ModelProviderAdapter::Grok) && self.requires_openai_auth {
+            return Err(
+                "provider_adapter = \"grok\" cannot require OpenAI authentication".to_string(),
+            );
+        }
+        if self.provider_adapter == Some(ModelProviderAdapter::Grok) && self.aws.is_some() {
+            return Err("provider_adapter = \"grok\" cannot use AWS authentication".to_string());
+        }
         if self.x_search && self.wire_api != WireApi::GrokResponses {
             return Err("provider x_search requires wire_api = \"grok_responses\"".to_string());
         }
@@ -357,6 +390,7 @@ impl ModelProviderInfo {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            provider_adapter: None,
             x_search: false,
             query_params: None,
             http_headers: Some(
@@ -404,6 +438,7 @@ impl ModelProviderInfo {
                 region: None,
             })),
             wire_api: WireApi::Responses,
+            provider_adapter: None,
             x_search: false,
             query_params: None,
             http_headers: Some(HashMap::from([(
@@ -552,6 +587,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         auth: None,
         aws: None,
         wire_api,
+        provider_adapter: None,
         x_search: false,
         query_params: None,
         http_headers: None,

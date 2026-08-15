@@ -181,6 +181,7 @@ fn model_provider_from_proto(
             .transpose()?,
         aws: None,
         wire_api,
+        provider_adapter: Default::default(),
         x_search: false,
         query_params: provider.query_params.map(|map| map.values),
         http_headers: provider.http_headers.map(|map| map.values),
@@ -210,6 +211,7 @@ fn model_provider_to_proto(
         auth,
         aws: _,
         wire_api,
+        provider_adapter: _,
         x_search: _,
         query_params,
         http_headers,
@@ -542,6 +544,7 @@ mod tests {
                 cwd: workspace_dir(),
             }),
             wire_api: WireApi::Responses,
+            provider_adapter: Default::default(),
             x_search: false,
             query_params: Some(HashMap::from([(
                 "api-version".to_string(),

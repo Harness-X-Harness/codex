@@ -304,6 +304,7 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            provider_adapter: Default::default(),
             x_search: false,
             query_params: None,
             http_headers: None,
