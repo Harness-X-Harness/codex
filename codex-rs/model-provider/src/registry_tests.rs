@@ -9,9 +9,15 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
+use codex_models_manager::cache::ModelsCatalogIdentity;
+use codex_models_manager::manager::ModelsEndpointClient;
+use codex_models_manager::manager::ModelsEndpointFuture;
+use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
@@ -173,6 +179,94 @@ async fn existing_thread_selection_preserves_provider_and_persisted_model() {
         .await
         .expect_err("existing thread provider must be immutable");
     assert!(provider_mismatch.to_string().contains("start a new thread"));
+}
+
+#[tokio::test]
+async fn unavailable_provider_does_not_erase_healthy_catalogs() {
+    let registry = ModelProviderRegistry::new(
+        [
+            test_registration(
+                OPENAI_PROVIDER_ID,
+                "OpenAI",
+                WireApi::Responses,
+                &["openai-model"],
+            ),
+            unavailable_registration("grok", "Grok", WireApi::GrokResponses),
+        ],
+        OPENAI_PROVIDER_ID,
+    )
+    .expect("test registrations should construct the registry");
+    let factory = test_http_client_factory();
+
+    let models = registry
+        .list_models(RefreshStrategy::Online, factory.clone())
+        .await
+        .expect("healthy provider choices must survive another Authority outage");
+    assert_eq!(
+        models
+            .into_iter()
+            .map(|model| model.model)
+            .collect::<Vec<_>>(),
+        vec!["openai-model"]
+    );
+
+    let unavailable = registry
+        .validate_bound_model("grok", "grok-model", RefreshStrategy::Online, factory)
+        .await
+        .expect_err("bound unavailable provider must retain its Authority error");
+    assert!(unavailable.to_string().contains("AuthorityUnavailable"));
+
+    let healthy_absence = registry
+        .resolve_new_thread_selection(
+            Some("missing-openai-model"),
+            Some(OPENAI_PROVIDER_ID),
+            RefreshStrategy::Online,
+            test_http_client_factory(),
+        )
+        .await
+        .expect_err("explicit healthy Provider can prove model absence");
+    assert!(healthy_absence.to_string().contains("ModelUnavailable"));
+
+    let unknown_owner = registry
+        .resolve_new_thread_selection(
+            Some("unknown-owner-model"),
+            None,
+            RefreshStrategy::Online,
+            test_http_client_factory(),
+        )
+        .await
+        .expect_err("unavailable Provider prevents proof of global model absence");
+    assert!(unknown_owner.to_string().contains("AuthorityUnavailable"));
+}
+
+#[tokio::test]
+async fn successful_catalog_absence_is_model_unavailable() {
+    let registry = test_registry(&["openai-model"], &[]);
+    let factory = test_http_client_factory();
+
+    let unavailable = registry
+        .validate_bound_model(
+            "grok",
+            "removed-grok-model",
+            RefreshStrategy::Offline,
+            factory.clone(),
+        )
+        .await
+        .expect_err("successful absence must be distinct from Authority failure");
+    assert!(unavailable.to_string().contains("ModelUnavailable"));
+
+    let persisted = registry
+        .resolve_existing_thread_selection(
+            "grok",
+            Some("removed-grok-model"),
+            None,
+            None,
+            RefreshStrategy::Offline,
+            factory,
+        )
+        .await
+        .expect_err("persisted model must be validated against the successful catalog");
+    assert!(persisted.to_string().contains("ModelUnavailable"));
 }
 
 #[tokio::test]
@@ -377,12 +471,13 @@ fn test_registration(
         wire_api,
         ..ModelProviderInfo::default()
     };
-    let provider: SharedModelProvider = Arc::new(TestCatalogProviderAdapter {
-        info,
-        catalog: ModelsResponse {
+    let manager: SharedModelsManager = Arc::new(StaticModelsManager::new(
+        /*auth_manager*/ None,
+        ModelsResponse {
             models: slugs.iter().map(|slug| test_model(slug)).collect(),
         },
-    });
+    ));
+    let provider: SharedModelProvider = Arc::new(TestCatalogProviderAdapter { info, manager });
     let picker_label = if id == OPENAI_PROVIDER_ID {
         "ChatGPT"
     } else {
@@ -397,10 +492,34 @@ fn test_registration(
     )
 }
 
+fn unavailable_registration(
+    id: &str,
+    display_name: &str,
+    wire_api: WireApi,
+) -> ProviderRegistration {
+    let info = ModelProviderInfo {
+        name: display_name.to_string(),
+        wire_api,
+        ..ModelProviderInfo::default()
+    };
+    let manager: SharedModelsManager = Arc::new(OpenAiModelsManager::new_without_cache(
+        Arc::new(UnavailableModelsEndpoint),
+        /*auth_manager*/ None,
+    ));
+    let provider: SharedModelProvider = Arc::new(TestCatalogProviderAdapter { info, manager });
+    ProviderRegistration::new(
+        id,
+        display_name,
+        provider,
+        PathBuf::from("/tmp/test-provider-models"),
+        /*config_model_catalog*/ None,
+    )
+}
+
 #[derive(Debug)]
 struct TestCatalogProviderAdapter {
     info: ModelProviderInfo,
-    catalog: ModelsResponse,
+    manager: SharedModelsManager,
 }
 
 impl ModelProvider for TestCatalogProviderAdapter {
@@ -428,10 +547,40 @@ impl ModelProvider for TestCatalogProviderAdapter {
         _codex_home: PathBuf,
         _config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        Arc::new(StaticModelsManager::new(
-            /*auth_manager*/ None,
-            self.catalog.clone(),
-        ))
+        Arc::clone(&self.manager)
+    }
+}
+
+#[derive(Debug)]
+struct UnavailableModelsEndpoint;
+
+impl ModelsEndpointClient for UnavailableModelsEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        ModelsCatalogIdentity::new("test-unavailable-authority", "test-decoder-v1")
+    }
+
+    fn has_command_auth(&self) -> bool {
+        false
+    }
+
+    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+
+    fn remote_catalog_is_authoritative(&self) -> bool {
+        true
+    }
+
+    fn list_models<'a>(
+        &'a self,
+        _client_version: &'a str,
+        _http_client_factory: HttpClientFactory,
+    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
+        Box::pin(async {
+            Err(CodexErr::InvalidRequest(
+                "test Authority is unavailable".to_string(),
+            ))
+        })
     }
 }
 

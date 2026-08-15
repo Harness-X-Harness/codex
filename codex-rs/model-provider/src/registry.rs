@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -101,6 +102,7 @@ struct ProviderCatalog {
 struct UnifiedModelCatalog {
     providers: Vec<ProviderCatalog>,
     owners: HashMap<String, String>,
+    unavailable_providers: BTreeSet<String>,
 }
 
 /// Process-owned Provider Registrations and their isolated model catalogs.
@@ -194,6 +196,11 @@ impl ModelProviderRegistry {
         let catalog = self
             .load_unified_catalog(refresh_strategy, http_client_factory)
             .await?;
+        if catalog.providers.is_empty() && !catalog.unavailable_providers.is_empty() {
+            return Err(authority_unavailable_for(
+                catalog.unavailable_providers.iter().map(String::as_str),
+            ));
+        }
         let mut models = Vec::new();
         for provider_catalog in catalog.providers {
             let registration = self
@@ -237,10 +244,19 @@ impl ModelProviderRegistry {
             .await?;
         match (requested_model, requested_provider_id) {
             (Some(model), provider_id) => {
+                if let Some(provider_id) = provider_id
+                    && catalog.unavailable_providers.contains(provider_id)
+                {
+                    return Err(authority_unavailable(provider_id));
+                }
                 let owner = catalog.owners.get(model).ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "model `{model}` is not present in the unified provider catalog"
-                    ))
+                    if provider_id.is_some() || catalog.unavailable_providers.is_empty() {
+                        model_unavailable(provider_id, model)
+                    } else {
+                        authority_unavailable_for(
+                            catalog.unavailable_providers.iter().map(String::as_str),
+                        )
+                    }
                 })?;
                 if let Some(provider_id) = provider_id
                     && provider_id != owner
@@ -255,17 +271,20 @@ impl ModelProviderRegistry {
                 }))
             }
             (None, Some(provider_id)) => {
+                if catalog.unavailable_providers.contains(provider_id) {
+                    return Err(authority_unavailable(provider_id));
+                }
                 let provider_catalog = catalog
                     .providers
                     .iter()
                     .find(|catalog| catalog.provider_id == provider_id)
-                    .expect("registered provider must have a catalog");
+                    .expect("available registered provider must have a catalog");
                 let model = provider_catalog
                     .models
                     .iter()
                     .find(|model| model.is_default)
                     .or_else(|| provider_catalog.models.first())
-                    .expect("provider catalog must not be empty");
+                    .ok_or_else(|| model_unavailable(Some(provider_id), "<default>"))?;
                 Ok(Some(ResolvedProviderSelection {
                     model: model.model.clone(),
                     provider_id: provider_id.to_string(),
@@ -289,11 +308,13 @@ impl ModelProviderRegistry {
         let catalog = self
             .load_unified_catalog(refresh_strategy, http_client_factory)
             .await?;
-        let owner = catalog.owners.get(requested_model).ok_or_else(|| {
-            CodexErr::InvalidRequest(format!(
-                "model `{requested_model}` is not present in the unified provider catalog"
-            ))
-        })?;
+        if catalog.unavailable_providers.contains(bound_provider_id) {
+            return Err(authority_unavailable(bound_provider_id));
+        }
+        let owner = catalog
+            .owners
+            .get(requested_model)
+            .ok_or_else(|| model_unavailable(Some(bound_provider_id), requested_model))?;
         if owner != bound_provider_id {
             return Err(CodexErr::InvalidRequest(format!(
                 "thread is bound to provider `{bound_provider_id}`, but model `{requested_model}` belongs to `{owner}`; start a new thread to use another provider"
@@ -343,6 +364,13 @@ impl ModelProviderRegistry {
             }));
         }
         if let Some(persisted_model) = persisted_model {
+            self.validate_bound_model(
+                bound_provider_id,
+                persisted_model,
+                refresh_strategy,
+                http_client_factory,
+            )
+            .await?;
             return Ok(Some(ResolvedProviderSelection {
                 model: persisted_model.to_string(),
                 provider_id: bound_provider_id.to_string(),
@@ -373,21 +401,23 @@ impl ModelProviderRegistry {
     ) -> CodexResult<UnifiedModelCatalog> {
         let mut providers = Vec::with_capacity(self.registrations.len());
         let mut owners = HashMap::<String, String>::new();
+        let mut unavailable_providers = BTreeSet::new();
         for provider_id in &self.registration_order {
             let registration = self
                 .registrations
                 .get(provider_id)
                 .expect("registration order must reference a registered provider");
-            let models = registration
-                .runtime
-                .models_manager
-                .list_models(refresh_strategy, http_client_factory.clone())
-                .await;
-            if models.is_empty() {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "model provider `{provider_id}` has no available model catalog"
-                )));
-            }
+            let manager = &registration.runtime.models_manager;
+            let models = match manager
+                .load_model_catalog(refresh_strategy, http_client_factory.clone())
+                .await
+            {
+                Ok(catalog) => manager.build_available_models(catalog.models),
+                Err(_) => {
+                    unavailable_providers.insert(provider_id.clone());
+                    continue;
+                }
+            };
             for model in &models {
                 if let Some(previous_owner) =
                     owners.insert(model.model.clone(), provider_id.clone())
@@ -403,7 +433,35 @@ impl ModelProviderRegistry {
                 models,
             });
         }
-        Ok(UnifiedModelCatalog { providers, owners })
+        Ok(UnifiedModelCatalog {
+            providers,
+            owners,
+            unavailable_providers,
+        })
+    }
+}
+
+fn authority_unavailable(provider_id: &str) -> CodexErr {
+    CodexErr::InvalidRequest(format!(
+        "AuthorityUnavailable: model catalog for provider `{provider_id}` is unavailable"
+    ))
+}
+
+fn authority_unavailable_for<'a>(provider_ids: impl IntoIterator<Item = &'a str>) -> CodexErr {
+    let provider_ids = provider_ids.into_iter().collect::<Vec<_>>().join("`, `");
+    CodexErr::InvalidRequest(format!(
+        "AuthorityUnavailable: model catalog for provider(s) `{provider_ids}` is unavailable"
+    ))
+}
+
+fn model_unavailable(provider_id: Option<&str>, model: &str) -> CodexErr {
+    match provider_id {
+        Some(provider_id) => CodexErr::InvalidRequest(format!(
+            "ModelUnavailable: model `{model}` is not present in the successful catalog for provider `{provider_id}`"
+        )),
+        None => CodexErr::InvalidRequest(format!(
+            "ModelUnavailable: model `{model}` is not present in the successful provider catalogs"
+        )),
     }
 }
 
