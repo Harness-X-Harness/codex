@@ -286,6 +286,7 @@ async fn provider_name_and_wire_dialect_do_not_select_the_grok_catalog_strategy(
     provider_info.provider_adapter =
         Some(codex_model_provider_info::ModelProviderAdapter::Configured);
     provider_info.requires_openai_auth = false;
+    provider_info.experimental_bearer_token = Some("configured-test-token".to_string());
     let provider = create_model_provider(provider_info, /*auth_manager*/ None);
     let manager = provider.models_manager_without_cache(/*config_model_catalog*/ None);
 
@@ -296,10 +297,5 @@ async fn provider_name_and_wire_dialect_do_not_select_the_grok_catalog_strategy(
         )
         .await;
 
-    assert!(
-        catalog
-            .models
-            .iter()
-            .any(|model| model.slug == "ordinary-model")
-    );
+    assert_eq!(catalog.models, vec![expected]);
 }
