@@ -100,6 +100,9 @@ use tracing::instrument;
 use tracing::warn;
 
 mod provider_binding;
+mod provider_registry;
+
+use provider_registry::build_provider_registry;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
@@ -323,7 +326,6 @@ pub(crate) struct ThreadManagerState {
     thread_created_tx: broadcast::Sender<ThreadId>,
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
-    models_manager: SharedModelsManager,
     provider_registry: ModelProviderRegistry,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -406,7 +408,6 @@ impl ThreadManager {
     pub fn new(
         config: &Config,
         auth_manager: Arc<AuthManager>,
-        models_manager: SharedModelsManager,
         codex_apps_tools_cache: CodexAppsToolsCache,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
@@ -446,20 +447,13 @@ impl ThreadManager {
             } else {
                 Arc::new(DisabledCodeModeSessionProvider)
             };
-        let provider_registry = ModelProviderRegistry::new(
-            &config.model_providers,
-            &config.model_provider_id,
-            config.codex_home.as_path(),
-            Arc::clone(&models_manager),
-            Arc::clone(&auth_manager),
-        )
-        .expect("validated config must register its default model provider");
+        let provider_registry = build_provider_registry(config, Arc::clone(&auth_manager))
+            .expect("validated config must register its default model provider");
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
-                models_manager,
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
                 skills_service,
@@ -602,21 +596,17 @@ impl ThreadManager {
         ));
         let agent_graph_store = local_agent_graph_store_from_state_db(state_db.as_ref());
         let provider = create_model_provider(provider, Some(auth_manager.clone()));
-        let models_manager = provider.models_manager(
-            provider_models_home(&codex_home, OPENAI_PROVIDER_ID),
-            /*config_model_catalog*/ None,
-        );
         let provider_registry = ModelProviderRegistry::single(
             OPENAI_PROVIDER_ID,
             provider,
-            Arc::clone(&models_manager),
+            provider_models_home(&codex_home, OPENAI_PROVIDER_ID),
+            /*config_model_catalog*/ None,
         );
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
-                models_manager,
                 provider_registry,
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -736,7 +726,7 @@ impl ThreadManager {
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
-        self.state.models_manager.clone()
+        self.state.provider_registry.default_models_manager()
     }
 
     pub async fn list_models(
@@ -745,7 +735,8 @@ impl ThreadManager {
         http_client_factory: codex_http_client::HttpClientFactory,
     ) -> Vec<ModelPreset> {
         self.state
-            .models_manager
+            .provider_registry
+            .default_models_manager()
             .list_models(refresh_strategy, http_client_factory)
             .await
     }
@@ -801,12 +792,21 @@ impl ThreadManager {
             .await
     }
 
-    pub fn has_federated_model_catalog(&self) -> bool {
-        self.state.provider_registry.is_federated()
+    pub fn unbound_history_requires_provider_binding(&self) -> bool {
+        self.state.provider_registry.requires_bound_history()
+    }
+
+    pub fn default_thread_provider_filter(&self) -> Option<Vec<String>> {
+        self.state
+            .provider_registry
+            .default_thread_provider_filter()
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.state.models_manager.list_collaboration_modes()
+        self.state
+            .provider_registry
+            .default_models_manager()
+            .list_collaboration_modes()
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
@@ -1821,26 +1821,16 @@ impl ThreadManagerState {
             starting.retain(|runtime| runtime.strong_count() != 0);
             starting.push(Arc::downgrade(&source_changed_during_startup));
         }
-        let models_manager = self
+        let provider_runtime = self
             .provider_registry
-            .models_manager(&config.model_provider_id)
-            .unwrap_or_else(|| {
-                create_model_provider(config.model_provider.clone(), Some(auth_manager.clone()))
-                    .models_manager(
-                        provider_models_home(
-                            config.codex_home.as_path(),
-                            &config.model_provider_id,
-                        ),
-                        config.model_catalog.clone(),
-                    )
-            });
+            .resolve_runtime(&config.model_provider_id)?;
         let (session, io) = Box::pin(Session::spawn(SessionSpawnArgs {
             config,
+            provider_runtime,
             allow_provider_model_fallback,
             user_instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager,
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),

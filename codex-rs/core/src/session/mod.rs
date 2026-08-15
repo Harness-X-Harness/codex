@@ -194,7 +194,7 @@ use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
 use codex_config::types::McpServerConfig;
-use codex_model_provider::create_model_provider;
+use codex_model_provider::ResolvedProviderRuntime;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
@@ -422,11 +422,11 @@ pub(crate) enum ForkPersistence {
 
 pub(crate) struct SessionSpawnArgs {
     pub(crate) config: Config,
+    pub(crate) provider_runtime: ResolvedProviderRuntime,
     pub(crate) allow_provider_model_fallback: bool,
     pub(crate) user_instructions: LoadedUserInstructions,
     pub(crate) installation_id: String,
     pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) models_manager: SharedModelsManager,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) skills_service: Arc<HostSkillsService>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
@@ -518,11 +518,11 @@ impl Session {
     async fn spawn_internal(args: SessionSpawnArgs) -> CodexResult<(Arc<Self>, SessionIo)> {
         let SessionSpawnArgs {
             mut config,
+            provider_runtime,
             allow_provider_model_fallback,
             user_instructions,
             installation_id,
             auth_manager,
-            models_manager,
             environment_manager,
             skills_service,
             plugins_manager,
@@ -556,6 +556,15 @@ impl Session {
             git_enrichment_policy,
             windows_sandbox_proxy_settings_mode,
         } = args;
+        if provider_runtime.provider_id() != config.model_provider_id {
+            return Err(CodexErr::InvalidRequest(format!(
+                "resolved provider runtime `{}` does not match configured provider `{}`",
+                provider_runtime.provider_id(),
+                config.model_provider_id
+            )));
+        }
+        let provider = provider_runtime.provider();
+        let models_manager = provider_runtime.models_manager();
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -724,10 +733,7 @@ impl Session {
         let service_tier =
             get_service_tier(config.service_tier.clone(), fast_mode_enabled, &model_info);
         let session_configuration = SessionConfiguration {
-            provider: create_model_provider(
-                config.model_provider.clone(),
-                Some(Arc::clone(&auth_manager)),
-            ),
+            provider,
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier,
@@ -773,7 +779,7 @@ impl Session {
             user_instructions,
             installation_id,
             auth_manager.clone(),
-            models_manager.clone(),
+            provider_runtime,
             model_info,
             exec_policy,
             tx_event.clone(),

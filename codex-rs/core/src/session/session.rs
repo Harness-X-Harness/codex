@@ -13,6 +13,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
+use codex_model_provider::ResolvedProviderRuntime;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -578,7 +579,7 @@ impl Session {
         user_instructions: Option<codex_extension_api::UserInstructions>,
         installation_id: String,
         auth_manager: Arc<AuthManager>,
-        models_manager: SharedModelsManager,
+        provider_runtime: ResolvedProviderRuntime,
         model_info: ModelInfo,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
@@ -605,6 +606,7 @@ impl Session {
         git_enrichment_policy: GitEnrichmentPolicy,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
     ) -> anyhow::Result<Arc<Self>> {
+        let models_manager = provider_runtime.models_manager();
         debug!(
             "Configuring session: model={}; provider={:?}",
             session_configuration.collaboration_mode.model(),
@@ -1240,8 +1242,10 @@ impl Session {
                     ClientRouteClass::Api,
                 )
                 .with_legacy_custom_ca_fallback(),
+                provider_runtime,
+                #[cfg(test)]
+                models_manager_override: None,
                 session_telemetry,
-                models_manager: Arc::clone(&models_manager),
                 tool_approvals: Mutex::new(ApprovalStore::default()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
                 runtime_handle: tokio::runtime::Handle::current(),
@@ -1266,15 +1270,14 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,
-                model_client: ModelClient::new(
-                    Some(Arc::clone(&auth_manager)),
+                model_client: ModelClient::new_with_provider(
+                    session_configuration.provider.clone(),
                     if config.features.enabled(Feature::UseAgentIdentity) {
                         AgentIdentityAuthPolicy::ChatGptAuth
                     } else {
                         AgentIdentityAuthPolicy::JwtOnly
                     },
                     thread_id,
-                    session_configuration.provider.info().clone(),
                     session_configuration.session_source.clone(),
                     session_configuration.originator.clone(),
                     config.model_verbosity,

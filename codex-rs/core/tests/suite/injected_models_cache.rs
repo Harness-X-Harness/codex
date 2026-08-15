@@ -21,6 +21,7 @@ use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -157,13 +158,7 @@ async fn run_agent_with_model(models_manager: SharedModelsManager, model_slug: &
         ]),
     )
     .await;
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_models_manager(models_manager);
-    let test = builder.build(&server).await?;
-    let available_models = test
-        .thread_manager
-        .get_models_manager()
+    let available_models = models_manager
         .list_models(
             RefreshStrategy::OnlineIfUncached,
             codex_core::test_support::default_http_client_factory(),
@@ -174,6 +169,13 @@ async fn run_agent_with_model(models_manager: SharedModelsManager, model_slug: &
             .iter()
             .any(|model| model.model == model_slug)
     );
+    let model_catalog = ModelsResponse {
+        models: vec![remote_model(model_slug)],
+    };
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| config.model_catalog = Some(model_catalog));
+    let test = builder.build(&server).await?;
 
     submit_thread_settings(
         &test.codex,

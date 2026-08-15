@@ -455,7 +455,7 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
     };
     let turn_context = Arc::new(
         turn_context
-            .with_model(next_model.to_string(), &session.services.models_manager)
+            .with_model(next_model.to_string(), &session.services.models_manager())
             .await,
     );
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
@@ -4419,7 +4419,7 @@ async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
     let updated = turn_context
-        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager())
         .await;
     let expected_model_info = session
         .services
@@ -5862,8 +5862,16 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ClientRouteClass::Api,
         )
         .with_legacy_custom_ca_fallback(),
+        provider_runtime: codex_model_provider::ModelProviderRegistry::single(
+            config.model_provider_id.clone(),
+            session_configuration.provider.clone(),
+            config.codex_home.to_path_buf(),
+            config.model_catalog.clone(),
+        )
+        .resolve_runtime(&config.model_provider_id)
+        .expect("single-provider runtime"),
+        models_manager_override: Some(Arc::clone(&models_manager)),
         session_telemetry: session_telemetry.clone(),
-        models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
@@ -8084,8 +8092,16 @@ where
             ClientRouteClass::Api,
         )
         .with_legacy_custom_ca_fallback(),
+        provider_runtime: codex_model_provider::ModelProviderRegistry::single(
+            config.model_provider_id.clone(),
+            session_configuration.provider.clone(),
+            config.codex_home.to_path_buf(),
+            config.model_catalog.clone(),
+        )
+        .resolve_runtime(&config.model_provider_id)
+        .expect("single-provider runtime"),
+        models_manager_override: Some(Arc::clone(&models_manager)),
         session_telemetry: session_telemetry.clone(),
-        models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
@@ -8854,7 +8870,7 @@ async fn record_context_updates_emits_environment_item_for_network_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
 
@@ -8910,7 +8926,7 @@ async fn record_context_updates_emits_environment_item_for_cwd_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     let cwd = test_path_buf("/new-repo").abs();
@@ -8963,7 +8979,7 @@ async fn record_context_updates_use_environment_permission_profile_and_workspace
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     let environment = current_context
@@ -9014,7 +9030,7 @@ async fn record_context_updates_emits_environment_item_for_time_changes() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     current_context.timezone = Some("Europe/Berlin".to_string());
@@ -9038,7 +9054,7 @@ async fn record_context_updates_omits_environment_item_when_disabled() {
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     let mut config = (*current_context.config).clone();
@@ -9099,7 +9115,7 @@ async fn record_context_updates_emits_realtime_start_when_session_becomes_live()
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     current_context.realtime_active = true;
@@ -9123,7 +9139,7 @@ async fn record_context_updates_emits_realtime_end_when_session_stops_being_live
     let mut current_context = previous_context
         .with_model(
             previous_context.model_info.slug.clone(),
-            &session.services.models_manager,
+            &session.services.models_manager(),
         )
         .await;
     current_context.realtime_active = false;
@@ -9784,7 +9800,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         "gpt-5.4"
     };
     let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager)
+        .with_model(next_model.to_string(), &session.services.models_manager())
         .await;
     let rollout_path = attach_thread_persistence(&mut session).await;
 

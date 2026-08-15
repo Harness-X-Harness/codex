@@ -107,7 +107,7 @@ pub(crate) struct AgentControl {
     manager: Weak<ThreadManagerState>,
     /// Captured at construction so delegates retain their manager's allocation policy.
     thread_id_generator: ThreadIdGenerator,
-    /// Cached runtime policy so a federated Session fails closed if its manager is dropped.
+    /// Cached runtime policy so a provider-bound Session fails closed if its manager is dropped.
     provider_binding_enforced: bool,
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,

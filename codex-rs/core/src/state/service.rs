@@ -32,6 +32,7 @@ use codex_hooks::Hooks;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthManager;
 use codex_mcp::McpRuntime;
+use codex_model_provider::ResolvedProviderRuntime;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -63,7 +64,9 @@ pub(crate) struct SessionServices {
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Upload-only clients shared across turns without logging signed blob URLs.
     pub(crate) openai_file_upload_client_pool: RouteAwareClientPool,
-    pub(crate) models_manager: SharedModelsManager,
+    pub(crate) provider_runtime: ResolvedProviderRuntime,
+    #[cfg(test)]
+    pub(crate) models_manager_override: Option<SharedModelsManager>,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) guardian_rejection_circuit_breaker: Mutex<GuardianRejectionCircuitBreaker>,
@@ -97,4 +100,19 @@ pub(crate) struct SessionServices {
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) tool_search_handler_cache: ToolSearchHandlerCache,
     pub(crate) turn_environments: Arc<ThreadEnvironments>,
+}
+
+impl SessionServices {
+    pub(crate) fn models_manager(&self) -> SharedModelsManager {
+        #[cfg(test)]
+        if let Some(models_manager) = self.models_manager_override.as_ref() {
+            return Arc::clone(models_manager);
+        }
+        self.provider_runtime.models_manager()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_models_manager_for_testing(&mut self, models_manager: SharedModelsManager) {
+        self.models_manager_override = Some(models_manager);
+    }
 }

@@ -441,7 +441,38 @@ impl ModelClient {
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         http_client_factory: HttpClientFactory,
     ) -> Self {
-        let model_provider = create_model_provider(provider_info, auth_manager);
+        Self::new_with_provider(
+            create_model_provider(provider_info, auth_manager),
+            agent_identity_policy,
+            thread_id,
+            session_source,
+            originator,
+            model_verbosity,
+            enable_request_compression,
+            include_timing_metrics,
+            beta_features_header,
+            concurrent_reasoning_summaries_enabled,
+            attestation_provider,
+            http_client_factory,
+        )
+    }
+
+    /// Creates a session-scoped client from an already resolved Provider runtime.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_provider(
+        model_provider: SharedModelProvider,
+        agent_identity_policy: AgentIdentityAuthPolicy,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+        originator: String,
+        model_verbosity: Option<VerbosityConfig>,
+        enable_request_compression: bool,
+        include_timing_metrics: bool,
+        beta_features_header: Option<String>,
+        concurrent_reasoning_summaries_enabled: bool,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()

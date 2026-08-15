@@ -823,7 +823,7 @@ impl Session {
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             model_info,
-            &self.services.models_manager,
+            &self.services.models_manager(),
             self.services
                 .network_proxy
                 .load_full()

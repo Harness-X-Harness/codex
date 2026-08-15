@@ -15,7 +15,7 @@ struct ThreadProviderBinding {
 
 impl ThreadManagerState {
     pub(crate) fn provider_binding_enforced(&self) -> bool {
-        self.provider_registry.is_federated()
+        self.provider_registry.requires_bound_history()
     }
 
     pub(crate) async fn validate_bound_model(
@@ -41,10 +41,6 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
     ) -> CodexResult<()> {
-        if !self.provider_registry.is_federated() {
-            return Ok(());
-        }
-
         let fork_binding = match forked_from_thread_id {
             Some(thread_id) => Some(self.thread_provider_binding(thread_id).await?),
             None => None,
@@ -70,6 +66,14 @@ impl ThreadManagerState {
             (None, None) => return Ok(()),
         };
 
+        if !self
+            .provider_registry
+            .requires_binding_resolution(&source_binding.provider_id)
+            && config.model_provider_id == source_binding.provider_id
+        {
+            return Ok(());
+        }
+
         if config.model_provider_id != source_binding.provider_id {
             return Err(CodexErr::InvalidRequest(format!(
                 "thread is bound to provider `{}`, not `{}`; start a new thread to use another provider",
@@ -92,16 +96,10 @@ impl ThreadManagerState {
             config.model = source_binding.model;
         }
 
-        let provider = self
+        let runtime = self
             .provider_registry
-            .provider(&source_binding.provider_id)
-            .ok_or_else(|| {
-                CodexErr::InvalidRequest(format!(
-                    "thread provider `{}` is not configured",
-                    source_binding.provider_id
-                ))
-            })?;
-        config.model_provider = provider.info().clone();
+            .resolve_runtime(&source_binding.provider_id)?;
+        config.model_provider = runtime.provider.info().clone();
         Ok(())
     }
 

@@ -58,7 +58,6 @@ use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
-use codex_core_api::build_models_manager;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
@@ -141,7 +140,6 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
-        build_models_manager(&config, auth_manager),
         CodexAppsToolsCache::default(),
         SessionSource::Exec,
         environment_manager,
@@ -247,6 +245,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers,
+        model_provider_registration_ids: vec![OPENAI_PROVIDER_ID.to_string()],
         project_doc_max_bytes: 32 * 1024,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,

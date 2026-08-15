@@ -302,7 +302,9 @@ async fn guardian_test_session_and_turn_with_base_url(
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     );
-    session.services.models_manager = models_manager;
+    session
+        .services
+        .set_models_manager_for_testing(models_manager);
     turn.config = Arc::clone(&config);
     turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
 
@@ -1806,7 +1808,9 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     );
-    session.services.models_manager = models_manager;
+    session
+        .services
+        .set_models_manager_for_testing(models_manager);
     let memory_extension = Arc::new(GuardianMemoryContextProbe);
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
     extensions.thread_lifecycle_contributor(memory_extension.clone());

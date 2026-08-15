@@ -111,7 +111,9 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     );
-    session.services.models_manager = models_manager;
+    session
+        .services
+        .set_models_manager_for_testing(models_manager);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
@@ -329,7 +331,9 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     );
-    session.services.models_manager = models_manager;
+    session
+        .services
+        .set_models_manager_for_testing(models_manager);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
@@ -447,7 +451,9 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     );
-    session.services.models_manager = models_manager;
+    session
+        .services
+        .set_models_manager_for_testing(models_manager);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
@@ -734,11 +740,18 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     );
 
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = models_manager_with_provider(
-        config.codex_home.to_path_buf(),
-        auth_manager.clone(),
+    let provider = create_model_provider(
         config.model_provider.clone(),
+        Some(Arc::clone(&auth_manager)),
     );
+    let provider_runtime = codex_model_provider::ModelProviderRegistry::single(
+        config.model_provider_id.clone(),
+        provider,
+        config.codex_home.to_path_buf(),
+        config.model_catalog.clone(),
+    )
+    .resolve_runtime(&config.model_provider_id)
+    .expect("single-provider runtime");
     let plugins_manager = Arc::new(plugins_manager_for_config(&config));
     let skills_service = Arc::new(HostSkillsService::new(
         config.codex_home.clone(),
@@ -752,11 +765,11 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
 
     let (session, io) = Session::spawn(SessionSpawnArgs {
         config,
+        provider_runtime,
         allow_provider_model_fallback: false,
         user_instructions: Default::default(),
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         auth_manager,
-        models_manager,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         skills_service,
         plugins_manager,
