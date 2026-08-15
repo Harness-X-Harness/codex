@@ -808,13 +808,6 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
 
     {
         let fixture = ProviderRoutingFixture::new().await?;
-        let arguments = serde_json::json!({
-            "plan": [{
-                "step": "must not dispatch after hosted ownership",
-                "status": "completed"
-            }]
-        })
-        .to_string();
         let response = mount_sse_once_match(
             &fixture.grok_server,
             header("authorization", "Bearer grok-test-key"),
@@ -917,6 +910,13 @@ async fn grok_undeclared_hosted_output_fails_before_projection_or_local_dispatch
 
     {
         let fixture = ProviderRoutingFixture::new().await?;
+        let arguments = serde_json::json!({
+            "plan": [{
+                "step": "must not dispatch after hosted ownership",
+                "status": "completed"
+            }]
+        })
+        .to_string();
         let response = mount_sse_once_match(
             &fixture.grok_server,
             header("authorization", "Bearer grok-test-key"),
