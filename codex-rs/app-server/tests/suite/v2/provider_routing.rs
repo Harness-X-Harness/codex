@@ -297,6 +297,7 @@ async fn grok_model_without_backend_search_omits_web_and_x_tools() -> Result<()>
 #[tokio::test]
 async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
+    let seed_response = mount_completion(&fixture.grok_server, "grok-authority-seed").await;
     let mut app = fixture.start_app().await?;
     let started = app
         .start_thread(ThreadStartParams {
@@ -304,6 +305,8 @@ async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable()
             ..Default::default()
         })
         .await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+    assert_eq!(seed_response.requests().len(), 1);
 
     fixture.grok_server.reset().await;
     Mock::given(method("GET"))
