@@ -12,6 +12,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 
 use super::ModelResolution;
+use super::ModelSelection;
 use super::ModelsEndpointClient;
 use super::ModelsEndpointFuture;
 use super::ModelsManager;
@@ -314,26 +315,14 @@ async fn static_catalog_resolves_or_rejects_from_one_snapshot() -> CoreResult<()
     let config = ModelsManagerConfig::default();
     assert!(matches!(
         authoritative
-            .resolve_model_profile(
-                ModelSelection::Exact("missing-model"),
-                &config,
-                RefreshStrategy::Offline,
-                HTTP_CLIENT_FACTORY,
-            )
-            .await?,
+            .resolve_model_profile(ModelSelection::Exact("missing-model"), &config),
         ModelResolution::Unavailable { model } if model == "missing-model"
     ));
     let ModelResolution::Resolved {
         model_info,
         available_models,
     } = metadata_only
-        .resolve_model_profile(
-            ModelSelection::Exact("missing-model"),
-            &config,
-            RefreshStrategy::Offline,
-            HTTP_CLIENT_FACTORY,
-        )
-        .await?
+        .resolve_model_profile(ModelSelection::Exact("missing-model"), &config)
     else {
         panic!("metadata-only catalog must preserve unconstrained model identifiers");
     };
