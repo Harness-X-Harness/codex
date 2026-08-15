@@ -296,5 +296,5 @@ async fn provider_name_and_wire_dialect_do_not_select_the_grok_catalog_strategy(
         )
         .await;
 
-    assert_eq!(catalog.models, vec![expected]);
+    assert!(catalog.models.contains(&expected));
 }

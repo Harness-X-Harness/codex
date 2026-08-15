@@ -405,7 +405,7 @@ async fn non_authoritative_provider_refresh_failure_preserves_stock_catalog() {
 async fn one_registration_preserves_stock_selection_semantics() -> codex_protocol::error::Result<()>
 {
     let registry = ModelProviderRegistry::new(
-        [test_registration(
+        [unconstrained_test_registration(
             OPENAI_PROVIDER_ID,
             "OpenAI",
             WireApi::Responses,
@@ -458,7 +458,7 @@ async fn one_registration_preserves_stock_selection_semantics() -> codex_protoco
 
 #[tokio::test]
 async fn registration_add_remove_and_restore_use_only_the_public_seam() {
-    let openai = test_registration(
+    let openai = unconstrained_test_registration(
         OPENAI_PROVIDER_ID,
         "OpenAI",
         WireApi::Responses,
@@ -604,6 +604,38 @@ fn test_registration(
         ..ModelProviderInfo::default()
     };
     let manager: SharedModelsManager = Arc::new(StaticModelsManager::new(
+        /*auth_manager*/ None,
+        ModelsResponse {
+            models: slugs.iter().map(|slug| test_model(slug)).collect(),
+        },
+    ));
+    let provider: SharedModelProvider = Arc::new(TestCatalogProviderAdapter { info, manager });
+    let picker_label = if id == OPENAI_PROVIDER_ID {
+        "ChatGPT"
+    } else {
+        display_name
+    };
+    ProviderRegistration::new(
+        id,
+        picker_label,
+        provider,
+        PathBuf::from("/tmp/test-provider-models"),
+        /*config_model_catalog*/ None,
+    )
+}
+
+fn unconstrained_test_registration(
+    id: &str,
+    display_name: &str,
+    wire_api: WireApi,
+    slugs: &[&str],
+) -> ProviderRegistration {
+    let info = ModelProviderInfo {
+        name: display_name.to_string(),
+        wire_api,
+        ..ModelProviderInfo::default()
+    };
+    let manager: SharedModelsManager = Arc::new(StaticModelsManager::new_unconstrained(
         /*auth_manager*/ None,
         ModelsResponse {
             models: slugs.iter().map(|slug| test_model(slug)).collect(),
