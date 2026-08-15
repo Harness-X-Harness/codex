@@ -164,7 +164,7 @@ mod tests {
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
-            body: Arc::new(response),
+            body: Arc::new(response.clone()),
             etag: None,
         };
 
@@ -224,7 +224,7 @@ mod tests {
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
-            body: Arc::new(response),
+            body: Arc::new(response.clone()),
             etag: None,
         };
 
@@ -246,7 +246,7 @@ mod tests {
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
-            body: Arc::new(response),
+            body: Arc::new(response.clone()),
             etag: Some("\"abc\"".to_string()),
         };
 
