@@ -175,6 +175,165 @@ async fn existing_thread_selection_preserves_provider_and_persisted_model() {
     assert!(provider_mismatch.to_string().contains("start a new thread"));
 }
 
+#[tokio::test]
+async fn one_registration_preserves_stock_selection_semantics() -> codex_protocol::error::Result<()>
+{
+    let registry = ModelProviderRegistry::new(
+        [test_registration(
+            OPENAI_PROVIDER_ID,
+            "OpenAI",
+            WireApi::Responses,
+            &["openai-model"],
+        )],
+        OPENAI_PROVIDER_ID,
+    )
+    .expect("single registration should construct the registry");
+    let factory = test_http_client_factory();
+
+    assert!(!registry.requires_bound_history());
+    assert_eq!(
+        registry.default_thread_provider_filter(),
+        Some(vec![OPENAI_PROVIDER_ID.to_string()])
+    );
+    assert_eq!(
+        registry
+            .resolve_new_thread_selection(
+                Some("unlisted-model"),
+                /*requested_provider_id*/ None,
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await?,
+        None
+    );
+    assert_eq!(
+        registry
+            .resolve_existing_thread_selection(
+                OPENAI_PROVIDER_ID,
+                Some("openai-model"),
+                Some("unlisted-model"),
+                Some(OPENAI_PROVIDER_ID),
+                RefreshStrategy::Offline,
+                factory.clone(),
+            )
+            .await?,
+        None
+    );
+    registry
+        .validate_bound_model(
+            OPENAI_PROVIDER_ID,
+            "unlisted-model",
+            RefreshStrategy::Offline,
+            factory,
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_add_remove_and_restore_use_only_the_public_seam() {
+    let openai = test_registration(
+        OPENAI_PROVIDER_ID,
+        "OpenAI",
+        WireApi::Responses,
+        &["openai-model"],
+    );
+    let test_provider = test_registration(
+        "test-provider",
+        "Test Provider",
+        WireApi::Responses,
+        &["test-model"],
+    );
+    let registered =
+        ModelProviderRegistry::new([openai.clone(), test_provider.clone()], OPENAI_PROVIDER_ID)
+            .expect("explicit registrations should construct the registry");
+    let runtime = registered
+        .resolve_runtime("test-provider")
+        .expect("registration should resolve its complete runtime");
+    assert_eq!(runtime.provider_id(), "test-provider");
+    assert_eq!(runtime.provider().info().name, "Test Provider");
+    assert_eq!(
+        runtime
+            .models_manager()
+            .list_models(RefreshStrategy::Offline, test_http_client_factory())
+            .await
+            .iter()
+            .map(|model| model.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["test-model"]
+    );
+    let selection = registered
+        .resolve_new_thread_selection(
+            Some("test-model"),
+            /*requested_provider_id*/ None,
+            RefreshStrategy::Offline,
+            test_http_client_factory(),
+        )
+        .await
+        .expect("registered test provider should resolve");
+    assert_eq!(
+        selection,
+        Some(ResolvedProviderSelection {
+            model: "test-model".to_string(),
+            provider_id: "test-provider".to_string(),
+        })
+    );
+
+    let removed = ModelProviderRegistry::new([openai], OPENAI_PROVIDER_ID)
+        .expect("remaining registration should construct the registry");
+    assert_eq!(
+        removed
+            .list_models(RefreshStrategy::Offline, test_http_client_factory())
+            .await
+            .expect("remaining registration should keep its catalog")
+            .iter()
+            .map(|model| model.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openai-model"]
+    );
+    let removed_new_selection = removed
+        .resolve_new_thread_selection(
+            Some("test-model"),
+            /*requested_provider_id*/ None,
+            RefreshStrategy::Offline,
+            test_http_client_factory(),
+        )
+        .await
+        .expect("single-provider compatibility keeps arbitrary model overrides");
+    assert_eq!(removed_new_selection, None);
+    let unavailable = removed
+        .resolve_existing_thread_selection(
+            "test-provider",
+            Some("test-model"),
+            /*requested_model*/ None,
+            /*requested_provider_id*/ None,
+            RefreshStrategy::Offline,
+            test_http_client_factory(),
+        )
+        .await
+        .expect_err("removed provider must not reroute its bound thread");
+    assert!(unavailable.to_string().contains("ProviderUnavailable"));
+
+    let restored = ModelProviderRegistry::new([test_provider], "test-provider")
+        .expect("stable registration should be restorable");
+    let restored_selection = restored
+        .resolve_existing_thread_selection(
+            "test-provider",
+            Some("test-model"),
+            /*requested_model*/ None,
+            /*requested_provider_id*/ None,
+            RefreshStrategy::Offline,
+            test_http_client_factory(),
+        )
+        .await
+        .expect("restored provider should resolve its bound thread");
+    assert_eq!(restored_selection, None);
+    let restored_runtime = restored
+        .resolve_runtime("test-provider")
+        .expect("restored provider runtime should resolve by its stable ID");
+    assert_eq!(restored_runtime.provider().info().name, "Test Provider");
+}
+
 #[test]
 fn provider_owned_credentials_do_not_inherit_chatgpt_auth() {
     let mut info = ModelProviderInfo {
