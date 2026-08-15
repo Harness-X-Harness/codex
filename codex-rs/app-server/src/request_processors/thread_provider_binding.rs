@@ -84,7 +84,6 @@ pub(super) async fn validate_existing_thread_provider_binding(
     if selection_overrides.model.is_none() && selection_overrides.provider_id.is_none() {
         return Ok(());
     }
-
     thread_manager
         .resolve_existing_thread_provider(
             binding.provider_id,

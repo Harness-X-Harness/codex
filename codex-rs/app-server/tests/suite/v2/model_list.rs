@@ -293,6 +293,7 @@ model_provider = "openai"
 approval_policy = "never"
 sandbox_mode = "read-only"
 openai_base_url = "{}/v1"
+model_provider_registrations = ["openai", "grok"]
 
 [model_providers.grok]
 name = "Grok"

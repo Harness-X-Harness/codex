@@ -1218,33 +1218,28 @@ impl ThreadRequestProcessor {
             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
             .await
             .map_err(|err| config_load_error(&err))?;
-        if listener_task_context
+        let requested_model = has_explicit_model
+            .then(|| config.model.as_deref())
+            .flatten();
+        let requested_provider_id =
+            has_explicit_provider.then_some(config.model_provider_id.as_str());
+        if let Some(selection) = listener_task_context
             .thread_manager
-            .has_federated_model_catalog()
+            .resolve_new_thread_provider(
+                requested_model,
+                requested_provider_id,
+                RefreshStrategy::OnlineIfUncached,
+                config.http_client_factory(),
+            )
+            .await
+            .map_err(provider_binding_error)?
         {
-            let requested_model = has_explicit_model
-                .then(|| config.model.as_deref())
-                .flatten();
-            let requested_provider_id =
-                has_explicit_provider.then_some(config.model_provider_id.as_str());
-            if let Some(selection) = listener_task_context
-                .thread_manager
-                .resolve_new_thread_provider(
-                    requested_model,
-                    requested_provider_id,
-                    RefreshStrategy::OnlineIfUncached,
-                    config.http_client_factory(),
-                )
+            typesafe_overrides.model = Some(selection.model);
+            typesafe_overrides.model_provider = Some(selection.provider_id);
+            config = config_manager
+                .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
                 .await
-                .map_err(provider_binding_error)?
-            {
-                typesafe_overrides.model = Some(selection.model);
-                typesafe_overrides.model_provider = Some(selection.provider_id);
-                config = config_manager
-                    .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
-                    .await
-                    .map_err(|err| config_load_error(&err))?;
-            }
+                .map_err(|err| config_load_error(&err))?;
         }
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
@@ -3192,12 +3187,16 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
-        if params.history.is_some() && self.thread_manager.has_federated_model_catalog() {
+        if params.history.is_some()
+            && self
+                .thread_manager
+                .unbound_history_requires_provider_binding()
+        {
             self.outgoing
                 .send_error(
                     request_id,
                     invalid_request(
-                        "`thread/resume.history` has no verifiable provider binding in federated provider mode; resume a stored thread or start a new thread",
+                        "`thread/resume.history` has no verifiable provider binding in multiple-provider mode; resume a stored thread or start a new thread",
                     ),
                 )
                 .await;
@@ -3301,14 +3300,8 @@ impl ThreadRequestProcessor {
         }
         let has_explicit_model_resume_override =
             has_model_resume_override(request_overrides.as_ref(), &typesafe_overrides);
-        let provider_selection_overrides = if self.thread_manager.has_federated_model_catalog() {
-            Some(ProviderSelectionOverrides::capture(
-                request_overrides.as_ref(),
-                &typesafe_overrides,
-            )?)
-        } else {
-            None
-        };
+        let provider_selection_overrides =
+            ProviderSelectionOverrides::capture(request_overrides.as_ref(), &typesafe_overrides)?;
         let persisted_metadata = self
             .load_and_apply_persisted_resume_metadata(
                 &thread_history,
@@ -3316,9 +3309,7 @@ impl ThreadRequestProcessor {
                 &mut typesafe_overrides,
             )
             .await;
-        if let (Some(source_thread), Some(selection_overrides)) =
-            (resume_source_thread.as_ref(), provider_selection_overrides)
-        {
+        if let Some(source_thread) = resume_source_thread.as_ref() {
             apply_existing_thread_provider_binding(
                 self.thread_manager.as_ref(),
                 self.config.as_ref(),
@@ -3326,7 +3317,7 @@ impl ThreadRequestProcessor {
                     provider_id: source_thread.model_provider.as_str(),
                     model: source_thread.model.as_deref(),
                 },
-                selection_overrides,
+                provider_selection_overrides,
                 &mut request_overrides,
                 &mut typesafe_overrides,
             )
@@ -3685,27 +3676,23 @@ impl ThreadRequestProcessor {
                 )));
             }
             let config_snapshot = existing_thread.config_snapshot().await;
-            if self.thread_manager.has_federated_model_catalog() {
-                let provider_overrides = ConfigOverrides {
-                    model: params.model.clone(),
-                    model_provider: params.model_provider.clone(),
-                    ..Default::default()
-                };
-                let selection_overrides = ProviderSelectionOverrides::capture(
-                    params.config.as_ref(),
-                    &provider_overrides,
-                )?;
-                validate_existing_thread_provider_binding(
-                    self.thread_manager.as_ref(),
-                    self.config.as_ref(),
-                    ExistingThreadProviderBinding {
-                        provider_id: config_snapshot.model_provider_id.as_str(),
-                        model: Some(config_snapshot.model.as_str()),
-                    },
-                    selection_overrides,
-                )
-                .await?;
-            }
+            let provider_overrides = ConfigOverrides {
+                model: params.model.clone(),
+                model_provider: params.model_provider.clone(),
+                ..Default::default()
+            };
+            let selection_overrides =
+                ProviderSelectionOverrides::capture(params.config.as_ref(), &provider_overrides)?;
+            validate_existing_thread_provider_binding(
+                self.thread_manager.as_ref(),
+                self.config.as_ref(),
+                ExistingThreadProviderBinding {
+                    provider_id: config_snapshot.model_provider_id.as_str(),
+                    model: Some(config_snapshot.model.as_str()),
+                },
+                selection_overrides,
+            )
+            .await?;
             let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
             if !mismatch_details.is_empty() {
                 let has_subscribers = !self
@@ -4327,24 +4314,20 @@ impl ThreadRequestProcessor {
             /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
-        if self.thread_manager.has_federated_model_catalog() {
-            let selection_overrides = ProviderSelectionOverrides::capture(
-                request_overrides.as_ref(),
-                &typesafe_overrides,
-            )?;
-            apply_existing_thread_provider_binding(
-                self.thread_manager.as_ref(),
-                self.config.as_ref(),
-                ExistingThreadProviderBinding {
-                    provider_id: source_thread.model_provider.as_str(),
-                    model: source_thread.model.as_deref(),
-                },
-                selection_overrides,
-                &mut request_overrides,
-                &mut typesafe_overrides,
-            )
-            .await?;
-        }
+        let selection_overrides =
+            ProviderSelectionOverrides::capture(request_overrides.as_ref(), &typesafe_overrides)?;
+        apply_existing_thread_provider_binding(
+            self.thread_manager.as_ref(),
+            self.config.as_ref(),
+            ExistingThreadProviderBinding {
+                provider_id: source_thread.model_provider.as_str(),
+                model: source_thread.model.as_deref(),
+            },
+            selection_overrides,
+            &mut request_overrides,
+            &mut typesafe_overrides,
+        )
+        .await?;
         let latest_context = if paginated_source
             && typesafe_overrides.approvals_reviewer.is_none()
             && !request_overrides
@@ -4731,8 +4714,7 @@ impl ThreadRequestProcessor {
                 }
             }
             None if relation_filter.is_some() => None,
-            None if self.thread_manager.has_federated_model_catalog() => None,
-            None => Some(vec![self.config.model_provider_id.clone()]),
+            None => self.thread_manager.default_thread_provider_filter(),
         };
         let (allowed_sources_vec, source_kind_filter) =
             if relation_filter.is_some() && source_kinds.is_none() {

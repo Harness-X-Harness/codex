@@ -72,6 +72,7 @@ impl ProviderRoutingFixture {
             "model = \"openai-model\"\nmodel_provider = \"openai\"\n",
             review_model,
             /*multi_agent_v2*/ false,
+            /*register_grok*/ true,
         )
         .await
     }
@@ -79,18 +80,34 @@ impl ProviderRoutingFixture {
     async fn with_implicit_openai_default() -> Result<Self> {
         Self::with_config(
             "", /*review_model*/ None, /*multi_agent_v2*/ false,
+            /*register_grok*/ true,
         )
         .await
     }
 
     async fn with_implicit_openai_default_and_multi_agent_v2() -> Result<Self> {
-        Self::with_config("", /*review_model*/ None, /*multi_agent_v2*/ true).await
+        Self::with_config(
+            "", /*review_model*/ None, /*multi_agent_v2*/ true,
+            /*register_grok*/ true,
+        )
+        .await
+    }
+
+    async fn with_stock_openai_only() -> Result<Self> {
+        Self::with_config(
+            "model = \"unlisted-openai-model\"\nmodel_provider = \"openai\"\n",
+            /*review_model*/ None,
+            /*multi_agent_v2*/ false,
+            /*register_grok*/ false,
+        )
+        .await
     }
 
     async fn with_config(
         default_selection: &str,
         review_model: Option<&str>,
         multi_agent_v2: bool,
+        register_grok: bool,
     ) -> Result<Self> {
         let openai_server = MockServer::start().await;
         let grok_server = MockServer::start().await;
@@ -111,6 +128,8 @@ impl ProviderRoutingFixture {
             .map(|model| format!("review_model = \"{model}\"\n"))
             .unwrap_or_default();
         let multi_agent_v2 = format!("multi_agent_v2 = {multi_agent_v2}");
+        let registrations =
+            register_grok.then_some("model_provider_registrations = [\"openai\", \"grok\"]\n");
         std::fs::write(
             codex_home.path().join("config.toml"),
             format!(
@@ -119,6 +138,7 @@ impl ProviderRoutingFixture {
 sandbox_mode = "read-only"
 web_search = "live"
 openai_base_url = "{}/v1"
+{registrations}
 
 [model_providers.grok]
 name = "Grok"
@@ -133,6 +153,7 @@ enable_request_compression = false
 "#,
                 openai_server.uri(),
                 grok_server.uri(),
+                registrations = registrations.unwrap_or_default(),
             ),
         )?;
         write_chatgpt_auth(
@@ -597,6 +618,33 @@ async fn fork_inherits_the_source_thread_provider_binding() -> Result<()> {
 }
 
 #[tokio::test]
+async fn stock_single_provider_fork_keeps_unlisted_model_compatibility() -> Result<()> {
+    let fixture = ProviderRoutingFixture::with_stock_openai_only().await?;
+    mount_completion(&fixture.openai_server, "openai-stock-fork-seed").await;
+    let mut app = fixture.start_app().await?;
+    let started = app.start_thread(ThreadStartParams::default()).await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+
+    let request_id = app
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: started.thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, model, .. } = to_response(response)?;
+
+    assert_eq!(thread.model_provider, "openai");
+    assert_eq!(model, "unlisted-openai-model");
+    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn detached_review_inherits_the_parent_provider_binding() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let grok_responses = responses::mount_sse_sequence(
@@ -783,6 +831,77 @@ async fn cold_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
 
     assert_eq!(error.error.code, -32600);
     assert!(error.error.message.contains("new thread"));
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(
+        received_responses_count(&fixture.grok_server).await?,
+        grok_request_count_before_resume
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_fails_closed_until_provider_registration_is_restored() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    mount_completion(&fixture.grok_server, "grok-removed-provider-seed").await;
+    let mut primary = fixture.start_app().await?;
+    let started = primary
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    materialize_thread(&mut primary, &started.thread.id).await?;
+    timeout(DEFAULT_TIMEOUT, primary.shutdown_gracefully()).await??;
+    let grok_request_count_before_resume = received_responses_count(&fixture.grok_server).await?;
+
+    let config_path = fixture.codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    let registration = "model_provider_registrations = [\"openai\", \"grok\"]";
+    assert!(config.contains(registration));
+    let config = config.replacen(registration, "model_provider_registrations = []", 1);
+    std::fs::write(config_path, config)?;
+
+    let mut secondary = fixture.start_app().await?;
+    let request_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        secondary.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("ProviderUnavailable"));
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(
+        received_responses_count(&fixture.grok_server).await?,
+        grok_request_count_before_resume
+    );
+
+    timeout(DEFAULT_TIMEOUT, secondary.shutdown_gracefully()).await??;
+    let config = std::fs::read_to_string(&config_path)?;
+    let config = config.replacen("model_provider_registrations = []", registration, 1);
+    std::fs::write(config_path, config)?;
+
+    let mut restored = fixture.start_app().await?;
+    let request_id = restored
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        restored.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let resumed = to_response::<ThreadResumeResponse>(response)?;
+    assert_eq!(resumed.thread.model_provider, "grok");
+    assert_eq!(resumed.model, "grok-model");
     assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
     assert_eq!(
         received_responses_count(&fixture.grok_server).await?,
