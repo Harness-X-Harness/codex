@@ -30,6 +30,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::RolloutRecorder;
+use codex_model_provider::provider_models_home;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -221,6 +222,49 @@ async fn thread_start_resolves_grok_model_to_provider_runtime() -> Result<()> {
         grok_responses.single_request().body_json()["model"],
         "grok-model"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    let mut app = fixture.start_app().await?;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    std::fs::remove_file(
+        provider_models_home(fixture.codex_home.path(), "grok").join("models_cache.json"),
+    )?;
+    fixture.grok_server.reset().await;
+    Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&fixture.grok_server)
+        .await;
+
+    let completed = app
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: started.thread.id,
+            input: vec![UserInput::Text {
+                text: "Do not egress without an authoritative model".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    assert!(
+        completed
+            .turn
+            .error
+            .is_some_and(|error| error.message.contains("AuthorityUnavailable"))
+    );
+    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
     Ok(())
 }
 
@@ -837,6 +881,55 @@ async fn cold_resume_rejects_a_conflicting_provider_binding() -> Result<()> {
         received_responses_count(&fixture.grok_server).await?,
         grok_request_count_before_resume
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_resume_reports_bound_model_removal_before_egress() -> Result<()> {
+    let fixture = ProviderRoutingFixture::new().await?;
+    mount_completion(&fixture.grok_server, "grok-removal-seed").await;
+    let mut primary = fixture.start_app().await?;
+    let started = primary
+        .start_thread(ThreadStartParams {
+            model: Some("grok-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    materialize_thread(&mut primary, &started.thread.id).await?;
+    timeout(DEFAULT_TIMEOUT, primary.shutdown_gracefully()).await??;
+
+    std::fs::remove_file(
+        provider_models_home(fixture.codex_home.path(), "grok").join("models_cache.json"),
+    )?;
+    fixture.openai_server.reset().await;
+    fixture.grok_server.reset().await;
+    mount_models_repeating(
+        &fixture.openai_server,
+        ModelsResponse {
+            models: vec![remote_catalog_model("grok-model", "Reassigned Model")],
+        },
+    )
+    .await;
+    mount_grok_models_repeating(&fixture.grok_server, &[]).await;
+
+    let mut secondary = fixture.start_app().await?;
+    let request_id = secondary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: started.thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        secondary.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("ModelUnavailable"));
+    assert!(!error.error.message.contains("belongs to provider"));
+    assert_eq!(received_responses_count(&fixture.openai_server).await?, 0);
+    assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
     Ok(())
 }
 

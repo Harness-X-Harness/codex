@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use codex_http_client::HttpClientFactory;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_models_manager::manager::ModelAvailability;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
@@ -89,6 +90,26 @@ impl ResolvedProviderRuntime {
     /// Returns the Models Manager created by the same Provider Adapter.
     pub fn models_manager(&self) -> SharedModelsManager {
         self.models_manager.clone()
+    }
+
+    /// Validates a model against this Provider's exclusive catalog before egress.
+    pub async fn validate_model(
+        &self,
+        model: &str,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<()> {
+        let availability = self
+            .models_manager
+            .model_availability(model, refresh_strategy, http_client_factory)
+            .await
+            .map_err(|_| authority_unavailable(&self.provider_id))?;
+        match availability {
+            ModelAvailability::Unconstrained | ModelAvailability::Available => Ok(()),
+            ModelAvailability::Unavailable => {
+                Err(model_unavailable(Some(&self.provider_id), model))
+            }
+        }
     }
 }
 
@@ -196,11 +217,6 @@ impl ModelProviderRegistry {
         let catalog = self
             .load_unified_catalog(refresh_strategy, http_client_factory)
             .await?;
-        if catalog.providers.is_empty() && !catalog.unavailable_providers.is_empty() {
-            return Err(authority_unavailable_for(
-                catalog.unavailable_providers.iter().map(String::as_str),
-            ));
-        }
         let mut models = Vec::new();
         for provider_catalog in catalog.providers {
             let registration = self
@@ -214,6 +230,11 @@ impl ModelProviderRegistry {
                 }
                 models.push(model);
             }
+        }
+        if models.is_empty() && !catalog.unavailable_providers.is_empty() {
+            return Err(authority_unavailable_for(
+                catalog.unavailable_providers.iter().map(String::as_str),
+            ));
         }
         Ok(models)
     }
@@ -230,6 +251,12 @@ impl ModelProviderRegistry {
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<Option<ResolvedProviderSelection>> {
         if self.registrations.len() == 1 {
+            if let Some(model) = requested_model {
+                let runtime = self.resolve_runtime(&self.default_provider_id)?;
+                runtime
+                    .validate_model(model, refresh_strategy, http_client_factory)
+                    .await?;
+            }
             return Ok(None);
         }
         if requested_model.is_none() && requested_provider_id.is_none() {
@@ -301,10 +328,13 @@ impl ModelProviderRegistry {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<()> {
-        if !self.requires_binding_resolution(bound_provider_id) {
-            return Ok(());
+        let registration = self.require_registration(bound_provider_id)?;
+        if self.registrations.len() == 1 {
+            return registration
+                .runtime
+                .validate_model(requested_model, refresh_strategy, http_client_factory)
+                .await;
         }
-        self.require_registration(bound_provider_id)?;
         let catalog = self
             .load_unified_catalog(refresh_strategy, http_client_factory)
             .await?;
@@ -323,6 +353,42 @@ impl ModelProviderRegistry {
         Ok(())
     }
 
+    async fn validate_persisted_model(
+        &self,
+        bound_provider_id: &str,
+        persisted_model: &str,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> CodexResult<()> {
+        let registration = self.require_registration(bound_provider_id)?;
+        if self.registrations.len() == 1 {
+            return registration
+                .runtime
+                .validate_model(persisted_model, refresh_strategy, http_client_factory)
+                .await;
+        }
+        let catalog = self
+            .load_unified_catalog(refresh_strategy, http_client_factory)
+            .await?;
+        if catalog.unavailable_providers.contains(bound_provider_id) {
+            return Err(authority_unavailable(bound_provider_id));
+        }
+        let bound_catalog = catalog
+            .providers
+            .iter()
+            .find(|catalog| catalog.provider_id == bound_provider_id)
+            .expect("available registered provider must have a catalog");
+        if bound_catalog
+            .models
+            .iter()
+            .any(|model| model.model == persisted_model)
+        {
+            Ok(())
+        } else {
+            Err(model_unavailable(Some(bound_provider_id), persisted_model))
+        }
+    }
+
     /// Resolve an existing thread without changing its provider binding.
     ///
     /// A requested model may replace the persisted model only when both models belong to the
@@ -339,6 +405,15 @@ impl ModelProviderRegistry {
         if !self.requires_binding_resolution(bound_provider_id)
             && requested_provider_id.is_none_or(|provider_id| provider_id == bound_provider_id)
         {
+            if let Some(model) = requested_model.or(persisted_model) {
+                self.validate_bound_model(
+                    bound_provider_id,
+                    model,
+                    refresh_strategy,
+                    http_client_factory,
+                )
+                .await?;
+            }
             return Ok(None);
         }
         self.require_registration(bound_provider_id)?;
@@ -364,7 +439,7 @@ impl ModelProviderRegistry {
             }));
         }
         if let Some(persisted_model) = persisted_model {
-            self.validate_bound_model(
+            self.validate_persisted_model(
                 bound_provider_id,
                 persisted_model,
                 refresh_strategy,
