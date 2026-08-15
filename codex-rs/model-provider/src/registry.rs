@@ -3,36 +3,92 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use codex_http_client::HttpClientFactory;
-use codex_login::AuthManager;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
-use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 
 use crate::SharedModelProvider;
-use crate::create_model_provider;
 
 const PROVIDER_MODELS_DIR: &str = "model-providers";
 
+/// One explicit association from a stable provider ID to its runtime Adapter.
 #[derive(Clone, Debug)]
-struct ProviderProfile {
-    id: String,
-    display_name: String,
-    provider: SharedModelProvider,
-    models_manager: SharedModelsManager,
+pub struct ProviderRegistration {
+    picker_label: String,
+    runtime: ResolvedProviderRuntime,
+}
+
+impl ProviderRegistration {
+    /// Creates a Registration whose model catalog is produced by the same Adapter.
+    pub fn new(
+        id: impl Into<String>,
+        picker_label: impl Into<String>,
+        provider: SharedModelProvider,
+        models_home: PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> Self {
+        Self {
+            picker_label: picker_label.into(),
+            runtime: ResolvedProviderRuntime::from_provider(
+                id,
+                provider,
+                models_home,
+                config_model_catalog,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProviderSelection {
     pub model: String,
     pub provider_id: String,
+}
+
+/// One immutable Provider runtime resolved for a Session.
+#[derive(Clone, Debug)]
+pub struct ResolvedProviderRuntime {
+    provider_id: String,
+    provider: SharedModelProvider,
+    models_manager: SharedModelsManager,
+}
+
+impl ResolvedProviderRuntime {
+    /// Creates an atomic runtime from one Adapter and its own Models Manager.
+    fn from_provider(
+        provider_id: impl Into<String>,
+        provider: SharedModelProvider,
+        models_home: PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> Self {
+        let models_manager = provider.models_manager(models_home, config_model_catalog);
+        Self {
+            provider_id: provider_id.into(),
+            provider,
+            models_manager,
+        }
+    }
+
+    /// Returns the stable Provider Registration ID.
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
+    }
+
+    /// Returns the Provider Adapter used for request execution.
+    pub fn provider(&self) -> SharedModelProvider {
+        self.provider.clone()
+    }
+
+    /// Returns the Models Manager created by the same Provider Adapter.
+    pub fn models_manager(&self) -> SharedModelsManager {
+        self.models_manager.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -47,93 +103,87 @@ struct UnifiedModelCatalog {
     owners: HashMap<String, String>,
 }
 
-/// Process-owned provider profiles and their isolated model catalogs.
+/// Process-owned Provider Registrations and their isolated model catalogs.
 #[derive(Debug)]
 pub struct ModelProviderRegistry {
-    profiles: BTreeMap<String, ProviderProfile>,
-    selectable_ids: Vec<String>,
-    federated: bool,
+    registrations: BTreeMap<String, ProviderRegistration>,
+    registration_order: Vec<String>,
+    default_provider_id: String,
 }
 
 impl ModelProviderRegistry {
     pub fn new(
-        providers: &HashMap<String, ModelProviderInfo>,
+        registrations: impl IntoIterator<Item = ProviderRegistration>,
         default_provider_id: &str,
-        codex_home: &Path,
-        default_models_manager: SharedModelsManager,
-        auth_manager: Arc<AuthManager>,
     ) -> CodexResult<Self> {
-        let federated = providers
-            .values()
-            .any(|provider| provider.wire_api == WireApi::GrokResponses);
-        let mut profiles = BTreeMap::new();
-        for (id, info) in providers {
-            let provider = create_model_provider(info.clone(), Some(Arc::clone(&auth_manager)));
-            let models_manager = if id == default_provider_id {
-                Arc::clone(&default_models_manager)
-            } else {
-                provider.models_manager(
-                    provider_models_home(codex_home, id),
-                    /*config_model_catalog*/ None,
-                )
-            };
-            profiles.insert(
-                id.clone(),
-                ProviderProfile {
-                    id: id.clone(),
-                    display_name: info.name.clone(),
-                    provider,
-                    models_manager,
-                },
-            );
+        let mut registered = BTreeMap::new();
+        let mut registration_order = Vec::new();
+        for registration in registrations {
+            let id = registration.runtime.provider_id.clone();
+            if registered.insert(id.clone(), registration).is_some() {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "model provider `{id}` is registered more than once"
+                )));
+            }
+            registration_order.push(id);
         }
-        if !profiles.contains_key(default_provider_id) {
+        if !registered.contains_key(default_provider_id) {
             return Err(CodexErr::InvalidRequest(format!(
                 "default model provider `{default_provider_id}` is not registered"
             )));
         }
-
-        let selectable_ids = selectable_provider_ids(&profiles, default_provider_id, federated);
         Ok(Self {
-            profiles,
-            selectable_ids,
-            federated,
+            registrations: registered,
+            registration_order,
+            default_provider_id: default_provider_id.to_string(),
         })
+    }
+
+    /// Returns the model manager owned by the default Provider runtime.
+    pub fn default_models_manager(&self) -> SharedModelsManager {
+        self.registrations
+            .get(&self.default_provider_id)
+            .expect("registry construction validates the default provider")
+            .runtime
+            .models_manager()
     }
 
     pub fn single(
         provider_id: impl Into<String>,
         provider: SharedModelProvider,
-        models_manager: SharedModelsManager,
+        models_home: PathBuf,
+        config_model_catalog: Option<ModelsResponse>,
     ) -> Self {
         let id = provider_id.into();
-        let profile = ProviderProfile {
-            id: id.clone(),
-            display_name: provider.info().name.clone(),
-            provider,
-            models_manager,
-        };
-        Self {
-            profiles: BTreeMap::from([(id.clone(), profile)]),
-            selectable_ids: vec![id],
-            federated: false,
-        }
+        let picker_label = provider.info().name.clone();
+        Self::new(
+            [ProviderRegistration::new(
+                id.clone(),
+                picker_label,
+                provider,
+                models_home,
+                config_model_catalog,
+            )],
+            &id,
+        )
+        .expect("single provider registration must contain its default")
     }
 
-    pub fn is_federated(&self) -> bool {
-        self.federated
+    pub fn requires_bound_history(&self) -> bool {
+        self.registrations.len() > 1
     }
 
-    pub fn models_manager(&self, provider_id: &str) -> Option<SharedModelsManager> {
-        self.profiles
-            .get(provider_id)
-            .map(|profile| Arc::clone(&profile.models_manager))
+    pub fn default_thread_provider_filter(&self) -> Option<Vec<String>> {
+        (self.registrations.len() == 1).then(|| vec![self.default_provider_id.clone()])
     }
 
-    pub fn provider(&self, provider_id: &str) -> Option<SharedModelProvider> {
-        self.profiles
-            .get(provider_id)
-            .map(|profile| Arc::clone(&profile.provider))
+    pub fn requires_binding_resolution(&self, bound_provider_id: &str) -> bool {
+        self.registrations.len() > 1 || bound_provider_id != self.default_provider_id
+    }
+
+    pub fn resolve_runtime(&self, provider_id: &str) -> CodexResult<ResolvedProviderRuntime> {
+        let registration = self.require_registration(provider_id)?;
+        Ok(registration.runtime.clone())
     }
 
     pub async fn list_models(
@@ -146,14 +196,14 @@ impl ModelProviderRegistry {
             .await?;
         let mut models = Vec::new();
         for provider_catalog in catalog.providers {
-            let profile = self
-                .profiles
+            let registration = self
+                .registrations
                 .get(&provider_catalog.provider_id)
-                .expect("selectable provider must be registered");
+                .expect("catalog provider must be registered");
             for mut model in provider_catalog.models {
-                if self.federated {
+                if self.registrations.len() > 1 {
                     model.display_name =
-                        format!("{} · {}", profile_picker_label(profile), model.display_name);
+                        format!("{} · {}", registration.picker_label, model.display_name);
                 }
                 models.push(model);
             }
@@ -163,9 +213,8 @@ impl ModelProviderRegistry {
 
     /// Resolve an explicit new-thread selection through the unified catalog.
     ///
-    /// `None` means the caller supplied neither field, or explicitly selected a legacy provider
-    /// that is outside the OpenAI/Grok unified catalog. In both cases normal config resolution
-    /// remains authoritative.
+    /// `None` means the caller supplied neither field, so normal config resolution remains
+    /// authoritative.
     pub async fn resolve_new_thread_selection(
         &self,
         requested_model: Option<&str>,
@@ -173,11 +222,14 @@ impl ModelProviderRegistry {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<Option<ResolvedProviderSelection>> {
-        if !self.federated || requested_model.is_none() && requested_provider_id.is_none() {
+        if self.registrations.len() == 1 {
             return Ok(None);
         }
-        if requested_provider_id.is_some_and(|provider_id| !self.is_selectable(provider_id)) {
+        if requested_model.is_none() && requested_provider_id.is_none() {
             return Ok(None);
+        }
+        if let Some(provider_id) = requested_provider_id {
+            self.require_registration(provider_id)?;
         }
 
         let catalog = self
@@ -207,7 +259,7 @@ impl ModelProviderRegistry {
                     .providers
                     .iter()
                     .find(|catalog| catalog.provider_id == provider_id)
-                    .expect("selectable provider must have a catalog");
+                    .expect("registered provider must have a catalog");
                 let model = provider_catalog
                     .models
                     .iter()
@@ -230,9 +282,10 @@ impl ModelProviderRegistry {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<()> {
-        if !self.federated || !self.is_selectable(bound_provider_id) {
+        if !self.requires_binding_resolution(bound_provider_id) {
             return Ok(());
         }
+        self.require_registration(bound_provider_id)?;
         let catalog = self
             .load_unified_catalog(refresh_strategy, http_client_factory)
             .await?;
@@ -262,9 +315,12 @@ impl ModelProviderRegistry {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<Option<ResolvedProviderSelection>> {
-        if !self.federated || !self.is_selectable(bound_provider_id) {
+        if !self.requires_binding_resolution(bound_provider_id)
+            && requested_provider_id.is_none_or(|provider_id| provider_id == bound_provider_id)
+        {
             return Ok(None);
         }
+        self.require_registration(bound_provider_id)?;
         if let Some(requested_provider_id) = requested_provider_id
             && requested_provider_id != bound_provider_id
         {
@@ -302,10 +358,12 @@ impl ModelProviderRegistry {
         .await
     }
 
-    fn is_selectable(&self, provider_id: &str) -> bool {
-        self.selectable_ids
-            .iter()
-            .any(|selectable_id| selectable_id == provider_id)
+    fn require_registration(&self, provider_id: &str) -> CodexResult<&ProviderRegistration> {
+        self.registrations.get(provider_id).ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "ProviderUnavailable: model provider `{provider_id}` is not registered"
+            ))
+        })
     }
 
     async fn load_unified_catalog(
@@ -313,14 +371,15 @@ impl ModelProviderRegistry {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<UnifiedModelCatalog> {
-        let mut providers = Vec::with_capacity(self.selectable_ids.len());
+        let mut providers = Vec::with_capacity(self.registrations.len());
         let mut owners = HashMap::<String, String>::new();
-        for provider_id in &self.selectable_ids {
-            let profile = self
-                .profiles
+        for provider_id in &self.registration_order {
+            let registration = self
+                .registrations
                 .get(provider_id)
-                .expect("selectable provider must be registered");
-            let models = profile
+                .expect("registration order must reference a registered provider");
+            let models = registration
+                .runtime
                 .models_manager
                 .list_models(refresh_strategy, http_client_factory.clone())
                 .await;
@@ -370,39 +429,6 @@ pub fn provider_models_home(codex_home: &Path, provider_id: &str) -> PathBuf {
         path.push(component);
     }
     path
-}
-
-fn selectable_provider_ids(
-    profiles: &BTreeMap<String, ProviderProfile>,
-    default_provider_id: &str,
-    federated: bool,
-) -> Vec<String> {
-    if !federated {
-        return vec![default_provider_id.to_string()];
-    }
-    let mut ids = Vec::new();
-    if profiles.contains_key(OPENAI_PROVIDER_ID) {
-        ids.push(OPENAI_PROVIDER_ID.to_string());
-    }
-    if !ids.iter().any(|id| id == default_provider_id) {
-        ids.push(default_provider_id.to_string());
-    }
-    for profile in profiles.values() {
-        if profile.provider.info().wire_api == WireApi::GrokResponses
-            && !ids.iter().any(|id| id == &profile.id)
-        {
-            ids.push(profile.id.clone());
-        }
-    }
-    ids
-}
-
-fn profile_picker_label(profile: &ProviderProfile) -> &str {
-    if profile.id == OPENAI_PROVIDER_ID {
-        "ChatGPT"
-    } else {
-        profile.display_name.as_str()
-    }
 }
 
 #[cfg(test)]

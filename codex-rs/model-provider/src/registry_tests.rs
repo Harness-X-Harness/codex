@@ -1,10 +1,32 @@
-use super::*;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_model_provider_info::WireApi;
+use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use pretty_assertions::assert_eq;
 use serde_json::json;
+
+use super::ModelProviderRegistry;
+use super::ProviderRegistration;
+use super::ResolvedProviderSelection;
+use super::provider_models_home;
+use crate::ModelProvider;
+use crate::ModelProviderFuture;
+use crate::ProviderAccountResult;
+use crate::ProviderAccountState;
+use crate::SharedModelProvider;
+use crate::create_model_provider;
 
 #[test]
 fn provider_cache_roots_are_stable_and_isolated() {
@@ -21,7 +43,7 @@ fn provider_cache_roots_are_stable_and_isolated() {
 }
 
 #[tokio::test]
-async fn federated_catalog_is_labeled_and_duplicate_slugs_fail_atomically() {
+async fn registered_catalogs_are_labeled_and_duplicate_slugs_fail_atomically() {
     let registry = test_registry(&["openai-model"], &["grok-model"]);
     let models = registry
         .list_models(RefreshStrategy::Offline, test_http_client_factory())
@@ -170,46 +192,87 @@ fn provider_owned_credentials_do_not_inherit_chatgpt_auth() {
 }
 
 fn test_registry(openai_slugs: &[&str], grok_slugs: &[&str]) -> ModelProviderRegistry {
-    let openai = test_profile(
+    ModelProviderRegistry::new(
+        [
+            test_registration(
+                OPENAI_PROVIDER_ID,
+                "OpenAI",
+                WireApi::Responses,
+                openai_slugs,
+            ),
+            test_registration("grok", "Grok", WireApi::GrokResponses, grok_slugs),
+        ],
         OPENAI_PROVIDER_ID,
-        "OpenAI",
-        WireApi::Responses,
-        openai_slugs,
-    );
-    let grok = test_profile("grok", "Grok", WireApi::GrokResponses, grok_slugs);
-    ModelProviderRegistry {
-        profiles: BTreeMap::from([
-            (OPENAI_PROVIDER_ID.to_string(), openai),
-            ("grok".to_string(), grok),
-        ]),
-        selectable_ids: vec![OPENAI_PROVIDER_ID.to_string(), "grok".to_string()],
-        federated: true,
-    }
+    )
+    .expect("test registrations should construct the registry")
 }
 
-fn test_profile(
+fn test_registration(
     id: &str,
     display_name: &str,
     wire_api: WireApi,
     slugs: &[&str],
-) -> ProviderProfile {
+) -> ProviderRegistration {
     let info = ModelProviderInfo {
         name: display_name.to_string(),
         wire_api,
         ..ModelProviderInfo::default()
     };
-    let provider = create_model_provider(info, /*auth_manager*/ None);
-    let models_manager: SharedModelsManager = Arc::new(StaticModelsManager::new(
-        /*auth_manager*/ None,
-        ModelsResponse {
+    let provider: SharedModelProvider = Arc::new(TestCatalogProviderAdapter {
+        info,
+        catalog: ModelsResponse {
             models: slugs.iter().map(|slug| test_model(slug)).collect(),
         },
-    ));
-    ProviderProfile {
-        id: id.to_string(),
-        display_name: display_name.to_string(),
+    });
+    let picker_label = if id == OPENAI_PROVIDER_ID {
+        "ChatGPT"
+    } else {
+        display_name
+    };
+    ProviderRegistration::new(
+        id,
+        picker_label,
         provider,
-        models_manager,
+        PathBuf::from("/tmp/test-provider-models"),
+        /*config_model_catalog*/ None,
+    )
+}
+
+#[derive(Debug)]
+struct TestCatalogProviderAdapter {
+    info: ModelProviderInfo,
+    catalog: ModelsResponse,
+}
+
+impl ModelProvider for TestCatalogProviderAdapter {
+    fn info(&self) -> &ModelProviderInfo {
+        &self.info
+    }
+
+    fn auth_manager(&self) -> Option<Arc<AuthManager>> {
+        None
+    }
+
+    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
+        Box::pin(async { None })
+    }
+
+    fn account_state(&self) -> ProviderAccountResult {
+        Ok(ProviderAccountState {
+            account: None,
+            requires_openai_auth: false,
+        })
+    }
+
+    fn models_manager(
+        &self,
+        _codex_home: PathBuf,
+        _config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        Arc::new(StaticModelsManager::new(
+            /*auth_manager*/ None,
+            self.catalog.clone(),
+        ))
     }
 }
 

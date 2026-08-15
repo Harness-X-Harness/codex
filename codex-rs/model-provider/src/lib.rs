@@ -28,5 +28,7 @@ pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;
 pub use provider::openai_account_state;
 pub use registry::ModelProviderRegistry;
+pub use registry::ProviderRegistration;
+pub use registry::ResolvedProviderRuntime;
 pub use registry::ResolvedProviderSelection;
 pub use registry::provider_models_home;
