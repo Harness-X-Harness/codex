@@ -1021,7 +1021,7 @@
           "type": "object"
         },
         {
-          "description": "Durable representation of the official Grok Gateway image-generation shape. The internal tag differs from the Gateway tag so `prompt` is never coerced to OpenAI's `revised_prompt`; the Grok codec restores the native tag on replay.",
+          "description": "Durable representation of the official Grok Gateway image-generation shape. The internal tag differs from the Gateway tag so `prompt` is never coerced to OpenAI's `revised_prompt`; the Grok Provider Adapter owns its request projection.",
           "properties": {
             "id": {
               "type": [

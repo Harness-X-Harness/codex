@@ -1704,6 +1704,25 @@
       },
       "type": "object"
     },
+    "ModelProviderAdapter": {
+      "description": "Runtime Provider Adapter selected by a Provider Registration.",
+      "oneOf": [
+        {
+          "description": "The ordinary configured OpenAI-compatible Provider implementation.",
+          "enum": [
+            "configured"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The official Grok Gateway Provider implementation.",
+          "enum": [
+            "grok"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ModelProviderAuthInfo": {
       "additionalProperties": false,
       "description": "Configuration for obtaining a provider bearer token from a command.",
@@ -1763,37 +1782,10 @@
       },
       "type": "object"
     },
-    "ModelProviderAdapter": {
-      "description": "Runtime Provider Adapter selected by a Provider Registration.",
-      "oneOf": [
-        {
-          "description": "The ordinary configured OpenAI-compatible Provider implementation.",
-          "enum": [
-            "configured"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "The official Grok Gateway Provider implementation.",
-          "enum": [
-            "grok"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "ModelProviderInfo": {
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
       "properties": {
-        "provider_adapter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelProviderAdapter"
-            }
-          ],
-          "description": "Which runtime Provider Adapter owns this Provider's external facts and policies."
-        },
         "auth": {
           "allOf": [
             {
@@ -1844,6 +1836,14 @@
           "default": "",
           "description": "Friendly display name.",
           "type": "string"
+        },
+        "provider_adapter": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelProviderAdapter"
+            }
+          ],
+          "description": "Which runtime Provider Adapter owns this Provider's external facts and policies."
         },
         "query_params": {
           "additionalProperties": {
