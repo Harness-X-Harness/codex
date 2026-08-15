@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use codex_http_client::HttpClientFactory;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
-use codex_models_manager::config::ModelsManagerConfig;
+use codex_models_manager::ModelsManagerConfig;
 use codex_models_manager::manager::ModelResolution;
 use codex_models_manager::manager::ModelSelection;
 use codex_models_manager::manager::RefreshStrategy;

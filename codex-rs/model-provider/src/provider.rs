@@ -26,6 +26,7 @@ use crate::auth::ProviderAuthScope;
 use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
+use crate::auth::resolve_provider_auth_for_scope;
 use crate::grok_provider::GrokModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::request_setup::ProviderRequestSetup;
