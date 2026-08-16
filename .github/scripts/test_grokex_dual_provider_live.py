@@ -555,6 +555,34 @@ requires_openai_auth = false
                 ):
                     MODULE._write_isolated_config(source, target)
 
+    def test_explicit_legacy_selection_migrates_live_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.toml"
+            target = root / "target.toml"
+            source.write_text(
+                """
+model_provider = "mini_grok"
+
+[model_providers.mini_grok]
+base_url = "https://private.example/v1"
+experimental_bearer_token = "private-token"
+wire_api = "grok_responses"
+requires_openai_auth = false
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            provider = MODULE._write_isolated_config(source, target)
+            config = MODULE.tomllib.loads(target.read_text(encoding="utf-8"))
+
+            self.assertEqual(provider, "mini_grok")
+            self.assertEqual(
+                config["model_providers"]["mini_grok"]["provider_adapter"],
+                "grok",
+            )
+
     def test_evidence_writer_is_exclusive_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "evidence.json"

@@ -67,16 +67,26 @@ def _grok_profile(source: Path) -> tuple[str, dict[str, Any], str]:
     if not isinstance(providers, dict):
         raise AcceptanceError("configuration_has_no_provider_catalog")
     grok_profiles = [
-        (provider_id, profile)
-        for provider_id, profile in providers.items()
+        (candidate_id, profile)
+        for candidate_id, profile in providers.items()
         if isinstance(profile, dict) and profile.get("provider_adapter") == "grok"
     ]
-    if len(grok_profiles) != 1:
+    if len(grok_profiles) == 1:
+        provider_id, profile = grok_profiles[0]
+    elif len(grok_profiles) == 0:
+        provider_id = data.get("model_provider")
+        profile = providers.get(provider_id) if isinstance(provider_id, str) else None
+        if not isinstance(profile, dict):
+            raise AcceptanceError("configuration_requires_one_grok_profile")
+    else:
         raise AcceptanceError("configuration_requires_one_grok_profile")
-    provider_id, profile = grok_profiles[0]
     required_strings = ("base_url", "wire_api")
     if any(not isinstance(profile.get(key), str) for key in required_strings):
         raise AcceptanceError("grok_profile_is_incomplete")
+    if profile["wire_api"] != "grok_responses":
+        raise AcceptanceError("grok_profile_wire_api_is_invalid")
+    if profile.get("provider_adapter") not in (None, "grok"):
+        raise AcceptanceError("grok_profile_adapter_conflicts")
     credential_keys = [
         key
         for key in ("env_key", "experimental_bearer_token")
