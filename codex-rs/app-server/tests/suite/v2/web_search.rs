@@ -35,6 +35,7 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+use wiremock::matchers::path_regex;
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -79,13 +80,13 @@ async fn assert_standalone_web_search_round_trips_output(
         WebSearchProvider::ChatGpt => responses::start_mock_server().await,
         WebSearchProvider::CustomResponses => {
             let server = MockServer::start().await;
-            responses::mount_models_once(
-                &server,
-                ModelsResponse {
+            Mock::given(method("GET"))
+                .and(path_regex(".*/models$"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
                     models: vec![remote_catalog_model("mock-model", "Mock Model")],
-                },
-            )
-            .await;
+                }))
+                .mount(&server)
+                .await;
             server
         }
     };
