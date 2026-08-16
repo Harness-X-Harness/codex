@@ -1,7 +1,10 @@
 use super::*;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
+use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadItem;
@@ -17,7 +20,7 @@ const SUBAGENT_PARENT_PROMPT: &str = "Spawn one child reviewer";
 const SUBAGENT_CHILD_PROMPT: &str = "Review the Grok provider binding";
 
 #[tokio::test]
-async fn unified_home_keeps_chatgpt_subscription_account_visible() -> Result<()> {
+async fn unified_home_keeps_chatgpt_visible_without_closing_the_startup_gate() -> Result<()> {
     let fixture = ProviderRoutingFixture::with_implicit_openai_default().await?;
     let mut app = fixture.start_app().await?;
     let request_id = app
@@ -38,7 +41,27 @@ async fn unified_home_keeps_chatgpt_subscription_account_visible() -> Result<()>
                 email: None,
                 plan_type: codex_protocol::account::PlanType::Pro,
             }),
-            requires_openai_auth: true,
+            requires_openai_auth: false,
+        }
+    );
+
+    let request_id = app
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(false),
+            refresh_token: Some(false),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        to_response::<GetAuthStatusResponse>(response)?,
+        GetAuthStatusResponse {
+            auth_method: Some(AuthMode::Chatgpt),
+            auth_token: None,
+            requires_openai_auth: Some(false),
         }
     );
     Ok(())

@@ -966,11 +966,9 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // The current provider decides whether OpenAI auth is required, but it does not own the
-        // application-level OpenAI login. Existing desktop clients use both fields, so report the
-        // login independently instead of hiding it when a custom provider does not require it.
-        let config = self.load_latest_config().await;
-        let requires_openai_auth = config.model_provider.requires_openai_auth;
+        // This field gates application startup. It is independent of the default or active
+        // Provider and of the application-level OpenAI login reported below.
+        let requires_openai_auth = self.thread_manager.requires_openai_auth_for_startup();
 
         let auth = if do_refresh {
             self.auth_manager.auth_cached()
@@ -1037,7 +1035,7 @@ impl AccountRequestProcessor {
             Ok(account_state) => account_state,
             Err(err) => return Err(invalid_request(err.to_string())),
         };
-        let requires_openai_auth = provider_account_state.requires_openai_auth;
+        let requires_openai_auth = self.thread_manager.requires_openai_auth_for_startup();
         // Provider-owned identities take precedence while that provider is active. A custom
         // provider without its own account must not hide the application-level OpenAI identity.
         let account = match provider_account_state.account {

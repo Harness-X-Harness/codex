@@ -798,6 +798,12 @@ impl ThreadManager {
         self.state.provider_registry.requires_bound_history()
     }
 
+    pub fn requires_openai_auth_for_startup(&self) -> bool {
+        self.state
+            .provider_registry
+            .requires_openai_auth_for_startup()
+    }
+
     pub fn default_thread_provider_filter(&self) -> Option<Vec<String>> {
         self.state
             .provider_registry

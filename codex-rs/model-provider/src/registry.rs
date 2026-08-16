@@ -220,6 +220,17 @@ impl ModelProviderRegistry {
         self.registrations.len() > 1
     }
 
+    /// Returns whether basic application use must wait for OpenAI authentication.
+    ///
+    /// This is an application-level startup gate, not the authentication requirement of the
+    /// default or active Provider. A registered Provider that can operate without OpenAI auth
+    /// keeps the application usable while an optional ChatGPT account remains visible.
+    pub fn requires_openai_auth_for_startup(&self) -> bool {
+        self.registrations
+            .values()
+            .all(|registration| registration.runtime.provider.info().requires_openai_auth)
+    }
+
     pub fn default_thread_provider_filter(&self) -> Option<Vec<String>> {
         (self.registrations.len() == 1).then(|| vec![self.default_provider_id.clone()])
     }

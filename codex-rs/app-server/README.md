@@ -2197,14 +2197,15 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 
 - `account/read` — fetch current account info; optionally refresh tokens. The
   `account` field reports the application-level OpenAI/ChatGPT identity when
-  one exists, even if the active custom provider does not require it. The
-  independent `requiresOpenaiAuth` field continues to describe the active
-  provider. A provider-owned account such as managed Amazon Bedrock takes
+  one exists, even if another registered provider does not require it. The
+  independent `requiresOpenaiAuth` field is the application startup gate. It
+  is `false` when any registered provider can operate without OpenAI auth. A
+  provider-owned account such as managed Amazon Bedrock takes
   precedence while that provider is active.
 - `getAuthStatus` — legacy authentication status used by existing desktop
   clients. `authMethod` reports the application-level OpenAI/ChatGPT login,
-  while `requiresOpenaiAuth` independently reports whether the active provider
-  requires that login.
+  while `requiresOpenaiAuth` independently reports the same application
+  startup gate as `account/read`.
 - `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`, `amazonBedrock`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
@@ -2239,7 +2240,7 @@ Field notes:
 
 - `refreshToken` (bool): set `true` to force a token refresh.
 - `email` is `null` when the ChatGPT account does not have an email address.
-- `requiresOpenaiAuth` reflects the active provider; when `false`, Codex can run without OpenAI credentials.
+- `requiresOpenaiAuth` is the application startup gate. It does not follow the active Thread, last-used model, or default provider. When `false`, Codex can start without OpenAI credentials; each Thread still authenticates through its bound provider.
 - Amazon Bedrock reports `usesCodexManagedCredentials: true` when it uses a Bedrock API key managed by Codex. It reports `false` for external credential paths, including the AWS credential chain and configured command auth. This identifies whether Codex-managed credentials are selected; it does not validate that the credential source can resolve credentials.
 
 ### 2) Log in with an API key
