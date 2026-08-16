@@ -9,11 +9,14 @@ credentials, configuration, or rollout data.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
 import selectors
 import shutil
+import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -32,6 +35,7 @@ class AcceptanceError(RuntimeError):
 
 
 GROK_LIVE_MODEL = "grok-4.5"
+HOSTED_TOOL_TYPES = ("web_search", "x_search", "image_generation")
 X_SEARCH_NAMES = {
     "x_keyword_search",
     "x_semantic_search",
@@ -41,6 +45,15 @@ X_SEARCH_NAMES = {
 HOSTED_PROBE_MAX_EVENT_BYTES = 64 * 1024 * 1024
 HOSTED_PROBE_ERROR_BYTES = 64 * 1024
 SAFE_ERROR_FIELD = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+
+
+def _resolve_hosted_tool_types(requested: list[str] | None) -> tuple[str, ...]:
+    if requested is None:
+        return HOSTED_TOOL_TYPES
+    if not requested or len(requested) != len(set(requested)):
+        raise AcceptanceError("hosted_tool_selection_invalid")
+    selected = set(requested)
+    return tuple(tool_type for tool_type in HOSTED_TOOL_TYPES if tool_type in selected)
 
 
 def _toml_string(value: str) -> str:
@@ -195,6 +208,26 @@ def _hosted_probe_error_classification(error: urllib.error.HTTPError) -> str:
     )
 
 
+def _hosted_transport_error_classification(error: BaseException) -> str:
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, socket.gaierror):
+        return "dns"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "timeout"
+    if isinstance(reason, ssl.SSLError):
+        return "tls"
+    if isinstance(reason, http.client.RemoteDisconnected):
+        return "remote_disconnect"
+    if isinstance(reason, http.client.IncompleteRead):
+        return "incomplete_read"
+    if isinstance(
+        reason,
+        (ConnectionAbortedError, ConnectionResetError, BrokenPipeError),
+    ):
+        return "connection_closed"
+    return "unclassified"
+
+
 def _is_completed_hosted_item(event: dict[str, Any], tool_type: str) -> bool:
     if event.get("type") != "response.output_item.done":
         return False
@@ -273,13 +306,21 @@ def _probe_hosted_tool(
         raise AcceptanceError(
             f"hosted_probe_http_status:{tool_type}:{error.code}:{classification}"
         ) from None
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise AcceptanceError(f"hosted_probe_transport:{tool_type}") from error
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+        classification = _hosted_transport_error_classification(error)
+        raise AcceptanceError(
+            f"hosted_probe_transport:{tool_type}:{classification}"
+        ) from None
     if not completed:
         raise AcceptanceError(f"hosted_probe_terminal_item_missing:{tool_type}")
 
 
-def _run_gateway_hosted_live(source: Path, binary: Path, model: str) -> None:
+def _run_gateway_hosted_live(
+    source: Path,
+    binary: Path,
+    model: str,
+    tool_types: tuple[str, ...] = HOSTED_TOOL_TYPES,
+) -> None:
     _provider_id, profile, credential_key = _grok_profile(source)
     token = (
         os.environ[profile[credential_key]]
@@ -288,7 +329,7 @@ def _run_gateway_hosted_live(source: Path, binary: Path, model: str) -> None:
     )
     endpoint = profile["base_url"].rstrip("/") + "/responses"
     user_agent = _codex_live_user_agent(binary)
-    for tool_type in ("web_search", "x_search", "image_generation"):
+    for tool_type in tool_types:
         _probe_hosted_tool(endpoint, token, user_agent, model, tool_type)
 
 
@@ -842,6 +883,9 @@ def run(args: argparse.Namespace) -> None:
         raise AcceptanceError("chatgpt_auth_unavailable")
     if not grok_source.is_file():
         raise AcceptanceError("grok_config_unavailable")
+    hosted_tool_types = _resolve_hosted_tool_types(args.hosted_tools)
+    if args.evidence_output is not None and hosted_tool_types != HOSTED_TOOL_TYPES:
+        raise AcceptanceError("partial_hosted_evidence_output_not_supported")
     workspace.mkdir(parents=True, exist_ok=True)
 
     started_at = time.time()
@@ -853,7 +897,12 @@ def run(args: argparse.Namespace) -> None:
             (codex_home / "auth.json").chmod(stat.S_IRUSR | stat.S_IWUSR)
         grok_provider = _write_isolated_config(grok_source, codex_home / "config.toml")
         _assert_openai_does_not_target_grok(codex_home / "config.toml")
-        _run_gateway_hosted_live(grok_source, binary, GROK_LIVE_MODEL)
+        _run_gateway_hosted_live(
+            grok_source,
+            binary,
+            GROK_LIVE_MODEL,
+            hosted_tool_types,
+        )
 
         server = AppServer(binary, codex_home, workspace)
         try:
@@ -948,7 +997,7 @@ def run(args: argparse.Namespace) -> None:
                 "model": grok_model,
                 "thread_ids": [grok_thread, grok_fork, grok_child],
             }
-    _finish(args, started_at, openai_evidence, grok_evidence)
+    _finish(args, started_at, openai_evidence, grok_evidence, hosted_tool_types)
 
 
 def _finish(
@@ -956,6 +1005,7 @@ def _finish(
     started_at: float,
     openai: dict[str, Any] | None,
     grok: dict[str, Any],
+    hosted_tool_types: tuple[str, ...] = HOSTED_TOOL_TYPES,
 ) -> None:
     if args.evidence_output is not None:
         evidence = {
@@ -984,7 +1034,12 @@ def _finish(
         print("chatgpt_provider_binding=passed")
         print("chatgpt_application_auth_contract=passed")
     print("grok_provider_binding=passed")
-    print("grok_hosted_gateway_live=passed")
+    if hosted_tool_types == HOSTED_TOOL_TYPES:
+        print("grok_hosted_gateway_live=passed")
+    else:
+        for tool_type in hosted_tool_types:
+            print(f"grok_hosted_{tool_type}=passed")
+        print("grok_hosted_gateway_live=partial")
     print("mini_accounting_gate=requires_operator_usage_evidence")
     print("isolated_runtime_home_cleanup=passed")
 
@@ -996,6 +1051,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grok-config", type=Path, required=True)
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--evidence-output", type=Path)
+    parser.add_argument(
+        "--hosted-tool",
+        dest="hosted_tools",
+        action="append",
+        choices=HOSTED_TOOL_TYPES,
+        help="Run only this hosted-tool contract; repeat to select more than one.",
+    )
     parser.add_argument("--grok-only", action="store_true")
     return parser.parse_args()
 

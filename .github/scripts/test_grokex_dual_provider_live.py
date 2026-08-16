@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import os
+import socket
 import stat
 import tempfile
 import textwrap
@@ -844,6 +845,92 @@ requires_openai_auth = false
                 for tool_type in ("web_search", "x_search", "image_generation")
             ],
         )
+
+    def test_selected_hosted_probe_runs_only_image_once(self) -> None:
+        with mock.patch.object(
+            MODULE,
+            "_codex_live_user_agent",
+            return_value="codex_cli_rs/1.2.3 (grokex_live_acceptance)",
+        ), mock.patch.object(
+            MODULE,
+            "_grok_profile",
+            return_value=(
+                "grok",
+                {
+                    "base_url": "https://example.test/v1",
+                    "wire_api": "grok_responses",
+                    "experimental_bearer_token": "private-token",
+                },
+                "experimental_bearer_token",
+            ),
+        ), mock.patch.object(MODULE, "_probe_hosted_tool") as probe:
+            MODULE._run_gateway_hosted_live(
+                Path("config.toml"),
+                Path("codex"),
+                "grok-4.5",
+                ("image_generation",),
+            )
+
+        probe.assert_called_once_with(
+            "https://example.test/v1/responses",
+            "private-token",
+            "codex_cli_rs/1.2.3 (grokex_live_acceptance)",
+            "grok-4.5",
+            "image_generation",
+        )
+
+    def test_hosted_tool_selection_is_unique_and_canonical(self) -> None:
+        self.assertEqual(
+            MODULE._resolve_hosted_tool_types(["image_generation", "web_search"]),
+            ("web_search", "image_generation"),
+        )
+        with self.assertRaisesRegex(
+            MODULE.AcceptanceError,
+            r"^hosted_tool_selection_invalid$",
+        ):
+            MODULE._resolve_hosted_tool_types(
+                ["image_generation", "image_generation"]
+            )
+
+    def test_hosted_transport_error_has_only_a_safe_classification(self) -> None:
+        error = MODULE.urllib.error.URLError(socket.timeout("private detail"))
+        self.assertEqual(
+            MODULE._hosted_transport_error_classification(error),
+            "timeout",
+        )
+        with mock.patch.object(
+            MODULE.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ):
+            with self.assertRaisesRegex(
+                MODULE.AcceptanceError,
+                r"^hosted_probe_transport:image_generation:timeout$",
+            ):
+                MODULE._probe_hosted_tool(
+                    "https://example.test/v1/responses",
+                    "private-token",
+                    "codex_cli_rs/1.2.3 (grokex_live_acceptance)",
+                    "grok-4.5",
+                    "image_generation",
+                )
+
+    def test_partial_hosted_finish_does_not_claim_complete_suite(self) -> None:
+        args = MODULE.argparse.Namespace(evidence_output=None)
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", new=stdout):
+            MODULE._finish(
+                args,
+                1,
+                None,
+                {"thread_ids": []},
+                ("image_generation",),
+            )
+
+        lines = stdout.getvalue().splitlines()
+        self.assertIn("grok_hosted_image_generation=passed", lines)
+        self.assertIn("grok_hosted_gateway_live=partial", lines)
+        self.assertNotIn("grok_hosted_gateway_live=passed", lines)
 
     def test_hosted_probe_classifies_cloudflare_client_rejection(self) -> None:
         error = MODULE.urllib.error.HTTPError(
