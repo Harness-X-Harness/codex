@@ -6,6 +6,7 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::remote_catalog_model;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -21,6 +22,7 @@ use codex_app_server_protocol::WebSearchAction;
 use codex_app_server_protocol::WebSearchItem;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
+use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use pretty_assertions::assert_eq;
@@ -73,7 +75,20 @@ async fn assert_standalone_web_search_round_trips_output(
         "mcp_request_meta".to_string(),
         json!({ "openai/search_context": search_context }).to_string(),
     )]);
-    let server = responses::start_mock_server().await;
+    let server = match provider {
+        WebSearchProvider::ChatGpt => responses::start_mock_server().await,
+        WebSearchProvider::CustomResponses => {
+            let server = MockServer::start().await;
+            responses::mount_models_once(
+                &server,
+                ModelsResponse {
+                    models: vec![remote_catalog_model("mock-model", "Mock Model")],
+                },
+            )
+            .await;
+            server
+        }
+    };
     let search_path = match provider {
         WebSearchProvider::ChatGpt => "/api/codex/alpha/search",
         WebSearchProvider::CustomResponses => "/v1/alpha/search",
