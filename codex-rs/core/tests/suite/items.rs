@@ -5,6 +5,7 @@ use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
@@ -420,7 +421,13 @@ async fn grok_web_search_can_interrupt_and_resume_an_assistant_message() -> anyh
 
     let server = start_grok_mock_server("gpt-5.5").await;
     let TestCodex { codex, .. } = test_codex()
-        .with_config(configure_grok_test_provider)
+        .with_config(|config| {
+            configure_grok_test_provider(config);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Live)
+                .expect("Grok web search test should enable live search");
+        })
         .build(&server)
         .await?;
 
