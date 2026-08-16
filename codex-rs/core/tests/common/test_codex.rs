@@ -792,6 +792,19 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config);
         }
+        // Config loading keeps the selected provider, provider map, and registration set in sync.
+        // Test mutators edit the resolved Config directly, so restore that invariant before the
+        // ThreadManager builds its Provider Registry.
+        config.model_providers.insert(
+            config.model_provider_id.clone(),
+            config.model_provider.clone(),
+        );
+        if !config
+            .model_provider_registration_ids
+            .contains(&config.model_provider_id)
+        {
+            config.model_provider_registration_ids = vec![config.model_provider_id.clone()];
+        }
         ensure_test_model_catalog(&mut config)?;
 
         Ok((config, cwd))
