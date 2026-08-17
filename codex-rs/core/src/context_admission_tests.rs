@@ -17,7 +17,7 @@ fn model_with_context_window(context_window: i64) -> ModelInfo {
 }
 
 #[test]
-fn ordinary_projected_input_within_budget_is_admitted() {
+fn stock_identity_input_is_not_subject_to_projected_admission() {
     let input: ResponsesApiInput = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -34,11 +34,11 @@ fn ordinary_projected_input_within_budget_is_admitted() {
         &input,
         &model_with_context_window(1_000),
     )
-    .expect("small projected input should fit");
+    .expect("stock identity input keeps the existing Provider admission path");
 }
 
 #[test]
-fn ordinary_input_keeps_the_existing_item_cap() {
+fn stock_identity_input_does_not_acquire_grok_item_or_metadata_requirements() {
     let input: ResponsesApiInput = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -50,17 +50,12 @@ fn ordinary_input_keeps_the_existing_item_cap() {
     }]
     .into();
 
-    let error = ensure_projected_request_fits(
-        &TestPayload { input: &input },
-        &input,
-        &model_with_context_window(100_000),
-    )
-    .expect_err("canonical Provider input must keep the existing per-item cap");
+    let mut model_info = model_with_context_window(100_000);
+    model_info.context_window = None;
+    model_info.max_context_window = None;
 
-    assert!(matches!(
-        error.details(),
-        codex_protocol::error::CodexErrorDetails::ContextWindowExceeded
-    ));
+    ensure_projected_request_fits(&TestPayload { input: &input }, &input, &model_info)
+        .expect("a Grok projection limit must not become a stock OpenAI policy");
 }
 
 #[test]
@@ -124,7 +119,7 @@ fn projected_item_over_hard_limit_is_rejected_even_when_request_fits_window() {
 
 #[test]
 fn missing_context_window_fails_closed() {
-    let input: ResponsesApiInput = vec![ResponseItem::Message {
+    let items = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -132,8 +127,16 @@ fn missing_context_window_fails_closed() {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }]
-    .into();
+    }];
+    let input = ResponsesApiInput::from_projected(
+        items,
+        vec![serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}]
+        })],
+    )
+    .expect("one wire item must correspond to one canonical item");
     let mut model_info = model_with_context_window(1_000);
     model_info.context_window = None;
     model_info.max_context_window = None;

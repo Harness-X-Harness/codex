@@ -8,6 +8,7 @@ use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
+use crate::event_mapping::parse_grok_hosted_custom_turn_item;
 use crate::function_tool::FunctionCallError;
 use crate::image_generation_artifacts::materialize_image_generation_turn_item;
 use crate::parse_turn_item;
@@ -135,10 +136,6 @@ fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
         ResponseItem::ToolSearchCall { .. }
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
-    ) || matches!(
-        item,
-        ResponseItem::CustomToolCall { name, .. }
-            if codex_tools::is_evidence_backed_x_search_name(name)
     )
 }
 
@@ -147,8 +144,15 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
+    let is_grok_x_search = turn_context.provider.info().provider_adapter
+        == Some(codex_model_provider_info::ModelProviderAdapter::Grok)
+        && matches!(
+            item,
+            ResponseItem::CustomToolCall { name, .. }
+                if codex_tools::is_evidence_backed_x_search_name(name)
+        );
     if !turn_context.config.memories.disable_on_external_context
-        || !response_item_may_include_external_context(item)
+        || !(response_item_may_include_external_context(item) || is_grok_x_search)
     {
         return;
     }
@@ -464,7 +468,7 @@ pub(crate) async fn handle_non_tool_response_item(
             Some(turn_item)
         }
         ResponseItem::CustomToolCall { .. } if allow_hosted_custom_projection => {
-            let mut turn_item = parse_turn_item(item)?;
+            let mut turn_item = parse_grok_hosted_custom_turn_item(item)?;
             finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
             Some(turn_item)
         }

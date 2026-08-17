@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[test]
-fn remote_compaction_keeps_hosted_grok_items_but_not_local_custom_calls() {
+fn remote_compaction_only_keeps_unambiguous_grok_hosted_items() {
     let x_search = ResponseItem::CustomToolCall {
         id: Some(ResponseItemId::with_suffix("ct", "x")),
         status: Some("completed".to_string()),
@@ -33,7 +33,7 @@ fn remote_compaction_keeps_hosted_grok_items_but_not_local_custom_calls() {
         internal_chat_message_metadata_passthrough: None,
     };
 
-    assert!(crate::compact_remote::should_keep_compacted_history_item(
+    assert!(!crate::compact_remote::should_keep_compacted_history_item(
         &x_search
     ));
     assert!(crate::compact_remote::should_keep_compacted_history_item(

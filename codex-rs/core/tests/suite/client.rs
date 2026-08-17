@@ -190,6 +190,21 @@ fn assert_codex_client_metadata(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn openai_http_preserves_stock_admission_for_large_identity_input() {
+    let server = MockServer::start().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let test = test_codex().build(&server).await.unwrap();
+
+    test.submit_turn(&"A".repeat(40_100)).await.unwrap();
+
+    assert_eq!(response_mock.requests().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_turns() {
     let server = MockServer::start().await;
     let response_mock = mount_sse_sequence(

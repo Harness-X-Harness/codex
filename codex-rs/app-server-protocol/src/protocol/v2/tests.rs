@@ -3260,6 +3260,89 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 }
 
 #[test]
+fn provider_specific_hosted_fields_do_not_change_stock_item_json() {
+    let stock_web = ThreadItem::WebSearch(WebSearchItem {
+        id: "search-1".to_string(),
+        query: "docs".to_string(),
+        action: None,
+        results: None,
+        source: None,
+    });
+    let stock_image = ThreadItem::ImageGeneration(ImageGenerationItem {
+        id: "image-1".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: None,
+        prompt: None,
+        result: String::new(),
+        transparent_background: None,
+        saved_path: None,
+    });
+
+    assert_eq!(
+        serde_json::to_value(stock_web).expect("stock web search should serialize"),
+        json!({
+            "type": "webSearch",
+            "id": "search-1",
+            "query": "docs",
+            "action": null,
+            "results": null,
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(stock_image).expect("stock image generation should serialize"),
+        json!({
+            "type": "imageGeneration",
+            "id": "image-1",
+            "status": "completed",
+            "revisedPrompt": null,
+            "result": "",
+            "transparentBackground": null,
+        })
+    );
+
+    let grok_web = ThreadItem::WebSearch(WebSearchItem {
+        id: "search-2".to_string(),
+        query: "news".to_string(),
+        action: None,
+        results: None,
+        source: Some(SearchSource::X),
+    });
+    let grok_image = ThreadItem::ImageGeneration(ImageGenerationItem {
+        id: "image-2".to_string(),
+        status: "completed".to_string(),
+        revised_prompt: None,
+        prompt: Some("Draw a fox.".to_string()),
+        result: "opaque".to_string(),
+        transparent_background: None,
+        saved_path: None,
+    });
+
+    assert_eq!(
+        serde_json::to_value(grok_web).expect("Grok X search should serialize"),
+        json!({
+            "type": "webSearch",
+            "id": "search-2",
+            "query": "news",
+            "action": null,
+            "results": null,
+            "source": "x",
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(grok_image).expect("Grok image generation should serialize"),
+        json!({
+            "type": "imageGeneration",
+            "id": "image-2",
+            "status": "completed",
+            "revisedPrompt": null,
+            "prompt": "Draw a fox.",
+            "result": "opaque",
+            "transparentBackground": null,
+        })
+    );
+}
+
+#[test]
 fn mcp_tool_call_app_context_serializes_connector_id() {
     let item = ThreadItem::McpToolCall {
         id: "mcp-1".to_string(),

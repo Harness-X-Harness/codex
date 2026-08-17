@@ -292,7 +292,6 @@ impl TurnContext {
             && self.config.orchestrator_mcp_enabled
     }
 
-    #[cfg(test)]
     pub(crate) async fn with_model(
         &self,
         model: String,

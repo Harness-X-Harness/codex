@@ -220,6 +220,26 @@ fn output_item_parse_error(
     )))
 }
 
+fn decode_stream_output_item(
+    event_kind: &str,
+    dialect: ResponsesDialect,
+    item: Value,
+) -> std::result::Result<Option<ResponseItem>, ResponsesEventError> {
+    match decode_response_item(dialect, item.clone()) {
+        Ok(item) => Ok(Some(item)),
+        Err(error) => {
+            let error = output_item_parse_error(event_kind, &item, &error);
+            match dialect {
+                // Preserve the stock Responses decoder contract: additive or malformed output
+                // items are logged and ignored instead of terminating the stream.
+                ResponsesDialect::OpenAi => Ok(None),
+                // The Grok wire contract is explicit and closed over the supported output kinds.
+                ResponsesDialect::Grok => Err(error),
+            }
+        }
+    }
+}
+
 impl ResponsesStreamEvent {
     pub fn kind(&self) -> &str {
         &self.kind
@@ -384,10 +404,12 @@ pub fn process_responses_event_with_dialect(
     match event.kind.as_str() {
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
-                let item = decode_response_item(dialect, item_val.clone()).map_err(|error| {
-                    output_item_parse_error("response.output_item.done", &item_val, &error)
-                })?;
-                return Ok(Some(ResponseEvent::OutputItemDone(item)));
+                return Ok(decode_stream_output_item(
+                    "response.output_item.done",
+                    dialect,
+                    item_val,
+                )?
+                .map(ResponseEvent::OutputItemDone));
             }
         }
         "response.output_text.delta" => {
@@ -505,10 +527,12 @@ pub fn process_responses_event_with_dialect(
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
-                let item = decode_response_item(dialect, item_val.clone()).map_err(|error| {
-                    output_item_parse_error("response.output_item.added", &item_val, &error)
-                })?;
-                return Ok(Some(ResponseEvent::OutputItemAdded(item)));
+                return Ok(decode_stream_output_item(
+                    "response.output_item.added",
+                    dialect,
+                    item_val,
+                )?
+                .map(ResponseEvent::OutputItemAdded));
             }
         }
         "response.reasoning_summary_part.added" => {
@@ -923,6 +947,49 @@ mod tests {
                 if message.contains("future_gateway_tool_call")
                     && !message.contains(secret_marker)
         );
+    }
+
+    #[test]
+    fn openai_undecodable_output_item_preserves_stock_tolerance() {
+        let item = json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "image_generation_call",
+                "status": "completed",
+                "result": null
+            }
+        })
+        .to_string();
+        let event: ResponsesStreamEvent =
+            serde_json::from_str(&item).expect("fixture should parse");
+
+        assert!(
+            process_responses_event_with_dialect(event, ResponsesDialect::OpenAi)
+                .expect("stock OpenAI must ignore an undecodable additive output item")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_stream_continues_after_undecodable_output_item() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "image_generation_call",
+                    "status": "in_progress",
+                    "result": null
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_eq!(events.len(), 1);
+        assert_matches!(&events[0], ResponseEvent::Completed { response_id, .. } if response_id == "resp1");
     }
 
     #[test]
