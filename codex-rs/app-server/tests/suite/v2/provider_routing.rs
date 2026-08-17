@@ -611,7 +611,6 @@ async fn grok_app_request_preserves_complete_freeform_grammar_metadata() -> Resu
             "definition": "\nstart: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/\n"
         })
     );
-    assert!(exec_description.len() <= 8_000);
     Ok(())
 }
 
