@@ -2169,7 +2169,10 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
                 ev_assistant_message("m1", "before switch"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
             ]),
-            remote_v2_compaction_response(),
+            sse(vec![
+                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
+            ]),
             sse(vec![
                 ev_assistant_message("m3", "after switch"),
                 ev_completed_with_tokens("r3", /*total_tokens*/ 100),
@@ -2218,10 +2221,11 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
         3,
         "expected user, compact, and follow-up requests"
     );
-    assert_stock_pre_sampling_switch_compaction_requests(
+    assert_pre_sampling_switch_compaction_requests(
         &requests[0].body_json(),
         &requests[1].body_json(),
         &requests[2].body_json(),
+        previous_model,
         previous_model,
         next_model,
     );
@@ -3251,10 +3255,7 @@ async fn pre_sampling_compact_runs_after_fork_and_switch_to_smaller_model() {
                 ev_assistant_message("m1", "before fork"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
             ]),
-            sse(vec![
-                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
+            remote_v2_compaction_response(),
             sse(vec![
                 ev_assistant_message("m3", "after fork"),
                 ev_completed_with_tokens("r3", /*total_tokens*/ 100),
@@ -3319,11 +3320,10 @@ async fn pre_sampling_compact_runs_after_fork_and_switch_to_smaller_model() {
         3,
         "expected user, compact, and follow-up requests"
     );
-    assert_pre_sampling_switch_compaction_requests(
+    assert_stock_pre_sampling_switch_compaction_requests(
         &requests[0].body_json(),
         &requests[1].body_json(),
         &requests[2].body_json(),
-        previous_model,
         previous_model,
         next_model,
     );
