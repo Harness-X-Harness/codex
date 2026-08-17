@@ -16,7 +16,6 @@ const DERIVED_NAME_PREFIX: &str = "local__";
 const HASH_VERSION: &str = "grok-tool-name-v1";
 const MAX_WIRE_NAME_LEN: usize = 64;
 const HASH_SUFFIX_LEN: usize = 16;
-const MAX_GROK_FREEFORM_DESCRIPTION_BYTES: usize = 8_000;
 const FREEFORM_FORMAT_DESCRIPTION_HEADER: &str = "Local Codex freeform grammar metadata (descriptive only; the Grok Gateway does not enforce this grammar):";
 const RESERVED_WIRE_NAMES: &[&str] = &[
     "code_execution",
@@ -350,12 +349,6 @@ fn project_freeform_tool(
     let format = serde_json::to_string(&format)
         .map_err(|error| format!("freeform grammar metadata is not representable: {error}"))?;
     let description = format!("{description}\n\n{FREEFORM_FORMAT_DESCRIPTION_HEADER}\n{format}");
-    if description.len() > MAX_GROK_FREEFORM_DESCRIPTION_BYTES {
-        return Err(format!(
-            "projected freeform description is {} bytes; maximum is {MAX_GROK_FREEFORM_DESCRIPTION_BYTES}",
-            description.len()
-        ));
-    }
     Ok((
         ResponsesApiTool {
             name,

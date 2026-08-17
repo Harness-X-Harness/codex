@@ -542,28 +542,35 @@ fn freeform_description_preserves_boundary_and_complete_grammar_metadata() {
 }
 
 #[test]
-fn oversized_freeform_grammar_fails_closed_without_truncation() {
-    let error = plan_grok_tools(vec![GrokLocalTool {
+fn freeform_grammar_above_former_boundary_is_preserved_without_truncation() {
+    let description = "Must remain complete.";
+    let format = FreeformToolFormat {
+        r#type: "grammar".to_string(),
+        syntax: "lark".to_string(),
+        definition: "x".repeat(8_001),
+    };
+    let plan = plan_grok_tools(vec![GrokLocalTool {
         identity: ToolName::plain("oversized_freeform"),
         spec: ToolSpec::Freeform(FreeformTool {
             name: "oversized_freeform".to_string(),
-            description: "Must remain complete.".to_string(),
+            description: description.to_string(),
             defer_loading: None,
-            format: FreeformToolFormat {
-                r#type: "grammar".to_string(),
-                syntax: "lark".to_string(),
-                definition: "x".repeat(8_001),
-            },
+            format: format.clone(),
         }),
     }])
-    .expect_err("an oversized model-visible grammar must not be truncated or emitted");
+    .expect("the former standalone boundary must not reject a representable freeform tool");
 
-    assert!(matches!(
-        error,
-        GrokToolPlanError::UnsupportedLocalTool { identity, reason }
-            if identity == ToolName::plain("oversized_freeform")
-                && reason.contains("maximum is 8000")
-    ));
+    let ToolSpec::Function(projected) = &plan.declarations[0] else {
+        panic!("freeform projection must be model-visible as one function");
+    };
+    let serialized_format = serde_json::to_string(&format).expect("test format should serialize");
+    assert_eq!(
+        projected.description,
+        format!(
+            "{description}\n\nLocal Codex freeform grammar metadata (descriptive only; the Grok Gateway does not enforce this grammar):\n{serialized_format}"
+        )
+    );
+    assert!(projected.description.len() > 8_000);
 }
 
 #[test]
