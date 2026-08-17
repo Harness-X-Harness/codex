@@ -2365,15 +2365,18 @@ async fn grok_websocket_sends_the_full_bounded_image_projection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_admits_full_history_before_sending_incremental_delta() {
+async fn responses_websocket_preserves_stock_admission_for_large_identity_input() {
     skip_if_no_network!();
 
     let oversized_item = "A".repeat(40_000);
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_assistant_message("msg_1", &oversized_item),
-        ev_completed("resp-1"),
-    ]]])
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg_1", &oversized_item),
+            ev_completed("resp-1"),
+        ],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
     .await;
 
     let harness = websocket_harness(&server).await;
@@ -2391,7 +2394,7 @@ async fn responses_websocket_admits_full_history_before_sending_incremental_delt
 
     stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     let responses_metadata = turn_metadata(&harness, /*turn_id*/ None);
-    let error = match client_session
+    let mut stream = client_session
         .stream(
             &prompt_two,
             &harness.model_info,
@@ -2403,16 +2406,20 @@ async fn responses_websocket_admits_full_history_before_sending_incremental_delt
             &InferenceTraceContext::disabled(),
         )
         .await
-    {
-        Ok(_) => panic!("oversized full history must fail before an incremental send"),
-        Err(error) => error,
-    };
+        .expect("stock OpenAI identity input must keep the existing transport path");
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        if matches!(
+            event.expect("stock OpenAI websocket stream must remain valid"),
+            ResponseEvent::Completed { .. }
+        ) {
+            completed = true;
+            break;
+        }
+    }
 
-    assert!(matches!(
-        error.details(),
-        codex_protocol::error::CodexErrorDetails::ContextWindowExceeded
-    ));
-    assert_eq!(server.single_connection().len(), 1);
+    assert!(completed, "stock OpenAI websocket stream must complete");
+    assert_eq!(server.single_connection().len(), 2);
     server.shutdown().await;
 }
 

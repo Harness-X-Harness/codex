@@ -1084,10 +1084,18 @@ async fn maybe_run_previous_model_inline_compact(
     let previous_model = previous_turn_settings.model;
     let previous_turn_model = sess.previous_turn_model().await;
     let has_frozen_previous_model = previous_turn_model.is_some();
-    // Rollouts do not persist Provider model facts. After resume or fork, keep the current Turn's
-    // immutable profile instead of reconstructing old Provider facts from a persisted slug.
+    let reconstruct_stock_previous_model =
+        !has_frozen_previous_model && turn_context.provider.info().is_openai();
+    // Rollouts do not persist Provider model facts. Preserve stock OpenAI resume/fork behavior by
+    // resolving its persisted previous slug. Other Providers must not reconstruct historical
+    // authority facts that were never persisted.
     let previous_model_turn_context = match previous_turn_model {
         Some(previous_turn_model) => Arc::new(turn_context.with_frozen_model(previous_turn_model)),
+        None if reconstruct_stock_previous_model => Arc::new(
+            turn_context
+                .with_model(previous_model.clone(), &sess.services.provider_runtime)
+                .await?,
+        ),
         None => Arc::clone(turn_context),
     };
     let mut previous_model_client_session = sess
@@ -1099,7 +1107,8 @@ async fn maybe_run_previous_model_inline_compact(
         let step_context = sess
             .capture_step_context(Arc::clone(&previous_model_turn_context), cancellation_token)
             .await?;
-        let fallback_step_context = if has_frozen_previous_model {
+        let fallback_step_context = if has_frozen_previous_model || reconstruct_stock_previous_model
+        {
             capture_current_model_fallback_step_context(
                 sess,
                 turn_context,

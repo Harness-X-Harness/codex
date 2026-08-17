@@ -234,28 +234,6 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 source: None,
             }))
         }
-        ResponseItem::CustomToolCall {
-            id,
-            status,
-            name,
-            namespace,
-            input,
-            ..
-        } if namespace.is_none()
-            && matches!(
-                status.as_deref(),
-                Some("in_progress" | "completed" | "failed")
-            )
-            && codex_tools::is_evidence_backed_x_search_name(name) =>
-        {
-            Some(TurnItem::WebSearch(WebSearchItem {
-                id: id.as_deref()?.to_string(),
-                query: input.clone(),
-                action: WebSearchAction::Other,
-                results: None,
-                source: Some(SearchSource::X),
-            }))
-        }
         ResponseItem::ImageGenerationCall {
             id,
             status,
@@ -290,6 +268,38 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
         )),
         _ => None,
     }
+}
+
+/// Projects a custom output only after the Grok Tool Plan has established
+/// hosted ownership for the item.
+pub(crate) fn parse_grok_hosted_custom_turn_item(item: &ResponseItem) -> Option<TurnItem> {
+    let ResponseItem::CustomToolCall {
+        id,
+        status,
+        name,
+        namespace,
+        input,
+        ..
+    } = item
+    else {
+        return None;
+    };
+    if namespace.is_some()
+        || !matches!(
+            status.as_deref(),
+            Some("in_progress" | "completed" | "failed")
+        )
+        || !codex_tools::is_evidence_backed_x_search_name(name)
+    {
+        return None;
+    }
+    Some(TurnItem::WebSearch(WebSearchItem {
+        id: id.as_deref()?.to_string(),
+        query: input.clone(),
+        action: WebSearchAction::Other,
+        results: None,
+        source: Some(SearchSource::X),
+    }))
 }
 
 #[cfg(test)]

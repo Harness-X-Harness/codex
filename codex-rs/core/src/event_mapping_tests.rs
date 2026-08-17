@@ -1,5 +1,6 @@
 use super::has_non_contextual_dev_message_content;
 use super::is_contextual_dev_message_content;
+use super::parse_grok_hosted_custom_turn_item;
 use super::parse_turn_item;
 use crate::context::ContextualUserFragment;
 use crate::context::InternalContextSource;
@@ -649,7 +650,7 @@ fn parses_partial_web_search_call_without_action_as_other() {
 }
 
 #[test]
-fn projects_grok_x_search_and_image_items_without_changing_durable_shapes() {
+fn grok_custom_projection_requires_the_provider_owned_parser() {
     let x_item = ResponseItem::CustomToolCall {
         id: Some(ResponseItemId::with_suffix("ct", "x")),
         status: Some("completed".to_string()),
@@ -674,7 +675,8 @@ fn projects_grok_x_search_and_image_items_without_changing_durable_shapes() {
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let Some(TurnItem::WebSearch(x_search)) = parse_turn_item(&x_item) else {
+    assert!(parse_turn_item(&x_item).is_none());
+    let Some(TurnItem::WebSearch(x_search)) = parse_grok_hosted_custom_turn_item(&x_item) else {
         panic!("expected X Search UI projection");
     };
     assert_eq!(

@@ -1,0 +1,108 @@
+name: Grokex stock compatibility
+
+on:
+  pull_request:
+    branches:
+      - grok-backend
+    paths:
+      - ".github/workflows/grokex-stock-compatibility.yml"
+      - "codex-rs/app-server-protocol/**"
+      - "codex-rs/codex-api/**"
+      - "codex-rs/core/**"
+      - "codex-rs/extension-items/**"
+      - "codex-rs/model-provider/**"
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-stock-compatibility-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-contracts:
+    name: Linux stock and Grok contract controls
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: Install Linux test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap libcap-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Configure persistent Rust compiler cache
+        uses: ./.github/actions/setup-grokex-sccache
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Check Rust formatting
+        working-directory: codex-rs
+        run: cargo fmt --all -- --config imports_granularity=Item --check
+
+      - name: Verify stock stream tolerance
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: cargo test --locked -p codex-api
+
+      - name: Verify Provider-specific projection and history controls
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p codex-core context_admission
+          cargo test --locked -p codex-core \
+            grok_custom_projection_requires_the_provider_owned_parser
+          cargo test --locked -p codex-core \
+            remote_compaction_only_keeps_unambiguous_grok_hosted_items
+
+      - name: Verify stock HTTP and WebSocket admission controls
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p codex-core \
+            openai_http_preserves_stock_admission_for_large_identity_input
+          cargo test --locked -p codex-core \
+            responses_websocket_preserves_stock_admission_for_large_identity_input
+
+      - name: Verify stock resume and fork compaction controls
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p codex-core \
+            pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model
+          cargo test --locked -p codex-core \
+            pre_sampling_compact_runs_after_fork_and_switch_to_smaller_model
+          cargo test --locked -p codex-core \
+            pre_sampling_compact_recovers_comp_hash_after_resume
+
+      - name: Verify stock App Server shapes and schema fixtures
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: cargo test --locked -p codex-app-server-protocol

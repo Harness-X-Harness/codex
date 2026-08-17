@@ -6,8 +6,6 @@ use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use serde::Serialize;
 use std::io::Write;
 
-use crate::context_manager::estimate_item_token_count;
-
 const MAX_PROJECTED_ITEM_TOKENS: i64 = 10_000;
 
 /// Verifies the request payload after Provider-specific history projection.
@@ -16,6 +14,12 @@ pub(crate) fn ensure_projected_request_fits<T: Serialize>(
     projected_input: &ResponsesApiInput,
     model_info: &ModelInfo,
 ) -> Result<()> {
+    // Identity projection is the stock Provider path. Preserve its existing context-window
+    // behavior; this additional proof gate exists only for an actual Provider-owned wire
+    // projection whose replay cost can differ from durable history.
+    let Some(wire_items) = projected_input.wire_items() else {
+        return Ok(());
+    };
     let context_window = effective_context_window(model_info).ok_or_else(|| {
         CodexErr::InvalidRequest(format!(
             "cannot admit ModelInput for `{}` without a context window",
@@ -23,39 +27,13 @@ pub(crate) fn ensure_projected_request_fits<T: Serialize>(
         ))
     })?;
     let serialized_bytes = serialized_json_len(payload)?;
-    let serialized_tokens = approx_tokens_from_byte_count_i64(serialized_bytes);
-    let projected_request_tokens = match projected_input.wire_items() {
-        Some(wire_items) => {
-            for item in wire_items {
-                let item_tokens = approx_tokens_from_byte_count_i64(serialized_json_len(item)?);
-                if item_tokens > MAX_PROJECTED_ITEM_TOKENS {
-                    return Err(CodexErr::ContextWindowExceeded);
-                }
-            }
-            serialized_tokens
+    let projected_request_tokens = approx_tokens_from_byte_count_i64(serialized_bytes);
+    for item in wire_items {
+        let item_tokens = approx_tokens_from_byte_count_i64(serialized_json_len(item)?);
+        if item_tokens > MAX_PROJECTED_ITEM_TOKENS {
+            return Err(CodexErr::ContextWindowExceeded);
         }
-        None => {
-            let raw_input_tokens = projected_input
-                .iter()
-                .map(|item| {
-                    serialized_json_len(item)
-                        .map(approx_tokens_from_byte_count_i64)
-                        .unwrap_or(i64::MAX)
-                })
-                .fold(0i64, i64::saturating_add);
-            let mut projected_input_tokens = 0i64;
-            for item in projected_input.iter() {
-                let item_tokens = estimate_item_token_count(item);
-                if item_tokens > MAX_PROJECTED_ITEM_TOKENS {
-                    return Err(CodexErr::ContextWindowExceeded);
-                }
-                projected_input_tokens = projected_input_tokens.saturating_add(item_tokens);
-            }
-            serialized_tokens
-                .saturating_sub(raw_input_tokens)
-                .saturating_add(projected_input_tokens)
-        }
-    };
+    }
     if projected_request_tokens > context_window {
         return Err(CodexErr::ContextWindowExceeded);
     }

@@ -1,5 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_core::ForkSnapshot;
+use codex_core::NewThread;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
@@ -420,6 +422,37 @@ fn assert_pre_sampling_switch_compaction_requests(
         body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
         "pre-sampling compact request should include summarization prompt"
     );
+    assert!(
+        !compact_body.contains("<model_switch>"),
+        "pre-sampling compact request should strip trailing model-switch update item"
+    );
+    let follow_up_body = follow_up.to_string();
+    assert!(
+        follow_up_body.contains("<model_switch>"),
+        "follow-up request after successful model-switch compaction should include model-switch update item"
+    );
+}
+
+fn assert_stock_pre_sampling_switch_compaction_requests(
+    first: &serde_json::Value,
+    compact: &serde_json::Value,
+    follow_up: &serde_json::Value,
+    previous_model: &str,
+    next_model: &str,
+) {
+    assert_eq!(first["model"].as_str(), Some(previous_model));
+    assert_eq!(compact["model"].as_str(), Some(previous_model));
+    assert_eq!(follow_up["model"].as_str(), Some(next_model));
+
+    let compact_input = compact["input"]
+        .as_array()
+        .expect("stock remote-v2 compact request should include input");
+    assert_eq!(
+        compact_input.last(),
+        Some(&json!({"type": "compaction_trigger"})),
+        "stock remote-v2 compact request should append one compaction trigger"
+    );
+    let compact_body = compact.to_string();
     assert!(
         !compact_body.contains("<model_switch>"),
         "pre-sampling compact request should strip trailing model-switch update item"
@@ -2136,10 +2169,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
                 ev_assistant_message("m1", "before switch"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
             ]),
-            sse(vec![
-                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
+            remote_v2_compaction_response(),
             sse(vec![
                 ev_assistant_message("m3", "after switch"),
                 ev_completed_with_tokens("r3", /*total_tokens*/ 100),
@@ -2188,11 +2218,10 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
         3,
         "expected user, compact, and follow-up requests"
     );
-    assert_pre_sampling_switch_compaction_requests(
+    assert_stock_pre_sampling_switch_compaction_requests(
         &requests[0].body_json(),
         &requests[1].body_json(),
         &requests[2].body_json(),
-        previous_model,
         previous_model,
         next_model,
     );
@@ -3105,10 +3134,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
                 ev_assistant_message("m1", "before resume"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
             ]),
-            sse(vec![
-                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
+            remote_v2_compaction_response(),
             sse(vec![
                 ev_assistant_message("m3", "after resume"),
                 ev_completed_with_tokens("r3", /*total_tokens*/ 100),
@@ -3117,7 +3143,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     )
     .await;
 
-    let model_provider = non_openai_model_provider(&server);
+    let model_provider = openai_model_provider(&server);
     let mut initial_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
@@ -3160,7 +3186,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     })
     .await;
 
-    let model_provider = non_openai_model_provider(&server);
+    let model_provider = openai_model_provider(&server);
     let mut resumed_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
@@ -3191,12 +3217,114 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         3,
         "expected user, compact, and follow-up requests"
     );
-    assert_pre_sampling_switch_compaction_requests(
+    assert_stock_pre_sampling_switch_compaction_requests(
         &requests[0].body_json(),
         &requests[1].body_json(),
         &requests[2].body_json(),
         previous_model,
         next_model,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_runs_after_fork_and_switch_to_smaller_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.4";
+    let next_model = "gpt-5.2";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, /*context_window*/ 273_000),
+                model_info_with_context_window(next_model, /*context_window*/ 125_000),
+            ],
+        },
+    )
+    .await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before fork"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "after fork"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let initial = builder
+        .build(&server)
+        .await
+        .expect("build initial test codex");
+    initial
+        .codex
+        .submit(disabled_permission_user_turn(
+            "before fork",
+            initial.cwd.path().to_path_buf(),
+            previous_model.to_string(),
+        ))
+        .await
+        .expect("submit pre-fork turn");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let rollout_path = initial.codex.rollout_path().expect("rollout path");
+    let NewThread { thread: forked, .. } = initial
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            initial.config.clone(),
+            rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork completed stock thread");
+
+    forked
+        .submit(disabled_permission_user_turn(
+            "after fork",
+            initial.cwd.path().to_path_buf(),
+            next_model.to_string(),
+        ))
+        .await
+        .expect("submit forked user turn");
+    assert_compaction_uses_turn_lifecycle_id(&forked).await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user, compact, and follow-up requests"
+    );
+    assert_pre_sampling_switch_compaction_requests(
+        &requests[0].body_json(),
+        &requests[1].body_json(),
+        &requests[2].body_json(),
+        previous_model,
+        previous_model,
         next_model,
     );
 }
@@ -3227,10 +3355,7 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
                 ev_assistant_message("m1", "before resume"),
                 ev_completed_with_tokens("r1", /*total_tokens*/ 100),
             ]),
-            sse(vec![
-                ev_assistant_message("m2", "RESUMED_COMP_HASH_SUMMARY"),
-                ev_completed_with_tokens("r2", /*total_tokens*/ 10),
-            ]),
+            remote_v2_compaction_response(),
             sse(vec![
                 ev_assistant_message("m3", "after resume"),
                 ev_completed_with_tokens("r3", /*total_tokens*/ 100),
@@ -3239,7 +3364,7 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
     )
     .await;
 
-    let model_provider = non_openai_model_provider(&server);
+    let model_provider = openai_model_provider(&server);
     let mut initial_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
@@ -3292,7 +3417,7 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
         });
     assert_eq!(persisted_comp_hash.as_deref(), Some("hash-a"));
 
-    let model_provider = non_openai_model_provider(&server);
+    let model_provider = openai_model_provider(&server);
     let mut resumed_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
@@ -3323,12 +3448,11 @@ async fn pre_sampling_compact_recovers_comp_hash_after_resume() {
         3,
         "the resumed turn should compact using the comp hash recovered from rollout"
     );
-    assert_pre_sampling_switch_compaction_requests(
+    assert_stock_pre_sampling_switch_compaction_requests(
         &requests[0].body_json(),
         &requests[1].body_json(),
         &requests[2].body_json(),
         previous_model,
-        next_model,
         next_model,
     );
 }
