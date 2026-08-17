@@ -620,6 +620,7 @@ def _wait_turn(
     server: AppServer,
     thread_id: str,
     turn_id: str,
+    failure_phase: str,
     required_item_types: tuple[str, ...] = ("agentMessage",),
 ) -> dict[str, Any]:
     params = server.wait_notification(
@@ -630,7 +631,15 @@ def _wait_turn(
     )
     turn = params.get("turn")
     if not isinstance(turn, dict) or turn.get("status") != "completed":
-        raise AcceptanceError("turn_did_not_complete")
+        status = turn.get("status") if isinstance(turn, dict) else None
+        safe_status = (
+            status
+            if isinstance(status, str) and SAFE_ERROR_FIELD.fullmatch(status)
+            else "unknown"
+        )
+        raise AcceptanceError(
+            f"turn_did_not_complete:{failure_phase}:{safe_status}"
+        )
     items = turn.get("items")
     if not isinstance(items, list):
         raise AcceptanceError("turn_items_missing")
@@ -709,7 +718,12 @@ def _compact(server: AppServer, thread_id: str) -> None:
         raise AcceptanceError("compaction_turn_did_not_complete")
 
 
-def _spawn_child(server: AppServer, thread_id: str, provider: str) -> str:
+def _spawn_child(
+    server: AppServer,
+    thread_id: str,
+    provider: str,
+    failure_phase: str,
+) -> str:
     existing_children = server.request(
         "thread/list", {"limit": 20, "parentThreadId": thread_id}
     ).get("data")
@@ -728,7 +742,7 @@ def _spawn_child(server: AppServer, thread_id: str, provider: str) -> str:
             "wait for it to complete, and then reply briefly."
         ),
     )
-    _wait_turn(server, thread_id, turn_id)
+    _wait_turn(server, thread_id, turn_id, failure_phase)
     deadline = time.monotonic() + 300
     while True:
         children = server.request(
@@ -833,7 +847,7 @@ def _start_grok_only(
     if resolved_provider != grok_provider:
         raise AcceptanceError("grok_model_owner_mismatch")
     turn_id = _start_message_turn(server, thread_id)
-    _wait_turn(server, thread_id, turn_id)
+    _wait_turn(server, thread_id, turn_id, "grok_initial")
     return thread_id
 
 
@@ -845,14 +859,19 @@ def _resume_grok_only(
 ) -> dict[str, Any]:
     _resume(server, thread_id, grok_provider)
     turn_id = _start_message_turn(server, thread_id)
-    _wait_turn(server, thread_id, turn_id)
+    _wait_turn(server, thread_id, turn_id, "grok_resume")
 
     fork_id = _fork(server, thread_id, grok_provider)
     fork_turn_id = _start_message_turn(server, fork_id)
-    _wait_turn(server, fork_id, fork_turn_id)
+    _wait_turn(server, fork_id, fork_turn_id, "grok_fork")
 
     _compact(server, thread_id)
-    child_id = _spawn_child(server, thread_id, grok_provider)
+    child_id = _spawn_child(
+        server,
+        thread_id,
+        grok_provider,
+        "grok_child_orchestration",
+    )
 
     _interactive_thread_list_has_bindings(
         server,
@@ -883,7 +902,11 @@ def run(args: argparse.Namespace) -> None:
         raise AcceptanceError("chatgpt_auth_unavailable")
     if not grok_source.is_file():
         raise AcceptanceError("grok_config_unavailable")
-    hosted_tool_types = _resolve_hosted_tool_types(args.hosted_tools)
+    if args.skip_hosted and args.hosted_tools is not None:
+        raise AcceptanceError("hosted_tool_selection_invalid")
+    hosted_tool_types = (
+        () if args.skip_hosted else _resolve_hosted_tool_types(args.hosted_tools)
+    )
     if args.evidence_output is not None and hosted_tool_types != HOSTED_TOOL_TYPES:
         raise AcceptanceError("partial_hosted_evidence_output_not_supported")
     workspace.mkdir(parents=True, exist_ok=True)
@@ -897,12 +920,13 @@ def run(args: argparse.Namespace) -> None:
             (codex_home / "auth.json").chmod(stat.S_IRUSR | stat.S_IWUSR)
         grok_provider = _write_isolated_config(grok_source, codex_home / "config.toml")
         _assert_openai_does_not_target_grok(codex_home / "config.toml")
-        _run_gateway_hosted_live(
-            grok_source,
-            binary,
-            GROK_LIVE_MODEL,
-            hosted_tool_types,
-        )
+        if hosted_tool_types:
+            _run_gateway_hosted_live(
+                grok_source,
+                binary,
+                GROK_LIVE_MODEL,
+                hosted_tool_types,
+            )
 
         server = AppServer(binary, codex_home, workspace)
         try:
@@ -938,8 +962,8 @@ def run(args: argparse.Namespace) -> None:
 
                 openai_turn = _start_message_turn(server, openai_thread)
                 grok_turn = _start_message_turn(server, grok_thread)
-                _wait_turn(server, openai_thread, openai_turn)
-                _wait_turn(server, grok_thread, grok_turn)
+                _wait_turn(server, openai_thread, openai_turn, "chatgpt_initial")
+                _wait_turn(server, grok_thread, grok_turn, "grok_initial")
         finally:
             server.close()
 
@@ -960,8 +984,8 @@ def run(args: argparse.Namespace) -> None:
                 _resume(server, grok_thread, resolved_grok_provider)
                 openai_turn = _start_message_turn(server, openai_thread)
                 grok_turn = _start_message_turn(server, grok_thread)
-                _wait_turn(server, openai_thread, openai_turn)
-                _wait_turn(server, grok_thread, grok_turn)
+                _wait_turn(server, openai_thread, openai_turn, "chatgpt_resume")
+                _wait_turn(server, grok_thread, grok_turn, "grok_resume")
                 openai_fork = _fork(server, openai_thread, openai_provider)
                 grok_fork = _fork(server, grok_thread, resolved_grok_provider)
                 _interactive_thread_list_has_bindings(
@@ -975,13 +999,21 @@ def run(args: argparse.Namespace) -> None:
                 )
                 openai_fork_turn = _start_message_turn(server, openai_fork)
                 grok_fork_turn = _start_message_turn(server, grok_fork)
-                _wait_turn(server, openai_fork, openai_fork_turn)
-                _wait_turn(server, grok_fork, grok_fork_turn)
+                _wait_turn(server, openai_fork, openai_fork_turn, "chatgpt_fork")
+                _wait_turn(server, grok_fork, grok_fork_turn, "grok_fork")
                 _compact(server, openai_thread)
                 _compact(server, grok_thread)
-                openai_child = _spawn_child(server, openai_thread, openai_provider)
+                openai_child = _spawn_child(
+                    server,
+                    openai_thread,
+                    openai_provider,
+                    "chatgpt_child_orchestration",
+                )
                 grok_child = _spawn_child(
-                    server, grok_thread, resolved_grok_provider
+                    server,
+                    grok_thread,
+                    resolved_grok_provider,
+                    "grok_child_orchestration",
                 )
         finally:
             server.close()
@@ -1036,6 +1068,8 @@ def _finish(
     print("grok_provider_binding=passed")
     if hosted_tool_types == HOSTED_TOOL_TYPES:
         print("grok_hosted_gateway_live=passed")
+    elif not hosted_tool_types:
+        print("grok_hosted_gateway_live=skipped")
     else:
         for tool_type in hosted_tool_types:
             print(f"grok_hosted_{tool_type}=passed")
@@ -1057,6 +1091,11 @@ def parse_args() -> argparse.Namespace:
         action="append",
         choices=HOSTED_TOOL_TYPES,
         help="Run only this hosted-tool contract; repeat to select more than one.",
+    )
+    parser.add_argument(
+        "--skip-hosted",
+        action="store_true",
+        help="Skip hosted probes and run only the App Server lifecycle.",
     )
     parser.add_argument("--grok-only", action="store_true")
     return parser.parse_args()

@@ -172,11 +172,42 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                 return terminal
 
         server = FakeServer()
-        turn = MODULE._wait_turn(server, "thread-1", "turn-expected")
+        turn = MODULE._wait_turn(
+            server,
+            "thread-1",
+            "turn-expected",
+            "chatgpt_initial",
+        )
 
         self.assertEqual(turn["id"], "turn-expected")
         self.assertEqual(server.asserted_method, "turn/completed")
         self.assertTrue(server.rejected_stale)
+
+    def test_wait_turn_reports_only_safe_phase_and_status(self) -> None:
+        class FakeServer:
+            def wait_notification(self, method, predicate, timeout=300):
+                params = {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "failed",
+                        "items": [],
+                    },
+                }
+                if not predicate(params):
+                    raise AssertionError("test notification did not match")
+                return params
+
+        with self.assertRaisesRegex(
+            MODULE.AcceptanceError,
+            r"^turn_did_not_complete:chatgpt_initial:failed$",
+        ):
+            MODULE._wait_turn(
+                FakeServer(),
+                "thread-1",
+                "turn-1",
+                "chatgpt_initial",
+            )
 
     def test_wait_turn_requires_completed_local_command_evidence(self) -> None:
         class FakeServer:
@@ -212,6 +243,7 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
             FakeServer("completed"),
             "thread-1",
             "turn-1",
+            "grok_initial",
             required_item_types=("agentMessage", "commandExecution"),
         )
 
@@ -223,6 +255,7 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                 FakeServer("inProgress"),
                 "thread-1",
                 "turn-1",
+                "grok_initial",
                 required_item_types=("agentMessage", "commandExecution"),
             )
 
@@ -234,6 +267,7 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
                 FakeServer("completed", "userShell"),
                 "thread-1",
                 "turn-1",
+                "grok_initial",
                 required_item_types=("agentMessage", "commandExecution"),
             )
 
@@ -370,7 +404,12 @@ class GrokexDualProviderLiveTest(unittest.TestCase):
 
         accepted = FakeServer()
         self.assertEqual(
-            MODULE._spawn_child(accepted, "parent-1", "grok"),
+            MODULE._spawn_child(
+                accepted,
+                "parent-1",
+                "grok",
+                "grok_child_orchestration",
+            ),
             "new-child",
         )
         self.assertEqual(
@@ -931,6 +970,67 @@ requires_openai_auth = false
         self.assertIn("grok_hosted_image_generation=passed", lines)
         self.assertIn("grok_hosted_gateway_live=partial", lines)
         self.assertNotIn("grok_hosted_gateway_live=passed", lines)
+
+    def test_skip_hosted_reaches_app_server_without_a_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = root / "codex"
+            binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            binary.chmod(0o700)
+            auth = root / "auth.json"
+            auth.write_text("{}\n", encoding="utf-8")
+            config = root / "config.toml"
+            config.write_text(
+                """
+[model_providers.grok]
+base_url = "https://example.test/v1"
+experimental_bearer_token = "private-token"
+provider_adapter = "grok"
+wire_api = "grok_responses"
+requires_openai_auth = false
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            workspace = root / "workspace"
+            args = MODULE.argparse.Namespace(
+                codex_bin=binary,
+                chatgpt_auth=auth,
+                grok_config=config,
+                workspace=workspace,
+                evidence_output=None,
+                hosted_tools=None,
+                skip_hosted=True,
+                grok_only=False,
+            )
+
+            with (
+                mock.patch.object(MODULE, "_run_gateway_hosted_live") as hosted,
+                mock.patch.object(
+                    MODULE,
+                    "AppServer",
+                    side_effect=MODULE.AcceptanceError("app_server_boundary"),
+                ) as app_server,
+                self.assertRaisesRegex(
+                    MODULE.AcceptanceError,
+                    r"^app_server_boundary$",
+                ),
+            ):
+                MODULE.run(args)
+
+            hosted.assert_not_called()
+            app_server.assert_called_once()
+
+    def test_skip_hosted_finish_is_explicit(self) -> None:
+        args = MODULE.argparse.Namespace(evidence_output=None)
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", new=stdout):
+            MODULE._finish(args, 1, None, {"thread_ids": []}, ())
+
+        self.assertIn(
+            "grok_hosted_gateway_live=skipped",
+            stdout.getvalue().splitlines(),
+        )
 
     def test_hosted_probe_classifies_cloudflare_client_rejection(self) -> None:
         error = MODULE.urllib.error.HTTPError(
