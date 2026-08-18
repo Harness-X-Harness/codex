@@ -1183,12 +1183,18 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
     });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
-    test.submit_turn_with_approval_and_permission_profile(
-        "Find and run the rmcp echo tool",
-        AskForApproval::Never,
-        PermissionProfile::Disabled,
-    )
-    .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Find and run the rmcp echo tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
 
     let EventMsg::McpToolCallEnd(end) = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::McpToolCallEnd(_))
@@ -1201,6 +1207,10 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
     assert_eq!(end.invocation.server, "rmcp");
     assert_eq!(end.invocation.tool, "echo");
     assert!(end.is_success());
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let requests = request_bodies
         .lock()
