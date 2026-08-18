@@ -319,17 +319,21 @@ jobs:
         working-directory: codex-rs
         run: cargo fmt --all -- --config imports_granularity=Item --check
 
-      - name: Build Code Mode host for integration contracts
+      - name: Build integration contract hosts
         working-directory: codex-rs
         shell: bash
         run: |
           set -euo pipefail
           cargo build --locked -p codex-code-mode-host
+          cargo build --locked -p codex-rmcp-client --bin test_stdio_server
           target_dir="$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r '.target_directory')"
           host_path="${target_dir}/debug/codex-code-mode-host"
+          stdio_server_path="${target_dir}/debug/test_stdio_server"
           test -x "$host_path"
+          test -x "$stdio_server_path"
           echo "CARGO_BIN_EXE_codex_code_mode_host=$host_path" >> "$GITHUB_ENV"
+          echo "CARGO_BIN_EXE_test_stdio_server=$stdio_server_path" >> "$GITHUB_ENV"
 
       - name: Run unified provider tracer contract
         working-directory: codex-rs
