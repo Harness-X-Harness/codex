@@ -94,6 +94,49 @@ fn safe_plain_function_keeps_its_wire_name() {
 }
 
 #[test]
+fn client_tool_search_projects_to_ordinary_function_and_decodes_canonically() {
+    let parameters = JsonSchema::object(
+        BTreeMap::from([(
+            "query".to_string(),
+            JsonSchema::string(Some("Search query.".to_string())),
+        )]),
+        Some(vec!["query".to_string()]),
+        Some(false.into()),
+    );
+    let plan = plan_grok_tools(vec![GrokLocalTool {
+        identity: ToolName::plain("tool_search"),
+        spec: ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search deferred tools.".to_string(),
+            parameters: parameters.clone(),
+        },
+    }])
+    .expect("client tool_search should project to an ordinary Grok function");
+
+    assert_eq!(
+        plan.declarations,
+        vec![ToolSpec::Function(ResponsesApiTool {
+            name: "tool_search".to_string(),
+            description: "Search deferred tools.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters,
+            output_schema: None,
+        })]
+    );
+    let arguments = r#"{"query":"calendar","limit":2}"#;
+    let decoded = plan
+        .decode_local_function_call("tool_search", arguments)
+        .expect("tool_search arguments should decode")
+        .expect("tool_search should be locally owned");
+    assert_eq!(decoded.canonical_identity, ToolName::plain("tool_search"));
+    assert_eq!(
+        decoded.input,
+        GrokLocalToolInput::ToolSearchArguments(arguments.to_string())
+    );
+}
+
+#[test]
 fn namespaced_union_root_function_round_trips_through_object_envelope() {
     let original_parameters = JsonSchema::any_of(
         vec![
@@ -603,11 +646,7 @@ fn malformed_freeform_wrapper_and_unprojectable_tool_fail_closed() {
         },
         GrokLocalTool {
             identity: ToolName::plain("unsupported"),
-            spec: ToolSpec::ToolSearch {
-                execution: "client".to_string(),
-                description: "Unsupported discovery operation.".to_string(),
-                parameters: JsonSchema::default(),
-            },
+            spec: ToolSpec::ImageGeneration,
         },
     ])
     .expect_err("one unprojectable capability must fail the complete plan");

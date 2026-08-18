@@ -127,6 +127,7 @@ pub(crate) fn build_tool_router(
     apps_enabled: bool,
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
+    pending_tool_search_tools: &[serde_json::Value],
 ) -> CodexResult<ToolRouter> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
@@ -146,33 +147,38 @@ pub(crate) fn build_tool_router(
     let mut registry = ToolRegistry::default();
     add_core_tool_sources(&context, &mut registry);
 
-    let hosted_specs = if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source)
-    {
-        Vec::new()
-    } else {
-        let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
-            mcp,
-            &turn_context.config,
-            apps_enabled,
-            &mcp.config().mcp_server_catalog,
-            search_tool_enabled(turn_context),
-            &mut registry,
-        );
-        apply_mcp_tool_exposure_policy(turn_context, mcp, &registered_mcp_tools, &mut registry);
-        let standalone_web_search_tool = append_extension_tool_executors(
-            turn_context,
-            extension_tool_executors(session, step_store),
-            &mut registry,
-        );
-        append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
-        hosted_model_tool_specs(turn_context, standalone_web_search_tool.as_slice())
-    };
+    let (hosted_specs, registered_mcp_tools) =
+        if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+            (Vec::new(), HashSet::new())
+        } else {
+            let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
+                mcp,
+                &turn_context.config,
+                apps_enabled,
+                &mcp.config().mcp_server_catalog,
+                search_tool_enabled(turn_context),
+                &mut registry,
+            );
+            apply_mcp_tool_exposure_policy(turn_context, mcp, &registered_mcp_tools, &mut registry);
+            let standalone_web_search_tool = append_extension_tool_executors(
+                turn_context,
+                extension_tool_executors(session, step_store),
+                &mut registry,
+            );
+            append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+            (
+                hosted_model_tool_specs(turn_context, standalone_web_search_tool.as_slice()),
+                registered_mcp_tools,
+            )
+        };
 
     finalize_tool_router(
         turn_context,
         registry,
         hosted_specs,
         &session.services.tool_search_handler_cache,
+        pending_tool_search_tools,
+        &registered_mcp_tools,
     )
 }
 
@@ -223,10 +229,7 @@ fn apply_mcp_tool_exposure_policy(
             exposures = exposures.difference(ToolExposures::DEFERRED | ToolExposures::CODE_MODE);
         }
 
-        exposures = if is_grok_dialect(turn_context) && exposures.contains(ToolExposures::DEFERRED)
-        {
-            exposures.difference(ToolExposures::DEFERRED) | ToolExposures::DIRECT
-        } else if search_tool_enabled(turn_context)
+        exposures = if search_tool_enabled(turn_context)
             && exposures.contains(ToolExposures::DEFERRED)
             && (effective_tool_mode(turn_context) != ToolMode::CodeModeOnly
                 || exposures.contains(ToolExposures::CODE_MODE))
@@ -324,10 +327,16 @@ pub(crate) fn finalize_tool_router(
     mut registry: ToolRegistry,
     hosted_specs: Vec<ToolSpec>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
+    pending_tool_search_tools: &[serde_json::Value],
+    registered_mcp_tools: &HashSet<ToolName>,
 ) -> CodexResult<ToolRouter> {
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
     if is_grok_dialect(turn_context) {
-        promote_grok_deferred_tools(&mut registry);
+        expose_grok_tools(
+            &mut registry,
+            registered_mcp_tools,
+            pending_tool_search_tools,
+        );
     }
     let code_mode_enabled = matches!(
         effective_tool_mode(turn_context),
@@ -492,14 +501,57 @@ pub(crate) fn finalize_tool_router(
     })
 }
 
-fn promote_grok_deferred_tools(registry: &mut ToolRegistry) {
+fn expose_grok_tools(
+    registry: &mut ToolRegistry,
+    registered_mcp_tools: &HashSet<ToolName>,
+    pending_tool_search_tools: &[serde_json::Value],
+) {
     for tool in registry.entries_mut() {
+        if !tool.exposure.is_deferred() {
+            continue;
+        }
+        let tool_name = tool.runtime.tool_name();
+        if registered_mcp_tools.contains(&tool_name)
+            && !tool.runtime.search_info().is_some_and(|info| {
+                selected_tools_contain(&info.entry.output, pending_tool_search_tools)
+            })
+        {
+            continue;
+        }
         tool.exposure = match tool.exposure {
             ToolExposure::Deferred => ToolExposure::Direct,
             ToolExposure::DeferredModelOnly => ToolExposure::DirectModelOnly,
             exposure => exposure,
         };
     }
+}
+
+fn selected_tools_contain(
+    candidate: &codex_tools::LoadableToolSpec,
+    selected_tools: &[serde_json::Value],
+) -> bool {
+    let Ok(candidate) = serde_json::to_value(candidate) else {
+        return false;
+    };
+    if candidate.get("type").and_then(serde_json::Value::as_str) != Some("namespace") {
+        return selected_tools.contains(&candidate);
+    }
+    let Some(candidate_tools) = candidate.get("tools").and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    selected_tools.iter().any(|selected| {
+        selected.get("type") == candidate.get("type")
+            && selected.get("name") == candidate.get("name")
+            && selected.get("description") == candidate.get("description")
+            && selected
+                .get("tools")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|selected_children| {
+                    candidate_tools
+                        .iter()
+                        .all(|candidate_child| selected_children.contains(candidate_child))
+                })
+    })
 }
 
 fn grok_hosted_tool_specs(turn_context: &TurnContext) -> CodexResult<Vec<ToolSpec>> {
@@ -684,9 +736,8 @@ fn hosted_model_tool_specs(
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    !is_grok_dialect(turn_context)
-        && turn_context.model_info.supports_search_tool
-        && namespace_tools_enabled(turn_context)
+    turn_context.model_info.supports_search_tool
+        && (is_grok_dialect(turn_context) || namespace_tools_enabled(turn_context))
 }
 
 fn is_grok_dialect(turn_context: &TurnContext) -> bool {

@@ -41,6 +41,7 @@ pub enum GrokLocalInputProjection {
     Function,
     FunctionEnvelope { input_key: String },
     Freeform { input_key: String },
+    ToolSearch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +60,7 @@ pub struct GrokToolPlan {
 pub enum GrokLocalToolInput {
     FunctionArguments(String),
     Freeform(String),
+    ToolSearchArguments(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +116,9 @@ impl GrokToolPlan {
                 };
                 GrokLocalToolInput::Freeform(input.to_string())
             }
+            GrokLocalInputProjection::ToolSearch => {
+                GrokLocalToolInput::ToolSearchArguments(arguments.to_string())
+            }
         };
         Ok(Some(GrokDecodedLocalToolCall {
             canonical_identity: route.canonical_identity.clone(),
@@ -129,6 +134,22 @@ pub fn plan_grok_tools(local_tools: Vec<GrokLocalTool>) -> Result<GrokToolPlan, 
     for local_tool in local_tools {
         let identity = local_tool.identity;
         let (wire_name, tool, input_projection) = match local_tool.spec {
+            ToolSpec::ToolSearch {
+                execution,
+                description,
+                parameters,
+            } if identity == ToolName::plain("tool_search") && execution == "client" => (
+                "tool_search".to_string(),
+                ResponsesApiTool {
+                    name: "tool_search".to_string(),
+                    description,
+                    strict: false,
+                    defer_loading: None,
+                    parameters,
+                    output_schema: None,
+                },
+                GrokLocalInputProjection::ToolSearch,
+            ),
             ToolSpec::Function(mut tool)
                 if identity.is_default_namespace() && tool.name == identity.name =>
             {

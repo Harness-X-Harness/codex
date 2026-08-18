@@ -5,6 +5,7 @@ use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::grok::is_evidence_backed_x_search_name;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
 use serde::Serialize;
@@ -81,12 +82,12 @@ fn project_item(item: ResponseItem) -> Result<ResponseItem, CodexErr> {
             ResponseItem::GrokImageGenerationCall { .. } => item,
             ResponseItem::AdditionalTools { .. } => return unsupported("additional_tools"),
             ResponseItem::LocalShellCall { .. } => return unsupported("local_shell_call"),
-            ResponseItem::ToolSearchCall { .. } => return unsupported("tool_search_call"),
+            ResponseItem::ToolSearchCall { .. } => item,
             ResponseItem::CustomToolCall { .. } => return unsupported("custom_tool_call"),
             ResponseItem::CustomToolCallOutput { .. } => {
                 return unsupported("custom_tool_call_output");
             }
-            ResponseItem::ToolSearchOutput { .. } => return unsupported("tool_search_output"),
+            ResponseItem::ToolSearchOutput { .. } => item,
             ResponseItem::ImageGenerationCall { .. } => {
                 return unsupported("image_generation_call");
             }
@@ -104,6 +105,67 @@ fn project_item(item: ResponseItem) -> Result<ResponseItem, CodexErr> {
 
 fn project_wire_item(item: &ResponseItem) -> Result<serde_json::Value, CodexErr> {
     match item {
+        ResponseItem::ToolSearchCall {
+            call_id,
+            status,
+            execution,
+            arguments,
+            ..
+        } => {
+            if execution != "client" || !matches!(status.as_deref(), None | Some("completed")) {
+                return Err(CodexErr::InvalidRequest(
+                    "Grok can only replay terminal client tool_search calls".to_string(),
+                ));
+            }
+            let call_id = call_id
+                .as_deref()
+                .filter(|call_id| !call_id.is_empty())
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(
+                        "Grok tool_search history is missing its call id".to_string(),
+                    )
+                })?;
+            let arguments = serde_json::to_string(arguments)?;
+            serde_json::to_value(ResponseItem::FunctionCall {
+                id: None,
+                name: "tool_search".to_string(),
+                namespace: None,
+                arguments,
+                encrypted_function_args: None,
+                call_id: call_id.to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            })
+            .map_err(Into::into)
+        }
+        ResponseItem::ToolSearchOutput {
+            call_id,
+            status,
+            execution,
+            tools,
+            ..
+        } => {
+            if execution != "client" || status != "completed" {
+                return Err(CodexErr::InvalidRequest(
+                    "Grok can only replay completed client tool_search outputs".to_string(),
+                ));
+            }
+            let call_id = call_id
+                .as_deref()
+                .filter(|call_id| !call_id.is_empty())
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(
+                        "Grok tool_search output history is missing its call id".to_string(),
+                    )
+                })?;
+            let output = serde_json::to_string(&serde_json::json!({ "tools": tools }))?;
+            serde_json::to_value(ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: call_id.to_string(),
+                output: FunctionCallOutputPayload::from_text(output),
+                internal_chat_message_metadata_passthrough: None,
+            })
+            .map_err(Into::into)
+        }
         ResponseItem::GrokImageGenerationCall {
             id,
             status,

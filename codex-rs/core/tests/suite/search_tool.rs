@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
@@ -56,6 +57,7 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call_with_namespace;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
@@ -63,9 +65,12 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
+use core_test_support::responses::start_grok_mock_server;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::configure_grok_test_provider;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
@@ -74,7 +79,12 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
+use wiremock::Mock;
+use wiremock::Request;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to tools from the following sources",
@@ -1058,6 +1068,230 @@ async fn tool_search_returns_deferred_custom_tool_and_routes_follow_up_call() ->
             .expect("custom tool output should contain serialized JSON"),
     )?;
     assert_eq!(output, json!({ "echo": "hello", "namespace": "functions" }));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_grok_mock_server("gpt-5.4").await;
+    let request_bodies = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured_request_bodies = Arc::clone(&request_bodies);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(move |request: &Request| {
+            let body_bytes = if request
+                .headers
+                .get("content-encoding")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("zstd"))
+            {
+                zstd::stream::decode_all(std::io::Cursor::new(&request.body))
+                    .expect("zstd request body should decode")
+            } else {
+                request.body.clone()
+            };
+            let body: Value = serde_json::from_slice(&body_bytes)
+                .expect("Grok request body should be valid JSON");
+            let mut captured = captured_request_bodies
+                .lock()
+                .expect("request capture should not be poisoned");
+            let response = match captured.len() {
+                0 => sse(vec![
+                    ev_response_created("resp-1"),
+                    ev_function_call(
+                        "search-1",
+                        TOOL_SEARCH_TOOL_NAME,
+                        &json!({"query": "echo message and environment data"}).to_string(),
+                    ),
+                    ev_completed("resp-1"),
+                ]),
+                1 => {
+                    let initial_tool_names = tool_names(&captured[0]);
+                    let selected_tool_names = tool_names(&body)
+                        .into_iter()
+                        .filter(|name| !initial_tool_names.contains(name))
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        selected_tool_names.len(),
+                        1,
+                        "exactly one deferred MCP tool should be exposed after search"
+                    );
+                    sse(vec![
+                        ev_response_created("resp-2"),
+                        ev_function_call(
+                            "echo-1",
+                            &selected_tool_names[0],
+                            &json!({"message": "ping"}).to_string(),
+                        ),
+                        ev_completed("resp-2"),
+                    ])
+                }
+                2 => sse(vec![
+                    ev_response_created("resp-3"),
+                    ev_assistant_message("msg-1", "done"),
+                    ev_completed("resp-3"),
+                ]),
+                call => panic!("unexpected Grok request {call}"),
+            };
+            captured.push(body);
+            sse_response(response)
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder = test_codex().with_config(move |config| {
+        configure_search_capable_model(config);
+        configure_grok_test_provider(config);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "rmcp".to_string(),
+            McpServerConfig {
+                auth: Default::default(),
+                transport: McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                environment_id: "local".to_string(),
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: Some(Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                default_tools_approval_mode: None,
+                enabled_tools: Some(vec!["echo".to_string()]),
+                disabled_tools: None,
+                scopes: None,
+                oauth: None,
+                oauth_resource: None,
+                supports_parallel_tool_calls: false,
+                omit_tools_from: None,
+                tools: HashMap::new(),
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Find and run the rmcp echo tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                permission_profile: Some(PermissionProfile::Disabled),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let EventMsg::McpToolCallEnd(end) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    assert_eq!(end.call_id, "echo-1");
+    assert_eq!(end.invocation.server, "rmcp");
+    assert_eq!(end.invocation.tool, "echo");
+    assert!(end.is_success());
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_bodies
+        .lock()
+        .expect("request capture should not be poisoned")
+        .clone();
+    assert_eq!(requests.len(), 3);
+
+    let first_body = &requests[0];
+    let first_tool_names = tool_names(first_body);
+    let first_tools = first_body["tools"]
+        .as_array()
+        .context("first Grok request should contain tools")?;
+    assert!(first_tools.iter().any(|tool| {
+        tool.get("type").and_then(Value::as_str) == Some("function")
+            && tool.get("name").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_NAME)
+    }));
+    assert!(
+        first_tools
+            .iter()
+            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp__echo") })
+    );
+
+    let second_body = &requests[1];
+    let second_input = second_body["input"]
+        .as_array()
+        .context("second Grok request should contain projected history")?;
+    assert!(second_input.iter().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("function_call")
+            && item.get("name").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_NAME)
+            && item.get("call_id").and_then(Value::as_str) == Some("search-1")
+    }));
+    assert!(second_input.iter().any(|item| {
+        item.get("type").and_then(Value::as_str) == Some("function_call_output")
+            && item.get("call_id").and_then(Value::as_str) == Some("search-1")
+    }));
+    let second_tools = second_body["tools"]
+        .as_array()
+        .context("second Grok request should contain tools")?;
+    let selected_tool_names = tool_names(second_body)
+        .into_iter()
+        .filter(|name| !first_tool_names.contains(name))
+        .collect::<Vec<_>>();
+    assert_eq!(selected_tool_names.len(), 1);
+    let selected_tool_name = &selected_tool_names[0];
+    assert!(second_tools.iter().any(|tool| {
+        tool.get("type").and_then(Value::as_str) == Some("function")
+            && tool.get("name").and_then(Value::as_str) == Some(selected_tool_name.as_str())
+    }));
+    assert!(
+        second_tools
+            .iter()
+            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp__echo") })
+    );
+
+    let third_body = &requests[2];
+    assert!(
+        third_body["tools"]
+            .as_array()
+            .context("third Grok request should contain tools")?
+            .iter()
+            .all(|tool| {
+                tool.get("name").and_then(Value::as_str) != Some(selected_tool_name.as_str())
+            })
+    );
+    let output = third_body["input"]
+        .as_array()
+        .context("third Grok request should contain projected history")?
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(Value::as_str) == Some("echo-1")
+        })
+        .context("third Grok request should contain the MCP function output")?;
+    assert_eq!(
+        output.get("call_id").and_then(Value::as_str),
+        Some("echo-1")
+    );
 
     Ok(())
 }

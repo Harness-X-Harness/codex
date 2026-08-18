@@ -325,6 +325,56 @@ fn grok_freeform_planned_entry_owns_description_identity_and_exact_decoder() {
 }
 
 #[test]
+fn grok_ordinary_tool_search_function_decodes_to_native_tool_search_payload() {
+    let plan = plan_grok_tools(vec![GrokLocalTool {
+        identity: ToolName::plain("tool_search"),
+        spec: ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search deferred tools.".to_string(),
+            parameters: codex_tools::JsonSchema::default(),
+        },
+    }])
+    .expect("Grok tool_search should be plannable");
+    let router = ToolRouter::from_grok_plan(Default::default(), plan);
+
+    let wire_item = ResponseItem::FunctionCall {
+        id: None,
+        name: "tool_search".to_string(),
+        namespace: None,
+        arguments: json!({"query": "calendar", "limit": 2}).to_string(),
+        encrypted_function_args: None,
+        call_id: "search-1".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let call = router
+        .route_tool_call(wire_item.clone())
+        .expect("Grok tool_search should decode")
+        .expect("tool_search should remain locally owned");
+
+    assert_eq!(call.tool_name, ToolName::plain("tool_search"));
+    let history_item = router
+        .tool_call_history_item(&wire_item, &call)
+        .expect("Grok tool_search history should canonicalize")
+        .expect("Grok tool_search should produce a canonical history item");
+    let ToolPayload::ToolSearch { arguments } = &call.payload else {
+        panic!("Grok tool_search should use the native Tool Search payload");
+    };
+    assert_eq!(arguments.query, "calendar");
+    assert_eq!(arguments.limit, Some(2));
+    assert!(matches!(
+        history_item,
+        ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            execution,
+            arguments,
+            ..
+        } if call_id == "search-1"
+            && execution == "client"
+            && arguments == json!({"query": "calendar", "limit": 2})
+    ));
+}
+
+#[test]
 fn grok_collaboration_function_arguments_are_plaintext() {
     let wire_name = "local__collaboration_spawn_agent__test";
     let router = ToolRouter::from_grok_plan(

@@ -101,6 +101,8 @@ impl ToolRouter {
             registry,
             hosted_specs,
             tool_search_handler_cache,
+            &[],
+            &Default::default(),
         )
         .expect("test tool registry should not contain duplicate tools")
     }
@@ -284,6 +286,15 @@ impl ToolRouter {
         let payload = match decoded.input {
             GrokLocalToolInput::FunctionArguments(arguments) => ToolPayload::Function { arguments },
             GrokLocalToolInput::Freeform(input) => ToolPayload::Custom { input },
+            GrokLocalToolInput::ToolSearchArguments(arguments) => {
+                let arguments: SearchToolCallParams =
+                    serde_json::from_str(&arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse tool_search arguments: {err}"
+                        ))
+                    })?;
+                ToolPayload::ToolSearch { arguments }
+            }
         };
         // Grok function arguments are plaintext. Normalize the missing OpenAI
         // marker into Codex's existing plaintext representation before local dispatch.
@@ -293,6 +304,42 @@ impl ToolRouter {
             call_id,
             payload,
             encrypted_function_args,
+        }))
+    }
+
+    pub(crate) fn tool_call_history_item(
+        &self,
+        item: &ResponseItem,
+        call: &ToolCall,
+    ) -> Result<Option<ResponseItem>, FunctionCallError> {
+        let ResponseItem::FunctionCall {
+            id,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = item
+        else {
+            return Ok(None);
+        };
+        if self.grok_tool_plan.is_none() || !matches!(call.payload, ToolPayload::ToolSearch { .. })
+        {
+            return Ok(None);
+        }
+        let ToolPayload::ToolSearch { arguments } = &call.payload else {
+            unreachable!("guarded by the ToolSearch payload check");
+        };
+        let arguments = serde_json::to_value(arguments).map_err(|error| {
+            FunctionCallError::Fatal(format!(
+                "failed to preserve canonical tool_search history: {error}"
+            ))
+        })?;
+        Ok(Some(ResponseItem::ToolSearchCall {
+            id: id.clone(),
+            call_id: Some(call.call_id.clone()),
+            status: Some("completed".to_string()),
+            execution: "client".to_string(),
+            arguments,
+            internal_chat_message_metadata_passthrough: internal_chat_message_metadata_passthrough
+                .clone(),
         }))
     }
 

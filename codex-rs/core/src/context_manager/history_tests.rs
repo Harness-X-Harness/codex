@@ -79,6 +79,95 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn client_tool_search_pair(call_id: &str) -> Vec<ResponseItem> {
+    vec![
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some(call_id.to_string()),
+            status: Some("completed".to_string()),
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "calendar"}),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some(call_id.to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({"type": "function", "name": "calendar_create"})],
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]
+}
+
+#[test]
+fn grok_latest_terminal_client_tool_search_result_is_pending_until_model_consumption() {
+    let tools = vec![serde_json::json!({"type": "function", "name": "calendar_create"})];
+    let pending = create_history_with_items(client_tool_search_pair("search-1"));
+    assert_eq!(pending.pending_client_tool_search_tools(), Some(tools));
+
+    let mut consumed_items = client_tool_search_pair("search-1");
+    consumed_items.push(assistant_msg("I used the discovered tool."));
+    let consumed = create_history_with_items(consumed_items);
+    assert_eq!(consumed.pending_client_tool_search_tools(), None);
+}
+
+#[test]
+fn grok_orphan_or_nonterminal_tool_search_output_is_not_pending() {
+    let orphan = create_history_with_items(vec![ResponseItem::ToolSearchOutput {
+        id: None,
+        call_id: Some("search-1".to_string()),
+        status: "completed".to_string(),
+        execution: "client".to_string(),
+        tools: vec![serde_json::json!({"type": "function", "name": "calendar_create"})],
+        internal_chat_message_metadata_passthrough: None,
+    }]);
+    assert_eq!(orphan.pending_client_tool_search_tools(), None);
+
+    let mut failed = client_tool_search_pair("search-1");
+    if let ResponseItem::ToolSearchOutput { status, .. } = &mut failed[1] {
+        *status = "failed".to_string();
+    }
+    let failed = create_history_with_items(failed);
+    assert_eq!(failed.pending_client_tool_search_tools(), None);
+
+    let mut mismatched = client_tool_search_pair("search-1");
+    mismatched.insert(
+        1,
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-2".to_string()),
+            status: Some("completed".to_string()),
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "mail"}),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    );
+    let mismatched = create_history_with_items(mismatched);
+    assert_eq!(mismatched.pending_client_tool_search_tools(), None);
+}
+
+#[test]
+fn grok_pending_tool_search_is_derived_after_replay_and_absent_after_compaction_drops_pair() {
+    let items = client_tool_search_pair("search-1");
+    let replayed: Vec<ResponseItem> = serde_json::from_value(
+        serde_json::to_value(&items).expect("canonical Tool Search history should serialize"),
+    )
+    .expect("canonical Tool Search history should replay");
+
+    for restored in [replayed.clone(), replayed] {
+        assert!(
+            create_history_with_items(restored)
+                .pending_client_tool_search_tools()
+                .is_some(),
+            "resume and fork rebuild the same pending selection from canonical history"
+        );
+    }
+
+    let compacted = create_history_with_items(vec![assistant_msg("compacted summary")]);
+    assert_eq!(compacted.pending_client_tool_search_tools(), None);
+}
+
 fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
