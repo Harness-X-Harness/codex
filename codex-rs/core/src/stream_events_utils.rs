@@ -333,7 +333,13 @@ pub(crate) async fn handle_output_item_done(
                 payload_preview
             );
 
-            let projected_history_item = ctx.tool_runtime.tool_call_history_item(&item, &call)?;
+            let projected_history_item = ctx
+                .tool_runtime
+                .tool_call_history_item(&item, &call)
+                .map_err(|error| match error {
+                    FunctionCallError::RespondToModel(message)
+                    | FunctionCallError::Fatal(message) => CodexErr::Fatal(message),
+                })?;
             let history_item = projected_history_item.as_ref().unwrap_or(&item);
             record_completed_response_item(
                 ctx.sess.as_ref(),
