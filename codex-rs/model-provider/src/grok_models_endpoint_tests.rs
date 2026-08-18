@@ -78,7 +78,7 @@ fn expected_model(slug: &str) -> ModelInfo {
         experimental_supported_tools: Vec::new(),
         input_modalities: Vec::new(),
         used_fallback_model_metadata: false,
-        supports_search_tool: false,
+        supports_search_tool: true,
         api_backend: None,
         supports_backend_search: false,
         use_responses_lite: false,

@@ -32,7 +32,7 @@ use crate::models_endpoint::ModelsEndpointRequest;
 use crate::models_endpoint::PreparedModelsRequest;
 
 const GROK_MODELS_AUTHORITY: &str = "official-grok-gateway-model-catalog";
-const GROK_MODELS_DECODER_VERSION: &str = "codex-grok-models-v1";
+const GROK_MODELS_DECODER_VERSION: &str = "codex-grok-models-v2";
 
 /// Grok Gateway `/models` strategy selected by the explicit Grok Provider Adapter.
 #[derive(Debug)]
@@ -259,7 +259,7 @@ fn decode_model(value: &Value) -> Result<ModelInfo, &'static str> {
         experimental_supported_tools: Vec::new(),
         input_modalities: Vec::new(),
         used_fallback_model_metadata: false,
-        supports_search_tool: false,
+        supports_search_tool: true,
         api_backend,
         supports_backend_search: bool_field_from(
             object,

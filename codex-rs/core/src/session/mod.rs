@@ -3227,6 +3227,18 @@ impl Session {
         }
         .or_cancel(cancellation_token)
         .await?;
+        let pending_tool_search_tools = if turn_context.provider.info().wire_api
+            == codex_model_provider_info::WireApi::GrokResponses
+        {
+            self.state
+                .lock()
+                .await
+                .history
+                .pending_client_tool_search_tools()
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let tool_router = turn::built_tools(
             self.as_ref(),
             turn_context.as_ref(),
@@ -3234,6 +3246,7 @@ impl Session {
             &mcp,
             &extension_data,
             prepared_recommendations,
+            &pending_tool_search_tools,
         )
         .or_cancel(cancellation_token)
         .await??;

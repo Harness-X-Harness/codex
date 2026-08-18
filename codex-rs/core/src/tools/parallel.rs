@@ -79,6 +79,16 @@ impl ToolCallRuntime {
         self.step_context.tool_router.route_tool_call(item)
     }
 
+    pub(crate) fn tool_call_history_item(
+        &self,
+        item: &ResponseItem,
+        call: &ToolCall,
+    ) -> Result<Option<ResponseItem>, FunctionCallError> {
+        self.step_context
+            .tool_router
+            .tool_call_history_item(item, call)
+    }
+
     pub(crate) fn classify_grok_hosted_output<'a>(
         &self,
         item: &'a ResponseItem,

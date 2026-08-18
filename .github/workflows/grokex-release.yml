@@ -399,6 +399,10 @@ jobs:
             pre_sampling_compact_runs_after_fork_and_switch_to_smaller_model
           cargo test --locked -p codex-core \
             pre_sampling_compact_recovers_comp_hash_after_resume
+          cargo test --locked -p codex-core --test all \
+            suite::search_tool::search_tool_enabled_by_default_adds_tool_search -- --exact
+          cargo test --locked -p codex-core --test all \
+            suite::search_tool::tool_search_returns_deferred_custom_tool_and_routes_follow_up_call -- --exact
 
       - name: Run Grok TUI projection contracts
         working-directory: codex-rs

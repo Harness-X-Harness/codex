@@ -57,21 +57,77 @@ fn encrypted_agent_message_fails_before_provider_request() {
 }
 
 #[test]
-fn unsupported_codex_only_history_fails_before_provider_request() {
-    let input = vec![ResponseItem::ToolSearchCall {
+fn tool_search_history_projects_to_ordinary_function_pair_only_on_the_wire() {
+    let input = vec![
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: Some("completed".to_string()),
+            execution: "client".to_string(),
+            arguments: json!({"query": "calendar"}),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![json!({"type": "function", "name": "calendar_create"})],
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let projected = project(input.clone()).expect("tool_search history should project");
+
+    assert_eq!(projected.clone().into_items(), input);
+    assert_eq!(
+        serde_json::to_value(projected).expect("projected request should serialize"),
+        json!([
+            {
+                "type": "function_call",
+                "name": "tool_search",
+                "arguments": "{\"query\":\"calendar\"}",
+                "call_id": "search-1"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "search-1",
+                "output": "{\"tools\":[{\"name\":\"calendar_create\",\"type\":\"function\"}]}"
+            }
+        ])
+    );
+}
+
+#[test]
+fn incomplete_or_non_client_tool_search_history_fails_before_provider_request() {
+    let missing_call_id = ResponseItem::ToolSearchCall {
         id: None,
-        call_id: Some("search-1".to_string()),
+        call_id: None,
         status: Some("completed".to_string()),
         execution: "client".to_string(),
-        arguments: serde_json::json!({"query": "calendar"}),
+        arguments: json!({"query": "calendar"}),
         internal_chat_message_metadata_passthrough: None,
-    }];
-
+    };
     assert_eq!(
-        project(input)
-            .expect_err("unsupported history must fail")
+        project(vec![missing_call_id])
+            .expect_err("missing call id must fail")
             .to_string(),
-        "Grok does not support Codex history item `tool_search_call`"
+        "Grok tool_search history is missing its call id"
+    );
+
+    let server_output = ResponseItem::ToolSearchOutput {
+        id: None,
+        call_id: Some("search-1".to_string()),
+        status: "completed".to_string(),
+        execution: "server".to_string(),
+        tools: Vec::new(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert_eq!(
+        project(vec![server_output])
+            .expect_err("server tool_search output must not use the client projection")
+            .to_string(),
+        "Grok can only replay completed client tool_search outputs"
     );
 }
 

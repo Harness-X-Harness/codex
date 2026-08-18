@@ -152,6 +152,51 @@ impl ContextManager {
         &self.items
     }
 
+    /// Returns the latest completed client Tool Search result only while it is
+    /// still pending consumption by a later model-generated item.
+    pub(crate) fn pending_client_tool_search_tools(&self) -> Option<Vec<serde_json::Value>> {
+        let mut pending = None;
+        for (index, item) in self.items.iter().enumerate().rev() {
+            match item {
+                ResponseItem::ToolSearchOutput {
+                    call_id: Some(call_id),
+                    status,
+                    execution,
+                    tools,
+                    ..
+                } if status == "completed" && execution == "client" && !call_id.is_empty() => {
+                    pending = Some((index, call_id, tools));
+                    break;
+                }
+                ResponseItem::ToolSearchOutput { .. } | ResponseItem::ToolSearchCall { .. } => {
+                    return None;
+                }
+                item if is_model_generated_item(item) => return None,
+                _ => {}
+            }
+        }
+        let (output_index, call_id, tools) = pending?;
+        let has_matching_call = self.items[..output_index]
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                ResponseItem::ToolSearchCall {
+                    call_id: Some(candidate_call_id),
+                    status,
+                    execution,
+                    ..
+                } => Some(
+                    execution == "client"
+                        && matches!(status.as_deref(), None | Some("completed"))
+                        && candidate_call_id == call_id,
+                ),
+                ResponseItem::ToolSearchCall { .. } => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false);
+        has_matching_call.then(|| tools.clone())
+    }
+
     /// Returns raw items in the history and consumes the snapshot.
     pub(crate) fn into_raw_items(self) -> Vec<ResponseItem> {
         Arc::unwrap_or_clone(self.items)

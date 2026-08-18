@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -69,6 +70,8 @@ struct ToolPlanInputs {
     extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     wait_for_environment_tool_config: Option<Arc<WaitForEnvironmentToolConfig>>,
     dynamic_tools: Vec<DynamicToolSpec>,
+    pending_tool_search_tools: Vec<serde_json::Value>,
+    registered_mcp_tools: HashSet<ToolName>,
 }
 
 struct ToolPlanProbe {
@@ -219,12 +222,15 @@ async fn probe_with(
         inputs.extension_tool_executors,
         &inputs.dynamic_tools,
     );
-    let router = ToolRouter::from_registry(
+    let router = super::finalize_tool_router(
         step_context.turn.as_ref(),
         registry,
         hosted_specs,
         &Default::default(),
-    );
+        &inputs.pending_tool_search_tools,
+        &inputs.registered_mcp_tools,
+    )
+    .expect("test tool registry should finalize");
     ToolPlanProbe::from_router(router)
 }
 
@@ -311,6 +317,7 @@ fn use_grok_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    turn.model_info.supports_search_tool = true;
     set_web_search_mode(turn, WebSearchMode::Disabled);
     set_feature(turn, Feature::ImageGeneration, /*enabled*/ false);
 }
@@ -421,8 +428,102 @@ async fn grok_plan_is_authoritative_for_visible_local_tools_and_registry_ownersh
     assert_eq!(
         plan.exposure("extension_echo"),
         ToolExposure::Direct,
-        "Grok eagerly exposes representable deferred local tools"
+        "Grok keeps the existing eager behavior for deferred non-MCP tools"
     );
+}
+
+#[tokio::test]
+async fn grok_exposes_only_selected_current_deferred_mcp_tool_on_the_next_step() {
+    let selected_runtime = mcp_runtime(
+        "selected",
+        "mcp__selected",
+        "selected_lookup",
+        ToolExposure::Deferred,
+    );
+    let selected_name = selected_runtime.runtime.tool_name();
+    let selected = serde_json::to_value(
+        selected_runtime
+            .runtime
+            .search_info()
+            .expect("deferred MCP tool should have search metadata")
+            .entry
+            .output,
+    )
+    .expect("selected MCP tool should serialize");
+    let still_deferred_runtime = mcp_runtime(
+        "still_deferred",
+        "mcp__still_deferred",
+        "other_lookup",
+        ToolExposure::Deferred,
+    );
+    let still_deferred_name = still_deferred_runtime.runtime.tool_name();
+    let plan = probe_with(
+        use_grok_provider,
+        ToolPlanInputs {
+            tool_runtimes: vec![selected_runtime, still_deferred_runtime],
+            pending_tool_search_tools: vec![selected],
+            registered_mcp_tools: HashSet::from([
+                selected_name.clone(),
+                still_deferred_name.clone(),
+            ]),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["tool_search"]);
+    assert_eq!(plan.exposure(&selected_name.to_string()), ToolExposure::Direct);
+    assert_eq!(
+        plan.exposure(&still_deferred_name.to_string()),
+        ToolExposure::Deferred
+    );
+    assert!(plan.visible_specs.iter().any(|spec| {
+        matches!(spec, ToolSpec::Function(tool) if tool.description == "selected_lookup test tool")
+    }));
+    assert!(plan.visible_specs.iter().all(|spec| {
+        !matches!(spec, ToolSpec::Function(tool) if tool.description == "other_lookup test tool")
+    }));
+}
+
+#[tokio::test]
+async fn grok_does_not_expose_a_selected_mcp_tool_after_its_definition_changes() {
+    let runtime = mcp_runtime(
+        "selected",
+        "mcp__selected",
+        "lookup",
+        ToolExposure::Deferred,
+    );
+    let tool_name = runtime.runtime.tool_name();
+    let mut stale = serde_json::to_value(
+        runtime
+            .runtime
+            .search_info()
+            .expect("deferred MCP tool should have search metadata")
+            .entry
+            .output,
+    )
+    .expect("selected MCP tool should serialize");
+    *stale
+        .pointer_mut("/tools/0/description")
+        .expect("MCP search output should contain the child description") =
+        serde_json::Value::String("stale definition".to_string());
+
+    let plan = probe_with(
+        use_grok_provider,
+        ToolPlanInputs {
+            tool_runtimes: vec![runtime],
+            pending_tool_search_tools: vec![stale],
+            registered_mcp_tools: HashSet::from([tool_name.clone()]),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["tool_search"]);
+    assert_eq!(plan.exposure(&tool_name.to_string()), ToolExposure::Deferred);
+    assert!(plan.visible_specs.iter().all(|spec| {
+        !matches!(spec, ToolSpec::Function(tool) if tool.description == "lookup test tool")
+    }));
 }
 
 #[tokio::test]
@@ -1435,6 +1536,8 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             registry,
             hosted_specs,
             &Default::default(),
+            &[],
+            &Default::default(),
         );
 
         if enabled && second_exposure != ToolExposure::Hidden {
@@ -1673,6 +1776,8 @@ async fn strict_tool_collisions_reject_external_and_synthetic_duplicates() {
             step_context.turn.as_ref(),
             registry,
             hosted_specs,
+            &Default::default(),
+            &[],
             &Default::default(),
         )
         .err()
