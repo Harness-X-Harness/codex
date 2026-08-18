@@ -224,7 +224,7 @@ enable_request_compression = false
 }
 
 #[tokio::test]
-async fn thread_start_resolves_grok_model_to_provider_runtime() -> Result<()> {
+async fn provider_request_preserves_parallel_tool_call_capability() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let grok_responses = mount_sse_once_match(
         &fixture.grok_server,
@@ -261,6 +261,32 @@ async fn thread_start_resolves_grok_model_to_provider_runtime() -> Result<()> {
     assert_eq!(
         grok_responses.single_request().body_json()["model"],
         "grok-model"
+    );
+    assert_eq!(
+        grok_responses.single_request().body_json()["parallel_tool_calls"],
+        true
+    );
+
+    let openai_responses = mount_completion(&fixture.openai_server, "openai-response").await;
+    let started = app
+        .start_thread(ThreadStartParams {
+            model: Some("openai-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: started.thread.id,
+        input: vec![UserInput::Text {
+            text: "Use the stock provider".to_string(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })
+    .await?;
+
+    assert_eq!(
+        openai_responses.single_request().body_json()["parallel_tool_calls"],
+        false
     );
     Ok(())
 }

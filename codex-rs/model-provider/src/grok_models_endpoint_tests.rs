@@ -68,7 +68,7 @@ fn expected_model(slug: &str) -> ModelInfo {
         apply_patch_tool_type: None,
         web_search_tool_type: WebSearchToolType::Text,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
-        supports_parallel_tool_calls: false,
+        supports_parallel_tool_calls: true,
         supports_image_detail_original: false,
         context_window: None,
         max_context_window: None,
@@ -163,7 +163,7 @@ async fn public_models_manager_preserves_authoritative_grok_catalog() {
 }
 
 #[test]
-fn id_only_entry_invents_no_provider_capability() {
+fn id_only_entry_preserves_grok_parallel_tool_call_capability() {
     let model = decode_model(&json!({"id": "future-grok"})).expect("identity is valid");
 
     assert_eq!(model, expected_model("future-grok"));
