@@ -1196,16 +1196,22 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
         tool.get("type").and_then(Value::as_str) == Some("function")
             && tool.get("name").and_then(Value::as_str) == Some(grok_echo_wire_name)
     }));
-    assert!(second_tools.iter().all(|tool| {
-        tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp__echo")
-    }));
+    assert!(
+        second_tools
+            .iter()
+            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp__echo") })
+    );
 
     let third_body = requests[2].body_json();
-    assert!(third_body["tools"]
-        .as_array()
-        .context("third Grok request should contain tools")?
-        .iter()
-        .all(|tool| tool.get("name").and_then(Value::as_str) != Some(grok_echo_wire_name)));
+    assert!(
+        third_body["tools"]
+            .as_array()
+            .context("third Grok request should contain tools")?
+            .iter()
+            .all(|tool| {
+                tool.get("name").and_then(Value::as_str) != Some(grok_echo_wire_name)
+            })
+    );
     let output = requests[2].function_call_output("echo-1");
     assert_eq!(
         output.get("call_id").and_then(Value::as_str),

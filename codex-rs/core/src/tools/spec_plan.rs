@@ -147,31 +147,35 @@ pub(crate) fn build_tool_router(
     let mut registry = ToolRegistry::default();
     add_core_tool_sources(&context, &mut registry);
 
-    let (hosted_specs, registered_mcp_tools) = if crate::guardian::is_guardian_reviewer_source(
-        &turn_context.session_source,
-    ) {
-        (Vec::new(), HashSet::new())
-    } else {
-        let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
-            mcp,
-            &turn_context.config,
-            apps_enabled,
-            &mcp.config().mcp_server_catalog,
-            search_tool_enabled(turn_context),
-            &mut registry,
-        );
-        apply_mcp_tool_exposure_policy(turn_context, mcp, &registered_mcp_tools, &mut registry);
-        let standalone_web_search_tool = append_extension_tool_executors(
-            turn_context,
-            extension_tool_executors(session, step_store),
-            &mut registry,
-        );
-        append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
-        (
-            hosted_model_tool_specs(turn_context, standalone_web_search_tool.as_slice()),
-            registered_mcp_tools,
-        )
-    };
+    let (hosted_specs, registered_mcp_tools) =
+        if crate::guardian::is_guardian_reviewer_source(&turn_context.session_source) {
+            (Vec::new(), HashSet::new())
+        } else {
+            let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools(
+                mcp,
+                &turn_context.config,
+                apps_enabled,
+                &mcp.config().mcp_server_catalog,
+                search_tool_enabled(turn_context),
+                &mut registry,
+            );
+            apply_mcp_tool_exposure_policy(
+                turn_context,
+                mcp,
+                &registered_mcp_tools,
+                &mut registry,
+            );
+            let standalone_web_search_tool = append_extension_tool_executors(
+                turn_context,
+                extension_tool_executors(session, step_store),
+                &mut registry,
+            );
+            append_dynamic_tool_runtimes(&turn_context.dynamic_tools, &mut registry);
+            (
+                hosted_model_tool_specs(turn_context, standalone_web_search_tool.as_slice()),
+                registered_mcp_tools,
+            )
+        };
 
     finalize_tool_router(
         turn_context,

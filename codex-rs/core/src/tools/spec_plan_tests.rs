@@ -472,7 +472,10 @@ async fn grok_exposes_only_selected_current_deferred_mcp_tool_on_the_next_step()
     .await;
 
     plan.assert_visible_contains(&["tool_search"]);
-    assert_eq!(plan.exposure(&selected_name.to_string()), ToolExposure::Direct);
+    assert_eq!(
+        plan.exposure(&selected_name.to_string()),
+        ToolExposure::Direct
+    );
     assert_eq!(
         plan.exposure(&still_deferred_name.to_string()),
         ToolExposure::Deferred
@@ -520,7 +523,10 @@ async fn grok_does_not_expose_a_selected_mcp_tool_after_its_definition_changes()
     .await;
 
     plan.assert_visible_contains(&["tool_search"]);
-    assert_eq!(plan.exposure(&tool_name.to_string()), ToolExposure::Deferred);
+    assert_eq!(
+        plan.exposure(&tool_name.to_string()),
+        ToolExposure::Deferred
+    );
     assert!(plan.visible_specs.iter().all(|spec| {
         !matches!(spec, ToolSpec::Function(tool) if tool.description == "lookup test tool")
     }));
