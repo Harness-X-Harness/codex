@@ -8,7 +8,6 @@ use codex_analytics::GuardianReviewedAction;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_extension_api::ThreadIdleCause;
 use codex_models_manager::manager::ModelSelection;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::protocol::AskForApproval;
@@ -773,7 +772,6 @@ pub(super) async fn guardian_review_session_config(
         .resolve_model_profile(
             ModelSelection::Exact(selection),
             &turn.config.to_models_manager_config(),
-            RefreshStrategy::Offline,
             turn.config.http_client_factory(),
         )
         .await?;

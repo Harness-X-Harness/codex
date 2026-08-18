@@ -12,7 +12,6 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_models_manager::manager::ModelSelection;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -313,7 +312,6 @@ pub(crate) async fn resolve_spawn_agent_model(
         .resolve_model_profile(
             ModelSelection::Exact(&model),
             &config.to_models_manager_config(),
-            RefreshStrategy::Offline,
             config.http_client_factory(),
         )
         .await

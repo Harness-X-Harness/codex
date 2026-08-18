@@ -21,6 +21,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
@@ -107,16 +109,15 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, CoreResult<ModelsResponse>>;
 
-    /// Resolves one model from a single catalog snapshot.
+    /// Resolves one model from the manager's current catalog generation.
     ///
-    /// An authoritative catalog returns `ModelResolution::Unavailable` only after a successful
-    /// load omits the requested model. Non-authoritative managers may compose existing Codex
-    /// fallback metadata.
+    /// An authoritative manager establishes its first generation from its matched cache or
+    /// endpoint before resolving. A non-authoritative manager uses its canonical in-memory model
+    /// facts without adding refresh or cache policy to ordinary Turn construction.
     fn resolve_model_profile<'a>(
         &'a self,
         selection: ModelSelection<'a>,
         config: &'a ModelsManagerConfig,
-        refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'a, CoreResult<ModelResolution>>;
 
@@ -255,6 +256,7 @@ pub type SharedModelsManager = Arc<dyn ModelsManager>;
 #[derive(Debug)]
 pub struct OpenAiModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
+    catalog_loaded: AtomicBool,
     etag: RwLock<Option<String>>,
     cache: Option<Arc<dyn ModelsCache>>,
     endpoint_client: SharedModelsEndpointClient,
@@ -319,6 +321,7 @@ impl OpenAiModelsManager {
         };
         Self {
             remote_models: RwLock::new(remote_models),
+            catalog_loaded: AtomicBool::new(!endpoint_client.remote_catalog_is_authoritative()),
             etag: RwLock::new(None),
             cache,
             endpoint_client,
@@ -351,7 +354,6 @@ impl ModelsManager for OpenAiModelsManager {
             self,
             selection,
             config,
-            refresh_strategy,
             http_client_factory,
         ))
     }
@@ -545,6 +547,7 @@ impl OpenAiModelsManager {
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
         if self.endpoint_client.remote_catalog_is_authoritative() {
             *self.remote_models.write().await = models;
+            self.catalog_loaded.store(true, Ordering::Release);
             return;
         }
         // Use the remote models list as the source of truth if it contains at least one

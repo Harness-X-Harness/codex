@@ -36,12 +36,14 @@ const HTTP_CLIENT_FACTORY: HttpClientFactory =
 #[derive(Debug)]
 struct TestCache {
     entry: Mutex<Option<ModelsCacheEntry>>,
+    load_count: AtomicUsize,
 }
 
 impl TestCache {
     fn new(entry: ModelsCacheEntry) -> Arc<Self> {
         Arc::new(Self {
             entry: Mutex::new(Some(entry)),
+            load_count: AtomicUsize::new(0),
         })
     }
 }
@@ -53,6 +55,7 @@ impl ModelsCache for TestCache {
         _catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>> {
         Box::pin(async move {
+            self.load_count.fetch_add(1, Ordering::SeqCst);
             Ok(self
                 .entry
                 .lock()
@@ -80,6 +83,36 @@ impl ModelsCache for TestCache {
         _catalog_identity: &'a ModelsCatalogIdentity,
     ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+#[derive(Debug)]
+struct StockEndpoint {
+    fetch_count: AtomicUsize,
+}
+
+impl ModelsEndpointClient for StockEndpoint {
+    fn catalog_identity(&self) -> ModelsCatalogIdentity {
+        ModelsCatalogIdentity::new("stock", "stock-decoder")
+    }
+
+    fn has_command_auth(&self) -> bool {
+        true
+    }
+
+    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+
+    fn list_models<'a>(
+        &'a self,
+        _client_version: &'a str,
+        _http_client_factory: HttpClientFactory,
+    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
+        Box::pin(async move {
+            self.fetch_count.fetch_add(1, Ordering::SeqCst);
+            Err(CodexErr::InvalidRequest("stock refresh failure".to_string()))
+        })
     }
 }
 
@@ -148,6 +181,56 @@ fn cache_entry(catalog_identity: Option<ModelsCatalogIdentity>) -> ModelsCacheEn
 }
 
 #[tokio::test]
+async fn stock_resolution_uses_current_memory_without_cache_or_endpoint_access() -> CoreResult<()> {
+    let cache = TestCache::new(cache_entry(Some(ModelsCatalogIdentity::new(
+        "stock",
+        "stock-decoder",
+    ))));
+    let endpoint = Arc::new(StockEndpoint {
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = OpenAiModelsManager::new_with_cache(cache.clone(), endpoint.clone(), None);
+
+    let ModelResolution::Resolved { model_info, .. } = manager
+        .resolve_model_profile(
+            ModelSelection::Exact("stock-model"),
+            &ModelsManagerConfig::default(),
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("stock model identifiers remain unconstrained");
+    };
+
+    assert_eq!(model_info.slug, "stock-model");
+    assert_eq!(cache.load_count.load(Ordering::SeqCst), 0);
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stock_refresh_failure_preserves_current_catalog() -> CoreResult<()> {
+    let cache = TestCache::new(cache_entry(Some(ModelsCatalogIdentity::new(
+        "stock",
+        "stock-decoder",
+    ))));
+    let endpoint = Arc::new(StockEndpoint {
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = OpenAiModelsManager::new_with_cache(cache.clone(), endpoint.clone(), None);
+    let before = manager.get_remote_models().await;
+
+    let catalog = manager
+        .load_model_catalog(RefreshStrategy::Online, HTTP_CLIENT_FACTORY)
+        .await?;
+
+    assert_eq!(catalog.models, before);
+    assert_eq!(cache.load_count.load(Ordering::SeqCst), 0);
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn legacy_or_old_decoder_cache_cannot_satisfy_authority() {
     for catalog_identity in [
         None,
@@ -172,6 +255,32 @@ async fn legacy_or_old_decoder_cache_cannot_satisfy_authority() {
         );
         assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
     }
+}
+
+#[tokio::test]
+async fn authoritative_resolution_uses_matching_cache_without_fetch() -> CoreResult<()> {
+    let cache = TestCache::new(cache_entry(Some(ModelsCatalogIdentity::new(
+        AUTHORITY,
+        DECODER_VERSION,
+    ))));
+    let endpoint = TestEndpoint::unavailable();
+    let manager = OpenAiModelsManager::new_with_cache(cache.clone(), endpoint.clone(), None);
+
+    let ModelResolution::Resolved { model_info, .. } = manager
+        .resolve_model_profile(
+            ModelSelection::Exact("cached-model"),
+            &ModelsManagerConfig::default(),
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("matching authoritative cache contains the model");
+    };
+
+    assert_eq!(model_info.slug, "cached-model");
+    assert_eq!(cache.load_count.load(Ordering::SeqCst), 1);
+    assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 0);
+    Ok(())
 }
 
 #[tokio::test]
@@ -230,7 +339,6 @@ async fn authoritative_resolution_returns_model_and_picker_from_one_fetch() -> C
         .resolve_model_profile(
             ModelSelection::Exact("catalog-model"),
             &ModelsManagerConfig::default(),
-            RefreshStrategy::Online,
             HTTP_CLIENT_FACTORY,
         )
         .await?
@@ -241,6 +349,22 @@ async fn authoritative_resolution_returns_model_and_picker_from_one_fetch() -> C
     assert_eq!(model_info.slug, "catalog-model");
     assert_eq!(available_models.len(), 1);
     assert_eq!(available_models[0].model, "catalog-model");
+
+    let ModelResolution::Resolved {
+        model_info: second_profile,
+        available_models: second_available_models,
+    } = manager
+        .resolve_model_profile(
+            ModelSelection::Exact("catalog-model"),
+            &ModelsManagerConfig::default(),
+            HTTP_CLIENT_FACTORY,
+        )
+        .await?
+    else {
+        panic!("established authority generation still contains the model");
+    };
+    assert_eq!(second_profile, model_info);
+    assert_eq!(second_available_models, available_models);
     assert_eq!(endpoint.fetch_count.load(Ordering::SeqCst), 1);
     Ok(())
 }
@@ -261,7 +385,6 @@ async fn authoritative_default_selection_and_profile_use_one_fetch() -> CoreResu
         .resolve_model_profile(
             ModelSelection::ProviderDefault,
             &ModelsManagerConfig::default(),
-            RefreshStrategy::Online,
             HTTP_CLIENT_FACTORY,
         )
         .await?
@@ -289,7 +412,6 @@ async fn authoritative_preferred_model_falls_back_within_one_snapshot() -> CoreR
         .resolve_model_profile(
             ModelSelection::PreferRequested("retired-model"),
             &ModelsManagerConfig::default(),
-            RefreshStrategy::Online,
             HTTP_CLIENT_FACTORY,
         )
         .await?

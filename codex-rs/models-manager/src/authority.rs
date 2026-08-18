@@ -44,12 +44,18 @@ impl OpenAiModelsManager {
         &self,
         selection: ModelSelection<'_>,
         config: &ModelsManagerConfig,
-        refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CoreResult<ModelResolution> {
-        let catalog = self
-            .load_catalog(refresh_strategy, http_client_factory)
-            .await?;
+        let catalog = if self.endpoint_client.remote_catalog_is_authoritative()
+            && !self.catalog_loaded.load(Ordering::Acquire)
+        {
+            self.load_catalog(RefreshStrategy::OnlineIfUncached, http_client_factory)
+                .await?
+        } else {
+            ModelsResponse {
+                models: self.remote_models.read().await.clone(),
+            }
+        };
         let available_models = self.build_available_models(catalog.models.clone());
         let model = select_model(
             selection,
@@ -146,7 +152,6 @@ impl ModelsManager for StaticModelsManager {
         &'a self,
         selection: ModelSelection<'a>,
         config: &'a ModelsManagerConfig,
-        _refresh_strategy: RefreshStrategy,
         _http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'a, CoreResult<ModelResolution>> {
         Box::pin(async move {
