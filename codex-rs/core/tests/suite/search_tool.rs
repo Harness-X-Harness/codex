@@ -1192,7 +1192,11 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
-            thread_settings: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                permission_profile: Some(PermissionProfile::Disabled),
+                ..Default::default()
+            },
         })
         .await?;
 
