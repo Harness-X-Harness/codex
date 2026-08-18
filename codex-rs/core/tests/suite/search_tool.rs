@@ -1164,7 +1164,8 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
 
-    let first_tools = requests[0].body_json()["tools"]
+    let first_body = requests[0].body_json();
+    let first_tools = first_body["tools"]
         .as_array()
         .context("first Grok request should contain tools")?;
     assert!(first_tools.iter().any(|tool| {
