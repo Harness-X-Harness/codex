@@ -112,9 +112,7 @@ fn project_wire_item(item: &ResponseItem) -> Result<serde_json::Value, CodexErr>
             arguments,
             ..
         } => {
-            if execution != "client"
-                || !matches!(status.as_deref(), None | Some("completed"))
-            {
+            if execution != "client" || !matches!(status.as_deref(), None | Some("completed")) {
                 return Err(CodexErr::InvalidRequest(
                     "Grok can only replay terminal client tool_search calls".to_string(),
                 ));

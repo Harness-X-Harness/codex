@@ -320,9 +320,7 @@ impl ToolRouter {
         else {
             return Ok(None);
         };
-        if self.grok_tool_plan.is_none()
-            || !matches!(call.payload, ToolPayload::ToolSearch { .. })
-        {
+        if self.grok_tool_plan.is_none() || !matches!(call.payload, ToolPayload::ToolSearch { .. }) {
             return Ok(None);
         }
         let ToolPayload::ToolSearch { arguments } = &call.payload else {
