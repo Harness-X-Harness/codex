@@ -1217,9 +1217,11 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
         tool.get("type").and_then(Value::as_str) == Some("function")
             && tool.get("name").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_NAME)
     }));
-    assert!(first_tools.iter().all(|tool| {
-        tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp__echo")
-    }));
+    assert!(
+        first_tools
+            .iter()
+            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some("mcp__rmcp__echo") })
+    );
 
     let second_body = &requests[1];
     let second_input = second_body["input"]
