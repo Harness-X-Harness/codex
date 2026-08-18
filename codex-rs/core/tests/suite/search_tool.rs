@@ -1208,9 +1208,7 @@ async fn grok_projects_native_tool_search_and_exposes_its_result_for_one_step() 
             .as_array()
             .context("third Grok request should contain tools")?
             .iter()
-            .all(|tool| {
-                tool.get("name").and_then(Value::as_str) != Some(grok_echo_wire_name)
-            })
+            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some(grok_echo_wire_name) })
     );
     let output = requests[2].function_call_output("echo-1");
     assert_eq!(

@@ -159,12 +159,7 @@ pub(crate) fn build_tool_router(
                 search_tool_enabled(turn_context),
                 &mut registry,
             );
-            apply_mcp_tool_exposure_policy(
-                turn_context,
-                mcp,
-                &registered_mcp_tools,
-                &mut registry,
-            );
+            apply_mcp_tool_exposure_policy(turn_context, mcp, &registered_mcp_tools, &mut registry);
             let standalone_web_search_tool = append_extension_tool_executors(
                 turn_context,
                 extension_tool_executors(session, step_store),
