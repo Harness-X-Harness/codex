@@ -56,6 +56,18 @@ jobs:
         working-directory: codex-rs
         run: cargo fmt --all -- --config imports_granularity=Item --check
 
+      - name: Verify model catalog authority and stock Turn freshness
+        working-directory: codex-rs
+        env:
+          RUST_MIN_STACK: "8388608"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p codex-models-manager authority
+          cargo test --locked -p codex-app-server --test all \
+            suite::v2::provider_routing::stock_follow_up_turn_does_not_refresh_model_catalog \
+            -- --exact
+
       - name: Verify stock stream tolerance
         working-directory: codex-rs
         env:

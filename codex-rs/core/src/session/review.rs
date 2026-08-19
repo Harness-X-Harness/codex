@@ -19,7 +19,6 @@ pub(super) async fn spawn_review_thread(
         .resolve_model_profile(
             ModelSelection::Exact(&model),
             &config.to_models_manager_config(),
-            RefreshStrategy::OnlineIfUncached,
             config.http_client_factory(),
         )
         .await

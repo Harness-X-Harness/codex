@@ -28,7 +28,6 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_features::Feature;
 use codex_models_manager::manager::ModelSelection;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
@@ -135,7 +134,6 @@ async fn start_review_conversation(
                     .expect("review model was set above"),
             ),
             &sub_agent_config.to_models_manager_config(),
-            RefreshStrategy::Offline,
             sub_agent_config.http_client_factory(),
         )
         .await
