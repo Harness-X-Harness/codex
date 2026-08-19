@@ -1611,6 +1611,44 @@ async fn stock_single_provider_fork_keeps_unlisted_model_compatibility() -> Resu
 }
 
 #[tokio::test]
+async fn stock_follow_up_turn_does_not_refresh_model_catalog() -> Result<()> {
+    let fixture = ProviderRoutingFixture::with_stock_openai_only().await?;
+    mount_completion(&fixture.openai_server, "openai-stock-catalog-seed").await;
+    let mut app = fixture.start_app().await?;
+    let started = app.start_thread(ThreadStartParams::default()).await?;
+    materialize_thread(&mut app, &started.thread.id).await?;
+
+    fixture.openai_server.reset().await;
+    let models_cache =
+        provider_models_home(fixture.codex_home.path(), "openai").join("models_cache.json");
+    if models_cache.exists() {
+        std::fs::remove_file(models_cache)?;
+    }
+    let response = mount_completion(&fixture.openai_server, "openai-stock-catalog-follow-up").await;
+
+    app.start_turn_and_wait_for_completion(turn_for_thread(&started.thread.id))
+        .await?;
+
+    assert_eq!(response.requests().len(), 1);
+    let requests = fixture
+        .openai_server
+        .received_requests()
+        .await
+        .context("wiremock did not record requests")?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.method.as_str() == "GET" && request.url.path().ends_with("/models")
+            })
+            .count(),
+        0,
+        "stock Turn construction must not refresh the model catalog"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn detached_review_inherits_the_parent_provider_binding() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
     let grok_responses = responses::mount_sse_sequence(

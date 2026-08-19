@@ -100,12 +100,11 @@ impl ResolvedProviderRuntime {
         &self,
         selection: ModelSelection<'_>,
         config: &ModelsManagerConfig,
-        refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<(ModelInfo, Vec<ModelPreset>)> {
         let resolution = self
             .models_manager
-            .resolve_model_profile(selection, config, refresh_strategy, http_client_factory)
+            .resolve_model_profile(selection, config, http_client_factory)
             .await
             .map_err(|_| authority_unavailable(&self.provider_id))?;
         match resolution {
@@ -126,10 +125,13 @@ impl ResolvedProviderRuntime {
         refresh_strategy: RefreshStrategy,
         http_client_factory: HttpClientFactory,
     ) -> CodexResult<()> {
+        self.models_manager
+            .load_model_catalog(refresh_strategy, http_client_factory.clone())
+            .await
+            .map_err(|_| authority_unavailable(&self.provider_id))?;
         self.resolve_model_profile(
             ModelSelection::Exact(model),
             &ModelsManagerConfig::default(),
-            refresh_strategy,
             http_client_factory,
         )
         .await

@@ -76,7 +76,6 @@ use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpRuntimeInput;
 use codex_models_manager::manager::ModelSelection;
-use codex_models_manager::manager::RefreshStrategy;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
@@ -610,11 +609,6 @@ impl Session {
         };
 
         let mut config = Arc::new(config);
-        let refresh_strategy = if session_source.is_non_root_agent() {
-            codex_models_manager::manager::RefreshStrategy::Offline
-        } else {
-            codex_models_manager::manager::RefreshStrategy::OnlineIfUncached
-        };
         let ResolvedTurnModel {
             model_info,
             available_models,
@@ -639,7 +633,6 @@ impl Session {
                     .resolve_model_profile(
                         initial_model_selection,
                         &config.to_models_manager_config(),
-                        refresh_strategy,
                         config.http_client_factory(),
                     )
                     .await?;

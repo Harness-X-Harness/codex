@@ -303,7 +303,6 @@ impl TurnContext {
             .resolve_model_profile(
                 ModelSelection::Exact(model.as_str()),
                 &config.to_models_manager_config(),
-                RefreshStrategy::OnlineIfUncached,
                 config.http_client_factory(),
             )
             .await?;
@@ -799,7 +798,6 @@ impl Session {
             .resolve_model_profile(
                 ModelSelection::Exact(session_configuration.collaboration_mode.model()),
                 &config.to_models_manager_config(),
-                RefreshStrategy::OnlineIfUncached,
                 config.http_client_factory(),
             )
             .await?;
@@ -939,7 +937,6 @@ impl Session {
                     .resolve_model_profile(
                         ModelSelection::Exact(session_configuration.collaboration_mode.model()),
                         &per_turn_config.to_models_manager_config(),
-                        RefreshStrategy::OnlineIfUncached,
                         per_turn_config.http_client_factory(),
                     )
                     .await?;
