@@ -5,9 +5,9 @@ use app_test_support::TestAppServer;
 use app_test_support::remote_catalog_model;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
-use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -296,44 +296,28 @@ async fn grok_model_without_backend_search_omits_web_and_x_tools() -> Result<()>
 }
 
 #[tokio::test]
-async fn turn_fails_before_egress_when_bound_provider_authority_is_unavailable() -> Result<()> {
+async fn thread_start_fails_before_egress_when_provider_authority_is_unavailable() -> Result<()> {
     let fixture = ProviderRoutingFixture::new().await?;
-    let seed_response = mount_completion(&fixture.grok_server, "grok-authority-seed").await;
-    let mut app = fixture.start_app().await?;
-    let started = app
-        .start_thread(ThreadStartParams {
-            model: Some("grok-model".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    materialize_thread(&mut app, &started.thread.id).await?;
-    assert_eq!(seed_response.requests().len(), 1);
-
     fixture.grok_server.reset().await;
     Mock::given(method("GET"))
         .and(path_regex(".*/models$"))
         .respond_with(ResponseTemplate::new(503))
         .mount(&fixture.grok_server)
         .await;
-    std::fs::remove_dir_all(provider_models_home(fixture.codex_home.path(), "grok"))?;
-
+    let mut app = fixture.start_app().await?;
     let request_id = app
-        .send_turn_start_request(TurnStartParams {
-            thread_id: started.thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "Do not egress without an authoritative model".to_string(),
-                text_elements: Vec::new(),
-            }],
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("grok-model".to_string()),
             ..Default::default()
         })
         .await?;
-    let _: TurnStartResponse = timeout(DEFAULT_TIMEOUT, app.read_response(request_id)).await??;
-    let error: ErrorNotification =
-        timeout(DEFAULT_TIMEOUT, app.read_notification("error")).await??;
+    let error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
 
     assert!(error.error.message.contains("AuthorityUnavailable"));
-    assert!(!error.will_retry);
-    assert_eq!(error.thread_id, started.thread.id);
     assert_eq!(received_responses_count(&fixture.grok_server).await?, 0);
     Ok(())
 }

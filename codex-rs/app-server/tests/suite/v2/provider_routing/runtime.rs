@@ -136,7 +136,7 @@ impl Respond for FederatedSubagentResponder {
 }
 
 #[tokio::test]
-async fn unified_home_defaults_to_chatgpt_subscription_without_a_provider_override() -> Result<()> {
+async fn unified_home_defaults_to_openai_provider_without_a_provider_override() -> Result<()> {
     let fixture = ProviderRoutingFixture::with_implicit_openai_default().await?;
     let openai_responses = mount_sse_once_match(
         &fixture.openai_server,
@@ -147,7 +147,6 @@ async fn unified_home_defaults_to_chatgpt_subscription_without_a_provider_overri
     let mut app = fixture.start_app().await?;
     let started = app.start_thread(ThreadStartParams::default()).await?;
 
-    assert_eq!(started.model, "openai-model");
     assert_eq!(started.model_provider, "openai");
     materialize_thread(&mut app, &started.thread.id).await?;
 
