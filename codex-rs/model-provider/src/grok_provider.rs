@@ -85,6 +85,10 @@ impl ModelProvider for GrokModelProvider {
         self.inner.project_model_input(input)
     }
 
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        true
+    }
+
     fn approval_review_preferred_model(&self) -> Option<&'static str> {
         None
     }
