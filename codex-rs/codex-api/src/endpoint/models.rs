@@ -48,6 +48,30 @@ impl<T: HttpTransport> ModelsClient<T> {
         request_url: String,
         extra_headers: HeaderMap,
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
+        self.list_models_with_decoder(request_url, extra_headers, |body| {
+            let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(body)
+                .map_err(|e| {
+                    ApiError::Stream(format!(
+                        "failed to decode models response: {e}; body: {}",
+                        String::from_utf8_lossy(body)
+                    ))
+                })?;
+            Ok(models)
+        })
+        .await
+    }
+
+    /// Executes the models request and decodes the response body with the supplied Provider
+    /// decoder while preserving the stock request, authentication, telemetry, and ETag path.
+    pub async fn list_models_with_decoder<F>(
+        &self,
+        request_url: String,
+        extra_headers: HeaderMap,
+        decode: F,
+    ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError>
+    where
+        F: FnOnce(&[u8]) -> Result<Vec<ModelInfo>, ApiError> + Send,
+    {
         let resp = self
             .session
             .execute_with(
@@ -67,13 +91,7 @@ impl<T: HttpTransport> ModelsClient<T> {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
-            .map_err(|e| {
-                ApiError::Stream(format!(
-                    "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&resp.body)
-                ))
-            })?;
+        let models = decode(&resp.body)?;
 
         Ok((models, header_etag))
     }
