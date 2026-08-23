@@ -59,17 +59,21 @@ pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer
 
 /// Wire protocol that the provider speaks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
 pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
+    #[serde(rename = "responses")]
     Responses,
+    /// The Grok Responses dialect exposed by the configured Grok backend.
+    #[serde(rename = "grok_responses")]
+    GrokResponses,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::GrokResponses => "grok_responses",
         };
         f.write_str(value)
     }
@@ -83,10 +87,22 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
+            "grok_responses" => Ok(Self::GrokResponses),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["responses", "grok_responses"],
+            )),
         }
     }
+}
+
+/// Runtime implementation selected for a configured model provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelProviderAdapter {
+    Configured,
+    Grok,
 }
 
 /// Serializable representation of a provider definition.
@@ -115,6 +131,9 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
+    /// Optional runtime adapter. When omitted, the configured provider path is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_adapter: Option<ModelProviderAdapter>,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -190,6 +209,23 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        match (self.provider_adapter, self.wire_api) {
+            (Some(ModelProviderAdapter::Grok), WireApi::GrokResponses) => {}
+            (Some(ModelProviderAdapter::Grok), _) => {
+                return Err(
+                    "provider_adapter = \"grok\" requires wire_api = \"grok_responses\""
+                        .to_string(),
+                );
+            }
+            (_, WireApi::GrokResponses) => {
+                return Err(
+                    "wire_api = \"grok_responses\" requires provider_adapter = \"grok\""
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+
         if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -384,6 +420,7 @@ impl ModelProviderInfo {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            provider_adapter: None,
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -431,6 +468,7 @@ impl ModelProviderInfo {
                 auth_refresh: None,
             })),
             wire_api: WireApi::Responses,
+            provider_adapter: None,
             query_params: None,
             http_headers: Some(HashMap::from([(
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
@@ -601,6 +639,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         auth: None,
         aws: None,
         wire_api,
+        provider_adapter: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

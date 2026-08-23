@@ -14,6 +14,7 @@ use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
+use codex_model_provider_info::ModelProviderAdapter;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -30,6 +31,7 @@ use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
+use crate::grok_provider::GrokModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
 pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
@@ -311,22 +313,32 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
-    } else {
-        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+    match provider_info.provider_adapter {
+        Some(ModelProviderAdapter::Grok) => {
+            Arc::new(GrokModelProvider::new(provider_info, auth_manager))
+        }
+        Some(ModelProviderAdapter::Configured) => {
+            Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+        }
+        None if provider_info.is_amazon_bedrock() => {
+            Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
+        }
+        None => Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager)),
     }
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
 #[derive(Clone, Debug)]
-struct ConfiguredModelProvider {
+pub(crate) struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl ConfiguredModelProvider {
-    fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
+    pub(crate) fn new(
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
         let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
             info: provider_info,
@@ -565,6 +577,7 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            provider_adapter: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -636,6 +649,20 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn grok_adapter_selects_grok_provider() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                provider_adapter: Some(ModelProviderAdapter::Grok),
+                wire_api: WireApi::GrokResponses,
+                ..ModelProviderInfo::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert!(format!("{provider:?}").starts_with("GrokModelProvider"));
     }
 
     #[test]
@@ -989,6 +1016,7 @@ mod tests {
                 name: "Custom".to_string(),
                 base_url: Some("http://localhost:1234/v1".to_string()),
                 wire_api: WireApi::Responses,
+                provider_adapter: None,
                 requires_openai_auth: false,
                 ..Default::default()
             },
