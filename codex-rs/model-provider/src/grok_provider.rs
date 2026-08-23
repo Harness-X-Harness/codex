@@ -67,7 +67,7 @@ impl ModelProvider for GrokModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
-            namespace_tools: false,
+            namespace_tools: true,
             image_generation: false,
             web_search: false,
             external_web_access: false,
