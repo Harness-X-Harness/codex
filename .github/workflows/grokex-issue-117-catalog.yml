@@ -25,11 +25,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Prepare Linux Bazel and Cargo environment
-        uses: ./.github/actions/prepare-bazel-ci
-        with:
-          target: x86_64-unknown-linux-gnu
-          cache-scope: grokex-issue-117-catalog
+      - name: Prepare Linux Cargo environment
+        uses: ./.github/actions/setup-ci
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
@@ -40,13 +37,12 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Apply authoritative formatting and Bazel lock generation
+      - name: Apply authoritative formatting and capture the complete diff
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt -- --config imports_granularity=Item
           cd ..
-          just bazel-lock-update
           git diff --binary > "${RUNNER_TEMP}/issue-117-authority.patch"
           git status --short > "${RUNNER_TEMP}/issue-117-authority-status.txt"
 
