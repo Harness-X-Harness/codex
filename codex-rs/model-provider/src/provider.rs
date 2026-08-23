@@ -23,6 +23,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use http::HeaderValue;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -149,6 +150,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Projects a logical Codex reasoning effort to the value sent on this provider's wire.
+    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
+        match effort {
+            ReasoningEffort::Ultra => ReasoningEffort::Max,
+            effort => effort,
+        }
     }
 
     /// Returns the preferred model used for automatic approval review.

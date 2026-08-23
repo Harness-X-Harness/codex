@@ -320,7 +320,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
             parent_compaction: None,
             parent_compaction_hash: None,
             output_schema: schema.clone(),
-            reasoning_effort: ReasoningEffort::None,
+            reasoning_effort: ReasoningEffort::Ultra,
             turn_id: "turn-1".to_owned(),
         })
         .await?;
@@ -385,7 +385,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_structured_requ
             format!("turn-{}", index + 1)
         );
         assert!(request.get("tools").is_none());
-        let effort = if index == 0 { "none" } else { "medium" };
+        let effort = if index == 0 { "max" } else { "medium" };
         assert_eq!(request["reasoning"]["effort"], effort);
         assert_eq!(request["reasoning"]["context"], "all_turns");
     }

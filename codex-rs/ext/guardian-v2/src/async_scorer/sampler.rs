@@ -406,6 +406,10 @@ impl LunaSampler {
     /// Sends one structured, tool-less request on an exclusively leased WebSocket.
     pub async fn sample(&self, request: LunaSamplingRequest) -> Result<String, LunaSamplerError> {
         let turn_id = request.turn_id;
+        let reasoning_effort = self
+            .config
+            .provider
+            .project_reasoning_effort(request.reasoning_effort);
         let mut input = vec![
             ResponseItem::AdditionalTools {
                 id: None,
@@ -458,7 +462,7 @@ impl LunaSampler {
             tool_choice: "none".to_owned(),
             parallel_tool_calls: false,
             reasoning: Some(Reasoning {
-                effort: Some(request.reasoning_effort),
+                effort: Some(reasoning_effort),
                 summary: None,
                 context: Some(ReasoningContext::AllTurns),
             }),
