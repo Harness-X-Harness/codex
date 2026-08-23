@@ -10,6 +10,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::MultiAgentVersion;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -90,6 +91,8 @@ fn decode_grok_model(entry: &Value, priority: usize) -> Result<ModelInfo, String
                 .map(|tokens| tokens / 100)
         })
         .transpose()?;
+    let multi_agent_version =
+        (id == "grok-4.6").then_some(MultiAgentVersion::V2);
 
     Ok(ModelInfo {
         slug: id,
@@ -133,7 +136,7 @@ fn decode_grok_model(entry: &Value, priority: usize) -> Result<ModelInfo, String
         auto_review_model_override: None,
         model_specialty: None,
         tool_mode: None,
-        multi_agent_version: None,
+        multi_agent_version,
     })
 }
 
