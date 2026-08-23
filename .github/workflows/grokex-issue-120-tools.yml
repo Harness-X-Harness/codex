@@ -1,0 +1,54 @@
+name: Grokex Issue 120 tool projection
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-120-tool-projection
+
+permissions:
+  contents: read
+
+jobs:
+  tool-projection:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: a36a323a558e63bc7330df4a77d161cdd4c70bf3
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/issue-120.patch"
+          git status --short -- . > "$RUNNER_TEMP/issue-120.status"
+      - name: Provider contracts
+        run: cargo test -p codex-model-provider
+      - name: Reversible tool projection contract
+        run: cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
+      - name: Existing stock namespace routing contract
+        run: cargo test -p codex-core --lib tools::router::tests::build_tool_call_uses_namespace_for_registry_name -- --exact
+      - name: Affected library lints
+        run: cargo clippy -p codex-model-provider -p codex-core --lib -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-120-tool-authority
+          path: |
+            ${{ runner.temp }}/issue-120.patch
+            ${{ runner.temp }}/issue-120.status
+          if-no-files-found: error
