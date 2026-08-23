@@ -1,3 +1,4 @@
+use codex_api::ResponsesDialect;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::ContentItem;
@@ -88,5 +89,36 @@ fn grok_provider_projects_text_and_tool_continuation() {
         canonical_history(
             /*metadata*/ None, /*encrypted_function_args*/ None
         )
+    );
+}
+
+#[tokio::test]
+async fn resolved_provider_derives_internal_responses_dialect() {
+    let stock = create_model_provider(
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        /*auth_manager*/ None,
+    );
+    let grok = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        /*auth_manager*/ None,
+    );
+
+    assert_eq!(
+        stock
+            .api_provider()
+            .await
+            .expect("stock API provider")
+            .responses_dialect,
+        ResponsesDialect::OpenAi
+    );
+    assert_eq!(
+        grok.api_provider()
+            .await
+            .expect("Grok API provider")
+            .responses_dialect,
+        ResponsesDialect::Grok
     );
 }
