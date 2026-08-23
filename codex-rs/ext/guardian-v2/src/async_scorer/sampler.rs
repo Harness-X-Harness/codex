@@ -458,7 +458,11 @@ impl LunaSampler {
             tool_choice: "none".to_owned(),
             parallel_tool_calls: false,
             reasoning: Some(Reasoning {
-                effort: Some(request.reasoning_effort),
+                effort: Some(
+                    self.config
+                        .provider
+                        .project_reasoning_effort(request.reasoning_effort),
+                ),
                 summary: None,
                 context: Some(ReasoningContext::AllTurns),
             }),

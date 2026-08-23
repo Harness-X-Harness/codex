@@ -175,13 +175,6 @@ pub(crate) struct CompactConversationRequestSettings {
     pub(crate) service_tier: Option<String>,
 }
 
-fn reasoning_effort_for_request(effort: ReasoningEffortConfig) -> ReasoningEffortConfig {
-    match effort {
-        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Max,
-        effort => effort,
-    }
-}
-
 fn session_telemetry_for_request(
     session_telemetry: &SessionTelemetry,
     request: &ResponsesApiRequest,
@@ -725,7 +718,7 @@ impl ModelClient {
             model: model_info.slug.clone(),
             raw_memories,
             reasoning: effort
-                .map(reasoning_effort_for_request)
+                .map(|effort| self.state.provider.project_reasoning_effort(effort))
                 .map(|effort| Reasoning {
                     effort: Some(effort),
                     summary: None,
@@ -823,6 +816,7 @@ impl ModelClient {
     }
 
     fn build_reasoning(
+        &self,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -830,7 +824,7 @@ impl ModelClient {
         Reasoning {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())
-                .map(reasoning_effort_for_request),
+                .map(|effort| self.state.provider.project_reasoning_effort(effort)),
             summary: (model_info.supports_reasoning_summary_parameter
                 && summary != ReasoningSummaryConfig::None)
                 .then_some(summary),
@@ -895,7 +889,7 @@ impl ModelClient {
                 Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
             )
         };
-        let reasoning = Self::build_reasoning(model_info, effort, summary);
+        let reasoning = self.build_reasoning(model_info, effort, summary);
         let stream_options = (self.state.concurrent_reasoning_summaries_enabled
             && is_openai
             && reasoning.summary.is_some())

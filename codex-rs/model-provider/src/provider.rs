@@ -23,6 +23,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use http::HeaderValue;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -151,10 +152,21 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         ProviderCapabilities::default()
     }
 
+    /// Projects a logical reasoning effort onto this provider's request wire.
+    ///
+    /// The logical effort remains unchanged in session state. This hook is an internal request
+    /// projection and is not a serialized provider selector.
+    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
+        match effort {
+            ReasoningEffort::Ultra => ReasoningEffort::Max,
+            effort => effort,
+        }
+    }
+
     /// Returns the preferred model used for automatic approval review.
     ///
-    /// Providers without a verified backend-specific model return `None`; review then uses an
-    /// explicit override or the selected parent model.
+    /// Providers without a verified backend-specific model return `None`; review must then require
+    /// an explicit override instead of sending another provider's model ID.
     fn approval_review_preferred_model(&self) -> Option<&'static str> {
         Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
     }
