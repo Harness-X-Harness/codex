@@ -1862,14 +1862,6 @@
       },
       "type": "object"
     },
-    "ModelProviderAdapter": {
-      "description": "Runtime implementation selected for a configured model provider.",
-      "enum": [
-        "configured",
-        "grok"
-      ],
-      "type": "string"
-    },
     "ModelProviderAuthInfo": {
       "additionalProperties": false,
       "description": "Configuration for obtaining a provider bearer token from a command.",
@@ -1991,14 +1983,6 @@
           "default": "",
           "description": "Friendly display name.",
           "type": "string"
-        },
-        "provider_adapter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModelProviderAdapter"
-            }
-          ],
-          "description": "Optional runtime adapter. When omitted, the configured provider path is used."
         },
         "query_params": {
           "additionalProperties": {

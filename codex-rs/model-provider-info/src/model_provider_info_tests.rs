@@ -20,7 +20,6 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        provider_adapter: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -54,7 +53,6 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        provider_adapter: None,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -92,7 +90,6 @@ supports_standalone_web_search = true
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
-        provider_adapter: None,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -124,40 +121,6 @@ wire_api = "chat"
 
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
     assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
-}
-
-#[test]
-fn grok_profile_requires_matching_adapter_and_dialect() {
-    let grok: ModelProviderInfo = toml::from_str(
-        r#"
-name = "Grok"
-provider_adapter = "grok"
-wire_api = "grok_responses"
-"#,
-    )
-    .expect("Grok profile should deserialize");
-
-    assert_eq!(grok.validate(), Ok(()));
-
-    for (provider_adapter, wire_api, expected) in [
-        (
-            Some(ModelProviderAdapter::Grok),
-            WireApi::Responses,
-            "provider_adapter = \"grok\" requires wire_api = \"grok_responses\"",
-        ),
-        (
-            None,
-            WireApi::GrokResponses,
-            "wire_api = \"grok_responses\" requires provider_adapter = \"grok\"",
-        ),
-    ] {
-        let provider = ModelProviderInfo {
-            provider_adapter,
-            wire_api,
-            ..ModelProviderInfo::default()
-        };
-        assert_eq!(provider.validate(), Err(expected.to_string()));
-    }
 }
 
 #[test]
@@ -296,7 +259,6 @@ fn test_create_amazon_bedrock_provider() {
                 auth_refresh: None,
             }),
             wire_api: WireApi::Responses,
-            provider_adapter: None,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>
@@ -598,7 +560,6 @@ fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() 
                 auth_refresh: None,
             }),
             wire_api: WireApi::Responses,
-            provider_adapter: None,
             ..ModelProviderInfo::default()
         },
     )]);
