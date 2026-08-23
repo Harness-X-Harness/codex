@@ -14,8 +14,8 @@ use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
-use codex_model_provider_info::ModelProviderAdapter;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -313,17 +313,12 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    match provider_info.provider_adapter {
-        Some(ModelProviderAdapter::Grok) => {
-            Arc::new(GrokModelProvider::new(provider_info, auth_manager))
-        }
-        Some(ModelProviderAdapter::Configured) => {
-            Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
-        }
-        None if provider_info.is_amazon_bedrock() => {
+    match provider_info.wire_api {
+        WireApi::GrokResponses => Arc::new(GrokModelProvider::new(provider_info, auth_manager)),
+        WireApi::Responses if provider_info.is_amazon_bedrock() => {
             Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
         }
-        None => Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager)),
+        WireApi::Responses => Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager)),
     }
 }
 
@@ -577,7 +572,6 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            provider_adapter: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -652,10 +646,9 @@ mod tests {
     }
 
     #[test]
-    fn grok_adapter_selects_grok_provider() {
+    fn grok_wire_api_selects_grok_provider() {
         let provider = create_model_provider(
             ModelProviderInfo {
-                provider_adapter: Some(ModelProviderAdapter::Grok),
                 wire_api: WireApi::GrokResponses,
                 ..ModelProviderInfo::default()
             },
@@ -1016,7 +1009,6 @@ mod tests {
                 name: "Custom".to_string(),
                 base_url: Some("http://localhost:1234/v1".to_string()),
                 wire_api: WireApi::Responses,
-                provider_adapter: None,
                 requires_openai_auth: false,
                 ..Default::default()
             },
