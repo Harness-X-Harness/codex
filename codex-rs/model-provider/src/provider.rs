@@ -172,6 +172,13 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         input
     }
 
+    /// Returns how canonical Codex tool declarations cross this provider's wire.
+    ///
+    /// This is internal runtime state. It is not a serialized provider selector or capability.
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        false
+    }
+
     /// Returns the preferred model used for automatic approval review.
     ///
     /// Providers without a verified backend-specific model return `None`; review must then require
