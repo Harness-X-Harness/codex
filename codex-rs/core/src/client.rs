@@ -845,20 +845,10 @@ impl ModelClient {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
-        let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        let mut input = self.state.provider.project_model_input(
+            prompt.get_formatted_input_for_request(model_info.use_responses_lite),
+        );
         let is_openai = self.state.provider.info().is_openai();
-        if !is_openai {
-            for item in &mut input {
-                item.clear_internal_chat_message_metadata_passthrough();
-                if let ResponseItem::FunctionCall {
-                    encrypted_function_args,
-                    ..
-                } = item
-                {
-                    *encrypted_function_args = None;
-                }
-            }
-        }
         let (instructions, tools) = if model_info.use_responses_lite {
             let tools = if self.state.provider.capabilities().namespace_tools {
                 create_tools_json_for_responses_lite(&prompt.tools)?
