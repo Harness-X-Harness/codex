@@ -153,23 +153,26 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
 
     /// Returns the preferred model used for automatic approval review.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn approval_review_preferred_model(&self) -> &'static str {
-        DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; review then uses an
+    /// explicit override or the selected parent model.
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
     }
 
     /// Returns the preferred model used for memory extraction.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn memory_extraction_preferred_model(&self) -> &'static str {
-        DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; callers must require an
+    /// explicit model instead of sending another provider's model ID.
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
     }
 
     /// Returns the preferred model used for memory consolidation.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn memory_consolidation_preferred_model(&self) -> &'static str {
-        DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; callers must require an
+    /// explicit model instead of sending another provider's model ID.
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -362,17 +365,19 @@ impl ModelProvider for ConfiguredModelProvider {
         }
     }
 
-    fn approval_review_preferred_model(&self) -> &'static str {
-        if self
-            .auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.is_api_key_auth())
-        {
-            API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
-        } else {
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
-        }
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(
+            if self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_cached())
+                .is_some_and(|auth| auth.is_api_key_auth())
+            {
+                API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
+            } else {
+                DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            },
+        )
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -702,7 +707,7 @@ mod tests {
 
         assert_eq!(
             provider.approval_review_preferred_model(),
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
         );
     }
 
@@ -715,7 +720,10 @@ mod tests {
             ))),
         );
 
-        assert_eq!(provider.approval_review_preferred_model(), "gpt-5.6-luna");
+        assert_eq!(
+            provider.approval_review_preferred_model(),
+            Some("gpt-5.6-luna")
+        );
     }
 
     #[test]
@@ -729,7 +737,7 @@ mod tests {
 
         assert_eq!(
             provider.approval_review_preferred_model(),
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
         );
     }
 

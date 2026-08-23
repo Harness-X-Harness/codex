@@ -17,6 +17,7 @@ use crate::provider::ModelProvider;
 use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
 use crate::provider::ProviderCapabilities;
+use crate::provider::RemoteCompactionSupport;
 
 /// Grok provider identity using the configured provider lifecycle.
 #[derive(Clone, Debug)]
@@ -62,11 +63,25 @@ impl ModelProvider for GrokModelProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        self.inner.capabilities()
+        ProviderCapabilities {
+            namespace_tools: false,
+            image_generation: false,
+            web_search: false,
+            external_web_access: false,
+            remote_compaction: RemoteCompactionSupport::Unsupported,
+        }
     }
 
-    fn approval_review_preferred_model(&self) -> &'static str {
-        self.inner.approval_review_preferred_model()
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        None
     }
 
     fn supports_attestation(&self) -> bool {
