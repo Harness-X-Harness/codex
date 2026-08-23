@@ -23,6 +23,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use http::HeaderValue;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -149,6 +150,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Projects a logical Codex reasoning effort to the value sent on this provider's wire.
+    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
+        match effort {
+            ReasoningEffort::Ultra => ReasoningEffort::Max,
+            effort => effort,
+        }
     }
 
     /// Returns the preferred model used for automatic approval review.
@@ -649,6 +658,42 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn configured_provider_projects_logical_reasoning_for_stock_wire() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            (
+                provider.project_reasoning_effort(ReasoningEffort::Ultra),
+                provider.project_reasoning_effort(ReasoningEffort::High),
+            ),
+            (ReasoningEffort::Max, ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn grok_provider_projects_logical_ultra_to_xhigh() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                provider_adapter: Some(ModelProviderAdapter::Grok),
+                wire_api: WireApi::GrokResponses,
+                ..ModelProviderInfo::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            (
+                provider.project_reasoning_effort(ReasoningEffort::Ultra),
+                provider.project_reasoning_effort(ReasoningEffort::High),
+            ),
+            (ReasoningEffort::XHigh, ReasoningEffort::High)
+        );
     }
 
     #[test]
