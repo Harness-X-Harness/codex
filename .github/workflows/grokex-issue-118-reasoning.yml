@@ -1,0 +1,65 @@
+name: Grokex Issue 118 reasoning
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-118-reasoning-projection
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grokex-issue-118-reasoning
+  cancel-in-progress: false
+
+jobs:
+  reasoning:
+    if: github.head_ref == 'codex/issue-118-reasoning-projection-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Prepare Linux Cargo environment
+        uses: ./.github/actions/setup-ci
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
+
+      - name: Apply authoritative formatting and capture the complete diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt -- --config imports_granularity=Item
+          cd ..
+          git diff --binary > "${RUNNER_TEMP}/issue-118-authority.patch"
+          git status --short > "${RUNNER_TEMP}/issue-118-authority-status.txt"
+
+      - name: Upload authoritative mechanical changes
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: issue-118-authority
+          path: |
+            ${{ runner.temp }}/issue-118-authority.patch
+            ${{ runner.temp }}/issue-118-authority-status.txt
+          if-no-files-found: error
+
+      - name: Test exact Provider reasoning contracts
+        run: just test -p codex-model-provider
+
+      - name: Lint affected crates
+        run: |
+          just clippy -p codex-model-provider -- -D warnings
+          cargo clippy -p codex-core --lib -- -D warnings
