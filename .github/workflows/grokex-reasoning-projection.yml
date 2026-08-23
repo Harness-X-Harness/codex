@@ -1,0 +1,56 @@
+name: Grokex reasoning projection
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-118-reasoning-projection
+
+permissions:
+  contents: read
+
+jobs:
+  reasoning-projection:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: 0531de8af2abea1743a868cb764c9217738af5e0
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/reasoning-projection.patch"
+          git status --short -- . > "$RUNNER_TEMP/reasoning-projection.status"
+      - name: Model provider contracts
+        run: cargo test -p codex-model-provider
+      - name: Stock Ultra stays logical and projects to Max
+        run: cargo test -p codex-core --test all -- suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode --exact
+      - name: Grok Ultra projects to XHigh
+        run: cargo test -p codex-core --test all -- suite::multi_agent_mode::grok_ultra_reasoning_uses_xhigh --exact
+      - name: Guardian uses the active provider projection
+        run: cargo test -p codex-guardian-v2 async_scorer::sampler_tests::grok_guardian_ultra_reasoning_uses_xhigh -- --exact
+      - name: Affected crate lints
+        run: cargo clippy -p codex-model-provider -p codex-core -p codex-guardian-v2 --lib -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-118-reasoning-authority
+          path: |
+            ${{ runner.temp }}/reasoning-projection.patch
+            ${{ runner.temp }}/reasoning-projection.status
+          if-no-files-found: error
