@@ -5,9 +5,12 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
 use crate::create_model_provider;
+use crate::grok_catalog::static_model_catalog;
 use crate::provider::ProviderCapabilities;
 use crate::provider::RemoteCompactionSupport;
 
@@ -144,5 +147,43 @@ async fn resolved_provider_derives_internal_responses_dialect() {
             .expect("Grok API provider")
             .responses_dialect,
         ResponsesDialect::Grok
+    );
+}
+
+#[tokio::test]
+async fn grok_models_manager_uses_bundle_or_exact_config_replacement() {
+    let provider = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        /*auth_manager*/ None,
+    );
+    let bundled_catalog = static_model_catalog();
+
+    assert_eq!(
+        provider
+            .models_manager(PathBuf::new(), /*config_model_catalog*/ None)
+            .get_remote_models()
+            .await,
+        bundled_catalog.models
+    );
+
+    let mut replacement_model = static_model_catalog()
+        .models
+        .into_iter()
+        .next()
+        .expect("bundled Grok catalog should contain a model");
+    replacement_model.slug = "configured-grok".to_string();
+    let configured_catalog = ModelsResponse {
+        models: vec![replacement_model],
+    };
+
+    assert_eq!(
+        provider
+            .models_manager(PathBuf::new(), Some(configured_catalog.clone()))
+            .get_remote_models()
+            .await,
+        configured_catalog.models
     );
 }
