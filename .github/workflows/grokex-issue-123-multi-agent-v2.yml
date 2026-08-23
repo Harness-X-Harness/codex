@@ -1,0 +1,61 @@
+name: Grokex Issue 123 Multi-Agent V2
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-123-grok-multi-agent-v2
+
+permissions:
+  contents: read
+
+jobs:
+  multi-agent-v2:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: 77b9491c0fef8cd9383335adfde6f6d0db6759b1
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/issue-123.patch"
+          git status --short -- . > "$RUNNER_TEMP/issue-123.status"
+      - name: Provider catalog contracts
+        run: cargo test -p codex-model-provider
+      - name: Grok root child completion contract
+        run: cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+      - name: Existing stock V2 collaboration contracts
+        run: |
+          cargo test -p codex-core --lib tools::handlers::multi_agents_tests::multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_path -- --exact
+          cargo test -p codex-core --lib tools::handlers::multi_agents_tests::multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn -- --exact
+          cargo test -p codex-core --lib tools::handlers::multi_agents_tests::multi_agent_v2_list_agents_returns_completed_status -- --exact
+          cargo test -p codex-core --lib tools::handlers::multi_agents_tests::multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity -- --exact
+          cargo test -p codex-core --lib tools::handlers::multi_agents_tests::multi_agent_v2_interrupt_agent_accepts_task_name_target -- --exact
+      - name: Affected target lints
+        run: |
+          cargo clippy -p codex-model-provider --lib -- -D warnings
+          cargo clippy -p codex-core --test all -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-123-multi-agent-v2-authority
+          path: |
+            ${{ runner.temp }}/issue-123.patch
+            ${{ runner.temp }}/issue-123.status
+          if-no-files-found: error
