@@ -8,6 +8,8 @@ use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
 use crate::create_model_provider;
+use crate::provider::ProviderCapabilities;
+use crate::provider::RemoteCompactionSupport;
 
 fn canonical_history(
     metadata: Option<InternalChatMessageMetadataPassthrough>,
@@ -89,6 +91,28 @@ fn grok_provider_projects_text_and_tool_continuation() {
         canonical_history(
             /*metadata*/ None, /*encrypted_function_args*/ None
         )
+    );
+}
+
+#[test]
+fn grok_advertises_only_proven_provider_capabilities() {
+    let provider = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        /*auth_manager*/ None,
+    );
+
+    assert_eq!(
+        provider.capabilities(),
+        ProviderCapabilities {
+            namespace_tools: true,
+            image_generation: false,
+            web_search: false,
+            external_web_access: false,
+            remote_compaction: RemoteCompactionSupport::Unsupported,
+        }
     );
 }
 
