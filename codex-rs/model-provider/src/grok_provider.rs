@@ -9,6 +9,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::grok_catalog::GrokModelsResponseDecoder;
 use crate::models_endpoint::OpenAiModelsEndpoint;
@@ -63,6 +64,13 @@ impl ModelProvider for GrokModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         self.inner.capabilities()
+    }
+
+    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
+        match effort {
+            ReasoningEffort::Ultra => ReasoningEffort::XHigh,
+            effort => effort,
+        }
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
