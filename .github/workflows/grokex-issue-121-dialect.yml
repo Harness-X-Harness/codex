@@ -1,0 +1,56 @@
+name: Grokex Issue 121 Responses dialect
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-121-responses-dialect
+
+permissions:
+  contents: read
+
+jobs:
+  responses-dialect:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: b9529a1413e9df8ea6c740c8808d232d5ec1fad4
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/issue-121.patch"
+          git status --short -- . > "$RUNNER_TEMP/issue-121.status"
+      - name: Provider derives the internal dialect
+        run: cargo test -p codex-model-provider --lib grok_provider::tests::resolved_provider_derives_internal_responses_dialect -- --exact
+      - name: Grok no-tool request codec
+        run: cargo test -p codex-api --test clients grok_no_tool_request_omits_tool_controls -- --exact
+      - name: Grok canonical stream codec
+        run: cargo test -p codex-api --lib sse::responses::tests::parses_xai_text_and_whole_parallel_function_calls -- --exact
+      - name: Existing stock request codec
+        run: cargo test -p codex-api --test clients responses_client_stream_request_preserves_item_ids -- --exact
+      - name: Affected library lints
+        run: cargo clippy -p codex-api -p codex-model-provider-info -p codex-model-provider --lib -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-121-dialect-authority
+          path: |
+            ${{ runner.temp }}/issue-121.patch
+            ${{ runner.temp }}/issue-121.status
+          if-no-files-found: error
