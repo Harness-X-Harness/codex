@@ -1,0 +1,78 @@
+name: Grokex Issue 128 single selector
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-128-single-provider-selector
+
+permissions:
+  contents: read
+
+jobs:
+  single-selector:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify product parent
+        shell: bash
+        run: test "$(git rev-parse HEAD^)" = "7d04c1ab1ca51a84c3b0bcbc64f962c5404d724f"
+
+      - name: Prepare Linux Cargo environment
+        uses: ./.github/actions/setup-ci
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          toolchain: 1.95.0
+          components: clippy,rustfmt
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: cargo-nextest
+
+      - name: Generate authoritative formatting and config schema
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo fmt -- --config imports_granularity=Item
+          just write-config-schema
+          cd ..
+          git diff --binary > "${RUNNER_TEMP}/issue-128-authority.patch"
+          git status --short > "${RUNNER_TEMP}/issue-128-authority-status.txt"
+
+      - name: Upload authoritative generated changes
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: issue-128-authority
+          path: |
+            ${{ runner.temp }}/issue-128-authority.patch
+            ${{ runner.temp }}/issue-128-authority-status.txt
+
+      - name: Test Provider selector and catalog contracts
+        working-directory: codex-rs
+        run: |
+          just test -p codex-model-provider-info
+          just test -p codex-model-provider
+          just test -p codex-models-manager
+          just test -p codex-config
+
+      - name: Compile affected downstream contracts
+        working-directory: codex-rs
+        run: |
+          cargo check -p codex-login --lib --tests
+          cargo check -p codex-core --lib --tests
+          cargo check -p codex-app-server --lib --tests
+
+      - name: Lint changed implementation crates
+        working-directory: codex-rs
+        run: >-
+          cargo clippy
+          -p codex-model-provider-info
+          -p codex-model-provider
+          -p codex-config
+          --lib --tests -- -D warnings
