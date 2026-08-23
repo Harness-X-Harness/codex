@@ -1707,7 +1707,11 @@ async fn guardian_request_model_for_auto_review(
     )
     .auto_review_model_override = auto_review_model_override;
     let parent_model = turn.model_info.slug.clone();
-    let preferred_model = turn.provider.approval_review_preferred_model().to_string();
+    let preferred_model = turn
+        .provider
+        .approval_review_preferred_model()
+        .expect("test provider should define an approval review model")
+        .to_string();
     let parent_turn_id = turn.sub_id.clone();
     seed_guardian_parent_history(&session, &turn).await;
 

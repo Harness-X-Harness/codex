@@ -790,13 +790,17 @@ pub(super) async fn guardian_review_session_config(
         }
     };
     let model_override = turn.model_info.auto_review_model_override.as_deref();
-    let review_model_id = model_override.unwrap_or(default_review_model_id);
+    let review_model_id = model_override
+        .or(default_review_model_id)
+        .unwrap_or(turn.model_info.slug.as_str());
     let review_model = available_models
         .iter()
         .find(|preset| preset.model == review_model_id);
-    let guardian_catalog_contains_auto_review = available_models
-        .iter()
-        .any(|preset| preset.model == default_review_model_id);
+    let guardian_catalog_contains_auto_review = default_review_model_id.is_some_and(|model_id| {
+        available_models
+            .iter()
+            .any(|preset| preset.model == model_id)
+    });
     let guardian_review_model_overridden = model_override.is_some();
     let guardian_review_model_override = model_override.map(str::to_string);
     let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
@@ -859,7 +863,9 @@ pub(super) async fn guardian_review_session_config(
         spawn_config,
         model: guardian_model,
         reasoning_effort: guardian_reasoning_effort,
-        default_review_model_id: default_review_model_id.to_string(),
+        default_review_model_id: default_review_model_id
+            .unwrap_or(turn.model_info.slug.as_str())
+            .to_string(),
         catalog_contains_auto_review: guardian_catalog_contains_auto_review,
         model_overridden: guardian_review_model_overridden,
         model_override: guardian_review_model_override,
