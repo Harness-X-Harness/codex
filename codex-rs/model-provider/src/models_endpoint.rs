@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_api::AgentIdentityTelemetry;
+use codex_api::ApiError;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -39,12 +40,21 @@ use crate::provider::enforce_managed_residency;
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
 
+/// Decodes one Provider-owned models response into canonical Codex model metadata.
+///
+/// Implementations validate their Provider envelope and project only authoritative Provider facts;
+/// request construction, authentication, transport, telemetry, and ETag handling remain here.
+pub(crate) trait ModelsResponseDecoder: fmt::Debug + Send + Sync {
+    fn decode(&self, body: &[u8]) -> Result<Vec<ModelInfo>, ApiError>;
+}
+
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
 pub(crate) struct OpenAiModelsEndpoint {
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
     transport_builder: Arc<dyn ModelsTransportBuilder>,
+    response_decoder: Option<Arc<dyn ModelsResponseDecoder>>,
 }
 
 impl OpenAiModelsEndpoint {
@@ -56,6 +66,20 @@ impl OpenAiModelsEndpoint {
             provider_info,
             auth_manager,
             transport_builder: Arc::new(RouteAwareModelsTransportBuilder),
+            response_decoder: None,
+        }
+    }
+
+    pub(crate) fn new_with_decoder(
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+        response_decoder: Arc<dyn ModelsResponseDecoder>,
+    ) -> Self {
+        Self {
+            provider_info,
+            auth_manager,
+            transport_builder: Arc::new(RouteAwareModelsTransportBuilder),
+            response_decoder: Some(response_decoder),
         }
     }
 
@@ -107,10 +131,17 @@ impl OpenAiModelsEndpoint {
                 .await?;
             let client = ModelsClient::new(transport, api_provider, api_auth)
                 .with_telemetry(Some(request_telemetry));
-            client
-                .list_models(request_url, HeaderMap::new())
-                .await
-                .map_err(map_api_error)
+            match self.response_decoder.as_ref() {
+                Some(response_decoder) => {
+                    client
+                        .list_models_with_decoder(request_url, HeaderMap::new(), |body| {
+                            response_decoder.decode(body)
+                        })
+                        .await
+                }
+                None => client.list_models(request_url, HeaderMap::new()).await,
+            }
+            .map_err(map_api_error)
         })
         .await
         .map_err(|_| CodexErr::Timeout)?
@@ -376,6 +407,7 @@ mod tests {
             transport_builder: Arc::new(RecordingTransportBuilder {
                 observed_request: Arc::clone(&observed_request),
             }),
+            response_decoder: None,
         };
 
         endpoint
@@ -421,6 +453,7 @@ mod tests {
             transport_builder: Arc::new(RecordingTransportBuilder {
                 observed_request: Arc::new(Mutex::new(None)),
             }),
+            response_decoder: None,
         };
 
         set_default_client_residency_requirement(Some(ResidencyRequirement::Us));

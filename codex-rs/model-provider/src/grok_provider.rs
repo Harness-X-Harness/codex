@@ -5,9 +5,13 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
+use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::openai_models::ModelsResponse;
 
+use crate::grok_catalog::GrokModelsResponseDecoder;
+use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::provider::ConfiguredModelProvider;
 use crate::provider::ModelProvider;
 use crate::provider::ModelProviderFuture;
@@ -27,6 +31,27 @@ impl GrokModelProvider {
     ) -> Self {
         Self {
             inner: ConfiguredModelProvider::new(provider_info, auth_manager),
+        }
+    }
+
+    fn authoritative_models_manager(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+    ) -> SharedModelsManager {
+        let auth_manager = self.inner.auth_manager();
+        match config_model_catalog {
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(auth_manager, model_catalog)),
+            None => {
+                let endpoint = Arc::new(OpenAiModelsEndpoint::new_with_decoder(
+                    self.inner.info().clone(),
+                    auth_manager.clone(),
+                    Arc::new(GrokModelsResponseDecoder),
+                ));
+                Arc::new(OpenAiModelsManager::new_authoritative_without_cache(
+                    endpoint,
+                    auth_manager,
+                ))
+            }
         }
     }
 }
@@ -62,26 +87,24 @@ impl ModelProvider for GrokModelProvider {
 
     fn models_manager(
         &self,
-        codex_home: PathBuf,
+        _codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        self.inner.models_manager(codex_home, config_model_catalog)
+        self.authoritative_models_manager(config_model_catalog)
     }
 
     fn models_manager_without_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        self.inner
-            .models_manager_without_cache(config_model_catalog)
+        self.authoritative_models_manager(config_model_catalog)
     }
 
     fn models_manager_with_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
-        cache: Arc<dyn ModelsCache>,
+        _cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
-        self.inner
-            .models_manager_with_cache(config_model_catalog, cache)
+        self.authoritative_models_manager(config_model_catalog)
     }
 }
