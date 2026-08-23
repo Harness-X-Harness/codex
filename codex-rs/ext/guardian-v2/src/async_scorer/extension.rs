@@ -280,6 +280,14 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     return;
                 }
             };
+            if !input.config.model_provider.is_openai() {
+                self.event_sink.emit_warning(ExtensionWarning {
+                    thread_id,
+                    turn_id: None,
+                    message: "Guardian V2 Luna is unavailable for this model provider".to_owned(),
+                });
+                return;
+            }
             let luna_compaction_hash = if let Some(thread_manager) = self.thread_manager.upgrade() {
                 thread_manager
                     .get_models_manager()
