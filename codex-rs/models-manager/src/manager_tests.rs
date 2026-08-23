@@ -454,6 +454,30 @@ async fn authoritative_manager_starts_empty_and_uses_only_the_provider_catalog()
 }
 
 #[tokio::test]
+async fn authoritative_manager_hydrates_catalog_before_preserving_explicit_model() {
+    let remote_models = vec![remote_model("grok-4.6", "Grok 4.6", /*priority*/ 0)];
+    let endpoint = TestModelsEndpoint::without_refresh(vec![remote_models.clone()]);
+    let manager = OpenAiModelsManager::new_authoritative_without_cache(
+        endpoint.clone(),
+        /*auth_manager*/ None,
+    );
+    let requested_model = Some("grok-4.6".to_string());
+
+    let model = manager
+        .get_default_model(
+            &requested_model,
+            /*allow_provider_model_fallback*/ false,
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+
+    assert_eq!(model, "grok-4.6");
+    assert_eq!(manager.get_remote_models().await, remote_models);
+    assert_eq!(endpoint.fetch_count(), 1);
+}
+
+#[tokio::test]
 async fn injected_cache_hit_avoids_remote_fetch() {
     let cached_models = vec![remote_model("cached", "Cached", /*priority*/ 0)];
     let cache = TestModelsCache::with_entry(ModelsCacheEntry {

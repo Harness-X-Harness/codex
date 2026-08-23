@@ -334,6 +334,38 @@ impl StaticModelsManager {
 }
 
 impl ModelsManager for OpenAiModelsManager {
+    fn get_default_model<'a>(
+        &'a self,
+        model: &'a Option<String>,
+        allow_provider_model_fallback: bool,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'a, String> {
+        Box::pin(
+            async move {
+                if let Some(model) = model.as_ref() {
+                    if self.catalog_authority == RemoteCatalogAuthority::Provider
+                        && self.get_remote_models().await.is_empty()
+                    {
+                        self.list_models(refresh_strategy, http_client_factory)
+                            .await;
+                    }
+                    return model.to_string();
+                }
+                default_model_from_available(
+                    self.list_models(refresh_strategy, http_client_factory)
+                        .await,
+                )
+            }
+            .instrument(tracing::info_span!(
+                "get_default_model",
+                model.provided = model.is_some(),
+                allow_provider_model_fallback,
+                refresh_strategy = %refresh_strategy
+            )),
+        )
+    }
+
     fn raw_model_catalog(
         &self,
         refresh_strategy: RefreshStrategy,

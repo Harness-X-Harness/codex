@@ -59,7 +59,7 @@ fn expected_model(
         auto_review_model_override: None,
         model_specialty: None,
         tool_mode: None,
-        multi_agent_version: None,
+        multi_agent_version: (slug == "grok-4.6").then_some(MultiAgentVersion::V2),
     }
 }
 
