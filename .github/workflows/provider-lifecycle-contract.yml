@@ -1,0 +1,30 @@
+name: provider-lifecycle-contract
+
+on:
+  pull_request:
+
+jobs:
+  provider-lifecycle-contract:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - name: Verify generated config schema
+        working-directory: .
+        run: |
+          just write-config-schema
+          git diff --exit-code -- codex-rs/core/config.schema.json
+      - name: Test provider profile contract
+        run: cargo test -p codex-model-provider-info grok_profile_requires_matching_adapter_and_dialect
+      - name: Test provider factory contract
+        run: cargo test -p codex-model-provider grok_adapter_selects_grok_provider
+      - name: Lint affected provider crates
+        run: cargo clippy -p codex-model-provider-info -p codex-model-provider --tests -- -D warnings
