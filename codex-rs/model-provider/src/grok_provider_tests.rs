@@ -1,4 +1,6 @@
 use codex_api::ResponsesDialect;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::ContentItem;
@@ -117,6 +119,27 @@ fn grok_advertises_only_proven_provider_capabilities() {
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     );
+}
+
+#[test]
+fn grok_does_not_inherit_stock_attestation() {
+    let auth_manager = AuthManager::from_auth_for_testing(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
+    let stock = create_model_provider(
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        Some(auth_manager.clone()),
+    );
+    let grok = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        Some(auth_manager),
+    );
+
+    assert!(stock.supports_attestation());
+    assert!(!grok.supports_attestation());
 }
 
 #[tokio::test]
