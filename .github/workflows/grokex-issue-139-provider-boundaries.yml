@@ -1,0 +1,54 @@
+name: Grokex Issue 139 provider boundaries
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-139-provider-boundaries
+
+permissions:
+  contents: read
+
+jobs:
+  provider-boundaries:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: 819a3bda2f2cdff551a86233528ef30cf31f5ff6
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/issue-139.patch"
+          git status --short -- . > "$RUNNER_TEMP/issue-139.status"
+      - name: Provider boundary contracts
+        run: |
+          cargo test -p codex-model-provider-info
+          cargo test -p codex-model-provider
+      - name: Existing Grok Multi-Agent V2 contract
+        run: cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+      - name: Affected library lints
+        run: cargo clippy -p codex-model-provider-info -p codex-model-provider --lib -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-139-provider-boundaries-authority
+          path: |
+            ${{ runner.temp }}/issue-139.patch
+            ${{ runner.temp }}/issue-139.status
+          if-no-files-found: error
