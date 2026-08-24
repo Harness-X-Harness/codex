@@ -91,7 +91,7 @@ impl ModelProvider for GrokModelProvider {
     }
 
     fn supports_attestation(&self) -> bool {
-        self.inner.supports_attestation()
+        false
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
