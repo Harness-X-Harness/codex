@@ -1,0 +1,46 @@
+name: grokex-envelope-validation
+
+on:
+  pull_request:
+    branches: [release/rust-v0.149.0]
+
+jobs:
+  envelope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify carrier provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD^)" == "3043ca75141ba05957bcf1441d957f44845e3965" ]]
+          [[ "$(git diff-tree --no-commit-id --name-only -r HEAD)" == ".github/workflows/grokex-envelope-validation.yml" ]]
+      - name: Verify release envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile grokex/release.py
+          bash -n grokex/grokex grokex/install-grokex.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/config.toml.example
+          fixture="${RUNNER_TEMP}/fixture"
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl aarch64-pc-windows-msvc x86_64-pc-windows-msvc; do
+            mkdir -p "${fixture}/raw/${target}"
+            if [[ "${target}" == *windows* ]]; then
+              touch "${fixture}/raw/${target}/codex.exe" "${fixture}/raw/${target}/codex-code-mode-host.exe"
+            else
+              touch "${fixture}/raw/${target}/codex" "${fixture}/raw/${target}/codex-code-mode-host"
+            fi
+            if [[ "${target}" == *linux* ]]; then touch "${fixture}/raw/${target}/bwrap"; fi
+          done
+          python3 grokex/release.py package --raw-root "${fixture}/raw" --output "${fixture}/dist" --repository . --source-sha "$(git rev-parse HEAD^)"
+          python3 grokex/release.py verify-archives --dist "${fixture}/dist" --source-sha "$(git rev-parse HEAD^)"
+          printf '%s\n' '{"operation_count":1,"provider":"grok","source_sha":"3043ca75141ba05957bcf1441d957f44845e3965","status":"completed","validation_run":"fixture"}' > "${fixture}/evidence.json"
+          python3 grokex/release.py build-assets --archives "${fixture}/dist" --evidence "${fixture}/evidence.json" --output "${fixture}/assets" --repository . --source-sha "$(git rev-parse HEAD^)" --run-id fixture
+          python3 grokex/release.py verify-assets --dist "${fixture}/assets" --source-sha "$(git rev-parse HEAD^)" --run-id fixture
+          git diff --check HEAD^
