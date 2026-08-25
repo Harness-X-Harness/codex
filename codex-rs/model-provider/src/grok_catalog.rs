@@ -25,6 +25,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             description: Some("Grok 4.6 model".to_string()),
             default_reasoning_level: Some(ReasoningEffort::High),
             supported_reasoning_levels: vec![
+                reasoning_effort(ReasoningEffort::Ultra, "Ultra reasoning"),
                 reasoning_effort(ReasoningEffort::XHigh, "Maximum reasoning"),
                 reasoning_effort(ReasoningEffort::High, "High reasoning"),
                 reasoning_effort(ReasoningEffort::Medium, "Medium reasoning"),
