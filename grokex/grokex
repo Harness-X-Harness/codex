@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+: "${GROKEX_HOME:=${HOME}/.grokex}"
+export CODEX_HOME="${GROKEX_HOME}"
+exec "${script_dir}/grokex-bin" "$@"
