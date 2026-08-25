@@ -144,14 +144,14 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: preflight
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
-          - runner: macos-15-xlarge
+          - runner: macos-15-intel
             target: x86_64-apple-darwin
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
