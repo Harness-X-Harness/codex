@@ -162,7 +162,7 @@ async fn ultra_reasoning_uses_max_and_proactive_mode() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grok_ultra_reasoning_uses_xhigh() -> Result<()> {
+async fn grok_bundled_ultra_uses_proactive_v2_and_xhigh() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -172,10 +172,17 @@ async fn grok_ultra_reasoning_uses_xhigh() -> Result<()> {
     )
     .await;
     let test = test_codex()
-        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_model("grok-4.6")
         .with_config(|config| {
-            configure_ultra(config);
+            config.model_provider_id = "grok".to_string();
+            config.model_provider.name = "Grok".to_string();
             config.model_provider.wire_api = WireApi::GrokResponses;
+            config.model_provider.requires_openai_auth = false;
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
         })
         .build(&server)
         .await?;
@@ -183,8 +190,25 @@ async fn grok_ultra_reasoning_uses_xhigh() -> Result<()> {
     submit_turn(&test.codex, "hello", /*effort*/ None).await?;
 
     assert_eq!(
-        response.single_request().body_json()["reasoning"]["effort"].as_str(),
+        test.codex
+            .config_snapshot()
+            .await
+            .model_reasoning_effort,
+        Some(ReasoningEffort::Ultra)
+    );
+    let request = response.single_request();
+    assert_eq!(
+        request.body_json()["reasoning"]["effort"].as_str(),
         Some("xhigh")
+    );
+    let input = request.input();
+    let texts = developer_texts(&input);
+    assert_eq!(
+        (
+            count_containing(&texts, NO_SPAWN_TEXT),
+            count_containing(&texts, PROACTIVE_TEXT),
+        ),
+        (0, 1)
     );
 
     Ok(())
