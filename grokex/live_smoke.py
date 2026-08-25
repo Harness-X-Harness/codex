@@ -58,7 +58,7 @@ class AppServer:
         self.redaction = redaction
         self.stderr_tail: deque[str] = deque(maxlen=8)
         self.process = subprocess.Popen(
-            [str(binary), "app-server", "--strict-config", "--listen", "off"],
+            [str(binary), "app-server", "--strict-config", "--listen", "stdio://"],
             cwd=workspace,
             env=environment,
             stdin=subprocess.PIPE,
