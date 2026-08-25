@@ -8,6 +8,8 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -182,13 +184,36 @@ async fn grok_models_manager_uses_bundle_or_exact_config_replacement() {
         /*auth_manager*/ None,
     );
     let bundled_catalog = static_model_catalog();
+    let bundled_models = provider
+        .models_manager(PathBuf::new(), /*config_model_catalog*/ None)
+        .get_remote_models()
+        .await;
 
+    assert_eq!(bundled_models, bundled_catalog.models);
+    let bundled_model = bundled_models
+        .first()
+        .expect("bundled Grok catalog should contain a model");
     assert_eq!(
-        provider
-            .models_manager(PathBuf::new(), /*config_model_catalog*/ None)
-            .get_remote_models()
-            .await,
-        bundled_catalog.models
+        (
+            bundled_model.default_reasoning_level.clone(),
+            bundled_model
+                .supported_reasoning_levels
+                .iter()
+                .map(|preset| preset.effort.clone())
+                .collect::<Vec<_>>(),
+            bundled_model.multi_agent_version,
+        ),
+        (
+            Some(ReasoningEffort::High),
+            vec![
+                ReasoningEffort::Ultra,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::High,
+                ReasoningEffort::Medium,
+                ReasoningEffort::Low,
+            ],
+            Some(MultiAgentVersion::V2),
+        )
     );
 
     let mut replacement_model = static_model_catalog()
