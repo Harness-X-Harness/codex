@@ -14,6 +14,8 @@ import tarfile
 import tempfile
 import threading
 import time
+import tomllib
+from collections import deque
 from pathlib import Path
 
 
@@ -43,10 +45,18 @@ def extract_archive(path: Path, destination: Path) -> Path:
 
 
 class AppServer:
-    def __init__(self, binary: Path, codex_home: Path, workspace: Path) -> None:
+    def __init__(
+        self,
+        binary: Path,
+        codex_home: Path,
+        workspace: Path,
+        redaction: str,
+    ) -> None:
         environment = os.environ.copy()
         environment["CODEX_HOME"] = str(codex_home)
         environment["NO_COLOR"] = "1"
+        self.redaction = redaction
+        self.stderr_tail: deque[str] = deque(maxlen=8)
         self.process = subprocess.Popen(
             [str(binary), "app-server", "--strict-config", "--listen", "off"],
             cwd=workspace,
@@ -59,7 +69,7 @@ class AppServer:
         )
         self.messages: queue.Queue[dict[str, object]] = queue.Queue()
         self.reader = threading.Thread(target=self._read_stdout, daemon=True)
-        self.stderr_reader = threading.Thread(target=self._discard_stderr, daemon=True)
+        self.stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
         self.reader.start()
         self.stderr_reader.start()
 
@@ -73,10 +83,12 @@ class AppServer:
             if isinstance(value, dict):
                 self.messages.put(value)
 
-    def _discard_stderr(self) -> None:
+    def _read_stderr(self) -> None:
         assert self.process.stderr is not None
-        for _line in self.process.stderr:
-            pass
+        for line in self.process.stderr:
+            sanitized = line.rstrip().replace(self.redaction, "<redacted>")
+            if sanitized:
+                self.stderr_tail.append(sanitized[:500])
 
     def send(self, message: dict[str, object]) -> None:
         if self.process.poll() is not None:
@@ -107,8 +119,14 @@ class AppServer:
         except queue.Empty as error:
             status = self.process.poll()
             if status is not None:
+                details = ""
+                if waiting_for == "initialize":
+                    self.stderr_reader.join(timeout=1)
+                    if self.stderr_tail:
+                        details = "\n" + "\n".join(self.stderr_tail)
                 raise SystemExit(
                     f"App Server exited with status {status} while waiting for {waiting_for}"
+                    f"{details}"
                 ) from error
             raise SystemExit(
                 f"App Server response deadline expired while waiting for {waiting_for}"
@@ -140,7 +158,20 @@ def run_smoke(
         workspace.mkdir()
         shutil.copy2(config, codex_home / "config.toml")
 
-        server = AppServer(root / "bin/grokex-bin", codex_home, workspace)
+        with config.open("rb") as handle:
+            config_data = tomllib.load(handle)
+        providers = config_data.get("model_providers")
+        provider = providers.get("grok") if isinstance(providers, dict) else None
+        token = provider.get("experimental_bearer_token") if isinstance(provider, dict) else None
+        if not isinstance(token, str) or not token:
+            raise SystemExit("secret profile has no Grok bearer token")
+
+        server = AppServer(
+            root / "bin/grokex-bin",
+            codex_home,
+            workspace,
+            token,
+        )
         try:
             server.request(
                 1,
