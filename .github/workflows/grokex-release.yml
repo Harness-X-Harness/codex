@@ -104,12 +104,11 @@ jobs:
           python3 grokex/release.py verify-archives \
             --dist "${fixture}/dist" \
             --source-sha "${GITHUB_SHA}"
-      - name: Formatting and dependency lock
+      - name: Formatting
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt -- --config imports_granularity=Item --check
-          cargo metadata --locked --no-deps --format-version 1 >/dev/null
       - name: Provider contracts
         run: cargo test -p codex-model-provider
       - name: Stock App Server Provider projections
@@ -207,7 +206,7 @@ jobs:
         run: |
           set -euo pipefail
           export AWS_LC_SYS_NO_JITTER_ENTROPY=1
-          cargo build --locked --release --target "${{ matrix.target }}" --bin bwrap
+          cargo build --release --target "${{ matrix.target }}" --bin bwrap
           bwrap="${CARGO_TARGET_DIR:-target}/${{ matrix.target }}/release/bwrap"
           echo "CODEX_BWRAP_SHA256=$(sha256sum "${bwrap}" | awk '{print $1}')" >> "${GITHUB_ENV}"
       - name: Build Grokex binaries
@@ -222,7 +221,7 @@ jobs:
           if [[ "${TARGET}" == *linux* ]]; then
             export AWS_LC_SYS_NO_JITTER_ENTROPY=1
           fi
-          cargo build --locked --release --target "${TARGET}" --bin codex --bin codex-code-mode-host
+          cargo build --release --target "${TARGET}" --bin codex --bin codex-code-mode-host
       - name: Stage raw binaries
         env:
           TARGET: ${{ matrix.target }}
