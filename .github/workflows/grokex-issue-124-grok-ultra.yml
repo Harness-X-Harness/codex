@@ -1,0 +1,58 @@
+name: Grokex Issue 124 Ultra
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-124-grok-ultra
+
+permissions:
+  contents: read
+
+jobs:
+  grok-ultra:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: c775be0a3b7478ffd64efa40380f980fb8f3f212
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/issue-124.patch"
+          git status --short -- . > "$RUNNER_TEMP/issue-124.status"
+      - name: Bundled Grok catalog contracts
+        run: cargo test -p codex-model-provider
+      - name: Grok Ultra composition contract
+        run: cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
+      - name: Existing stock Ultra contract
+        run: cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
+      - name: Existing Grok Multi-Agent V2 lifecycle
+        run: cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+      - name: Affected library lints
+        run: |
+          cargo clippy -p codex-model-provider --lib -- -D warnings
+          cargo clippy -p codex-core --lib -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-124-grok-ultra-authority
+          path: |
+            ${{ runner.temp }}/issue-124.patch
+            ${{ runner.temp }}/issue-124.status
+          if-no-files-found: error
