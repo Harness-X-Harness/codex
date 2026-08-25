@@ -149,9 +149,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-15-xlarge
             target: aarch64-apple-darwin
-          - runner: macos-15-intel
+          - runner: macos-15-xlarge
             target: x86_64-apple-darwin
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
