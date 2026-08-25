@@ -1,0 +1,70 @@
+name: Grokex Issue 125 App Server integration
+
+on:
+  pull_request:
+    branches:
+      - codex/issue-125-app-server-integration
+
+permissions:
+  contents: read
+
+jobs:
+  app-server-integration:
+    runs-on: ubuntu-24.04
+    env:
+      RUST_MIN_STACK: 16777216
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product parent
+        working-directory: .
+        env:
+          EXPECTED_PRODUCT_SHA: ff93e2e22fbf498269b0c2b4c8378899bc159601
+        run: test "$(git rev-parse HEAD^)" = "$EXPECTED_PRODUCT_SHA"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Capture authoritative formatting
+        run: |
+          cargo fmt -- --config imports_granularity=Item
+          git diff --binary -- . > "$RUNNER_TEMP/issue-125.patch"
+          git status --short -- . > "$RUNNER_TEMP/issue-125.status"
+      - name: Provider contracts
+        run: cargo test -p codex-model-provider
+      - name: Stock App Server Grok model projection
+        run: cargo test -p codex-app-server --test all suite::v2::model_list::list_models_uses_grok_release_catalog_through_stock_model_dto -- --exact
+      - name: Stock App Server Grok capability projection
+        run: cargo test -p codex-app-server --test all suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities -- --exact
+      - name: Stock App Server text turn
+        run: cargo test -p codex-app-server --test all suite::v2::turn_start::turn_start_with_empty_input_runs_model_request -- --exact
+      - name: Stock App Server resume and fork contracts
+        run: |
+          cargo test -p codex-app-server --test all suite::v2::thread_resume::thread_resume_returns_rollout_history -- --exact
+          cargo test -p codex-app-server --test all suite::v2::thread_fork::thread_fork_creates_new_thread_and_emits_started -- --exact
+      - name: Reversible parallel namespaced tool contract
+        run: cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
+      - name: Stock App Server MCP event contract
+        run: cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
+      - name: Grok metadata-driven V2 and Ultra contracts
+        run: |
+          cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+          cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
+      - name: Affected target lints
+        run: |
+          cargo clippy -p codex-app-server --test all -- -D warnings
+          cargo clippy -p codex-model-provider -p codex-core --lib -- -D warnings
+      - name: Upload formatter authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-125-app-server-authority
+          path: |
+            ${{ runner.temp }}/issue-125.patch
+            ${{ runner.temp }}/issue-125.status
+          if-no-files-found: error
