@@ -1,0 +1,32 @@
+name: grokex-workflow-validation-final
+
+on:
+  pull_request:
+    branches: [release/rust-v0.149.0]
+
+jobs:
+  workflow-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify carrier provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD^)" == "6f114873d6babc4d3601514dd15140fa27953997" ]]
+          [[ "$(git diff-tree --no-commit-id --name-only -r HEAD)" == ".github/workflows/grokex-workflow-validation-final.yml" ]]
+      - name: Validate final workflow and helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/grokex-release.yml
+          python3 -m py_compile grokex/release.py grokex/live_smoke.py
+          bash -n grokex/grokex grokex/install-grokex.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/config.toml.example
+          git diff --check HEAD^
