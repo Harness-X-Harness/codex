@@ -1,0 +1,70 @@
+name: grokex-live-smoke-validation
+
+on:
+  pull_request:
+    branches: [release/rust-v0.149.0]
+
+jobs:
+  smoke-runner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify carrier provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD^)" == "4afdd9efc911be9bff4a747432cd31b7b233aa56" ]]
+          [[ "$(git diff-tree --no-commit-id --name-only -r HEAD)" == ".github/workflows/grokex-live-smoke-validation.yml" ]]
+      - name: Exercise one protocol operation
+        env:
+          GROK_API_KEY: fixture
+          SMOKE_COUNT_FILE: ${{ runner.temp }}/turn-count
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="${RUNNER_TEMP}/fixture"
+          mkdir -p "${fixture}/raw/x86_64-unknown-linux-musl"
+          printf '0\n' > "${SMOKE_COUNT_FILE}"
+          cat > "${fixture}/raw/x86_64-unknown-linux-musl/codex" <<'PY'
+          #!/usr/bin/env python3
+          import json, os, sys
+          for line in sys.stdin:
+              request = json.loads(line)
+              request_id = request.get("id")
+              method = request.get("method")
+              if method == "initialize":
+                  response = {}
+              elif method == "model/list":
+                  response = {"data": [{"id": "grok-4.6", "multiAgentVersion": "v2", "supportedReasoningEfforts": [{"reasoningEffort": "ultra"}]}]}
+              elif method == "thread/start":
+                  response = {"modelProvider": "grok", "thread": {"id": "not-recorded"}}
+              elif method == "turn/start":
+                  count_path = os.environ["SMOKE_COUNT_FILE"]
+                  count = int(open(count_path, encoding="utf-8").read()) + 1
+                  open(count_path, "w", encoding="utf-8").write(f"{count}\n")
+                  response = {"turn": {"id": "not-recorded"}}
+              else:
+                  continue
+              print(json.dumps({"id": request_id, "response": response}), flush=True)
+              if method == "turn/start":
+                  print(json.dumps({"method": "item/completed", "params": {"item": {"type": "agentMessage"}}}), flush=True)
+                  print(json.dumps({"method": "turn/completed", "params": {"turn": {"status": "completed"}}}), flush=True)
+          PY
+          chmod +x "${fixture}/raw/x86_64-unknown-linux-musl/codex"
+          touch "${fixture}/raw/x86_64-unknown-linux-musl/codex-code-mode-host" "${fixture}/raw/x86_64-unknown-linux-musl/bwrap"
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl aarch64-pc-windows-msvc x86_64-pc-windows-msvc; do
+            mkdir -p "${fixture}/raw/${target}"
+            if [[ "${target}" == *windows* ]]; then suffix=.exe; else suffix=; fi
+            touch "${fixture}/raw/${target}/codex${suffix}" "${fixture}/raw/${target}/codex-code-mode-host${suffix}"
+            if [[ "${target}" == *linux* ]]; then touch "${fixture}/raw/${target}/bwrap"; fi
+          done
+          python3 grokex/release.py package --raw-root "${fixture}/raw" --output "${fixture}/dist" --repository . --source-sha "$(git rev-parse HEAD^)"
+          python3 grokex/live_smoke.py --archive "${fixture}/dist/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz" --config grokex/config.toml.example --evidence "${fixture}/evidence.json" --source-sha "$(git rev-parse HEAD^)" --run-id fixture
+          [[ "$(<"${SMOKE_COUNT_FILE}")" == "1" ]]
+          python3 -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value["operation_count"] == 1 and value["status"] == "completed" and "thread_id" not in value' "${fixture}/evidence.json"
+          git diff --check HEAD^
