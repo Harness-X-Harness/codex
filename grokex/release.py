@@ -77,9 +77,15 @@ def copy_release_files(stage: Path, repository: Path) -> None:
         shutil.copy2(repository / relative, stage / Path(relative).name)
 
 
-def package(raw_root: Path, output: Path, repository: Path, source_sha: str) -> None:
+def package(
+    raw_root: Path,
+    output: Path,
+    repository: Path,
+    source_sha: str,
+    targets: tuple[str, ...] = TARGETS,
+) -> None:
     output.mkdir(parents=True, exist_ok=True)
-    for target in TARGETS:
+    for target in targets:
         raw = raw_root / target
         suffix = ".exe" if "windows" in target else ""
         required = (f"codex{suffix}", f"codex-code-mode-host{suffix}")
@@ -139,8 +145,12 @@ def safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     return members
 
 
-def verify_archives(dist: Path, source_sha: str) -> None:
-    expected_archives = {archive_name(target) for target in TARGETS}
+def verify_archives(
+    dist: Path,
+    source_sha: str,
+    targets: tuple[str, ...] = TARGETS,
+) -> None:
+    expected_archives = {archive_name(target) for target in targets}
     actual_archives = {path.name for path in dist.glob("*.tar.gz")}
     if actual_archives != expected_archives:
         raise SystemExit(
@@ -148,7 +158,7 @@ def verify_archives(dist: Path, source_sha: str) -> None:
             f"got {sorted(actual_archives)}"
         )
 
-    for target in TARGETS:
+    for target in targets:
         path = dist / archive_name(target)
         suffix = ".exe" if "windows" in target else ""
         root = TAG
@@ -296,7 +306,9 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
         raise SystemExit("release manifest mismatch")
 
     evidence = json.loads((dist / "LIVE_EVIDENCE.json").read_text(encoding="utf-8"))
+    live_archive = archive_name("x86_64-unknown-linux-musl")
     required_evidence = {
+        "archive": live_archive,
         "operation_count": 1,
         "provider": "grok",
         "source_sha": source_sha,
@@ -305,6 +317,8 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     }
     if any(evidence.get(key) != value for key, value in required_evidence.items()):
         raise SystemExit("live evidence mismatch")
+    if evidence.get("archive_sha256") != sha256(dist / live_archive):
+        raise SystemExit("live evidence archive checksum mismatch")
 
     checksum_lines = (dist / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
     recorded: dict[str, str] = {}
@@ -327,10 +341,12 @@ def main() -> None:
     package_parser.add_argument("--output", type=Path, required=True)
     package_parser.add_argument("--repository", type=Path, required=True)
     package_parser.add_argument("--source-sha", required=True)
+    package_parser.add_argument("--target", action="append", choices=TARGETS)
 
     verify_archives_parser = subparsers.add_parser("verify-archives")
     verify_archives_parser.add_argument("--dist", type=Path, required=True)
     verify_archives_parser.add_argument("--source-sha", required=True)
+    verify_archives_parser.add_argument("--target", action="append", choices=TARGETS)
 
     profile_parser = subparsers.add_parser("verify-profile")
     profile_parser.add_argument("--path", type=Path, required=True)
@@ -351,9 +367,19 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "package":
-        package(args.raw_root, args.output, args.repository, args.source_sha)
+        package(
+            args.raw_root,
+            args.output,
+            args.repository,
+            args.source_sha,
+            tuple(args.target) if args.target else TARGETS,
+        )
     elif args.command == "verify-archives":
-        verify_archives(args.dist, args.source_sha)
+        verify_archives(
+            args.dist,
+            args.source_sha,
+            tuple(args.target) if args.target else TARGETS,
+        )
     elif args.command == "verify-profile":
         verify_profile(args.path, args.secret)
     elif args.command == "build-assets":
