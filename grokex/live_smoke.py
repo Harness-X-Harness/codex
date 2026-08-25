@@ -89,7 +89,7 @@ class AppServer:
         self.send({"id": request_id, "method": method, "params": params})
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            message = self.next_message(deadline)
+            message = self.next_message(deadline, method)
             if message.get("id") != request_id:
                 continue
             if "error" in message:
@@ -100,12 +100,19 @@ class AppServer:
             return response
         raise SystemExit(f"App Server timed out during {method}")
 
-    def next_message(self, deadline: float) -> dict[str, object]:
+    def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
         remaining = max(0.0, deadline - time.monotonic())
         try:
             return self.messages.get(timeout=remaining)
         except queue.Empty as error:
-            raise SystemExit("App Server response deadline expired") from error
+            status = self.process.poll()
+            if status is not None:
+                raise SystemExit(
+                    f"App Server exited with status {status} while waiting for {waiting_for}"
+                ) from error
+            raise SystemExit(
+                f"App Server response deadline expired while waiting for {waiting_for}"
+            ) from error
 
     def close(self) -> None:
         if self.process.poll() is None:
@@ -196,7 +203,7 @@ def run_smoke(
             status = None
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
-                message = server.next_message(deadline)
+                message = server.next_message(deadline, "the single Grok Turn")
                 method = message.get("method")
                 params = message.get("params")
                 if not isinstance(params, dict):
