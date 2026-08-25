@@ -1,0 +1,394 @@
+name: grokex-release
+
+on:
+  push:
+    branches: [release/rust-v0.149.0]
+    paths: [.github/workflows/grokex-release.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-v0.149.0-release
+  cancel-in-progress: false
+
+env:
+  SOURCE_BRANCH: release/rust-v0.149.0
+  RELEASE_TAG: grokex-v0.149.0
+  UPSTREAM_COMMIT: 758ef40f50c1a458425c7cfbf1eb12cbc07af0b0
+
+jobs:
+  preflight:
+    name: Freeze source and destination
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: source
+        name: Verify exact release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF}" == "refs/heads/${SOURCE_BRANCH}" ]]
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          [[ "${GITHUB_SHA}" == "${branch_sha}" ]]
+          git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${GITHUB_SHA}"
+          [[ "$(<grokex/codex-release-tag)" == "rust-v0.149.0" ]]
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Destination tag already exists" >&2
+            exit 1
+          fi
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Destination release already exists" >&2
+            exit 1
+          fi
+          echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Verify public Grok profile
+        run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
+
+  contracts:
+    name: Current stock and Grok contracts
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+      - name: Release helper contracts
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile grokex/release.py grokex/live_smoke.py
+          bash -n grokex/grokex grokex/install-grokex.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/config.toml.example
+          fixture="${RUNNER_TEMP}/grokex-fixture"
+          mkdir -p "${fixture}/raw"
+          for target in \
+            aarch64-apple-darwin x86_64-apple-darwin \
+            aarch64-unknown-linux-musl x86_64-unknown-linux-musl \
+            aarch64-pc-windows-msvc x86_64-pc-windows-msvc; do
+            mkdir -p "${fixture}/raw/${target}"
+            if [[ "${target}" == *windows* ]]; then
+              touch "${fixture}/raw/${target}/codex.exe" "${fixture}/raw/${target}/codex-code-mode-host.exe"
+            else
+              touch "${fixture}/raw/${target}/codex" "${fixture}/raw/${target}/codex-code-mode-host"
+            fi
+            if [[ "${target}" == *linux* ]]; then
+              touch "${fixture}/raw/${target}/bwrap"
+            fi
+          done
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --source-sha "${GITHUB_SHA}"
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --source-sha "${GITHUB_SHA}"
+      - name: Formatting and dependency lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt -- --config imports_granularity=Item --check
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+      - name: Provider contracts
+        run: cargo test -p codex-model-provider
+      - name: Stock App Server Provider projections
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-app-server --test all suite::v2::model_list::list_models_uses_grok_release_catalog_through_stock_model_dto -- --exact
+          cargo test -p codex-app-server --test all suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities -- --exact
+      - name: Stock text, lifecycle, tool, and MCP controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-app-server --test all suite::v2::turn_start::turn_start_with_empty_input_runs_model_request -- --exact
+          cargo test -p codex-app-server --test all suite::v2::thread_resume::thread_resume_returns_rollout_history -- --exact
+          cargo test -p codex-app-server --test all suite::v2::thread_fork::thread_fork_creates_new_thread_and_emits_started -- --exact
+          cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
+          cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
+      - name: Grok metadata-driven V2 and Ultra
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+          cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
+          cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
+      - name: Affected library lints
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy -p codex-model-provider -p codex-core --lib -- -D warnings
+          cargo clippy -p codex-app-server --test all -- -D warnings
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ matrix.target }}
+      - if: contains(matrix.target, 'linux')
+        name: Use hermetic Cargo home
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home-${{ matrix.target }}"
+          mkdir -p "${cargo_home}/bin"
+          : > "${cargo_home}/config.toml"
+          echo "CARGO_HOME=${cargo_home}" >> "${GITHUB_ENV}"
+          echo "${cargo_home}/bin" >> "${GITHUB_PATH}"
+      - if: contains(matrix.target, 'linux')
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+      - if: contains(matrix.target, 'linux')
+        name: Install musl tools
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - if: contains(matrix.target, 'linux')
+        name: Build Linux sandbox helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AWS_LC_SYS_NO_JITTER_ENTROPY=1
+          cargo build --locked --release --target "${{ matrix.target }}" --bin bwrap
+          bwrap="${CARGO_TARGET_DIR:-target}/${{ matrix.target }}/release/bwrap"
+          echo "CODEX_BWRAP_SHA256=$(sha256sum "${bwrap}" | awk '{print $1}')" >> "${GITHUB_ENV}"
+      - name: Build Grokex binaries
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${TARGET}" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+          if [[ "${TARGET}" == *linux* ]]; then
+            export AWS_LC_SYS_NO_JITTER_ENTROPY=1
+          fi
+          cargo build --locked --release --target "${TARGET}" --bin codex --bin codex-code-mode-host
+      - name: Stage raw binaries
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
+          output="${RUNNER_TEMP}/raw/${TARGET}"
+          mkdir -p "${output}"
+          if [[ "${TARGET}" == *windows* ]]; then
+            cp "${release_dir}/codex.exe" "${release_dir}/codex-code-mode-host.exe" "${output}/"
+          else
+            cp "${release_dir}/codex" "${release_dir}/codex-code-mode-host" "${output}/"
+          fi
+          if [[ "${TARGET}" == *linux* ]]; then
+            cp "${release_dir}/bwrap" "${output}/"
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: raw-${{ matrix.target }}
+          path: ${{ runner.temp }}/raw/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    name: Package exact six archives
+    needs: [preflight, contracts, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: raw-*
+          path: raw
+      - name: Normalize artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in raw/raw-*; do
+            target="${directory#raw/raw-}"
+            mv "${directory}" "raw/${target}"
+          done
+      - name: Build and verify archives
+        run: |
+          python3 grokex/release.py package --raw-root raw --output archives --repository . --source-sha "${{ needs.preflight.outputs.source_sha }}"
+          python3 grokex/release.py verify-archives --dist archives --source-sha "${{ needs.preflight.outputs.source_sha }}"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-archives
+          path: archives
+          if-no-files-found: error
+          retention-days: 1
+
+  live:
+    name: One bounded Grok artifact Turn
+    needs: [preflight, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-archives
+          path: archives
+      - name: Materialize and validate secret profile
+        env:
+          GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${GROK_CONFIG_TOML}" ]]
+          umask 077
+          printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
+          python3 grokex/release.py verify-profile --path "${RUNNER_TEMP}/config.toml" --secret
+      - name: Execute the semantic operation once
+        run: |
+          python3 grokex/live_smoke.py \
+            --archive archives/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz \
+            --config "${RUNNER_TEMP}/config.toml" \
+            --evidence "${RUNNER_TEMP}/LIVE_EVIDENCE.json" \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-live-evidence
+          path: ${{ runner.temp }}/LIVE_EVIDENCE.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish and independently verify
+    needs: [preflight, package, live]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-archives
+          path: archives
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-live-evidence
+          path: evidence
+      - name: Assemble and verify release assets
+        run: |
+          python3 grokex/release.py build-assets \
+            --archives archives \
+            --evidence evidence/LIVE_EVIDENCE.json \
+            --output release-assets \
+            --repository . \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
+          python3 grokex/release.py verify-assets \
+            --dist release-assets \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
+      - name: Recheck immutable source and empty destination
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          [[ "${branch_sha}" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Destination tag appeared during validation" >&2
+            exit 1
+          fi
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Destination release appeared during validation" >&2
+            exit 1
+          fi
+      - name: Publish once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${{ needs.preflight.outputs.source_sha }}" \
+            --title "Grokex 0.149.0" \
+            --notes "Stock Codex 0.149.0 harness with the release-bundled grok-4.6 Provider catalog."
+      - name: Download and verify published destination
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          mkdir published
+          gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --dir published
+          python3 grokex/release.py verify-assets \
+            --dist published \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
