@@ -71,7 +71,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: clippy,rustfmt
-      - name: Release helper contracts
+      - id: release_helpers
+        name: Release helper contracts
+        continue-on-error: true
         working-directory: .
         shell: bash
         run: |
@@ -100,24 +102,50 @@ jobs:
             --raw-root "${fixture}/raw" \
             --output "${fixture}/dist" \
             --repository . \
-            --source-sha "${GITHUB_SHA}"
+            --source-sha "${GITHUB_SHA}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --source-sha "${GITHUB_SHA}" \
+            --target x86_64-unknown-linux-musl
+          candidate="${fixture}/dist/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz"
+          candidate_sha="$(sha256sum "${candidate}" | awk '{print $1}')"
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --source-sha "${GITHUB_SHA}" \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --target aarch64-unknown-linux-musl \
+            --target aarch64-pc-windows-msvc \
+            --target x86_64-pc-windows-msvc
+          [[ "$(sha256sum "${candidate}" | awk '{print $1}')" == "${candidate_sha}" ]]
           python3 grokex/release.py verify-archives \
             --dist "${fixture}/dist" \
             --source-sha "${GITHUB_SHA}"
-      - name: Formatting
+      - id: formatting
+        name: Formatting
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt -- --config imports_granularity=Item --check
-      - name: Provider contracts
+      - id: provider_contracts
+        name: Provider contracts
+        continue-on-error: true
         run: cargo test -p codex-model-provider
-      - name: Stock App Server Provider projections
+      - id: stock_provider_projections
+        name: Stock App Server Provider projections
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cargo test -p codex-app-server --test all suite::v2::model_list::list_models_uses_grok_release_catalog_through_stock_model_dto -- --exact
           cargo test -p codex-app-server --test all suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities -- --exact
-      - name: Stock text, lifecycle, tool, and MCP controls
+      - id: stock_controls
+        name: Stock text, lifecycle, tool, and MCP controls
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -126,129 +154,66 @@ jobs:
           cargo test -p codex-app-server --test all suite::v2::thread_fork::thread_fork_creates_new_thread_and_emits_started -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
           cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
-      - name: Grok metadata-driven V2 and Ultra
+      - id: grok_contracts
+        name: Grok metadata-driven V2 and Ultra
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
-      - name: Affected library lints
+      - id: affected_lints
+        name: Affected library lints
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cargo clippy -p codex-model-provider -p codex-core --lib -- -D warnings
           cargo clippy -p codex-app-server --test all -- -D warnings
+      - name: Require every independent contract
+        if: always()
+        env:
+          AFFECTED_LINTS: ${{ steps.affected_lints.outcome }}
+          FORMATTING: ${{ steps.formatting.outcome }}
+          GROK_CONTRACTS: ${{ steps.grok_contracts.outcome }}
+          PROVIDER_CONTRACTS: ${{ steps.provider_contracts.outcome }}
+          RELEASE_HELPERS: ${{ steps.release_helpers.outcome }}
+          STOCK_CONTROLS: ${{ steps.stock_controls.outcome }}
+          STOCK_PROVIDER_PROJECTIONS: ${{ steps.stock_provider_projections.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${RELEASE_HELPERS}" == "success" ]] || failures+=("release helpers")
+          [[ "${FORMATTING}" == "success" ]] || failures+=("formatting")
+          [[ "${PROVIDER_CONTRACTS}" == "success" ]] || failures+=("Provider contracts")
+          [[ "${STOCK_PROVIDER_PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
+          [[ "${STOCK_CONTROLS}" == "success" ]] || failures+=("stock controls")
+          [[ "${GROK_CONTRACTS}" == "success" ]] || failures+=("Grok contracts")
+          [[ "${AFFECTED_LINTS}" == "success" ]] || failures+=("affected lints")
+          if (( ${#failures[@]} )); then
+            printf 'Failed independent contract: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
 
-  build:
-    name: Build ${{ matrix.target }}
-    needs: preflight
-    runs-on: ${{ matrix.runner }}
+  build_candidate:
+    name: Build x86_64-unknown-linux-musl candidate
+    needs: [preflight, contracts]
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-    defaults:
-      run:
-        working-directory: codex-rs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
           persist-credentials: false
-      - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: ./.github/actions/build-grokex
         with:
-          targets: ${{ matrix.target }}
-      - if: runner.os == 'Windows'
-        uses: ./.github/actions/setup-msvc-env
-        with:
-          target: ${{ matrix.target }}
-      - if: contains(matrix.target, 'linux')
-        name: Use hermetic Cargo home
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo_home="${GITHUB_WORKSPACE}/.cargo-home-${{ matrix.target }}"
-          mkdir -p "${cargo_home}/bin"
-          : > "${cargo_home}/config.toml"
-          echo "CARGO_HOME=${cargo_home}" >> "${GITHUB_ENV}"
-          echo "${cargo_home}/bin" >> "${GITHUB_PATH}"
-      - if: contains(matrix.target, 'linux')
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.14.0
-          use-cache: false
-      - if: contains(matrix.target, 'linux')
-        name: Install musl tools
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
-      - uses: ./.github/actions/setup-rusty-v8
-        with:
-          target: ${{ matrix.target }}
-      - if: contains(matrix.target, 'linux')
-        name: Build Linux sandbox helper
-        shell: bash
-        run: |
-          set -euo pipefail
-          export AWS_LC_SYS_NO_JITTER_ENTROPY=1
-          cargo build --release --target "${{ matrix.target }}" --bin bwrap
-          bwrap="${CARGO_TARGET_DIR:-target}/${{ matrix.target }}/release/bwrap"
-          echo "CODEX_BWRAP_SHA256=$(sha256sum "${bwrap}" | awk '{print $1}')" >> "${GITHUB_ENV}"
-      - name: Build Grokex binaries
-        env:
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${TARGET}" == "x86_64-pc-windows-msvc" ]]; then
-            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
-          fi
-          if [[ "${TARGET}" == *linux* ]]; then
-            export AWS_LC_SYS_NO_JITTER_ENTROPY=1
-          fi
-          cargo build --release --target "${TARGET}" --bin codex --bin codex-code-mode-host
-      - name: Stage raw binaries
-        env:
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
-          output="${RUNNER_TEMP}/raw/${TARGET}"
-          mkdir -p "${output}"
-          if [[ "${TARGET}" == *windows* ]]; then
-            cp "${release_dir}/codex.exe" "${release_dir}/codex-code-mode-host.exe" "${output}/"
-          else
-            cp "${release_dir}/codex" "${release_dir}/codex-code-mode-host" "${output}/"
-          fi
-          if [[ "${TARGET}" == *linux* ]]; then
-            cp "${release_dir}/bwrap" "${output}/"
-          fi
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: raw-${{ matrix.target }}
-          path: ${{ runner.temp }}/raw/${{ matrix.target }}
-          if-no-files-found: error
-          retention-days: 1
+          target: x86_64-unknown-linux-musl
 
-  package:
-    name: Package exact six archives
-    needs: [preflight, contracts, build]
+  package_candidate:
+    name: Package final Linux x86_64 candidate
+    needs: [preflight, build_candidate]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -257,30 +222,36 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: raw-*
+          name: raw-x86_64-unknown-linux-musl
           path: raw
-      - name: Normalize artifact layout
+      - name: Normalize candidate artifact layout
         shell: bash
         run: |
           set -euo pipefail
-          for directory in raw/raw-*; do
-            target="${directory#raw/raw-}"
-            mv "${directory}" "raw/${target}"
-          done
-      - name: Build and verify archives
+          mkdir -p raw/x86_64-unknown-linux-musl
+          find raw -maxdepth 1 -type f -exec mv {} raw/x86_64-unknown-linux-musl/ \;
+      - name: Build and verify candidate archive
         run: |
-          python3 grokex/release.py package --raw-root raw --output archives --repository . --source-sha "${{ needs.preflight.outputs.source_sha }}"
-          python3 grokex/release.py verify-archives --dist archives --source-sha "${{ needs.preflight.outputs.source_sha }}"
+          python3 grokex/release.py package \
+            --raw-root raw \
+            --output archives \
+            --repository . \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target x86_64-unknown-linux-musl
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: grokex-archives
+          name: grokex-linux-candidate
           path: archives
           if-no-files-found: error
           retention-days: 1
 
   live:
     name: One bounded Grok artifact Turn
-    needs: [preflight, package]
+    needs: [preflight, package_candidate]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -290,7 +261,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: grokex-archives
+          name: grokex-linux-candidate
           path: archives
       - name: Materialize and validate secret profile
         env:
@@ -314,6 +285,81 @@ jobs:
         with:
           name: grokex-live-evidence
           path: ${{ runner.temp }}/LIVE_EVIDENCE.json
+          if-no-files-found: error
+          retention-days: 1
+
+  build_remaining:
+    name: Build ${{ matrix.target }}
+    needs: [preflight, live]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/build-grokex
+        with:
+          target: ${{ matrix.target }}
+
+  package:
+    name: Assemble and verify exact six archives
+    needs: [preflight, live, build_remaining]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-linux-candidate
+          path: archives
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: raw-*
+          path: raw
+      - name: Normalize artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in raw/raw-*; do
+            target="${directory#raw/raw-}"
+            mv "${directory}" "raw/${target}"
+          done
+      - name: Build remaining archives and verify exact six
+        run: |
+          python3 grokex/release.py package \
+            --raw-root raw \
+            --output archives \
+            --repository . \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --target aarch64-unknown-linux-musl \
+            --target aarch64-pc-windows-msvc \
+            --target x86_64-pc-windows-msvc
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-archives
+          path: archives
           if-no-files-found: error
           retention-days: 1
 
