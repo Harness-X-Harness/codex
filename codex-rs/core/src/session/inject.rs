@@ -72,6 +72,7 @@ impl Session {
             && matches!(&item, ResponseItem::Message { role, .. } if role == "developer"))
         .then_some(CodexHarnessMetadata {
             client_authored: true,
+            ..Default::default()
         });
 
         ResponseItemEnvelope { item, metadata }
@@ -82,9 +83,14 @@ impl Session {
         turn_context: &TurnContext,
         items: Vec<ResponseItemEnvelope>,
     ) {
-        if !self.enabled(Feature::RetainClientDeveloperMessages)
-            || items.iter().all(|item| item.metadata.is_none())
-        {
+        let retain_client_developer_messages = self.enabled(Feature::RetainClientDeveloperMessages);
+        let has_retained_metadata = items.iter().any(|envelope| {
+            envelope.metadata.as_ref().is_some_and(|metadata| {
+                metadata.provider_hosted_tool_call
+                    || (retain_client_developer_messages && metadata.client_authored)
+            })
+        });
+        if !has_retained_metadata {
             let items = items
                 .into_iter()
                 .map(ResponseItemEnvelope::into_item)
@@ -102,7 +108,10 @@ impl Session {
             );
             image_preparations.extend(prepared_images);
 
-            let mut metadata = envelope.metadata;
+            let mut metadata = envelope.metadata.filter(|metadata| {
+                metadata.provider_hosted_tool_call
+                    || (retain_client_developer_messages && metadata.client_authored)
+            });
             annotated_items.extend(prepared_items.into_owned().into_iter().map(|item| {
                 ResponseItemEnvelope {
                     item,

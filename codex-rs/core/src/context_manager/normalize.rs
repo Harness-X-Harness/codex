@@ -22,6 +22,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
+    let mut provider_hosted_custom_call_ids = HashSet::new();
     for envelope in items.iter() {
         match &envelope.item {
             ResponseItem::FunctionCallOutput { call_id, .. } => {
@@ -37,6 +38,14 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                 custom_tool_output_ids.insert(call_id.as_str());
             }
             _ => {}
+        }
+        if envelope
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.provider_hosted_tool_call)
+            && let ResponseItem::CustomToolCall { call_id, .. } = &envelope.item
+        {
+            provider_hosted_custom_call_ids.insert(call_id.as_str());
         }
     }
 
@@ -80,7 +89,8 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                 ));
             }
             ResponseItem::CustomToolCall { id, call_id, .. }
-                if !custom_tool_output_ids.contains(call_id.as_str()) =>
+                if !custom_tool_output_ids.contains(call_id.as_str())
+                    && !provider_hosted_custom_call_ids.contains(call_id.as_str()) =>
             {
                 error_or_panic(format!(
                     "Custom tool call output is missing for call id: {call_id}"
