@@ -71,7 +71,19 @@ impl ModelProvider for GrokModelProvider {
     }
 
     fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        self.inner.project_model_input(input)
+        let mut input = self.inner.project_model_input(input);
+        for item in &mut input {
+            if let ResponseItem::Reasoning {
+                content,
+                encrypted_content: Some(_),
+                ..
+            } = item
+                && content.is_none()
+            {
+                *content = Some(Vec::new());
+            }
+        }
+        input
     }
 
     fn projects_tools_as_flat_functions(&self) -> bool {

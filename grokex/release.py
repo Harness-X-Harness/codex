@@ -38,7 +38,8 @@ LIVE_SCENARIO_ASSERTIONS = {
         "status": "completed",
     },
     "encrypted-reasoning-tool-continuation": {
-        "operation_count": 1,
+        "history_response_assertion": "exact_match",
+        "operation_count": 2,
         "reasoning_replay": "completed",
         "response_assertion": "exact_match",
         "status": "completed",
@@ -270,7 +271,6 @@ def build_live_evidence(
         "catalog": "release-bundled",
         "model": "grok-4.6",
         "multi_agent_version": "v2",
-        "operation_count": 1,
         "provider": "grok",
         "reasoning_effort": "ultra",
         "source_sha": source_sha,
@@ -298,7 +298,9 @@ def build_live_evidence(
         "catalog": "release-bundled",
         "model": "grok-4.6",
         "multi_agent_version": "v2",
-        "operation_count": len(observed),
+        "operation_count": sum(
+            assertions["operation_count"] for assertions in observed.values()
+        ),
         "provider": "grok",
         "reasoning_effort": "ultra",
         "scenarios": observed,
@@ -381,7 +383,10 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     live_archive = archive_name("x86_64-unknown-linux-musl")
     required_evidence = {
         "archive": live_archive,
-        "operation_count": len(LIVE_SCENARIO_ASSERTIONS),
+        "operation_count": sum(
+            assertions["operation_count"]
+            for assertions in LIVE_SCENARIO_ASSERTIONS.values()
+        ),
         "provider": "grok",
         "scenarios": LIVE_SCENARIO_ASSERTIONS,
         "source_sha": source_sha,

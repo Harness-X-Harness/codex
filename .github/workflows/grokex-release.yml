@@ -7,6 +7,10 @@ concurrency:
   group: grokex-v0.149.0-release
   cancel-in-progress: false
 
+permissions:
+  actions: read
+  contents: read
+
 env:
   SOURCE_BRANCH: release/rust-v0.149.0
   RELEASE_TAG: grokex-v0.149.0
