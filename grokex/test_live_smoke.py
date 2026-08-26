@@ -19,7 +19,7 @@ class FakeAppServer:
 
 
 class VerifiedTurnTest(unittest.TestCase):
-    def completed_turn(self, reply: str) -> FakeAppServer:
+    def completed_turn(self, reply: str, status: str = "completed") -> FakeAppServer:
         return FakeAppServer(
             [
                 {
@@ -54,7 +54,7 @@ class VerifiedTurnTest(unittest.TestCase):
                 },
                 {
                     "method": "turn/completed",
-                    "params": {"turn": {"status": "completed"}},
+                    "params": {"turn": {"status": status}},
                 },
             ]
         )
@@ -95,6 +95,15 @@ class VerifiedTurnTest(unittest.TestCase):
         server = self.completed_turn("not the expected reply")
 
         with self.assertRaisesRegex(SystemExit, "expected semantic reply"):
+            live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+
+    def test_reports_secret_safe_phase_when_turn_fails_after_tool(self) -> None:
+        server = self.completed_turn("", status="failed")
+
+        with self.assertRaisesRegex(
+            SystemExit,
+            "status=failed.*reasoning_completed=true.*tool_requests=1.*tool_completed=true",
+        ):
             live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
 
 
