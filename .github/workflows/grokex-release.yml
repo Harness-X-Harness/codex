@@ -22,7 +22,9 @@ jobs:
     permissions:
       contents: read
     outputs:
+      mode: ${{ steps.source.outputs.mode }}
       source_sha: ${{ steps.source.outputs.sha }}
+      validator_sha: ${{ steps.source.outputs.validator_sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -35,20 +37,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${GITHUB_REF}" == "refs/heads/${SOURCE_BRANCH}" ]]
-          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
-          [[ "${GITHUB_SHA}" == "${branch_sha}" ]]
           git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${GITHUB_SHA}"
           [[ "$(<grokex/codex-release-tag)" == "rust-v0.149.0" ]]
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "Destination tag already exists" >&2
+          tag_exists=false
+          release_exists=false
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1 && tag_exists=true
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 && release_exists=true
+          if [[ "${tag_exists}" == true && "${release_exists}" == true ]]; then
+            tag_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.type)"
+            [[ "${tag_type}" == "commit" ]]
+            source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.sha)"
+            release_target="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish)"
+            [[ "${release_target}" == "${source_sha}" ]]
+            git merge-base --is-ancestor "${source_sha}" "${GITHUB_SHA}"
+            mode=published-live
+          elif [[ "${tag_exists}" == false && "${release_exists}" == false ]]; then
+            [[ "${GITHUB_REF}" == "refs/heads/${SOURCE_BRANCH}" ]]
+            branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+            [[ "${GITHUB_SHA}" == "${branch_sha}" ]]
+            source_sha="${GITHUB_SHA}"
+            mode=publish
+          else
+            echo "Release tag and release destination disagree" >&2
             exit 1
           fi
-          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "Destination release already exists" >&2
-            exit 1
-          fi
-          echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "mode=${mode}"
+            echo "sha=${source_sha}"
+            echo "validator_sha=${GITHUB_SHA}"
+          } >> "${GITHUB_OUTPUT}"
       - name: Verify public Grok profile
         run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
 
@@ -65,10 +82,12 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
+          ref: ${{ needs.preflight.outputs.validator_sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+        if: needs.preflight.outputs.mode == 'publish'
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        if: needs.preflight.outputs.mode == 'publish'
         with:
           components: clippy,rustfmt
       - id: release_helpers
@@ -78,7 +97,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile grokex/release.py grokex/live_smoke.py
+          python3 -m py_compile grokex/release.py grokex/live_smoke.py grokex/test_live_smoke.py
+          python3 -m unittest grokex.test_live_smoke
           bash -n grokex/grokex grokex/install-grokex.sh
           pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
           python3 grokex/release.py verify-profile --path grokex/config.toml.example
@@ -126,6 +146,7 @@ jobs:
             --source-sha "${GITHUB_SHA}"
       - id: formatting
         name: Formatting
+        if: needs.preflight.outputs.mode == 'publish'
         continue-on-error: true
         shell: bash
         run: |
@@ -133,10 +154,12 @@ jobs:
           cargo fmt -- --config imports_granularity=Item --check
       - id: provider_contracts
         name: Provider contracts
+        if: needs.preflight.outputs.mode == 'publish'
         continue-on-error: true
         run: cargo test -p codex-model-provider
       - id: stock_provider_projections
         name: Stock App Server Provider projections
+        if: needs.preflight.outputs.mode == 'publish'
         continue-on-error: true
         shell: bash
         run: |
@@ -145,6 +168,7 @@ jobs:
           cargo test -p codex-app-server --test all suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities -- --exact
       - id: stock_controls
         name: Stock text, lifecycle, tool, and MCP controls
+        if: needs.preflight.outputs.mode == 'publish'
         continue-on-error: true
         shell: bash
         run: |
@@ -156,6 +180,7 @@ jobs:
           cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
       - id: grok_contracts
         name: Grok metadata-driven V2 and Ultra
+        if: needs.preflight.outputs.mode == 'publish'
         continue-on-error: true
         shell: bash
         run: |
@@ -165,6 +190,7 @@ jobs:
           cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
       - id: affected_lints
         name: Affected library lints
+        if: needs.preflight.outputs.mode == 'publish'
         continue-on-error: true
         shell: bash
         run: |
@@ -179,6 +205,7 @@ jobs:
           GROK_CONTRACTS: ${{ steps.grok_contracts.outcome }}
           PROVIDER_CONTRACTS: ${{ steps.provider_contracts.outcome }}
           RELEASE_HELPERS: ${{ steps.release_helpers.outcome }}
+          MODE: ${{ needs.preflight.outputs.mode }}
           STOCK_CONTROLS: ${{ steps.stock_controls.outcome }}
           STOCK_PROVIDER_PROJECTIONS: ${{ steps.stock_provider_projections.outcome }}
         shell: bash
@@ -186,12 +213,14 @@ jobs:
           set -euo pipefail
           failures=()
           [[ "${RELEASE_HELPERS}" == "success" ]] || failures+=("release helpers")
-          [[ "${FORMATTING}" == "success" ]] || failures+=("formatting")
-          [[ "${PROVIDER_CONTRACTS}" == "success" ]] || failures+=("Provider contracts")
-          [[ "${STOCK_PROVIDER_PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
-          [[ "${STOCK_CONTROLS}" == "success" ]] || failures+=("stock controls")
-          [[ "${GROK_CONTRACTS}" == "success" ]] || failures+=("Grok contracts")
-          [[ "${AFFECTED_LINTS}" == "success" ]] || failures+=("affected lints")
+          if [[ "${MODE}" == "publish" ]]; then
+            [[ "${FORMATTING}" == "success" ]] || failures+=("formatting")
+            [[ "${PROVIDER_CONTRACTS}" == "success" ]] || failures+=("Provider contracts")
+            [[ "${STOCK_PROVIDER_PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
+            [[ "${STOCK_CONTROLS}" == "success" ]] || failures+=("stock controls")
+            [[ "${GROK_CONTRACTS}" == "success" ]] || failures+=("Grok contracts")
+            [[ "${AFFECTED_LINTS}" == "success" ]] || failures+=("affected lints")
+          fi
           if (( ${#failures[@]} )); then
             printf 'Failed independent contract: %s\n' "${failures[@]}" >&2
             exit 1
@@ -204,10 +233,12 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: needs.preflight.outputs.mode == 'publish'
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
           persist-credentials: false
       - uses: ./.github/actions/build-grokex
+        if: needs.preflight.outputs.mode == 'publish'
         with:
           target: x86_64-unknown-linux-musl
 
@@ -218,19 +249,22 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
+          ref: ${{ needs.preflight.outputs.validator_sha }}
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.preflight.outputs.mode == 'publish'
         with:
           name: raw-x86_64-unknown-linux-musl
           path: raw
       - name: Normalize candidate artifact layout
+        if: needs.preflight.outputs.mode == 'publish'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p raw/x86_64-unknown-linux-musl
           find raw -maxdepth 1 -type f -exec mv {} raw/x86_64-unknown-linux-musl/ \;
       - name: Build and verify candidate archive
+        if: needs.preflight.outputs.mode == 'publish'
         run: |
           python3 grokex/release.py package \
             --raw-root raw \
@@ -238,6 +272,22 @@ jobs:
             --repository . \
             --source-sha "${{ needs.preflight.outputs.source_sha }}" \
             --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target x86_64-unknown-linux-musl
+      - name: Download and verify published Linux candidate
+        if: needs.preflight.outputs.mode == 'published-live'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p archives
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz' \
+            --dir archives
           python3 grokex/release.py verify-archives \
             --dist archives \
             --source-sha "${{ needs.preflight.outputs.source_sha }}" \
@@ -257,7 +307,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
+          ref: ${{ needs.preflight.outputs.validator_sha }}
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -280,6 +330,7 @@ jobs:
             --config "${RUNNER_TEMP}/config.toml" \
             --evidence "${RUNNER_TEMP}/LIVE_EVIDENCE.json" \
             --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --validator-sha "${{ needs.preflight.outputs.validator_sha }}" \
             --run-id "${GITHUB_RUN_ID}"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -291,6 +342,7 @@ jobs:
   build_remaining:
     name: Build ${{ matrix.target }}
     needs: [preflight, live]
+    if: needs.preflight.outputs.mode == 'publish'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     strategy:
@@ -319,6 +371,7 @@ jobs:
   package:
     name: Assemble and verify exact six archives
     needs: [preflight, live, build_remaining]
+    if: needs.preflight.outputs.mode == 'publish'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -366,6 +419,7 @@ jobs:
   publish:
     name: Publish and independently verify
     needs: [preflight, package, live]
+    if: needs.preflight.outputs.mode == 'publish'
     runs-on: ubuntu-24.04
     permissions:
       contents: write

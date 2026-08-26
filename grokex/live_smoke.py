@@ -20,6 +20,9 @@ from pathlib import Path
 
 
 TAG = "grokex-v0.149.0"
+TOOL_NAME = "grokex_live_probe"
+TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
+EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 
 
 def sha256(path: Path) -> str:
@@ -142,11 +145,90 @@ class AppServer:
                 self.process.wait(timeout=5)
 
 
+def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]:
+    reasoning_completed = False
+    tool_request_count = 0
+    tool_completed = False
+    agent_reply = None
+    status = None
+
+    while time.monotonic() < deadline:
+        message = server.next_message(deadline, "the single Grok Turn")
+        method = message.get("method")
+        params = message.get("params")
+        if method == "item/tool/call":
+            request_id = message.get("id")
+            if not isinstance(request_id, (int, str)) or not isinstance(params, dict):
+                raise SystemExit("the Grok Turn returned an invalid dynamic tool request")
+            if params.get("tool") != TOOL_NAME or params.get("arguments") != {}:
+                raise SystemExit("the Grok Turn requested an unexpected dynamic tool operation")
+            tool_request_count += 1
+            if tool_request_count != 1:
+                raise SystemExit("the Grok Turn requested the semantic tool more than once")
+            server.send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "contentItems": [
+                            {"type": "inputText", "text": TOOL_OUTPUT_MARKER}
+                        ],
+                        "success": True,
+                    },
+                }
+            )
+            continue
+        if not isinstance(params, dict):
+            continue
+        if method == "item/completed":
+            item = params.get("item")
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                reasoning_completed = True
+            elif item_type == "dynamicToolCall":
+                content_items = item.get("contentItems")
+                tool_completed = (
+                    item.get("tool") == TOOL_NAME
+                    and item.get("status") == "completed"
+                    and item.get("success") is True
+                    and isinstance(content_items, list)
+                    and any(
+                        isinstance(content, dict)
+                        and content.get("type") == "inputText"
+                        and content.get("text") == TOOL_OUTPUT_MARKER
+                        for content in content_items
+                    )
+                )
+            elif item_type == "agentMessage":
+                agent_reply = item.get("text")
+        elif method == "turn/completed":
+            turn = params.get("turn")
+            status = turn.get("status") if isinstance(turn, dict) else None
+            break
+
+    if status != "completed":
+        raise SystemExit("the single Grok Turn did not complete")
+    if not reasoning_completed:
+        raise SystemExit("the Grok Turn did not expose a completed reasoning item")
+    if tool_request_count != 1 or not tool_completed:
+        raise SystemExit("the Grok Turn did not complete one semantic tool continuation")
+    if not isinstance(agent_reply, str) or agent_reply.strip() != EXPECTED_AGENT_REPLY:
+        raise SystemExit("the Grok Turn did not return the expected semantic reply")
+    return {
+        "reasoning_replay": "completed",
+        "response_assertion": "exact_match",
+        "status": status,
+        "tool_continuation": "completed",
+    }
+
+
 def run_smoke(
     archive: Path,
     config: Path,
     evidence_path: Path,
     source_sha: str,
+    validator_sha: str,
     run_id: str,
 ) -> None:
     with tempfile.TemporaryDirectory() as temporary:
@@ -211,6 +293,17 @@ def run_smoke(
                     "ephemeral": True,
                     "model": "grok-4.6",
                     "modelProvider": "grok",
+                    "dynamicTools": [
+                        {
+                            "name": TOOL_NAME,
+                            "description": "Return the fixed live validation marker.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {},
+                                "additionalProperties": False,
+                            },
+                        }
+                    ],
                 },
             )
             thread = thread_response.get("thread")
@@ -225,30 +318,20 @@ def run_smoke(
                 4,
                 "turn/start",
                 {
-                    "input": [{"text": "Reply with OK.", "textElements": [], "type": "text"}],
+                    "input": [
+                        {
+                            "text": (
+                                f"Call {TOOL_NAME} exactly once. Use its result, then reply "
+                                f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
+                            ),
+                            "textElements": [],
+                            "type": "text",
+                        }
+                    ],
                     "threadId": thread_id,
                 },
             )
-
-            agent_message_completed = False
-            status = None
-            deadline = time.monotonic() + 120
-            while time.monotonic() < deadline:
-                message = server.next_message(deadline, "the single Grok Turn")
-                method = message.get("method")
-                params = message.get("params")
-                if not isinstance(params, dict):
-                    continue
-                if method == "item/completed":
-                    item = params.get("item")
-                    if isinstance(item, dict) and item.get("type") == "agentMessage":
-                        agent_message_completed = True
-                elif method == "turn/completed":
-                    turn = params.get("turn")
-                    status = turn.get("status") if isinstance(turn, dict) else None
-                    break
-            if status != "completed" or not agent_message_completed:
-                raise SystemExit("the single Grok Turn did not complete with an agent message")
+            turn_evidence = wait_for_verified_turn(server, time.monotonic() + 120)
 
             evidence = {
                 "archive": archive.name,
@@ -260,9 +343,10 @@ def run_smoke(
                 "provider": "grok",
                 "reasoning_effort": "ultra",
                 "source_sha": source_sha,
-                "status": status,
+                **turn_evidence,
                 "story": "grokex-provider-profile-startup",
                 "validation_run": run_id,
+                "validator_sha": validator_sha,
             }
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -277,9 +361,17 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--validator-sha", required=True)
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
-    run_smoke(args.archive, args.config, args.evidence, args.source_sha, args.run_id)
+    run_smoke(
+        args.archive,
+        args.config,
+        args.evidence,
+        args.source_sha,
+        args.validator_sha,
+        args.run_id,
+    )
 
 
 if __name__ == "__main__":
