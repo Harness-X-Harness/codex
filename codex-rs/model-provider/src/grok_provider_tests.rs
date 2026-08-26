@@ -3,6 +3,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
@@ -11,7 +12,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::ResponseItemId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
@@ -68,13 +68,22 @@ fn stock_provider_keeps_canonical_history_unchanged() {
         ModelProviderInfo::create_openai_provider(/*base_url*/ None),
         /*auth_manager*/ None,
     );
-    let input = canonical_history(
+    let mut input = canonical_history(
         Some(InternalChatMessageMetadataPassthrough {
             turn_id: Some("turn-1".to_owned()),
             ..Default::default()
         }),
         Some(vec!["encrypted".to_owned()]),
     );
+    input.push(ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_owned(),
+        }],
+        content: None,
+        encrypted_content: Some("opaque-encrypted-reasoning".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    });
 
     assert_eq!(provider.project_model_input(input.clone()), input);
 }
