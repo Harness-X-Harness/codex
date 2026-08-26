@@ -83,8 +83,7 @@ impl Session {
         turn_context: &TurnContext,
         items: Vec<ResponseItemEnvelope>,
     ) {
-        let retain_client_developer_messages =
-            self.enabled(Feature::RetainClientDeveloperMessages);
+        let retain_client_developer_messages = self.enabled(Feature::RetainClientDeveloperMessages);
         let has_retained_metadata = items.iter().any(|envelope| {
             envelope.metadata.as_ref().is_some_and(|metadata| {
                 metadata.provider_hosted_tool_call

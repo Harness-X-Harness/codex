@@ -52,6 +52,7 @@ pub struct CodexHarnessMetadata {
     pub provider_hosted_tool_call: bool,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(value: &bool) -> bool {
     !*value
 }

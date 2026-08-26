@@ -135,14 +135,25 @@ fn provider_hosted_tool_metadata_round_trips_beside_rollout_payload() -> Result<
             "timestamp": "2025-01-03T12:00:00.000Z",
             "ordinal": 8,
             "type": "response_item",
-            "payload": response_item,
+            "payload": response_item.clone(),
             "metadata": {
                 "client_authored": false,
                 "provider_hosted_tool_call": true,
             },
         })
     );
-    assert_eq!(serde_json::from_value::<RolloutLine>(serialized)?, line);
+    let restored = serde_json::from_value::<RolloutLine>(serialized)?;
+    let RolloutItem::ResponseItem(envelope) = restored.item else {
+        panic!("expected response item");
+    };
+    assert_eq!(envelope.item, response_item);
+    assert_eq!(
+        envelope.metadata,
+        Some(CodexHarnessMetadata {
+            provider_hosted_tool_call: true,
+            ..Default::default()
+        })
+    );
     Ok(())
 }
 
