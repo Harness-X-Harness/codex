@@ -208,7 +208,15 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]
             break
 
     if status != "completed":
-        raise SystemExit("the single Grok Turn did not complete")
+        safe_status = status if isinstance(status, str) else "missing"
+        raise SystemExit(
+            "the single Grok Turn did not complete "
+            f"(status={safe_status}, "
+            f"reasoning_completed={str(reasoning_completed).lower()}, "
+            f"tool_requests={tool_request_count}, "
+            f"tool_completed={str(tool_completed).lower()}, "
+            f"agent_reply_seen={str(isinstance(agent_reply, str)).lower()})"
+        )
     if not reasoning_completed:
         raise SystemExit("the Grok Turn did not expose a completed reasoning item")
     if tool_request_count != 1 or not tool_completed:
