@@ -19,6 +19,36 @@ class FakeAppServer:
 
 
 class VerifiedTurnTest(unittest.TestCase):
+    def test_accepts_basic_exact_reply_without_tool(self) -> None:
+        server = FakeAppServer(
+            [
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "type": "agentMessage",
+                            "text": live_smoke.BASIC_EXPECTED_AGENT_REPLY,
+                        }
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {"turn": {"status": "completed"}},
+                },
+            ]
+        )
+
+        evidence = live_smoke.wait_for_basic_turn(server, time.monotonic() + 1)
+
+        self.assertEqual(
+            evidence,
+            {
+                "response_assertion": "exact_match",
+                "status": "completed",
+            },
+        )
+        self.assertEqual(server.sent, [])
+
     def completed_turn(self, reply: str, status: str = "completed") -> FakeAppServer:
         return FakeAppServer(
             [
