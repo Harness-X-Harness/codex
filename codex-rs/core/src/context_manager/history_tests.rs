@@ -1623,6 +1623,32 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
     );
 }
 
+#[test]
+fn normalize_keeps_provider_hosted_custom_tool_call_without_output() {
+    let item = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ctc", "provider-item")),
+        status: Some("completed".to_string()),
+        call_id: "provider-call".to_string(),
+        name: "provider_search".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let envelope = ResponseItemEnvelope {
+        item,
+        metadata: Some(CodexHarnessMetadata {
+            provider_hosted_tool_call: true,
+            ..Default::default()
+        }),
+    };
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![envelope.clone()]);
+
+    history.normalize_history(&default_input_modalities());
+
+    assert_eq!(history.annotated_items(), &[envelope]);
+}
+
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_local_shell_call_with_id() {

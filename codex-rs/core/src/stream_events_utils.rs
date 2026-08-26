@@ -2,6 +2,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
@@ -365,13 +367,28 @@ pub(crate) async fn handle_output_item_done(
                     .emit_turn_item_completed(&ctx.turn_context, finalized_turn_item.turn_item)
                     .await;
             }
-            record_completed_response_item_with_finalized_facts(
-                ctx.sess.as_ref(),
-                ctx.turn_context.as_ref(),
-                &item,
-                finalized_facts.as_ref(),
-            )
-            .await;
+            if provider_hosted_tool_call {
+                ctx.sess
+                    .record_annotated_conversation_items(
+                        ctx.turn_context.as_ref(),
+                        vec![ResponseItemEnvelope {
+                            item: item.clone(),
+                            metadata: Some(CodexHarnessMetadata {
+                                provider_hosted_tool_call: true,
+                                ..Default::default()
+                            }),
+                        }],
+                    )
+                    .await;
+            } else {
+                record_completed_response_item_with_finalized_facts(
+                    ctx.sess.as_ref(),
+                    ctx.turn_context.as_ref(),
+                    &item,
+                    finalized_facts.as_ref(),
+                )
+                .await;
+            }
 
             output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
         }

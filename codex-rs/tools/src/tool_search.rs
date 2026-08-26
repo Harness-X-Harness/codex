@@ -69,9 +69,7 @@ impl ToolSearchInfo {
                 }
                 LoadableToolSpec::Namespace(namespace)
             }
-            ToolSpec::ToolSearch { .. }
-            | ToolSpec::WebSearch { .. }
-            | ToolSpec::XSearch => {
+            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } | ToolSpec::XSearch => {
                 return None;
             }
         };

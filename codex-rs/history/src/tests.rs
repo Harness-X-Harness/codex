@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_protocol::ResponseItemId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -72,6 +73,7 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
             item: response_item.clone(),
             metadata: Some(CodexHarnessMetadata {
                 client_authored: true,
+                ..Default::default()
             }),
         }),
     };
@@ -97,8 +99,50 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
         envelope.metadata,
         Some(CodexHarnessMetadata {
             client_authored: true,
+            ..Default::default()
         })
     );
+    Ok(())
+}
+
+#[test]
+fn provider_hosted_tool_metadata_round_trips_beside_rollout_payload() -> Result<()> {
+    let response_item = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ctc", "provider-item")),
+        status: Some("completed".to_string()),
+        call_id: "provider-call".to_string(),
+        name: "provider_search".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let line = RolloutLine {
+        timestamp: "2025-01-03T12:00:00.000Z".to_string(),
+        ordinal: Some(8),
+        item: RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item: response_item.clone(),
+            metadata: Some(CodexHarnessMetadata {
+                provider_hosted_tool_call: true,
+                ..Default::default()
+            }),
+        }),
+    };
+
+    let serialized = serde_json::to_value(&line)?;
+    assert_eq!(
+        serialized,
+        json!({
+            "timestamp": "2025-01-03T12:00:00.000Z",
+            "ordinal": 8,
+            "type": "response_item",
+            "payload": response_item,
+            "metadata": {
+                "client_authored": false,
+                "provider_hosted_tool_call": true,
+            },
+        })
+    );
+    assert_eq!(serde_json::from_value::<RolloutLine>(serialized)?, line);
     Ok(())
 }
 
@@ -184,6 +228,7 @@ fn compacted_replacement_history_stores_metadata_in_an_aligned_sidecar() -> Resu
                 item: developer_message.clone(),
                 metadata: Some(CodexHarnessMetadata {
                     client_authored: true,
+                    ..Default::default()
                 }),
             },
             ResponseItemEnvelope::new(compaction_item.clone()),
@@ -216,6 +261,7 @@ fn compacted_replacement_history_stores_metadata_in_an_aligned_sidecar() -> Resu
                 item: developer_message,
                 metadata: Some(CodexHarnessMetadata {
                     client_authored: true,
+                    ..Default::default()
                 }),
             },
             ResponseItemEnvelope {
@@ -277,6 +323,7 @@ fn compacted_metadata_remains_compatible_with_legacy_response_item_readers() -> 
         item: response_item.clone(),
         metadata: Some(CodexHarnessMetadata {
             client_authored: true,
+            ..Default::default()
         }),
     };
     let response_line = serde_json::to_value(RolloutItem::ResponseItem(envelope.clone()))?;
