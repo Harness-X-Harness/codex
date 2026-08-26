@@ -42,6 +42,11 @@ impl ResponsesDialect {
         if self == Self::Grok
             && let Some(object) = value.as_object_mut()
         {
+            if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
+                for tool in tools {
+                    project_grok_web_search_tool(tool)?;
+                }
+            }
             let has_no_tools = match object.get("tools") {
                 None => true,
                 Some(tools) => tools.as_array().is_some_and(Vec::is_empty),
@@ -54,6 +59,28 @@ impl ResponsesDialect {
         }
         Ok(value)
     }
+}
+
+fn project_grok_web_search_tool(tool: &mut Value) -> serde_json::Result<()> {
+    let Some(object) = tool.as_object_mut() else {
+        return Ok(());
+    };
+    if object.get("type").and_then(Value::as_str) != Some("web_search") {
+        return Ok(());
+    }
+
+    if object.remove("external_web_access") != Some(Value::Bool(true)) {
+        return Err(<serde_json::Error as serde::ser::Error>::custom(
+            "Grok Web Search supports only verified live external access",
+        ));
+    }
+    if object.len() != 1 {
+        return Err(<serde_json::Error as serde::ser::Error>::custom(
+            "Grok Web Search does not support indexed access or optional search fields",
+        ));
+    }
+
+    Ok(())
 }
 
 impl RetryConfig {
@@ -161,6 +188,94 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use serde_json::json;
+    use serde_json::value::RawValue;
+    use std::sync::Arc;
+
+    fn responses_request_with_tools(tools: Value) -> ResponsesApiRequest {
+        ResponsesApiRequest {
+            model: "grok-test".to_string(),
+            instructions: "test".to_string(),
+            input: vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "test".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }],
+            tools: Some(
+                Arc::from(
+                    RawValue::from_string(tools.to_string()).expect("valid tool declaration"),
+                )
+                .into(),
+            ),
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: false,
+            stream: true,
+            stream_options: None,
+            include: Vec::new(),
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            client_metadata: None,
+        }
+    }
+
+    #[test]
+    fn grok_projects_verified_live_web_search_to_bare_declaration() {
+        let request = responses_request_with_tools(json!([{
+            "type": "web_search",
+            "external_web_access": true,
+        }]));
+
+        let projected = ResponsesDialect::Grok
+            .project_request(&request)
+            .expect("verified live search should project");
+
+        assert_eq!(projected["tools"], json!([{"type": "web_search"}]));
+    }
+
+    #[test]
+    fn grok_rejects_unverified_web_search_declarations() {
+        for tool in [
+            json!({"type": "web_search", "external_web_access": false}),
+            json!({
+                "type": "web_search",
+                "external_web_access": true,
+                "indexed_web_access": true,
+            }),
+            json!({
+                "type": "web_search",
+                "external_web_access": true,
+                "search_context_size": "high",
+            }),
+        ] {
+            let request = responses_request_with_tools(json!([tool]));
+
+            assert!(ResponsesDialect::Grok.project_request(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn stock_preserves_live_web_search_declaration() {
+        let tools = json!([{
+            "type": "web_search",
+            "external_web_access": true,
+        }]);
+        let request = responses_request_with_tools(tools.clone());
+
+        let projected = ResponsesDialect::OpenAi
+            .project_request(&request)
+            .expect("stock request should serialize");
+
+        assert_eq!(projected["tools"], tools);
+    }
 
     #[test]
     fn detects_azure_responses_base_urls() {

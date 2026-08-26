@@ -93,7 +93,7 @@ wire_api = "grok_responses"
         ModelProviderCapabilitiesReadResponse {
             namespace_tools: true,
             image_generation: false,
-            web_search: false,
+            web_search: true,
         }
     );
     Ok(())
