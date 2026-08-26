@@ -175,8 +175,10 @@ fn grok_advertises_only_proven_provider_capabilities() {
         ProviderCapabilities {
             namespace_tools: true,
             image_generation: false,
-            web_search: false,
-            external_web_access: false,
+            web_search: true,
+            cached_web_search: false,
+            external_web_access: true,
+            indexed_web_search: false,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     );
