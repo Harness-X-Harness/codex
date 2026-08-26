@@ -94,14 +94,14 @@ impl ModelProvider for GrokModelProvider {
             item,
             ResponseItem::CustomToolCall {
                 id: Some(id),
-                status,
+                status: Some(status),
                 call_id,
                 name,
                 namespace: None,
                 ..
             } if !id.is_empty()
                 && !call_id.is_empty()
-                && status.as_deref().is_none_or(|status| status == "completed")
+                && status == "completed"
                 && matches!(
                     name.as_str(),
                     "x_keyword_search"

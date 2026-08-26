@@ -1653,8 +1653,10 @@ pub async fn mount_compact_response_sequence(
 ///   `local_shell_call` with the same `call_id` in the same `input`.
 /// - Every `custom_tool_call_output` must match a prior `custom_tool_call`.
 /// - Every `tool_search_output` must match a prior `tool_search_call`.
-/// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
-///   `tool_search_call` in the `input` must have a matching output entry.
+/// - Additionally, enforce symmetry: every locally executed `function_call`/
+///   `custom_tool_call`/`tool_search_call` in the `input` must have a matching output entry.
+/// - A completed Provider-hosted X call is valid without local output only when the request also
+///   declares the hosted `x_search` tool.
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
@@ -1719,6 +1721,40 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             .collect()
     }
 
+    fn is_provider_hosted_x_call(item: &Value, declares_x_search: bool) -> bool {
+        declares_x_search
+            && item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+            && item
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty())
+            && item.get("status").and_then(Value::as_str) == Some("completed")
+            && item.get("namespace").is_none()
+            && matches!(
+                item.get("name").and_then(Value::as_str),
+                Some(
+                    "x_keyword_search"
+                        | "x_semantic_search"
+                        | "x_user_search"
+                        | "x_thread_fetch"
+                )
+            )
+    }
+
+    let declares_x_search = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool.get("type").and_then(Value::as_str) == Some("x_search"))
+        });
+    let provider_hosted_x_calls = items
+        .iter()
+        .filter(|item| is_provider_hosted_x_call(item, declares_x_search))
+        .filter_map(get_call_id)
+        .collect::<HashSet<_>>();
+
     let function_calls = gather_ids(items, "function_call");
     let tool_search_calls = gather_ids(items, "tool_search_call");
     let custom_tool_calls = gather_ids(items, "custom_tool_call");
@@ -1761,6 +1797,13 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         );
     }
     for cid in &custom_tool_calls {
+        if provider_hosted_x_calls.contains(cid.as_str()) {
+            assert!(
+                !custom_tool_call_outputs.contains(cid),
+                "Provider-hosted X call must not have local output for call id: {cid}",
+            );
+            continue;
+        }
         assert!(
             custom_tool_call_outputs.contains(cid),
             "Custom tool call output is missing for call id: {cid}",

@@ -186,7 +186,7 @@ fn grok_advertises_only_proven_provider_capabilities() {
 }
 
 #[test]
-fn grok_recognizes_only_done_provider_hosted_x_calls() {
+fn grok_recognizes_only_completed_provider_hosted_x_calls() {
     let grok = create_model_provider(
         ModelProviderInfo {
             wire_api: WireApi::GrokResponses,
@@ -216,7 +216,7 @@ fn grok_recognizes_only_done_provider_hosted_x_calls() {
     ] {
         assert!(grok.is_provider_hosted_tool_call(&x_call(name, Some("completed"))));
     }
-    assert!(grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", None)));
+    assert!(!grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", None)));
     assert!(!grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", Some("in_progress"))));
     assert!(!grok.is_provider_hosted_tool_call(&x_call("unverified_search", Some("completed"))));
     assert!(!stock.is_provider_hosted_tool_call(&x_call("x_keyword_search", Some("completed"))));
