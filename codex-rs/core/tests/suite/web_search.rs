@@ -81,12 +81,9 @@ async fn grok_web_search_uses_bare_live_declaration_and_replays_stock_history() 
         .await
         .expect("create test Grok conversation");
 
-    test.submit_turn_with_permission_profile(
-        "search the web",
-        PermissionProfile::read_only(),
-    )
-    .await
-    .expect("submit Grok search turn");
+    test.submit_turn_with_permission_profile("search the web", PermissionProfile::read_only())
+        .await
+        .expect("submit Grok search turn");
     test.submit_turn_with_permission_profile(
         "continue with the prior result",
         PermissionProfile::read_only(),
