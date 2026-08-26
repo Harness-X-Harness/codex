@@ -66,6 +66,7 @@ pub struct ProviderCapabilities {
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
+    pub x_search: bool,
     pub cached_web_search: bool,
     pub external_web_access: bool,
     pub indexed_web_search: bool,
@@ -78,6 +79,7 @@ impl Default for ProviderCapabilities {
             namespace_tools: true,
             image_generation: true,
             web_search: true,
+            x_search: false,
             cached_web_search: true,
             external_web_access: true,
             indexed_web_search: true,
@@ -174,6 +176,15 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// provider-incompatible wire fields; durable Session history remains canonical.
     fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
         input
+    }
+
+    /// Returns whether a completed response item was executed by the Provider.
+    ///
+    /// The default keeps every tool call under Codex dispatch ownership. A Provider override must
+    /// recognize only its verified response shape; the caller separately requires that the
+    /// matching hosted declaration was present in the request.
+    fn is_provider_hosted_tool_call(&self, _item: &ResponseItem) -> bool {
+        false
     }
 
     /// Returns how canonical Codex tool declarations cross this provider's wire.

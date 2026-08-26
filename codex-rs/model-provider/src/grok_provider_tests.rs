@@ -176,12 +176,58 @@ fn grok_advertises_only_proven_provider_capabilities() {
             namespace_tools: true,
             image_generation: false,
             web_search: true,
+            x_search: true,
             cached_web_search: false,
             external_web_access: true,
             indexed_web_search: false,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     );
+}
+
+#[test]
+fn grok_recognizes_only_completed_provider_hosted_x_calls() {
+    let grok = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        /*auth_manager*/ None,
+    );
+    let stock = create_model_provider(
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        /*auth_manager*/ None,
+    );
+    let x_call = |name: &str, status: Option<&str>| ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ctc", "provider-item")),
+        status: status.map(str::to_owned),
+        call_id: "provider-call".to_owned(),
+        name: name.to_owned(),
+        namespace: None,
+        input: "{}".to_owned(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    for name in [
+        "x_keyword_search",
+        "x_semantic_search",
+        "x_user_search",
+        "x_thread_fetch",
+    ] {
+        assert!(grok.is_provider_hosted_tool_call(&x_call(name, Some("completed"))));
+    }
+    assert!(!grok.is_provider_hosted_tool_call(&x_call(
+        "x_keyword_search",
+        None
+    )));
+    assert!(!grok.is_provider_hosted_tool_call(&x_call(
+        "unverified_search",
+        Some("completed")
+    )));
+    assert!(!stock.is_provider_hosted_tool_call(&x_call(
+        "x_keyword_search",
+        Some("completed")
+    )));
 }
 
 #[test]

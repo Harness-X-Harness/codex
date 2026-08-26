@@ -294,10 +294,22 @@ pub(crate) async fn handle_output_item_done(
     let plan_mode = ctx.turn_context.mode == ModeKind::Plan;
     let mut item = item;
 
+    let provider_hosted_tool_call = ctx.tool_runtime.exposes_x_search()
+        && ctx
+            .turn_context
+            .provider
+            .is_provider_hosted_tool_call(&item);
+
     match ctx
         .tool_runtime
         .restore_tool_call(&mut item)
-        .and_then(|()| ToolRouter::build_tool_call(item.clone()))
+        .and_then(|()| {
+            if provider_hosted_tool_call {
+                Ok(None)
+            } else {
+                ToolRouter::build_tool_call(item.clone())
+            }
+        })
     {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {

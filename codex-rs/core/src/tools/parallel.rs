@@ -77,6 +77,10 @@ impl ToolCallRuntime {
         self.step_context.tool_router.restore_tool_call(item)
     }
 
+    pub(crate) fn exposes_x_search(&self) -> bool {
+        self.step_context.tool_router.exposes_x_search()
+    }
+
     #[instrument(level = "trace", skip_all)]
     pub(crate) fn handle_tool_call(
         self,
