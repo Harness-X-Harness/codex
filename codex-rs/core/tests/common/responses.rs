@@ -1729,22 +1729,21 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             "x_thread_fetch",
         ];
 
-        declares_x_search
-            && item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-            && item
-                .get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|name| HOSTED_X_CALL_NAMES.contains(&name))
+        if !declares_x_search
+            || item.get("type").and_then(Value::as_str) != Some("custom_tool_call")
+        {
+            return false;
+        }
+        let Some(name) = item.get("name").and_then(Value::as_str) else {
+            return false;
+        };
+        HOSTED_X_CALL_NAMES.contains(&name)
     }
 
     let declares_x_search = body
         .get("tools")
         .and_then(Value::as_array)
-        .is_some_and(|tools| {
-            tools.iter().any(|tool| {
-                tool.get("type").and_then(Value::as_str) == Some("x_search")
-            })
-        });
+        .is_some_and(|tools| tools.iter().any(|tool| tool["type"] == "x_search"));
     let provider_hosted_x_calls = items
         .iter()
         .filter(|item| is_provider_hosted_x_call(item, declares_x_search))

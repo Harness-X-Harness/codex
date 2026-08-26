@@ -98,11 +98,11 @@ async fn grok_x_search_is_provider_hosted_and_replays_canonical_history() {
                 && item.get("call_id").and_then(Value::as_str) == Some("xs-grok-x-search")
         })
         .expect("completed X Search item should be replayed");
+    // Stock request preparation strips unprefixed server item IDs before replay.
     assert_eq!(
         replayed_x_call,
         &json!({
             "type": "custom_tool_call",
-            "id": "ctc-grok-x-search",
             "status": "completed",
             "call_id": "xs-grok-x-search",
             "name": "x_keyword_search",
