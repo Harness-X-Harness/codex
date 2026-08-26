@@ -178,10 +178,12 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         input
     }
 
-    /// Returns whether a completed response item was executed by the Provider.
+    /// Returns whether a response item from the completed-item stream boundary was executed by
+    /// the Provider.
     ///
     /// The default keeps every tool call under Codex dispatch ownership. A Provider override must
-    /// recognize only its verified response shape; the caller separately requires that the
+    /// recognize only its verified response shape. Item-local status may be absent because the
+    /// caller already owns the completed-item boundary. The caller separately requires that the
     /// matching hosted declaration was present in the request.
     fn is_provider_hosted_tool_call(&self, _item: &ResponseItem) -> bool {
         false
