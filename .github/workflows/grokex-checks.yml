@@ -1,0 +1,241 @@
+name: grokex-checks
+
+on:
+  pull_request:
+    branches: [release/rust-v0.149.0]
+    paths:
+      - .github/workflows/grokex-checks.yml
+      - .github/workflows/grokex-live.yml
+      - .github/workflows/grokex-release.yml
+      - codex-rs/app-server/**
+      - codex-rs/core/**
+      - codex-rs/model-provider/**
+      - codex-rs/protocol/**
+      - grokex/**
+  push:
+    branches: [release/rust-v0.149.0]
+    paths:
+      - .github/workflows/grokex-checks.yml
+      - .github/workflows/grokex-live.yml
+      - .github/workflows/grokex-release.yml
+      - codex-rs/app-server/**
+      - codex-rs/core/**
+      - codex-rs/model-provider/**
+      - codex-rs/protocol/**
+      - grokex/**
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-checks-${{ inputs.source_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CHECKOUT_SHA: ${{ inputs.source_sha || github.sha }}
+
+jobs:
+  helpers:
+    name: Release helper contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - name: Verify helper contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            grokex/release.py \
+            grokex/live_smoke.py \
+            grokex/test_release.py \
+            grokex/test_live_smoke.py
+          python3 -m unittest grokex.test_release grokex.test_live_smoke
+          bash -n grokex/grokex grokex/install-grokex.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/config.toml.example
+          fixture="${RUNNER_TEMP}/grokex-fixture"
+          mkdir -p "${fixture}/raw"
+          for target in \
+            aarch64-apple-darwin x86_64-apple-darwin \
+            aarch64-unknown-linux-musl x86_64-unknown-linux-musl \
+            aarch64-pc-windows-msvc x86_64-pc-windows-msvc; do
+            mkdir -p "${fixture}/raw/${target}"
+            if [[ "${target}" == *windows* ]]; then
+              touch "${fixture}/raw/${target}/codex.exe" "${fixture}/raw/${target}/codex-code-mode-host.exe"
+            else
+              touch "${fixture}/raw/${target}/codex" "${fixture}/raw/${target}/codex-code-mode-host"
+            fi
+            if [[ "${target}" == *linux* ]]; then
+              touch "${fixture}/raw/${target}/bwrap"
+            fi
+          done
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --source-sha "${CHECKOUT_SHA}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --source-sha "${CHECKOUT_SHA}" \
+            --target x86_64-unknown-linux-musl
+          candidate="${fixture}/dist/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz"
+          candidate_sha="$(sha256sum "${candidate}" | awk '{print $1}')"
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --source-sha "${CHECKOUT_SHA}" \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --target aarch64-unknown-linux-musl \
+            --target aarch64-pc-windows-msvc \
+            --target x86_64-pc-windows-msvc
+          [[ "$(sha256sum "${candidate}" | awk '{print $1}')" == "${candidate_sha}" ]]
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --source-sha "${CHECKOUT_SHA}"
+
+  formatting:
+    name: Formatting
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - run: cargo fmt -- --config imports_granularity=Item --check
+
+  contracts:
+    name: Stock and Grok contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - id: provider
+        name: Provider contracts
+        continue-on-error: true
+        run: cargo test -p codex-model-provider
+      - id: projections
+        name: Stock App Server Provider projections
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-app-server --test all suite::v2::model_list::list_models_uses_grok_release_catalog_through_stock_model_dto -- --exact
+          cargo test -p codex-app-server --test all suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities -- --exact
+      - id: controls
+        name: Stock text, lifecycle, tool, and MCP controls
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-app-server --test all suite::v2::turn_start::turn_start_with_empty_input_runs_model_request -- --exact
+          cargo test -p codex-app-server --test all suite::v2::thread_resume::thread_resume_returns_rollout_history -- --exact
+          cargo test -p codex-app-server --test all suite::v2::thread_fork::thread_fork_creates_new_thread_and_emits_started -- --exact
+          cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
+          cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
+      - id: grok
+        name: Grok metadata-driven V2 and Ultra
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+          cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
+          cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
+      - name: Require every contract group
+        if: always()
+        env:
+          CONTROLS: ${{ steps.controls.outcome }}
+          GROK: ${{ steps.grok.outcome }}
+          PROJECTIONS: ${{ steps.projections.outcome }}
+          PROVIDER: ${{ steps.provider.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${PROVIDER}" == "success" ]] || failures+=("Provider contracts")
+          [[ "${PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
+          [[ "${CONTROLS}" == "success" ]] || failures+=("stock controls")
+          [[ "${GROK}" == "success" ]] || failures+=("Grok contracts")
+          if (( ${#failures[@]} )); then
+            printf 'Failed contract group: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
+
+  lints:
+    name: Affected library lints
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - name: Lint affected libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy -p codex-model-provider -p codex-core --lib -- -D warnings
+          cargo clippy -p codex-app-server --test all -- -D warnings
+
+  require:
+    name: Require every deterministic gate
+    needs: [helpers, formatting, contracts, lints]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require success
+        env:
+          CONTRACTS: ${{ needs.contracts.result }}
+          FORMATTING: ${{ needs.formatting.result }}
+          HELPERS: ${{ needs.helpers.result }}
+          LINTS: ${{ needs.lints.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${HELPERS}" == "success" ]] || failures+=("release helpers")
+          [[ "${FORMATTING}" == "success" ]] || failures+=("formatting")
+          [[ "${CONTRACTS}" == "success" ]] || failures+=("contracts")
+          [[ "${LINTS}" == "success" ]] || failures+=("lints")
+          if (( ${#failures[@]} )); then
+            printf 'Failed deterministic gate: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi

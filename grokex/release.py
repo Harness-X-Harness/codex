@@ -31,6 +31,20 @@ LEGACY_KEYS = {
     "provider_adapter",
     "provider_catalog",
 }
+LIVE_SCENARIO_ASSERTIONS = {
+    "basic-exact-reply": {
+        "operation_count": 1,
+        "response_assertion": "exact_match",
+        "status": "completed",
+    },
+    "encrypted-reasoning-tool-continuation": {
+        "operation_count": 1,
+        "reasoning_replay": "completed",
+        "response_assertion": "exact_match",
+        "status": "completed",
+        "tool_continuation": "completed",
+    },
+}
 
 
 def sha256(path: Path) -> str:
@@ -241,6 +255,64 @@ def verify_profile(path: Path, secret: bool) -> None:
         raise SystemExit("public profile must not contain a bearer token")
 
 
+def build_live_evidence(
+    evidence_dir: Path,
+    archive: Path,
+    output: Path,
+    source_sha: str,
+    validator_sha: str,
+    run_id: str,
+) -> None:
+    archive_digest = sha256(archive)
+    common = {
+        "archive": archive.name,
+        "archive_sha256": archive_digest,
+        "catalog": "release-bundled",
+        "model": "grok-4.6",
+        "multi_agent_version": "v2",
+        "operation_count": 1,
+        "provider": "grok",
+        "reasoning_effort": "ultra",
+        "source_sha": source_sha,
+        "validation_run": run_id,
+        "validator_sha": validator_sha,
+    }
+    observed: dict[str, dict[str, object]] = {}
+    for path in evidence_dir.glob("*.json"):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        scenario = value.get("scenario")
+        if scenario not in LIVE_SCENARIO_ASSERTIONS or scenario in observed:
+            raise SystemExit("live scenario evidence set is invalid")
+        if any(value.get(key) != expected for key, expected in common.items()):
+            raise SystemExit(f"live scenario evidence mismatch: {scenario}")
+        expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
+        if any(value.get(key) != expected for key, expected in expected_assertions.items()):
+            raise SystemExit(f"live scenario outcome mismatch: {scenario}")
+        observed[scenario] = expected_assertions
+    if set(observed) != set(LIVE_SCENARIO_ASSERTIONS):
+        raise SystemExit("required live scenario evidence is incomplete")
+
+    manifest = {
+        "archive": archive.name,
+        "archive_sha256": archive_digest,
+        "catalog": "release-bundled",
+        "model": "grok-4.6",
+        "multi_agent_version": "v2",
+        "operation_count": len(observed),
+        "provider": "grok",
+        "reasoning_effort": "ultra",
+        "scenarios": observed,
+        "source_sha": source_sha,
+        "status": "completed",
+        "validation_run": run_id,
+        "validator_sha": validator_sha,
+    }
+    output.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def build_assets(
     archives: Path,
     evidence: Path,
@@ -309,8 +381,9 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     live_archive = archive_name("x86_64-unknown-linux-musl")
     required_evidence = {
         "archive": live_archive,
-        "operation_count": 1,
+        "operation_count": len(LIVE_SCENARIO_ASSERTIONS),
         "provider": "grok",
+        "scenarios": LIVE_SCENARIO_ASSERTIONS,
         "source_sha": source_sha,
         "status": "completed",
         "validation_run": run_id,
@@ -352,6 +425,14 @@ def main() -> None:
     profile_parser.add_argument("--path", type=Path, required=True)
     profile_parser.add_argument("--secret", action="store_true")
 
+    evidence_parser = subparsers.add_parser("build-live-evidence")
+    evidence_parser.add_argument("--evidence-dir", type=Path, required=True)
+    evidence_parser.add_argument("--archive", type=Path, required=True)
+    evidence_parser.add_argument("--output", type=Path, required=True)
+    evidence_parser.add_argument("--source-sha", required=True)
+    evidence_parser.add_argument("--validator-sha", required=True)
+    evidence_parser.add_argument("--run-id", required=True)
+
     assets_parser = subparsers.add_parser("build-assets")
     assets_parser.add_argument("--archives", type=Path, required=True)
     assets_parser.add_argument("--evidence", type=Path, required=True)
@@ -382,6 +463,15 @@ def main() -> None:
         )
     elif args.command == "verify-profile":
         verify_profile(args.path, args.secret)
+    elif args.command == "build-live-evidence":
+        build_live_evidence(
+            args.evidence_dir,
+            args.archive,
+            args.output,
+            args.source_sha,
+            args.validator_sha,
+            args.run_id,
+        )
     elif args.command == "build-assets":
         build_assets(
             args.archives,

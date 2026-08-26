@@ -20,6 +20,10 @@ from pathlib import Path
 
 
 TAG = "grokex-v0.149.0"
+BASIC_SCENARIO = "basic-exact-reply"
+CONTINUATION_SCENARIO = "encrypted-reasoning-tool-continuation"
+SCENARIOS = (BASIC_SCENARIO, CONTINUATION_SCENARIO)
+BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
@@ -145,6 +149,40 @@ class AppServer:
                 self.process.wait(timeout=5)
 
 
+def wait_for_basic_turn(server: AppServer, deadline: float) -> dict[str, str]:
+    agent_reply = None
+    status = None
+
+    while time.monotonic() < deadline:
+        message = server.next_message(deadline, "the single basic Grok Turn")
+        method = message.get("method")
+        params = message.get("params")
+        if not isinstance(params, dict):
+            continue
+        if method == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                agent_reply = item.get("text")
+        elif method == "turn/completed":
+            turn = params.get("turn")
+            status = turn.get("status") if isinstance(turn, dict) else None
+            break
+
+    if status != "completed":
+        safe_status = status if isinstance(status, str) else "missing"
+        raise SystemExit(
+            "the single basic Grok Turn did not complete "
+            f"(status={safe_status}, "
+            f"agent_reply_seen={str(isinstance(agent_reply, str)).lower()})"
+        )
+    if not isinstance(agent_reply, str) or agent_reply.strip() != BASIC_EXPECTED_AGENT_REPLY:
+        raise SystemExit("the basic Grok Turn did not return the expected semantic reply")
+    return {
+        "response_assertion": "exact_match",
+        "status": status,
+    }
+
+
 def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]:
     reasoning_completed = False
     tool_request_count = 0
@@ -238,6 +276,7 @@ def run_smoke(
     source_sha: str,
     validator_sha: str,
     run_id: str,
+    scenario: str,
 ) -> None:
     with tempfile.TemporaryDirectory() as temporary:
         temporary_path = Path(temporary)
@@ -293,33 +332,43 @@ def run_smoke(
             if model.get("multiAgentVersion") != "v2" or "ultra" not in efforts:
                 raise SystemExit("grok-4.6 release metadata is incomplete")
 
-            thread_response = server.request(
-                3,
-                "thread/start",
-                {
-                    "cwd": str(workspace),
-                    "ephemeral": True,
-                    "model": "grok-4.6",
-                    "modelProvider": "grok",
-                    "dynamicTools": [
-                        {
-                            "name": TOOL_NAME,
-                            "description": "Return the fixed live validation marker.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {},
-                                "additionalProperties": False,
-                            },
-                        }
-                    ],
-                },
-            )
+            thread_params: dict[str, object] = {
+                "cwd": str(workspace),
+                "ephemeral": True,
+                "model": "grok-4.6",
+                "modelProvider": "grok",
+            }
+            if scenario == CONTINUATION_SCENARIO:
+                thread_params["dynamicTools"] = [
+                    {
+                        "name": TOOL_NAME,
+                        "description": "Return the fixed live validation marker.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            thread_response = server.request(3, "thread/start", thread_params)
             thread = thread_response.get("thread")
             if not isinstance(thread, dict) or thread_response.get("modelProvider") != "grok":
                 raise SystemExit("thread/start did not bind Provider grok")
             thread_id = thread.get("id")
             if not isinstance(thread_id, str) or not thread_id:
                 raise SystemExit("thread/start returned no thread identity")
+
+            if scenario == BASIC_SCENARIO:
+                prompt = (
+                    f"Reply with exactly {BASIC_EXPECTED_AGENT_REPLY} and no other text."
+                )
+                wait_for_turn = wait_for_basic_turn
+            else:
+                prompt = (
+                    f"Call {TOOL_NAME} exactly once. Use its result, then reply "
+                    f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
+                )
+                wait_for_turn = wait_for_verified_turn
 
             operation_count = 1
             server.request(
@@ -328,10 +377,7 @@ def run_smoke(
                 {
                     "input": [
                         {
-                            "text": (
-                                f"Call {TOOL_NAME} exactly once. Use its result, then reply "
-                                f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
-                            ),
+                            "text": prompt,
                             "textElements": [],
                             "type": "text",
                         }
@@ -339,7 +385,7 @@ def run_smoke(
                     "threadId": thread_id,
                 },
             )
-            turn_evidence = wait_for_verified_turn(server, time.monotonic() + 120)
+            turn_evidence = wait_for_turn(server, time.monotonic() + 120)
 
             evidence = {
                 "archive": archive.name,
@@ -350,9 +396,10 @@ def run_smoke(
                 "operation_count": operation_count,
                 "provider": "grok",
                 "reasoning_effort": "ultra",
+                "scenario": scenario,
                 "source_sha": source_sha,
                 **turn_evidence,
-                "story": "grokex-provider-profile-startup",
+                "story": f"grokex-{scenario}",
                 "validation_run": run_id,
                 "validator_sha": validator_sha,
             }
@@ -371,6 +418,7 @@ def main() -> None:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--validator-sha", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--scenario", choices=SCENARIOS, required=True)
     args = parser.parse_args()
     run_smoke(
         args.archive,
@@ -379,6 +427,7 @@ def main() -> None:
         args.source_sha,
         args.validator_sha,
         args.run_id,
+        args.scenario,
     )
 
 
