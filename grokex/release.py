@@ -49,7 +49,7 @@ LIVE_SCENARIO_ASSERTIONS = {
         "child_completion": "completed",
         "child_response_assertion": "exact_match",
         "default_full_history": "completed",
-        "operation_count": 3,
+        "operation_count": 4,
         "parent_completion": "completed",
         "response_assertion": "exact_match",
         "spawn_count": 1,

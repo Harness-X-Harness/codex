@@ -306,6 +306,10 @@ experimental_bearer_token = "secret"
         ]
         parent = [
             {
+                "method": "rawResponse/completed",
+                "params": {"threadId": "thread-1"},
+            },
+            {
                 "method": "item/completed",
                 "params": {
                     "item": {
@@ -381,7 +385,7 @@ experimental_bearer_token = "secret"
             )
             self.assertIs(thread_start[2]["experimentalRawEvents"], True)
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-            self.assertEqual(evidence["operation_count"], 3)
+            self.assertEqual(evidence["operation_count"], 4)
             self.assertEqual(evidence["default_full_history"], "completed")
             self.assertEqual(evidence["spawn_count"], 1)
             self.assertEqual(evidence["child_completion"], "completed")
@@ -408,13 +412,13 @@ experimental_bearer_token = "secret"
             "thread-1",
         )
 
-        self.assertEqual(evidence["operation_count"], 3)
+        self.assertEqual(evidence["operation_count"], 4)
         self.assertEqual(evidence["child_completion"], "completed")
 
     def test_collaboration_scenario_rejects_extra_response(self) -> None:
         server = FakeAppServer(self.collaboration_messages(extra_response=True))
 
-        with self.assertRaisesRegex(SystemExit, "used more than two responses"):
+        with self.assertRaisesRegex(SystemExit, "used more than three responses"):
             live_smoke.wait_for_collaboration_turn(
                 server,
                 time.monotonic() + 1,

@@ -27,6 +27,11 @@ const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const GROK_SPAWN_AGENT_WIRE_NAME: &str = "local__5ca652933835aa510437f1f000cd98aa";
+const GROK_WAIT_AGENT_WIRE_NAME: &str = "local__d7c9901ea9d58f6e6022549b9b3cc7ec";
+const CHILD_TASK_ENVELOPE: &str =
+    "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task";
+const CHILD_COMPLETION_ENVELOPE: &str =
+    "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/first\nPayload:\nworker completed";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<serde_json::Value>(&request.body)
@@ -152,6 +157,20 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         &server,
         |request: &wiremock::Request| has_function_call_output(request, "grok-spawn-call"),
         sse(vec![
+            ev_response_created("grok-root-wait"),
+            ev_function_call(
+                "grok-wait-call",
+                GROK_WAIT_AGENT_WIRE_NAME,
+                "{}",
+            ),
+            ev_completed("grok-root-wait"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "grok-wait-call"),
+        sse(vec![
             ev_response_created("grok-root-complete"),
             ev_assistant_message("grok-root-message", "child completed"),
             ev_completed("grok-root-complete"),
@@ -191,22 +210,25 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
             .iter()
             .map(|request| request.url.path())
             .collect::<Vec<_>>(),
-        vec!["/v1/responses", "/v1/responses", "/v1/responses"]
+        vec![
+            "/v1/responses",
+            "/v1/responses",
+            "/v1/responses",
+            "/v1/responses",
+        ]
     );
-    assert!(input_message_contains(
-        &requests[1],
-        "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task"
-    ));
-    assert!(input_message_contains(
-        &requests[2],
-        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/first\nPayload:\nworker completed"
-    ));
+    let child_request_index = requests
+        .iter()
+        .position(|request| input_message_contains(request, CHILD_TASK_ENVELOPE))
+        .expect("one child request should contain the exact task envelope");
+    requests
+        .iter()
+        .position(|request| input_message_contains(request, CHILD_COMPLETION_ENVELOPE))
+        .expect("one parent continuation should contain the exact child completion envelope");
     let bodies = requests
         .iter()
         .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body))
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(bodies[0]["reasoning"]["effort"], "xhigh");
-    assert_eq!(bodies[2]["reasoning"]["effort"], "xhigh");
     const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
         "message",
         "reasoning",
@@ -222,8 +244,11 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         "image_generation_call",
         "compaction",
     ];
-    for body in bodies {
+    for (index, body) in bodies.into_iter().enumerate() {
         assert_eq!(body["model"], "grok-4.6");
+        if index != child_request_index {
+            assert_eq!(body["reasoning"]["effort"], "xhigh");
+        }
         assert!(
             body["input"]
                 .as_array()

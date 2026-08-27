@@ -309,7 +309,7 @@ def wait_for_collaboration_turn(
             and default_spawn_count == 1
             and spawn_completed_count == 1
             and child_thread_id is not None
-            and response_counts.get(root_thread_id) == 2
+            and response_counts.get(root_thread_id) == 3
             and response_counts.get(child_thread_id) == 1
         ):
             break
@@ -322,8 +322,8 @@ def wait_for_collaboration_turn(
 
         if method == "rawResponse/completed" and isinstance(thread_id, str):
             response_counts[thread_id] = response_counts.get(thread_id, 0) + 1
-            if response_counts.get(root_thread_id, 0) > 2:
-                raise SystemExit("the Grok Ultra parent used more than two responses")
+            if response_counts.get(root_thread_id, 0) > 3:
+                raise SystemExit("the Grok Ultra parent used more than three responses")
             if child_thread_id is not None and response_counts.get(child_thread_id, 0) > 1:
                 raise SystemExit("the Grok Ultra child used more than one response")
             continue
@@ -400,8 +400,8 @@ def wait_for_collaboration_turn(
     if set(response_counts) != {root_thread_id, child_thread_id}:
         raise SystemExit("the Grok Ultra Turn observed an unexpected response owner")
     operation_count = sum(response_counts.values())
-    if response_counts != {root_thread_id: 2, child_thread_id: 1}:
-        raise SystemExit("the Grok Ultra Turn did not use exactly three responses")
+    if response_counts != {root_thread_id: 3, child_thread_id: 1}:
+        raise SystemExit("the Grok Ultra Turn did not use exactly four responses")
     return {
         "child_completion": "completed",
         "child_response_assertion": "exact_match",
