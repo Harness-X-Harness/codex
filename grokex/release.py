@@ -56,6 +56,15 @@ LIVE_SCENARIO_ASSERTIONS = {
         "status": "completed",
         "wait_count": 1,
     },
+    "image-generation-history-edit": {
+        "artifact_extension": ".jpg",
+        "history_edit": "completed",
+        "image_items_completed": 1,
+        "image_mime": "image/jpeg",
+        "operation_count": 2,
+        "same_thread": True,
+        "status": "completed",
+    },
 }
 
 

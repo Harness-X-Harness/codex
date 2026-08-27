@@ -54,12 +54,25 @@ class LiveEvidenceTest(unittest.TestCase):
                 "spawn_count": 1,
                 "wait_count": 1,
             }
+            image = {
+                **common,
+                "artifact_extension": ".jpg",
+                "history_edit": "completed",
+                "image_items_completed": 1,
+                "image_mime": "image/jpeg",
+                "operation_count": 2,
+                "same_thread": True,
+                "scenario": "image-generation-history-edit",
+            }
             (evidence_dir / "basic.json").write_text(json.dumps(basic), encoding="utf-8")
             (evidence_dir / "continuation.json").write_text(
                 json.dumps(continuation), encoding="utf-8"
             )
             (evidence_dir / "collaboration.json").write_text(
                 json.dumps(collaboration), encoding="utf-8"
+            )
+            (evidence_dir / "image.json").write_text(
+                json.dumps(image), encoding="utf-8"
             )
             output = root / "LIVE_EVIDENCE.json"
 
@@ -80,7 +93,7 @@ class LiveEvidenceTest(unittest.TestCase):
                     "catalog": "release-bundled",
                     "model": "grok-4.6",
                     "multi_agent_version": "v2",
-                    "operation_count": 7,
+                    "operation_count": 9,
                     "provider": "grok",
                     "reasoning_effort": "ultra",
                     "scenarios": {
@@ -107,6 +120,15 @@ class LiveEvidenceTest(unittest.TestCase):
                             "spawn_count": 1,
                             "status": "completed",
                             "wait_count": 1,
+                        },
+                        "image-generation-history-edit": {
+                            "artifact_extension": ".jpg",
+                            "history_edit": "completed",
+                            "image_items_completed": 1,
+                            "image_mime": "image/jpeg",
+                            "operation_count": 2,
+                            "same_thread": True,
+                            "status": "completed",
                         },
                     },
                     "source_sha": "source-sha",

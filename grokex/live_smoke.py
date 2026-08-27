@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -23,7 +24,13 @@ TAG = "grokex-v0.149.0"
 BASIC_SCENARIO = "basic-exact-reply"
 CONTINUATION_SCENARIO = "encrypted-reasoning-tool-continuation"
 COLLABORATION_SCENARIO = "ultra-full-history-collaboration"
-SCENARIOS = (BASIC_SCENARIO, CONTINUATION_SCENARIO, COLLABORATION_SCENARIO)
+IMAGE_SCENARIO = "image-generation-history-edit"
+SCENARIOS = (
+    BASIC_SCENARIO,
+    CONTINUATION_SCENARIO,
+    COLLABORATION_SCENARIO,
+    IMAGE_SCENARIO,
+)
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
@@ -426,6 +433,46 @@ def wait_for_collaboration_turn(
     }
 
 
+def wait_for_image_turn(server: AppServer, deadline: float) -> dict[str, object]:
+    completed = 0
+    while time.monotonic() < deadline:
+        message = server.next_message(deadline, "the Grok image Turn")
+        params = message.get("params")
+        if not isinstance(params, dict):
+            continue
+        if message.get("method") == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "imageGeneration":
+                result = item.get("result")
+                saved_path = item.get("savedPath")
+                if item.get("status") != "completed" or not isinstance(result, str):
+                    raise SystemExit("image generation item was not completed")
+                try:
+                    signature = base64.b64decode(result, validate=True)[:3]
+                except (ValueError, TypeError) as error:
+                    raise SystemExit("image generation result was not valid base64") from error
+                if signature != b"\xff\xd8\xff":
+                    raise SystemExit("image generation result was not JPEG")
+                if not isinstance(saved_path, str) or not saved_path.endswith(".jpg"):
+                    raise SystemExit("image generation artifact was not JPEG")
+                completed += 1
+        elif message.get("method") == "turn/completed":
+            turn = params.get("turn")
+            if (
+                not isinstance(turn, dict)
+                or turn.get("status") != "completed"
+                or completed != 1
+            ):
+                raise SystemExit("Grok image Turn did not complete exactly one image")
+            return {
+                "image_items_completed": 1,
+                "image_mime": "image/jpeg",
+                "artifact_extension": ".jpg",
+                "status": "completed",
+            }
+    raise SystemExit("Grok image Turn timed out")
+
+
 def run_smoke(
     archive: Path,
     config: Path,
@@ -592,7 +639,7 @@ def run_smoke(
                     ],
                     "reasoning_replay": "completed",
                 }
-            else:
+            elif scenario == COLLABORATION_SCENARIO:
                 prompt = (
                     "Use spawn_agent exactly once with task_name live_child. Omit fork_turns "
                     "so the child uses the default full-history fork. Tell the child to reply "
@@ -622,6 +669,38 @@ def run_smoke(
                     thread_id,
                 )
                 operation_count = turn_evidence.pop("operation_count")
+            else:
+                for request_id, prompt in [
+                    (4, "Use image_gen.imagegen once to generate one JPEG image."),
+                    (
+                        5,
+                        "Use image_gen.imagegen once to edit the last generated image "
+                        "with num_last_images_to_include=1.",
+                    ),
+                ]:
+                    server.request(
+                        request_id,
+                        "turn/start",
+                        {
+                            "input": [
+                                {
+                                    "text": prompt,
+                                    "textElements": [],
+                                    "type": "text",
+                                }
+                            ],
+                            "threadId": thread_id,
+                        },
+                    )
+                    image_evidence = wait_for_image_turn(
+                        server, time.monotonic() + 120
+                    )
+                operation_count = 2
+                turn_evidence = {
+                    **image_evidence,
+                    "history_edit": "completed",
+                    "same_thread": True,
+                }
 
             evidence = {
                 "archive": archive.name,

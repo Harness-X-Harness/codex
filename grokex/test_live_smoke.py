@@ -56,6 +56,25 @@ class FakeScenarioAppServer(FakeAppServer):
 
 
 class VerifiedTurnTest(unittest.TestCase):
+    def test_accepts_secret_safe_completed_jpeg_item(self) -> None:
+        server = FakeAppServer([
+            {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": "/9j/", "savedPath": "/tmp/generated.jpg"}}},
+            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+        ])
+        evidence = live_smoke.wait_for_image_turn(server, time.monotonic() + 1)
+        self.assertEqual(evidence["image_mime"], "image/jpeg")
+        self.assertNotIn("result", evidence)
+        self.assertNotIn("savedPath", evidence)
+
+    def test_rejects_wrong_image_mime_or_extension(self) -> None:
+        for result, path in [("iVBORw==", "/tmp/generated.jpg"), ("/9j/", "/tmp/generated.png")]:
+            server = FakeAppServer([
+                {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": result, "savedPath": path}}},
+                {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
+            ])
+            with self.assertRaises(SystemExit):
+                live_smoke.wait_for_image_turn(server, time.monotonic() + 1)
+
     def test_accepts_basic_exact_reply_without_tool(self) -> None:
         server = FakeAppServer(
             [
