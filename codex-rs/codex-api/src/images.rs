@@ -62,7 +62,7 @@ pub enum ImageQuality {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageResponse {
     #[serde(default)]
-    pub created: u64,
+    pub created: Option<u64>,
     pub data: Vec<ImageData>,
     #[serde(default)]
     pub background: Option<ImageBackground>,

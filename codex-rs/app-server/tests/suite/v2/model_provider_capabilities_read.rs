@@ -92,7 +92,7 @@ wire_api = "grok_responses"
         received,
         ModelProviderCapabilitiesReadResponse {
             namespace_tools: true,
-            image_generation: false,
+            image_generation: true,
             web_search: true,
         }
     );

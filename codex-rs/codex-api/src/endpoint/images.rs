@@ -44,7 +44,8 @@ impl<T: HttpTransport> ImagesClient<T> {
         extra_headers: HeaderMap,
     ) -> Result<ImageResponse, ApiError> {
         let body = match self.dialect {
-            ImagesDialect::OpenAi => to_value(request),
+            ImagesDialect::OpenAi =>
+                to_value(request).map_err(|error| ApiError::Stream(error.to_string())),
             ImagesDialect::Grok => Ok(serde_json::json!({
                 "model": request.model.as_str(),
                 "prompt": request.prompt.as_str(),
@@ -52,7 +53,7 @@ impl<T: HttpTransport> ImagesClient<T> {
             })),
         };
         self.post_image_request("images/generations", body, extra_headers, "image generation")
-        .await
+            .await
     }
 
     pub async fn edit(
@@ -61,7 +62,8 @@ impl<T: HttpTransport> ImagesClient<T> {
         extra_headers: HeaderMap,
     ) -> Result<ImageResponse, ApiError> {
         let body = match self.dialect {
-            ImagesDialect::OpenAi => to_value(request),
+            ImagesDialect::OpenAi =>
+                to_value(request).map_err(|error| ApiError::Stream(error.to_string())),
             ImagesDialect::Grok => grok_edit_body(request),
         };
         self.post_image_request("images/edits", body, extra_headers, "image edit")
@@ -71,22 +73,32 @@ impl<T: HttpTransport> ImagesClient<T> {
     async fn post_image_request(
         &self,
         path: &str,
-        body: Result<serde_json::Value, serde_json::Error>,
+        body: Result<serde_json::Value, ApiError>,
         extra_headers: HeaderMap,
         operation: &str,
     ) -> Result<ImageResponse, ApiError> {
-        let body = body
-            .map_err(|e| ApiError::Stream(format!("failed to encode {operation} request: {e}")))?;
+        let body = body?;
         let resp = self
             .session
             .execute(Method::POST, path, extra_headers, Some(body))
             .await?;
-        serde_json::from_slice(&resp.body)
-            .map_err(|e| ApiError::Stream(format!("failed to decode {operation} response: {e}")))
+        let response: ImageResponse = serde_json::from_slice(&resp.body)
+            .map_err(|e| ApiError::Stream(format!("failed to decode {operation} response: {e}")))?;
+        if self.dialect == ImagesDialect::OpenAi && response.created.is_none() {
+            return Err(ApiError::Stream(format!(
+                "failed to decode {operation} response: missing field `created`"
+            )));
+        }
+        Ok(response)
     }
 }
 
-fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, serde_json::Error> {
+fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, ApiError> {
+    if !(1..=3).contains(&request.images.len()) {
+        return Err(ApiError::Stream(
+            "Grok image edits require between 1 and 3 images".to_string(),
+        ));
+    }
     let images = request
         .images
         .iter()
@@ -103,16 +115,16 @@ fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, serde
         "prompt": request.prompt.as_str(),
         "response_format": "b64_json",
     });
-    body.as_object_mut()
-        .expect("image request is an object")
-        .insert(
-        image_field.to_string(),
-        if images.len() == 1 {
-            images[0].clone()
-        } else {
-            serde_json::Value::Array(images)
-        },
-    );
+    if let Some(object) = body.as_object_mut() {
+        object.insert(
+            image_field.to_string(),
+            if images.len() == 1 {
+                images[0].clone()
+            } else {
+                serde_json::Value::Array(images)
+            },
+        );
+    }
     Ok(body)
 }
 
@@ -218,7 +230,7 @@ mod tests {
 
     fn expected_response() -> ImageResponse {
         ImageResponse {
-            created: 1778832973,
+            created: Some(1778832973),
             background: Some(ImageBackground::Opaque),
             data: vec![ImageData {
                 b64_json: "REDACT".to_string(),
@@ -369,7 +381,7 @@ mod tests {
             .await
             .expect("grok response should decode");
 
-        assert_eq!(response.created, 0);
+        assert_eq!(response.created, None);
         assert_eq!(response.data[0].mime_type.as_deref(), Some("image/jpeg"));
         assert_eq!(
             captured_request(&transport)
@@ -397,6 +409,36 @@ mod tests {
             for (key, value) in expected.as_object().expect("object") { assert_eq!(body.get(key), Some(value)); }
             assert_eq!(body.get("response_format"), Some(&json!("b64_json")));
             assert!(body.get("background").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn grok_edit_rejects_unsupported_cardinality_before_transport() {
+        for count in [0, 4] {
+            let transport = CapturingTransport::new(response_body());
+            let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
+                .with_dialect(ImagesDialect::Grok);
+            let error = client
+                .edit(
+                    &ImageEditRequest {
+                        images: (0..count)
+                            .map(|index| ImageUrl {
+                                image_url: format!("image-{index}"),
+                            })
+                            .collect(),
+                        prompt: "edit".to_string(),
+                        background: None,
+                        model: "grok-imagine-image-2.0".to_string(),
+                        n: None,
+                        quality: None,
+                        size: None,
+                    },
+                    HeaderMap::new(),
+                )
+                .await
+                .expect_err("unsupported image count should fail");
+            assert!(error.to_string().contains("between 1 and 3"));
+            assert!(transport.last_request.lock().expect("lock request").is_none());
         }
     }
 }
