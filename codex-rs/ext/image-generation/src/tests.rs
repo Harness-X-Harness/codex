@@ -35,11 +35,18 @@ fn artifact_path_sanitizes_session_and_call_ids() {
     let save_root = AbsolutePathBuf::current_dir().expect("current directory should be absolute");
 
     assert_eq!(
-        image_generation_artifact_path(&save_root, "../session", "../call"),
+        image_generation_artifact_path(&save_root, "../session", "../call", "png"),
         save_root
             .join("generated_images")
             .join("___session")
             .join("___call.png")
+    );
+    assert_eq!(
+        image_generation_artifact_path(&save_root, "session", "call", "jpg"),
+        save_root
+            .join("generated_images")
+            .join("session")
+            .join("call.jpg")
     );
 }
 
@@ -66,6 +73,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
             },
             &[],
             &[],
+            "gpt-image-2",
         )
         .await
         .expect("generation request should build"),
@@ -151,6 +159,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             },
             &history,
             &[],
+            "gpt-image-2",
         )
         .await
         .expect("history-backed edit request should build"),
@@ -175,6 +184,7 @@ async fn conflicting_image_selectors_return_tool_error() {
         },
         &[],
         &[],
+        "gpt-image-2",
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -203,6 +213,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
         },
         &[],
         &[],
+        "gpt-image-2",
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -229,6 +240,7 @@ async fn recent_image_fallback_requires_requested_count() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
+        "gpt-image-2",
     )
     .await
     .expect_err("history-backed edit should require the requested image count");
@@ -245,6 +257,7 @@ fn generated_output_returns_image_input_and_output_hint() {
         image_generation_output_hint("/tmp", "/tmp/call-1.png").expect("hint should fit");
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
+        mime_type: "image/png".to_string(),
         output_hint: Some(output_hint.clone()),
     };
 
@@ -274,13 +287,14 @@ fn generated_output_returns_image_input_and_output_hint() {
 fn generated_output_returns_generated_image_helper_input_in_code_mode() {
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
+        mime_type: "image/jpeg".to_string(),
         output_hint: Some("generated image save hint".to_string()),
     };
 
     assert_eq!(
         output.code_mode_result(&function_payload()),
         serde_json::json!({
-            "image_url": format!("data:image/png;base64,{RESULT}"),
+            "image_url": format!("data:image/jpeg;base64,{RESULT}"),
             "output_hint": "generated image save hint",
         })
     );
@@ -291,6 +305,7 @@ fn generated_output_omits_oversized_output_hint() {
     let long_path = "x".repeat(1024);
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
+        mime_type: "image/png".to_string(),
         output_hint: image_generation_output_hint("/tmp", long_path),
     };
 

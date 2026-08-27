@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::io;
+use std::path::Path;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -56,7 +57,6 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
-const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
@@ -139,9 +139,13 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
 impl ImageGenerationTool {
     async fn handle_call(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request =
-            request_for_call_args(&args, call.conversation_history.items(), &call.environments)
-                .await?;
+        let request = request_for_call_args(
+            &args,
+            call.conversation_history.items(),
+            &call.environments,
+            self.backend.model(),
+        )
+        .await?;
         call.turn_item_emitter
             .emit_started(extension_turn_item(
                 ImageGenerationItem {
@@ -178,10 +182,11 @@ impl ImageGenerationTool {
                 .data
                 .into_iter()
                 .next()
-                .map(|data| (data.b64_json, transparent_background))
+                .map(normalize_image_data)
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
+                .and_then(|result| result.map(|(data, mime)| (data, mime, transparent_background)))
         });
-        let (result, transparent_background) = match result {
+        let (result, mime_type, transparent_background) = match result {
             Ok(result) => result,
             Err((message, failure)) => {
                 let item = ImageGenerationItem {
@@ -206,6 +211,7 @@ impl ImageGenerationTool {
             &self.thread_id,
             &call.call_id,
             &result,
+            image_extension(&mime_type).expect("MIME type was validated"),
         )
         .await;
         let item = ImageGenerationItem {
@@ -227,9 +233,40 @@ impl ImageGenerationTool {
         });
         Ok(Box::new(GeneratedImageOutput {
             result,
+            mime_type,
             output_hint,
         }))
     }
+}
+
+fn normalize_image_data(
+    data: codex_api::ImageData,
+) -> Result<(String, String), (String, Option<ImageGenerationFailure>)> {
+    let bytes = BASE64_STANDARD.decode(data.b64_json.trim()).map_err(|_| {
+        ("image generation returned invalid base64 data".to_string(), None)
+    })?;
+    let image = load_for_prompt_bytes(
+        Path::new("generated-image"),
+        bytes,
+        PromptImageMode::Original,
+    )
+    .map_err(|_| ("image generation returned invalid image data".to_string(), None))?;
+    if data.mime_type.as_deref().is_some_and(|mime| mime != image.mime) {
+        return Err((
+            "image generation returned mismatched MIME metadata".to_string(),
+            None,
+        ));
+    }
+    image_extension(&image.mime).ok_or_else(|| {
+        (
+            "image generation returned an unsupported MIME type".to_string(),
+            None,
+        )
+    })?;
+    Ok((
+        BASE64_STANDARD.encode(image.bytes.as_ref()),
+        image.mime,
+    ))
 }
 
 fn usage_limit_failure(error: &CodexErr) -> Option<ImageGenerationFailure> {
@@ -265,10 +302,11 @@ async fn save_image_generation_result(
     session_id: &str,
     call_id: &str,
     result: &str,
+    extension: &str,
 ) -> Option<AbsolutePathBuf> {
     let (output_dir, save_result) = match save_root {
         Some(save_root) => {
-            let path = image_generation_artifact_path(save_root, session_id, call_id);
+            let path = image_generation_artifact_path(save_root, session_id, call_id, extension);
             let output_dir = path.parent().unwrap_or_else(|| save_root.clone());
             let save_result: io::Result<AbsolutePathBuf> = async {
                 let bytes = BASE64_STANDARD
@@ -321,7 +359,7 @@ async fn save_image_generation_result(
                 }
 
                 let artifact_path =
-                    image_generation_artifact_path(&environment.cwd, session_id, call_id);
+                    image_generation_artifact_path(&environment.cwd, session_id, call_id, extension);
                 let path = output_dir.join(artifact_path.as_path().file_name().unwrap_or_default());
                 let sandbox = Some(&environment.file_system_sandbox_context);
                 if let Some(parent) = path.parent() {
@@ -402,6 +440,7 @@ async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
     environments: &[ToolEnvironment],
+    image_model: &str,
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
     if paths.len() > MAX_EDIT_IMAGES {
@@ -414,7 +453,7 @@ async fn request_for_call_args(
             return Ok(ImageRequest::Generate(ImageGenerationRequest {
                 prompt: args.prompt.clone(),
                 background: Some(ImageBackground::Auto),
-                model: IMAGE_MODEL.to_string(),
+                model: image_model.to_string(),
                 n: None,
                 quality: Some(ImageQuality::Auto),
                 size: Some("auto".to_string()),
@@ -462,7 +501,7 @@ async fn request_for_call_args(
         images,
         prompt: args.prompt.clone(),
         background: Some(ImageBackground::Auto),
-        model: IMAGE_MODEL.to_string(),
+        model: image_model.to_string(),
         n: None,
         quality: Some(ImageQuality::Auto),
         size: Some("auto".to_string()),
@@ -636,6 +675,7 @@ fn imagegen_tool_spec() -> ToolSpec {
 
 struct GeneratedImageOutput {
     result: String,
+    mime_type: String,
     output_hint: Option<String>,
 }
 
@@ -654,7 +694,7 @@ impl ToolOutput for GeneratedImageOutput {
     fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
         let mut result = Map::from_iter([(
             "image_url".to_string(),
-            Value::String(format!("data:image/png;base64,{}", self.result)),
+            Value::String(format!("data:{};base64,{}", self.mime_type, self.result)),
         )]);
         if let Some(output_hint) = &self.output_hint {
             result.insert(
@@ -668,7 +708,7 @@ impl ToolOutput for GeneratedImageOutput {
     /// Returns generated bytes and persisted-artifact context for model follow-up.
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
         let mut content = vec![FunctionCallOutputContentItem::InputImage {
-            image_url: format!("data:image/png;base64,{}", self.result),
+            image_url: format!("data:{};base64,{}", self.mime_type, self.result),
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }];
         if let Some(output_hint) = &self.output_hint {
@@ -683,6 +723,15 @@ impl ToolOutput for GeneratedImageOutput {
                 success: Some(true),
             },
         }
+    }
+}
+
+fn image_extension(mime_type: &str) -> Option<&'static str> {
+    match mime_type {
+        "image/jpeg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        "image/png" => Some("png"),
+        _ => None,
     }
 }
 

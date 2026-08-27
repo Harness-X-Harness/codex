@@ -80,6 +80,7 @@ pub use crate::images::ImageBackground;
 pub use crate::images::ImageData;
 pub use crate::images::ImageEditRequest;
 pub use crate::images::ImageGenerationRequest;
+pub use crate::images::ImagesDialect;
 pub use crate::images::ImageQuality;
 pub use crate::images::ImageResponse;
 pub use crate::images::ImageUrl;

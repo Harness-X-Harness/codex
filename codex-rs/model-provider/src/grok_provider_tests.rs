@@ -242,7 +242,7 @@ fn grok_advertises_only_proven_provider_capabilities() {
         provider.capabilities(),
         ProviderCapabilities {
             namespace_tools: true,
-            image_generation: false,
+            image_generation: true,
             web_search: true,
             x_search: true,
             cached_web_search: false,
@@ -251,6 +251,20 @@ fn grok_advertises_only_proven_provider_capabilities() {
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     );
+}
+
+#[test]
+fn grok_owns_image_model_and_wire_dialect() {
+    let provider = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        None,
+    );
+
+    assert_eq!(provider.image_generation_model(), "grok-imagine-image-2.0");
+    assert_eq!(provider.images_dialect(), codex_api::ImagesDialect::Grok);
 }
 
 #[test]

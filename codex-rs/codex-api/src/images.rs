@@ -1,6 +1,13 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImagesDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
     pub prompt: String,
@@ -54,6 +61,7 @@ pub enum ImageQuality {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageResponse {
+    #[serde(default)]
     pub created: u64,
     pub data: Vec<ImageData>,
     #[serde(default)]
@@ -67,4 +75,6 @@ pub struct ImageResponse {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageData {
     pub b64_json: String,
+    #[serde(default)]
+    pub mime_type: Option<String>,
 }

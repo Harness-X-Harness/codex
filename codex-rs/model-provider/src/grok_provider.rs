@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_api::ResponsesDialect;
+use codex_api::ImagesDialect;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -58,7 +59,7 @@ impl ModelProvider for GrokModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             namespace_tools: true,
-            image_generation: false,
+            image_generation: true,
             web_search: true,
             x_search: true,
             cached_web_search: false,
@@ -136,6 +137,14 @@ impl ModelProvider for GrokModelProvider {
 
     fn projects_tools_as_flat_functions(&self) -> bool {
         true
+    }
+
+    fn image_generation_model(&self) -> &'static str {
+        "grok-imagine-image-2.0"
+    }
+
+    fn images_dialect(&self) -> ImagesDialect {
+        ImagesDialect::Grok
     }
 
     fn approval_review_preferred_model(&self) -> Option<&'static str> {

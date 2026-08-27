@@ -70,11 +70,18 @@ impl CodexImagesBackend {
             .api_auth()
             .await
             .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        Ok(ImagesClient::new(
-            ReqwestTransport::from_http_client(create_client()),
-            provider,
-            auth,
-        ))
+        Ok(
+            ImagesClient::new(
+                ReqwestTransport::from_http_client(create_client()),
+                provider,
+                auth,
+            )
+            .with_dialect(self.provider.images_dialect()),
+        )
+    }
+
+    pub(crate) fn model(&self) -> &'static str {
+        self.provider.image_generation_model()
     }
 
     /// Sends a standalone image generation request through the configured Images client.
