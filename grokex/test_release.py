@@ -7,7 +7,7 @@ from grokex import release
 
 
 class LiveEvidenceTest(unittest.TestCase):
-    def test_builds_manifest_from_both_required_scenarios(self) -> None:
+    def test_builds_manifest_from_every_required_scenario(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             archive = root / "grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz"
@@ -42,9 +42,23 @@ class LiveEvidenceTest(unittest.TestCase):
                 "scenario": "encrypted-reasoning-tool-continuation",
                 "tool_continuation": "completed",
             }
+            collaboration = {
+                **common,
+                "child_completion": "completed",
+                "child_response_assertion": "exact_match",
+                "default_full_history": "completed",
+                "operation_count": 3,
+                "parent_completion": "completed",
+                "response_assertion": "exact_match",
+                "scenario": "ultra-full-history-collaboration",
+                "spawn_count": 1,
+            }
             (evidence_dir / "basic.json").write_text(json.dumps(basic), encoding="utf-8")
             (evidence_dir / "continuation.json").write_text(
                 json.dumps(continuation), encoding="utf-8"
+            )
+            (evidence_dir / "collaboration.json").write_text(
+                json.dumps(collaboration), encoding="utf-8"
             )
             output = root / "LIVE_EVIDENCE.json"
 
@@ -65,7 +79,7 @@ class LiveEvidenceTest(unittest.TestCase):
                     "catalog": "release-bundled",
                     "model": "grok-4.6",
                     "multi_agent_version": "v2",
-                    "operation_count": 3,
+                    "operation_count": 6,
                     "provider": "grok",
                     "reasoning_effort": "ultra",
                     "scenarios": {
@@ -81,6 +95,16 @@ class LiveEvidenceTest(unittest.TestCase):
                             "response_assertion": "exact_match",
                             "status": "completed",
                             "tool_continuation": "completed",
+                        },
+                        "ultra-full-history-collaboration": {
+                            "child_completion": "completed",
+                            "child_response_assertion": "exact_match",
+                            "default_full_history": "completed",
+                            "operation_count": 3,
+                            "parent_completion": "completed",
+                            "response_assertion": "exact_match",
+                            "spawn_count": 1,
+                            "status": "completed",
                         },
                     },
                     "source_sha": "source-sha",

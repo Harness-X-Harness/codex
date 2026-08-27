@@ -42,7 +42,19 @@ impl ResponsesDialect {
         if self == Self::Grok
             && let Some(object) = value.as_object_mut()
         {
-            reject_grok_agent_message_history(object.get("input"))?;
+            let has_agent_message = object
+                .get("input")
+                .and_then(Value::as_array)
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.get("type").and_then(Value::as_str) == Some("agent_message")
+                    })
+                });
+            if has_agent_message {
+                return Err(<serde_json::Error as serde::ser::Error>::custom(
+                    "Grok cannot replay unsupported encrypted collaboration history",
+                ));
+            }
             if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
                 for tool in tools {
                     project_grok_web_search_tool(tool)?;
@@ -60,22 +72,6 @@ impl ResponsesDialect {
         }
         Ok(value)
     }
-}
-
-fn reject_grok_agent_message_history(input: Option<&Value>) -> serde_json::Result<()> {
-    let has_agent_message = input
-        .and_then(Value::as_array)
-        .is_some_and(|items| {
-            items.iter().any(|item| {
-                item.get("type").and_then(Value::as_str) == Some("agent_message")
-            })
-        });
-    if has_agent_message {
-        return Err(<serde_json::Error as serde::ser::Error>::custom(
-            "Grok cannot replay unsupported encrypted collaboration history",
-        ));
-    }
-    Ok(())
 }
 
 fn project_grok_web_search_tool(tool: &mut Value) -> serde_json::Result<()> {

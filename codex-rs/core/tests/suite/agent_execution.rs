@@ -69,33 +69,6 @@ fn input_message_contains(request: &wiremock::Request, text: &str) -> bool {
     })
 }
 
-fn uses_gateway_supported_input_types(body: &serde_json::Value) -> bool {
-    const SUPPORTED_TYPES: &[&str] = &[
-        "message",
-        "reasoning",
-        "function_call",
-        "function_call_output",
-        "shell_call",
-        "shell_call_output",
-        "web_search_call",
-        "file_search_call",
-        "code_interpreter_call",
-        "mcp_call",
-        "custom_tool_call",
-        "image_generation_call",
-        "compaction",
-    ];
-    body.get("input")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|items| {
-            items.iter().all(|item| {
-                item.get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|item_type| SUPPORTED_TYPES.contains(&item_type))
-            })
-        })
-}
-
 async fn mount_root_collaboration_call(
     server: &wiremock::MockServer,
     prompt: &'static str,
@@ -229,11 +202,34 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         &requests[2],
         "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/first\nPayload:\nworker completed"
     ));
+    const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "shell_call",
+        "shell_call_output",
+        "web_search_call",
+        "file_search_call",
+        "code_interpreter_call",
+        "mcp_call",
+        "custom_tool_call",
+        "image_generation_call",
+        "compaction",
+    ];
     for request in requests {
         let body: serde_json::Value = serde_json::from_slice(&request.body)?;
         assert_eq!(body["model"], "grok-4.6");
         assert_eq!(body["reasoning"]["effort"], "xhigh");
-        assert!(uses_gateway_supported_input_types(&body));
+        assert!(
+            body["input"]
+                .as_array()
+                .is_some_and(|items| items.iter().all(|item| {
+                    item["type"]
+                        .as_str()
+                        .is_some_and(|item_type| GATEWAY_SUPPORTED_INPUT_TYPES.contains(&item_type))
+                }))
+        );
         assert!(
             !body["input"]
                 .as_array()

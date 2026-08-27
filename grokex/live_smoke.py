@@ -22,12 +22,15 @@ from pathlib import Path
 TAG = "grokex-v0.149.0"
 BASIC_SCENARIO = "basic-exact-reply"
 CONTINUATION_SCENARIO = "encrypted-reasoning-tool-continuation"
-SCENARIOS = (BASIC_SCENARIO, CONTINUATION_SCENARIO)
+COLLABORATION_SCENARIO = "ultra-full-history-collaboration"
+SCENARIOS = (BASIC_SCENARIO, CONTINUATION_SCENARIO, COLLABORATION_SCENARIO)
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
+CHILD_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_CHILD_OK"
+PARENT_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_PARENT_OK"
 
 
 def sha256(path: Path) -> str:
@@ -283,6 +286,106 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]
     }
 
 
+def wait_for_collaboration_turn(
+    server: AppServer,
+    deadline: float,
+    root_thread_id: str,
+) -> dict[str, object]:
+    child_reply_seen = False
+    child_status = None
+    child_thread_id = None
+    default_spawn_count = 0
+    parent_reply_seen = False
+    root_status = None
+    spawn_completed_count = 0
+
+    while time.monotonic() < deadline:
+        message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
+        method = message.get("method")
+        params = message.get("params")
+        if not isinstance(params, dict):
+            continue
+        thread_id = params.get("threadId")
+
+        if method == "rawResponseItem/completed" and thread_id == root_thread_id:
+            item = params.get("item")
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            arguments = item.get("arguments")
+            if not isinstance(arguments, str):
+                continue
+            try:
+                parsed_arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed_arguments, dict):
+                continue
+            task = parsed_arguments.get("message")
+            if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
+                continue
+            if "fork_turns" in parsed_arguments:
+                raise SystemExit("the Grok collaboration spawn did not use default full history")
+            default_spawn_count += 1
+            if default_spawn_count != 1:
+                raise SystemExit("the Grok collaboration Turn requested more than one child")
+            continue
+
+        if method == "item/completed":
+            item = params.get("item")
+            if not isinstance(item, dict):
+                continue
+            if (
+                thread_id == root_thread_id
+                and item.get("type") == "collabAgentToolCall"
+                and item.get("tool") == "spawnAgent"
+            ):
+                if item.get("status") != "completed":
+                    raise SystemExit("the Grok collaboration spawn did not complete")
+                receiver_thread_ids = item.get("receiverThreadIds")
+                if not isinstance(receiver_thread_ids, list) or len(receiver_thread_ids) != 1:
+                    raise SystemExit("the Grok collaboration spawn returned an invalid child set")
+                child_thread_id = receiver_thread_ids[0]
+                if not isinstance(child_thread_id, str) or not child_thread_id:
+                    raise SystemExit("the Grok collaboration spawn returned no child identity")
+                spawn_completed_count += 1
+                if spawn_completed_count != 1:
+                    raise SystemExit("the Grok collaboration Turn completed more than one spawn")
+            elif item.get("type") == "agentMessage":
+                reply = item.get("text")
+                if thread_id == root_thread_id:
+                    parent_reply_seen = reply == PARENT_EXPECTED_AGENT_REPLY
+                elif child_thread_id is not None and thread_id == child_thread_id:
+                    child_reply_seen = reply == CHILD_EXPECTED_AGENT_REPLY
+            continue
+
+        if method == "turn/completed":
+            turn = params.get("turn")
+            status = turn.get("status") if isinstance(turn, dict) else None
+            if thread_id == root_thread_id:
+                root_status = status
+                break
+            if child_thread_id is not None and thread_id == child_thread_id:
+                child_status = status
+
+    if root_status != "completed":
+        raise SystemExit("the Grok Ultra parent Turn did not complete")
+    if child_status != "completed" or not child_reply_seen:
+        raise SystemExit("the Grok Ultra child did not complete the bounded task")
+    if not parent_reply_seen:
+        raise SystemExit("the Grok Ultra parent did not return the expected semantic reply")
+    if default_spawn_count != 1 or spawn_completed_count != 1:
+        raise SystemExit("the Grok Ultra Turn did not prove one default-history spawn")
+    return {
+        "child_completion": "completed",
+        "child_response_assertion": "exact_match",
+        "default_full_history": "completed",
+        "parent_completion": "completed",
+        "response_assertion": "exact_match",
+        "spawn_count": 1,
+        "status": root_status,
+    }
+
+
 def run_smoke(
     archive: Path,
     config: Path,
@@ -352,6 +455,8 @@ def run_smoke(
                 "model": "grok-4.6",
                 "modelProvider": "grok",
             }
+            if scenario == COLLABORATION_SCENARIO:
+                thread_params["experimentalRawEvents"] = True
             if scenario == CONTINUATION_SCENARIO:
                 thread_params["dynamicTools"] = [
                     {
@@ -392,7 +497,7 @@ def run_smoke(
                     },
                 )
                 turn_evidence = wait_for_basic_turn(server, time.monotonic() + 120)
-            else:
+            elif scenario == CONTINUATION_SCENARIO:
                 prompt = (
                     f"Call {TOOL_NAME} exactly once. Use its result, then reply "
                     f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
@@ -447,6 +552,35 @@ def run_smoke(
                     ],
                     "reasoning_replay": "completed",
                 }
+            else:
+                prompt = (
+                    "Use spawn_agent exactly once with task_name live_child. Omit fork_turns "
+                    "so the child uses the default full-history fork. Tell the child to reply "
+                    f"with exactly {CHILD_EXPECTED_AGENT_REPLY} and no other text. Wait for "
+                    "that child to complete, then reply with exactly "
+                    f"{PARENT_EXPECTED_AGENT_REPLY} and no other text."
+                )
+                server.request(
+                    4,
+                    "turn/start",
+                    {
+                        "effort": "ultra",
+                        "input": [
+                            {
+                                "text": prompt,
+                                "textElements": [],
+                                "type": "text",
+                            }
+                        ],
+                        "threadId": thread_id,
+                    },
+                )
+                turn_evidence = wait_for_collaboration_turn(
+                    server,
+                    time.monotonic() + 120,
+                    thread_id,
+                )
+                operation_count = 3
 
             evidence = {
                 "archive": archive.name,
