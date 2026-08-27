@@ -44,16 +44,22 @@ impl<T: HttpTransport> ImagesClient<T> {
         extra_headers: HeaderMap,
     ) -> Result<ImageResponse, ApiError> {
         let body = match self.dialect {
-            ImagesDialect::OpenAi =>
-                to_value(request).map_err(|error| ApiError::Stream(error.to_string())),
+            ImagesDialect::OpenAi => {
+                to_value(request).map_err(|error| ApiError::Stream(error.to_string()))
+            }
             ImagesDialect::Grok => Ok(serde_json::json!({
                 "model": request.model.as_str(),
                 "prompt": request.prompt.as_str(),
                 "response_format": "b64_json",
             })),
         };
-        self.post_image_request("images/generations", body, extra_headers, "image generation")
-            .await
+        self.post_image_request(
+            "images/generations",
+            body,
+            extra_headers,
+            "image generation",
+        )
+        .await
     }
 
     pub async fn edit(
@@ -62,8 +68,9 @@ impl<T: HttpTransport> ImagesClient<T> {
         extra_headers: HeaderMap,
     ) -> Result<ImageResponse, ApiError> {
         let body = match self.dialect {
-            ImagesDialect::OpenAi =>
-                to_value(request).map_err(|error| ApiError::Stream(error.to_string())),
+            ImagesDialect::OpenAi => {
+                to_value(request).map_err(|error| ApiError::Stream(error.to_string()))
+            }
             ImagesDialect::Grok => grok_edit_body(request),
         };
         self.post_image_request("images/edits", body, extra_headers, "image edit")
@@ -362,7 +369,8 @@ mod tests {
         let transport = CapturingTransport::new(
             serde_json::to_vec(&json!({
                 "data": [{"b64_json": "REDACT", "mime_type": "image/jpeg"}]
-            })).expect("serialize response"),
+            }))
+            .expect("serialize response"),
         );
         let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
             .with_dialect(ImagesDialect::Grok);
@@ -399,14 +407,51 @@ mod tests {
     #[tokio::test]
     async fn grok_edit_projects_single_and_multiple_image_shapes() {
         for (images, expected) in [
-            (vec![ImageUrl { image_url: "one".to_string() }], json!({"image":{"type":"image_url","url":"one"}})),
-            (vec![ImageUrl { image_url: "one".to_string() }, ImageUrl { image_url: "two".to_string() }], json!({"images":[{"type":"image_url","url":"one"},{"type":"image_url","url":"two"}]})),
+            (
+                vec![ImageUrl {
+                    image_url: "one".to_string(),
+                }],
+                json!({"image":{"type":"image_url","url":"one"}}),
+            ),
+            (
+                vec![
+                    ImageUrl {
+                        image_url: "one".to_string(),
+                    },
+                    ImageUrl {
+                        image_url: "two".to_string(),
+                    },
+                ],
+                json!({"images":[{"type":"image_url","url":"one"},{"type":"image_url","url":"two"}]}),
+            ),
         ] {
             let transport = CapturingTransport::new(response_body());
-            let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth)).with_dialect(ImagesDialect::Grok);
-            client.edit(&ImageEditRequest { images, prompt:"edit".to_string(), background:None, model:"grok-imagine-image-2.0".to_string(), n:None, quality:None, size:None }, HeaderMap::new()).await.expect("edit should work");
-            let body = captured_request(&transport).body.as_ref().and_then(RequestBody::json).cloned().expect("json body");
-            for (key, value) in expected.as_object().expect("object") { assert_eq!(body.get(key), Some(value)); }
+            let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
+                .with_dialect(ImagesDialect::Grok);
+            client
+                .edit(
+                    &ImageEditRequest {
+                        images,
+                        prompt: "edit".to_string(),
+                        background: None,
+                        model: "grok-imagine-image-2.0".to_string(),
+                        n: None,
+                        quality: None,
+                        size: None,
+                    },
+                    HeaderMap::new(),
+                )
+                .await
+                .expect("edit should work");
+            let body = captured_request(&transport)
+                .body
+                .as_ref()
+                .and_then(RequestBody::json)
+                .cloned()
+                .expect("json body");
+            for (key, value) in expected.as_object().expect("object") {
+                assert_eq!(body.get(key), Some(value));
+            }
             assert_eq!(body.get("response_format"), Some(&json!("b64_json")));
             assert!(body.get("background").is_none());
         }
@@ -438,7 +483,13 @@ mod tests {
                 .await
                 .expect_err("unsupported image count should fail");
             assert!(error.to_string().contains("between 1 and 3"));
-            assert!(transport.last_request.lock().expect("lock request").is_none());
+            assert!(
+                transport
+                    .last_request
+                    .lock()
+                    .expect("lock request")
+                    .is_none()
+            );
         }
     }
 }

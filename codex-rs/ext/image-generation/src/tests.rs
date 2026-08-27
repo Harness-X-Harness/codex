@@ -1,10 +1,10 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
@@ -92,7 +92,8 @@ async fn omitted_references_generate_with_fixed_defaults() {
 
 #[tokio::test]
 async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
-    let generated = BASE64_STANDARD.encode(include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg"));
+    let generated =
+        BASE64_STANDARD.encode(include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg"));
     let generated_url = format!("data:image/jpeg;base64,{generated}");
     let history = vec![
         ResponseItem::Message {

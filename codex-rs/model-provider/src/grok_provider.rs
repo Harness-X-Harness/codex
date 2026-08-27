@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_api::ResponsesDialect;
 use codex_api::ImagesDialect;
+use codex_api::ResponsesDialect;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;

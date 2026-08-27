@@ -249,15 +249,27 @@ fn normalize_image_data(
     data: codex_api::ImageData,
 ) -> Result<NormalizedImage, (String, Option<ImageGenerationFailure>)> {
     let bytes = BASE64_STANDARD.decode(data.b64_json.trim()).map_err(|_| {
-        ("image generation returned invalid base64 data".to_string(), None)
+        (
+            "image generation returned invalid base64 data".to_string(),
+            None,
+        )
     })?;
     let image = load_for_prompt_bytes(
         Path::new("generated-image"),
         bytes,
         PromptImageMode::Original,
     )
-    .map_err(|_| ("image generation returned invalid image data".to_string(), None))?;
-    if data.mime_type.as_deref().is_some_and(|mime| mime != image.mime) {
+    .map_err(|_| {
+        (
+            "image generation returned invalid image data".to_string(),
+            None,
+        )
+    })?;
+    if data
+        .mime_type
+        .as_deref()
+        .is_some_and(|mime| mime != image.mime)
+    {
         return Err((
             "image generation returned mismatched MIME metadata".to_string(),
             None,
@@ -365,8 +377,12 @@ async fn save_image_generation_result(
                     ));
                 }
 
-                let artifact_path =
-                    image_generation_artifact_path(&environment.cwd, session_id, call_id, extension);
+                let artifact_path = image_generation_artifact_path(
+                    &environment.cwd,
+                    session_id,
+                    call_id,
+                    extension,
+                );
                 let path = output_dir.join(artifact_path.as_path().file_name().unwrap_or_default());
                 let sandbox = Some(&environment.file_system_sandbox_context);
                 if let Some(parent) = path.parent() {

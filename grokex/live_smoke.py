@@ -445,23 +445,21 @@ def wait_for_image_turn(
             continue
         if message.get("method") == "rawResponseItem/completed":
             item = params.get("item")
-            if isinstance(item, dict) and item.get("type") == "response.output_item.done":
-                output = item.get("item")
-                if (
-                    isinstance(output, dict)
-                    and output.get("type") == "function_call"
-                    and output.get("namespace") == "image_gen"
-                    and output.get("name") == "imagegen"
-                ):
-                    try:
-                        arguments = json.loads(output.get("arguments", ""))
-                    except (TypeError, json.JSONDecodeError):
-                        arguments = None
-                    history_args_seen = history_args_seen or (
-                        isinstance(arguments, dict)
-                        and arguments.get("num_last_images_to_include") == 1
-                        and arguments.get("referenced_image_paths") is None
-                    )
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "function_call"
+                and item.get("namespace") == "image_gen"
+                and item.get("name") == "imagegen"
+            ):
+                try:
+                    arguments = json.loads(item.get("arguments", ""))
+                except (TypeError, json.JSONDecodeError):
+                    arguments = None
+                history_args_seen = history_args_seen or (
+                    isinstance(arguments, dict)
+                    and arguments.get("num_last_images_to_include") == 1
+                    and arguments.get("referenced_image_paths") is None
+                )
         elif message.get("method") == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "imageGeneration":

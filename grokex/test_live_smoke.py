@@ -65,7 +65,7 @@ class VerifiedTurnTest(unittest.TestCase):
             artifact.write_bytes(jpeg)
             image_item = {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}}
             turn_done = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
-            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "response.output_item.done", "item": {"type": "function_call", "namespace": "image_gen", "name": "imagegen", "arguments": json.dumps({"num_last_images_to_include": 1})}}}}
+            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "namespace": "image_gen", "name": "imagegen", "arguments": json.dumps({"num_last_images_to_include": 1})}}}
             server = FakeScenarioAppServer([image_item, turn_done, raw_edit, image_item, turn_done])
             archive = root / "candidate.tar.gz"
             archive.write_bytes(b"candidate")

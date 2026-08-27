@@ -73,18 +73,25 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
                 ),
                 responses::ev_completed("resp-1"),
             ]),
-            responses::sse(vec![responses::ev_assistant_message("msg-1", "Done"), responses::ev_completed("resp-2")]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
             responses::sse(vec![
                 responses::ev_response_created("resp-3"),
                 responses::ev_function_call_with_namespace(
                     "edit-1",
                     "image_gen",
                     "imagegen",
-                    &json!({"prompt": "add a red hat", "num_last_images_to_include": 1}).to_string(),
+                    &json!({"prompt": "add a red hat", "num_last_images_to_include": 1})
+                        .to_string(),
                 ),
                 responses::ev_completed("resp-3"),
             ]),
-            responses::sse(vec![responses::ev_assistant_message("msg-2", "Done"), responses::ev_completed("resp-4")]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-2", "Done"),
+                responses::ev_completed("resp-4"),
+            ]),
         ],
     )
     .await;
@@ -96,25 +103,72 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .with_provider_base_url(&format!("{}/api/codex", server.uri()))
         .with_provider_config("wire_api = \"grok_responses\"\nsupports_websockets = false\nrequires_openai_auth = true")
         .write(codex_home.path())?;
-    write_chatgpt_auth(codex_home.path(), ChatGptAuthFixture::new("access-chatgpt"), AuthCredentialsStoreMode::File)?;
-    let mut mcp = TestAppServer::builder().with_codex_home(codex_home.path()).build_initialized_with_timeout(DEFAULT_READ_TIMEOUT).await?;
-    let thread_req = mcp.send_thread_start_request_with_auto_env(ThreadStartParams::default()).await?;
-    let ThreadStartResponse { thread, .. } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread_req = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
     for text in ["Generate an image", "Edit the prior image"] {
-        let request = mcp.send_turn_start_request(TurnStartParams { thread_id: thread.id.clone(), input: vec![V2UserInput::Text { text: text.to_string(), text_elements: Vec::new() }], ..Default::default() }).await?;
-        let _: TurnStartResponse = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
-        let completed = timeout(DEFAULT_READ_TIMEOUT, wait_for_image_generation_completed(&mut mcp)).await??;
-        let ThreadItem::ImageGeneration(item) = completed.item else { panic!("expected image generation item"); };
+        let request = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let _: TurnStartResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+        let completed = timeout(
+            DEFAULT_READ_TIMEOUT,
+            wait_for_image_generation_completed(&mut mcp),
+        )
+        .await??;
+        let ThreadItem::ImageGeneration(item) = completed.item else {
+            panic!("expected image generation item");
+        };
         let saved = item.saved_path.context("image should be saved")?;
-        assert_eq!(saved.extension().and_then(|value| value.to_str()), Some("jpg"));
+        assert_eq!(
+            saved.extension().and_then(|value| value.to_str()),
+            Some("jpg")
+        );
         assert_eq!(std::fs::read(saved)?, jpeg);
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_stream_until_notification_message("turn/completed")).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
     }
     let requests = server.received_requests().await.context("requests")?;
-    let generation = requests.iter().find(|request| request.url.path().ends_with("/images/generations")).context("generation")?.body_json::<serde_json::Value>()?;
-    assert_eq!(generation, json!({"model":"grok-imagine-image-2.0","prompt":"paint a blue whale","response_format":"b64_json"}));
-    let edit = requests.iter().find(|request| request.url.path().ends_with("/images/edits")).context("edit")?.body_json::<serde_json::Value>()?;
-    assert_eq!(edit, json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{result}")}}));
+    let generation = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/images/generations"))
+        .context("generation")?
+        .body_json::<serde_json::Value>()?;
+    assert_eq!(
+        generation,
+        json!({"model":"grok-imagine-image-2.0","prompt":"paint a blue whale","response_format":"b64_json"})
+    );
+    let edit = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/images/edits"))
+        .context("edit")?
+        .body_json::<serde_json::Value>()?;
+    assert_eq!(
+        edit,
+        json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{result}")}})
+    );
     assert_eq!(response_mock.requests().len(), 4);
     Ok(())
 }
