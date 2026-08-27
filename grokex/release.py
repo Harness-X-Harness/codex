@@ -54,6 +54,7 @@ LIVE_SCENARIO_ASSERTIONS = {
         "response_assertion": "exact_match",
         "spawn_count": 1,
         "status": "completed",
+        "wait_count": 1,
     },
 }
 

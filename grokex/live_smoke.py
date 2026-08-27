@@ -299,6 +299,7 @@ def wait_for_collaboration_turn(
     response_counts: dict[str, int] = {}
     root_status = None
     spawn_completed_count = 0
+    wait_completed_count = 0
 
     while time.monotonic() < deadline:
         if (
@@ -306,11 +307,6 @@ def wait_for_collaboration_turn(
             and child_status == "completed"
             and child_reply_seen
             and parent_reply_seen
-            and default_spawn_count == 1
-            and spawn_completed_count == 1
-            and child_thread_id is not None
-            and response_counts.get(root_thread_id) == 3
-            and response_counts.get(child_thread_id) == 1
         ):
             break
         message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
@@ -358,19 +354,32 @@ def wait_for_collaboration_turn(
             if (
                 thread_id == root_thread_id
                 and item.get("type") == "collabAgentToolCall"
-                and item.get("tool") == "spawnAgent"
             ):
+                tool = item.get("tool")
                 if item.get("status") != "completed":
-                    raise SystemExit("the Grok collaboration spawn did not complete")
-                receiver_thread_ids = item.get("receiverThreadIds")
-                if not isinstance(receiver_thread_ids, list) or len(receiver_thread_ids) != 1:
-                    raise SystemExit("the Grok collaboration spawn returned an invalid child set")
-                child_thread_id = receiver_thread_ids[0]
-                if not isinstance(child_thread_id, str) or not child_thread_id:
-                    raise SystemExit("the Grok collaboration spawn returned no child identity")
-                spawn_completed_count += 1
-                if spawn_completed_count != 1:
-                    raise SystemExit("the Grok collaboration Turn completed more than one spawn")
+                    raise SystemExit("a Grok collaboration tool did not complete")
+                if tool == "spawnAgent":
+                    receiver_thread_ids = item.get("receiverThreadIds")
+                    if not isinstance(receiver_thread_ids, list) or len(receiver_thread_ids) != 1:
+                        raise SystemExit(
+                            "the Grok collaboration spawn returned an invalid child set"
+                        )
+                    child_thread_id = receiver_thread_ids[0]
+                    if not isinstance(child_thread_id, str) or not child_thread_id:
+                        raise SystemExit("the Grok collaboration spawn returned no child identity")
+                    spawn_completed_count += 1
+                    if spawn_completed_count != 1:
+                        raise SystemExit(
+                            "the Grok collaboration Turn completed more than one spawn"
+                        )
+                elif tool == "wait":
+                    wait_completed_count += 1
+                    if wait_completed_count != 1:
+                        raise SystemExit(
+                            "the Grok collaboration Turn completed more than one wait"
+                        )
+                else:
+                    raise SystemExit("the Grok collaboration Turn used an unexpected tool")
             elif item.get("type") == "agentMessage":
                 reply = item.get("text")
                 if thread_id == root_thread_id:
@@ -395,6 +404,8 @@ def wait_for_collaboration_turn(
         raise SystemExit("the Grok Ultra parent did not return the expected semantic reply")
     if default_spawn_count != 1 or spawn_completed_count != 1:
         raise SystemExit("the Grok Ultra Turn did not prove one default-history spawn")
+    if wait_completed_count != 1:
+        raise SystemExit("the Grok Ultra Turn did not complete exactly one wait")
     if child_thread_id is None:
         raise SystemExit("the Grok Ultra Turn did not identify one child")
     if set(response_counts) != {root_thread_id, child_thread_id}:
@@ -411,6 +422,7 @@ def wait_for_collaboration_turn(
         "response_assertion": "exact_match",
         "spawn_count": 1,
         "status": root_status,
+        "wait_count": 1,
     }
 
 
@@ -584,8 +596,9 @@ def run_smoke(
                 prompt = (
                     "Use spawn_agent exactly once with task_name live_child. Omit fork_turns "
                     "so the child uses the default full-history fork. Tell the child to reply "
-                    f"with exactly {CHILD_EXPECTED_AGENT_REPLY} and no other text. Wait for "
-                    "that child to complete, then reply with exactly "
+                    f"with exactly {CHILD_EXPECTED_AGENT_REPLY} and no other text. Call "
+                    "wait_agent exactly once after spawning the child, wait for that child "
+                    "to complete, then reply with exactly "
                     f"{PARENT_EXPECTED_AGENT_REPLY} and no other text."
                 )
                 server.request(

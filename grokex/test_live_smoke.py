@@ -313,6 +313,17 @@ experimental_bearer_token = "secret"
                 "method": "item/completed",
                 "params": {
                     "item": {
+                        "status": "completed",
+                        "tool": "wait",
+                        "type": "collabAgentToolCall",
+                    },
+                    "threadId": "thread-1",
+                },
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
                         "text": live_smoke.PARENT_EXPECTED_AGENT_REPLY,
                         "type": "agentMessage",
                     },
@@ -388,6 +399,7 @@ experimental_bearer_token = "secret"
             self.assertEqual(evidence["operation_count"], 4)
             self.assertEqual(evidence["default_full_history"], "completed")
             self.assertEqual(evidence["spawn_count"], 1)
+            self.assertEqual(evidence["wait_count"], 1)
             self.assertEqual(evidence["child_completion"], "completed")
             self.assertEqual(evidence["parent_completion"], "completed")
 
@@ -419,6 +431,24 @@ experimental_bearer_token = "secret"
         server = FakeAppServer(self.collaboration_messages(extra_response=True))
 
         with self.assertRaisesRegex(SystemExit, "used more than three responses"):
+            live_smoke.wait_for_collaboration_turn(
+                server,
+                time.monotonic() + 1,
+                "thread-1",
+            )
+
+    def test_collaboration_scenario_requires_one_completed_wait(self) -> None:
+        messages = [
+            message
+            for message in self.collaboration_messages()
+            if not (
+                message.get("method") == "item/completed"
+                and message.get("params", {}).get("item", {}).get("tool") == "wait"
+            )
+        ]
+        server = FakeAppServer(messages)
+
+        with self.assertRaisesRegex(SystemExit, "did not complete exactly one wait"):
             live_smoke.wait_for_collaboration_turn(
                 server,
                 time.monotonic() + 1,

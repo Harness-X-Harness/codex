@@ -52,6 +52,7 @@ class LiveEvidenceTest(unittest.TestCase):
                 "response_assertion": "exact_match",
                 "scenario": "ultra-full-history-collaboration",
                 "spawn_count": 1,
+                "wait_count": 1,
             }
             (evidence_dir / "basic.json").write_text(json.dumps(basic), encoding="utf-8")
             (evidence_dir / "continuation.json").write_text(
@@ -105,6 +106,7 @@ class LiveEvidenceTest(unittest.TestCase):
                             "response_assertion": "exact_match",
                             "spawn_count": 1,
                             "status": "completed",
+                            "wait_count": 1,
                         },
                     },
                     "source_sha": "source-sha",
