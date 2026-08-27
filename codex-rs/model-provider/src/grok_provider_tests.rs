@@ -260,7 +260,7 @@ fn grok_owns_image_model_and_wire_dialect() {
             wire_api: WireApi::GrokResponses,
             ..ModelProviderInfo::default()
         },
-        None,
+        /*auth_manager*/ None,
     );
 
     assert_eq!(provider.image_generation_model(), "grok-imagine-image-2.0");

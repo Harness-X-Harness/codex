@@ -560,7 +560,16 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                 image_urls.extend(output_image_urls(output));
             }
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
-                image_urls.push(format!("data:image/png;base64,{result}"));
+                if let Ok(bytes) = BASE64_STANDARD.decode(result)
+                    && let Ok(image) = load_for_prompt_bytes(
+                        Path::new("history-image"),
+                        bytes,
+                        PromptImageMode::Original,
+                    )
+                    && image_extension(&image.mime).is_some()
+                {
+                    image_urls.push(image.into_data_url());
+                }
             }
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::Reasoning { .. }
