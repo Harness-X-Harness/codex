@@ -438,16 +438,11 @@ experimental_bearer_token = "secret"
             )
 
     def test_collaboration_scenario_requires_one_completed_wait(self) -> None:
-        messages = [
+        server = FakeAppServer([
             message
             for message in self.collaboration_messages()
-            if not (
-                message.get("method") == "item/completed"
-                and message.get("params", {}).get("item", {}).get("tool") == "wait"
-            )
-        ]
-        server = FakeAppServer(messages)
-
+            if message.get("params", {}).get("item", {}).get("tool") != "wait"
+        ])
         with self.assertRaisesRegex(SystemExit, "did not complete exactly one wait"):
             live_smoke.wait_for_collaboration_turn(
                 server,

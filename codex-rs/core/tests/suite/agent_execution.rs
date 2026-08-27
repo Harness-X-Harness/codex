@@ -52,28 +52,6 @@ fn has_function_call_output(request: &wiremock::Request, call_id: &str) -> bool 
     })
 }
 
-fn input_message_contains(request: &wiremock::Request, text: &str) -> bool {
-    serde_json::from_slice::<serde_json::Value>(&request.body).is_ok_and(|body| {
-        body.get("input")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|items| {
-                items.iter().any(|item| {
-                    item.get("type").and_then(serde_json::Value::as_str) == Some("message")
-                        && item
-                            .get("content")
-                            .and_then(serde_json::Value::as_array)
-                            .is_some_and(|content| {
-                                content.iter().any(|part| {
-                                    part.get("text")
-                                        .and_then(serde_json::Value::as_str)
-                                        .is_some_and(|value| value.contains(text))
-                                })
-                            })
-                })
-            })
-    })
-}
-
 async fn mount_root_collaboration_call(
     server: &wiremock::MockServer,
     prompt: &'static str,
@@ -138,7 +116,7 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         "message": FIRST_TASK,
         "task_name": "first",
     }))?;
-    mount_sse_once_match(
+    let root_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
         sse(vec![
@@ -152,8 +130,8 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         ]),
     )
     .await;
-    mount_completed_worker(&server, FIRST_TASK, "grok-spawn-call").await;
-    mount_sse_once_match(
+    let child_response = mount_completed_worker(&server, FIRST_TASK, "grok-spawn-call").await;
+    let wait_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| has_function_call_output(request, "grok-spawn-call"),
         sse(vec![
@@ -167,7 +145,7 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         ]),
     )
     .await;
-    mount_sse_once_match(
+    let final_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| has_function_call_output(request, "grok-wait-call"),
         sse(vec![
@@ -204,31 +182,21 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     assert_eq!(child_config.model_provider_id, "grok");
     assert_eq!(child_config.model, "grok-4.6");
 
-    let requests = server.received_requests().await.expect("capture requests");
-    assert_eq!(
-        requests
-            .iter()
-            .map(|request| request.url.path())
-            .collect::<Vec<_>>(),
-        vec![
-            "/v1/responses",
-            "/v1/responses",
-            "/v1/responses",
-            "/v1/responses",
-        ]
-    );
+    let requests = [
+        root_response.single_request(),
+        child_response.single_request(),
+        wait_response.single_request(),
+        final_response.single_request(),
+    ];
     let child_request_index = requests
         .iter()
-        .position(|request| input_message_contains(request, CHILD_TASK_ENVELOPE))
+        .position(|request| request.body_contains_text(CHILD_TASK_ENVELOPE))
         .expect("one child request should contain the exact task envelope");
     requests
         .iter()
-        .position(|request| input_message_contains(request, CHILD_COMPLETION_ENVELOPE))
+        .position(|request| request.body_contains_text(CHILD_COMPLETION_ENVELOPE))
         .expect("one parent continuation should contain the exact child completion envelope");
-    let bodies = requests
-        .iter()
-        .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body))
-        .collect::<Result<Vec<_>, _>>()?;
+    let bodies = requests.map(|request| request.body_json());
     const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
         "message",
         "reasoning",
