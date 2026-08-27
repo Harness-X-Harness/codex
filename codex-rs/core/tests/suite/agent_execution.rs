@@ -3,6 +3,7 @@ use codex_features::Feature;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
@@ -44,6 +45,55 @@ fn has_function_call_output(request: &wiremock::Request, call_id: &str) -> bool 
                 })
             })
     })
+}
+
+fn input_message_contains(request: &wiremock::Request, text: &str) -> bool {
+    serde_json::from_slice::<serde_json::Value>(&request.body).is_ok_and(|body| {
+        body.get("input")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("type").and_then(serde_json::Value::as_str) == Some("message")
+                        && item
+                            .get("content")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|content| {
+                                content.iter().any(|part| {
+                                    part.get("text")
+                                        .and_then(serde_json::Value::as_str)
+                                        .is_some_and(|value| value.contains(text))
+                                })
+                            })
+                })
+            })
+    })
+}
+
+fn uses_gateway_supported_input_types(body: &serde_json::Value) -> bool {
+    const SUPPORTED_TYPES: &[&str] = &[
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "shell_call",
+        "shell_call_output",
+        "web_search_call",
+        "file_search_call",
+        "code_interpreter_call",
+        "mcp_call",
+        "custom_tool_call",
+        "image_generation_call",
+        "compaction",
+    ];
+    body.get("input")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| {
+            items.iter().all(|item| {
+                item.get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|item_type| SUPPORTED_TYPES.contains(&item_type))
+            })
+        })
 }
 
 async fn mount_root_collaboration_call(
@@ -104,12 +154,11 @@ async fn mount_completed_worker(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<()> {
+async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     let server = start_mock_server().await;
     let spawn_arguments = serde_json::to_string(&json!({
         "message": FIRST_TASK,
         "task_name": "first",
-        "fork_turns": "none",
     }))?;
     mount_sse_once_match(
         &server,
@@ -146,6 +195,7 @@ async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<(
             .features
             .enable(Feature::Collab)
             .expect("test config should allow feature update");
+        config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
     });
     let test = builder.build(&server).await?;
     let mut created_threads = test.thread_manager.subscribe_thread_created();
@@ -161,6 +211,7 @@ async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<(
     let child_config = child.config_snapshot().await;
     assert_eq!(child_config.model_provider_id, "grok");
     assert_eq!(child_config.model, "grok-4.6");
+    assert_eq!(child_config.reasoning_effort, Some(ReasoningEffort::Ultra));
 
     let requests = server.received_requests().await.expect("capture requests");
     assert_eq!(
@@ -170,9 +221,24 @@ async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<(
             .collect::<Vec<_>>(),
         vec!["/v1/responses", "/v1/responses", "/v1/responses"]
     );
+    assert!(input_message_contains(
+        &requests[1],
+        "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task"
+    ));
+    assert!(input_message_contains(
+        &requests[2],
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/first\nPayload:\nworker completed"
+    ));
     for request in requests {
         let body: serde_json::Value = serde_json::from_slice(&request.body)?;
         assert_eq!(body["model"], "grok-4.6");
+        assert_eq!(body["reasoning"]["effort"], "xhigh");
+        assert!(uses_gateway_supported_input_types(&body));
+        assert!(
+            !body["input"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["type"] == "agent_message"))
+        );
     }
 
     Ok(())

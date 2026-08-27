@@ -44,11 +44,7 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
-            && matches!(
-                self.tool_name.name.as_str(),
-                "spawn_agent" | "send_message" | "followup_task"
-            )
+        if is_plaintext_collaboration_tool(&self.tool_name)
             && self
                 .encrypted_function_args
                 .as_ref()
@@ -59,6 +55,14 @@ impl ToolCall {
             ToolCallSource::Direct
         }
     }
+}
+
+fn is_plaintext_collaboration_tool(tool_name: &ToolName) -> bool {
+    tool_name.namespace.as_deref() == Some("collaboration")
+        && matches!(
+            tool_name.name.as_str(),
+            "spawn_agent" | "send_message" | "followup_task"
+        )
 }
 
 pub(crate) fn tool_log_payload<'a>(
@@ -156,10 +160,14 @@ impl ToolRouter {
             }
             match item {
                 ResponseItem::FunctionCall {
-                    name, namespace, ..
+                    name,
+                    namespace,
+                    encrypted_function_args,
+                    ..
                 } => {
                     let tool_name = ToolName::new(namespace.take(), name.clone());
                     *name = flat_wire_name("function", &tool_name);
+                    *encrypted_function_args = None;
                 }
                 ResponseItem::CustomToolCall {
                     id,
@@ -316,6 +324,7 @@ impl ToolRouter {
             name,
             namespace,
             arguments,
+            encrypted_function_args,
             call_id,
             internal_chat_message_metadata_passthrough,
             ..
@@ -330,6 +339,9 @@ impl ToolRouter {
             WireToolRoute::Function(tool_name) => {
                 *name = tool_name.name.clone();
                 *namespace = tool_name.namespace.clone();
+                if is_plaintext_collaboration_tool(tool_name) {
+                    *encrypted_function_args = Some(Vec::new());
+                }
             }
             WireToolRoute::Custom {
                 tool_name,

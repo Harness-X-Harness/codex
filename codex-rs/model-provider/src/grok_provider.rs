@@ -8,7 +8,9 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 
@@ -76,6 +78,26 @@ impl ModelProvider for GrokModelProvider {
     fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let mut input = self.inner.project_model_input(input);
         for item in &mut input {
+            let projected_agent_message = match item {
+                ResponseItem::AgentMessage {
+                    id,
+                    content,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } => plaintext_agent_message_content(content).map(|text| ResponseItem::Message {
+                    id: id.clone(),
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                }),
+                _ => None,
+            };
+            if let Some(projected_agent_message) = projected_agent_message {
+                *item = projected_agent_message;
+                continue;
+            }
             if let ResponseItem::Reasoning {
                 content,
                 encrypted_content: Some(_),

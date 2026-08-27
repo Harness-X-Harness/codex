@@ -8,6 +8,7 @@ on:
       - .github/workflows/grokex-live.yml
       - .github/workflows/grokex-release.yml
       - codex-rs/app-server/**
+      - codex-rs/codex-api/**
       - codex-rs/core/**
       - codex-rs/model-provider/**
       - codex-rs/protocol/**
@@ -20,6 +21,7 @@ on:
       - .github/workflows/grokex-live.yml
       - .github/workflows/grokex-release.yml
       - codex-rs/app-server/**
+      - codex-rs/codex-api/**
       - codex-rs/core/**
       - codex-rs/model-provider/**
       - codex-rs/protocol/**
@@ -145,7 +147,11 @@ jobs:
       - id: provider
         name: Provider contracts
         continue-on-error: true
-        run: cargo test -p codex-model-provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-model-provider
+          cargo test -p codex-api provider::tests::grok_rejects_residual_agent_message_before_transport -- --exact
       - id: projections
         name: Stock App Server Provider projections
         continue-on-error: true
@@ -164,6 +170,7 @@ jobs:
           cargo test -p codex-app-server --test all suite::v2::thread_resume::thread_resume_returns_rollout_history -- --exact
           cargo test -p codex-app-server --test all suite::v2::thread_fork::thread_fork_creates_new_thread_and_emits_started -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
+          cargo test -p codex-core --lib tools::router::tests::flat_projection_marks_only_plaintext_collaboration_calls -- --exact
           cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
       - id: grok
         name: Grok metadata-driven V2, Ultra, and hosted X Search
@@ -171,7 +178,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p codex-core --test all suite::agent_execution::grok_v2_root_child_completion_uses_one_provider_lifecycle -- --exact
+          cargo test -p codex-core --test all suite::agent_execution::grok_ultra_v2_full_history_is_gateway_compatible -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
           cargo test -p codex-tools tool_spec::tests::x_search_serializes_as_bare_hosted_declaration -- --exact
@@ -218,7 +225,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo clippy -p codex-model-provider -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
+          cargo clippy -p codex-api -p codex-model-provider -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
+          cargo clippy -p codex-core --test all -- -D warnings
           cargo clippy -p codex-app-server --test all -- -D warnings
 
   require:

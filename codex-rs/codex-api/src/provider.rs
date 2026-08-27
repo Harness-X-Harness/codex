@@ -42,6 +42,7 @@ impl ResponsesDialect {
         if self == Self::Grok
             && let Some(object) = value.as_object_mut()
         {
+            reject_grok_agent_message_history(object.get("input"))?;
             if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
                 for tool in tools {
                     project_grok_web_search_tool(tool)?;
@@ -59,6 +60,22 @@ impl ResponsesDialect {
         }
         Ok(value)
     }
+}
+
+fn reject_grok_agent_message_history(input: Option<&Value>) -> serde_json::Result<()> {
+    let has_agent_message = input
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("agent_message")
+            })
+        });
+    if has_agent_message {
+        return Err(<serde_json::Error as serde::ser::Error>::custom(
+            "Grok cannot replay unsupported encrypted collaboration history",
+        ));
+    }
+    Ok(())
 }
 
 fn project_grok_web_search_tool(tool: &mut Value) -> serde_json::Result<()> {
@@ -188,6 +205,7 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::models::AgentMessageInputContent;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use serde_json::json;
@@ -275,6 +293,29 @@ mod tests {
             .expect("stock request should serialize");
 
         assert_eq!(projected["tools"], tools);
+    }
+
+    #[test]
+    fn grok_rejects_residual_agent_message_before_transport() {
+        let mut request = responses_request_with_tools(json!([]));
+        request.input = vec![ResponseItem::AgentMessage {
+            id: None,
+            author: "/root".to_string(),
+            recipient: "/root/child".to_string(),
+            content: vec![AgentMessageInputContent::EncryptedContent {
+                encrypted_content: "opaque".to_string(),
+            }],
+            internal_chat_message_metadata_passthrough: None,
+        }];
+
+        let error = ResponsesDialect::Grok
+            .project_request(&request)
+            .expect_err("unsupported collaboration history must fail before transport");
+        assert_eq!(
+            error.to_string(),
+            "Grok cannot replay unsupported encrypted collaboration history"
+        );
+        assert!(ResponsesDialect::OpenAi.project_request(&request).is_ok());
     }
 
     #[test]
