@@ -42,14 +42,15 @@ impl ResponsesDialect {
         if self == Self::Grok
             && let Some(object) = value.as_object_mut()
         {
-            let has_agent_message = object
-                .get("input")
-                .and_then(Value::as_array)
-                .is_some_and(|items| {
-                    items.iter().any(|item| {
-                        item.get("type").and_then(Value::as_str) == Some("agent_message")
-                    })
-                });
+            let has_agent_message =
+                object
+                    .get("input")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item.get("type").and_then(Value::as_str) == Some("agent_message")
+                        })
+                    });
             if has_agent_message {
                 return Err(<serde_json::Error as serde::ser::Error>::custom(
                     "Grok cannot replay unsupported encrypted collaboration history",
@@ -201,6 +202,7 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::ResponsesApiTools;
     use codex_protocol::models::AgentMessageInputContent;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -221,12 +223,9 @@ mod tests {
                 phase: None,
                 internal_chat_message_metadata_passthrough: None,
             }],
-            tools: Some(
-                Arc::from(
-                    RawValue::from_string(tools.to_string()).expect("valid tool declaration"),
-                )
-                .into(),
-            ),
+            tools: Some(ResponsesApiTools::from(Arc::<RawValue>::from(
+                RawValue::from_string(tools.to_string()).expect("valid tool declaration"),
+            ))),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: false,
             reasoning: None,

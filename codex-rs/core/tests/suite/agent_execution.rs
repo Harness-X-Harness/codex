@@ -184,7 +184,6 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     let child_config = child.config_snapshot().await;
     assert_eq!(child_config.model_provider_id, "grok");
     assert_eq!(child_config.model, "grok-4.6");
-    assert_eq!(child_config.reasoning_effort, Some(ReasoningEffort::Ultra));
 
     let requests = server.received_requests().await.expect("capture requests");
     assert_eq!(
@@ -194,6 +193,8 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
             .collect::<Vec<_>>(),
         vec!["/v1/responses", "/v1/responses", "/v1/responses"]
     );
+    assert_eq!(requests[0].body_json()["reasoning"]["effort"], "xhigh");
+    assert_eq!(requests[2].body_json()["reasoning"]["effort"], "xhigh");
     assert!(input_message_contains(
         &requests[1],
         "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task"

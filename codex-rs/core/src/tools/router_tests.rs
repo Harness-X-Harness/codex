@@ -244,10 +244,7 @@ fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<
         if call.tool_name.namespace.as_deref() == Some("collaboration") {
             restored_collaboration_names.push(call.tool_name.name.clone());
             assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-            assert_eq!(
-                call.direct_source(),
-                ToolCallSource::DirectPlaintextMessage
-            );
+            assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
         } else {
             assert_eq!(
                 call.tool_name,
