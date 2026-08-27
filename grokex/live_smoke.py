@@ -433,14 +433,31 @@ def wait_for_collaboration_turn(
     }
 
 
-def wait_for_image_turn(server: AppServer, deadline: float) -> dict[str, object]:
+def wait_for_image_turn(
+    server: AppServer, deadline: float, require_history: bool
+) -> dict[str, object]:
     completed = 0
+    history_args_seen = not require_history
     while time.monotonic() < deadline:
         message = server.next_message(deadline, "the Grok image Turn")
         params = message.get("params")
         if not isinstance(params, dict):
             continue
-        if message.get("method") == "item/completed":
+        if message.get("method") == "rawResponse/completed":
+            item = params.get("response")
+            if isinstance(item, dict) and item.get("type") == "response.output_item.done":
+                output = item.get("item")
+                if isinstance(output, dict) and output.get("type") == "function_call":
+                    try:
+                        arguments = json.loads(output.get("arguments", ""))
+                    except (TypeError, json.JSONDecodeError):
+                        arguments = None
+                    history_args_seen = history_args_seen or (
+                        isinstance(arguments, dict)
+                        and arguments.get("num_last_images_to_include") == 1
+                        and arguments.get("referenced_image_paths") is None
+                    )
+        elif message.get("method") == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "imageGeneration":
                 result = item.get("result")
@@ -451,10 +468,14 @@ def wait_for_image_turn(server: AppServer, deadline: float) -> dict[str, object]
                     signature = base64.b64decode(result, validate=True)[:3]
                 except (ValueError, TypeError) as error:
                     raise SystemExit("image generation result was not valid base64") from error
-                if signature != b"\xff\xd8\xff":
+                decoded = base64.b64decode(result, validate=True)
+                if not (decoded.startswith(b"\xff\xd8") and decoded.endswith(b"\xff\xd9")):
                     raise SystemExit("image generation result was not JPEG")
-                if not isinstance(saved_path, str) or not saved_path.endswith(".jpg"):
+                artifact = Path(saved_path) if isinstance(saved_path, str) else None
+                if artifact is None or artifact.suffix != ".jpg" or not artifact.is_file():
                     raise SystemExit("image generation artifact was not JPEG")
+                if artifact.stat().st_size > 32 * 1024 * 1024 or artifact.read_bytes() != decoded:
+                    raise SystemExit("image generation artifact did not match result")
                 completed += 1
         elif message.get("method") == "turn/completed":
             turn = params.get("turn")
@@ -462,9 +483,12 @@ def wait_for_image_turn(server: AppServer, deadline: float) -> dict[str, object]
                 not isinstance(turn, dict)
                 or turn.get("status") != "completed"
                 or completed != 1
+                or not history_args_seen
             ):
                 raise SystemExit("Grok image Turn did not complete exactly one image")
             return {
+                "artifact_match": True,
+                "history_arguments_verified": require_history,
                 "image_items_completed": 1,
                 "image_mime": "image/jpeg",
                 "artifact_extension": ".jpg",
@@ -670,12 +694,17 @@ def run_smoke(
                 )
                 operation_count = turn_evidence.pop("operation_count")
             else:
-                for request_id, prompt in [
-                    (4, "Use image_gen.imagegen once to generate one JPEG image."),
+                for request_id, prompt, require_history in [
+                    (
+                        4,
+                        "Use image_gen.imagegen once to generate one JPEG image.",
+                        False,
+                    ),
                     (
                         5,
                         "Use image_gen.imagegen once to edit the last generated image "
                         "with num_last_images_to_include=1.",
+                        True,
                     ),
                 ]:
                     server.request(
@@ -693,7 +722,7 @@ def run_smoke(
                         },
                     )
                     image_evidence = wait_for_image_turn(
-                        server, time.monotonic() + 120
+                        server, time.monotonic() + 120, require_history
                     )
                 operation_count = 2
                 turn_evidence = {

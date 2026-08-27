@@ -57,7 +57,9 @@ class LiveEvidenceTest(unittest.TestCase):
             image = {
                 **common,
                 "artifact_extension": ".jpg",
+                "artifact_match": True,
                 "history_edit": "completed",
+                "history_arguments_verified": True,
                 "image_items_completed": 1,
                 "image_mime": "image/jpeg",
                 "operation_count": 2,
@@ -123,7 +125,9 @@ class LiveEvidenceTest(unittest.TestCase):
                         },
                         "image-generation-history-edit": {
                             "artifact_extension": ".jpg",
+                            "artifact_match": True,
                             "history_edit": "completed",
+                            "history_arguments_verified": True,
                             "image_items_completed": 1,
                             "image_mime": "image/jpeg",
                             "operation_count": 2,
