@@ -261,7 +261,7 @@ fn generated_output_returns_image_input_and_output_hint() {
     let output_hint =
         image_generation_output_hint("/tmp", "/tmp/call-1.png").expect("hint should fit");
     let output = GeneratedImageOutput {
-        result: RESULT.to_string(),
+        base64_data: RESULT.to_string(),
         mime_type: "image/png".to_string(),
         output_hint: Some(output_hint.clone()),
     };
@@ -291,7 +291,7 @@ fn generated_output_returns_image_input_and_output_hint() {
 #[test]
 fn generated_output_returns_generated_image_helper_input_in_code_mode() {
     let output = GeneratedImageOutput {
-        result: RESULT.to_string(),
+        base64_data: RESULT.to_string(),
         mime_type: "image/jpeg".to_string(),
         output_hint: Some("generated image save hint".to_string()),
     };
@@ -309,7 +309,7 @@ fn generated_output_returns_generated_image_helper_input_in_code_mode() {
 fn generated_output_omits_oversized_output_hint() {
     let long_path = "x".repeat(1024);
     let output = GeneratedImageOutput {
-        result: RESULT.to_string(),
+        base64_data: RESULT.to_string(),
         mime_type: "image/png".to_string(),
         output_hint: image_generation_output_hint("/tmp", long_path),
     };
