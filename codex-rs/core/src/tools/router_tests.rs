@@ -90,7 +90,11 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             ToolSpec::Namespace(ResponsesApiNamespace {
                 name: "collaboration".to_string(),
                 description: "Agent tools.".to_string(),
-                tools: vec![function("spawn_agent")],
+                tools: vec![
+                    function("spawn_agent"),
+                    function("send_message"),
+                    function("followup_task"),
+                ],
             }),
         ],
         true,
@@ -104,7 +108,7 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             spec => panic!("expected projected function, got {spec:?}"),
         })
         .collect::<Vec<_>>();
-    assert_eq!(wire_names.len(), 2);
+    assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
     assert!(wire_names.iter().all(|name| name.len() <= 64));
 
@@ -143,6 +147,8 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         vec![
             ToolName::namespaced("mcp__calendar", "create_event"),
             ToolName::namespaced("collaboration", "spawn_agent"),
+            ToolName::namespaced("collaboration", "send_message"),
+            ToolName::namespaced("collaboration", "followup_task"),
         ]
     );
     assert_eq!(
@@ -157,106 +163,20 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             ToolPayload::Function {
                 arguments: json!({"value": "argument-1"}).to_string(),
             },
+            ToolPayload::Function {
+                arguments: json!({"value": "argument-2"}).to_string(),
+            },
+            ToolPayload::Function {
+                arguments: json!({"value": "argument-3"}).to_string(),
+            },
         ]
     );
     assert_eq!(calls[0].encrypted_function_args, None);
     assert_eq!(calls[0].direct_source(), ToolCallSource::Direct);
-    assert_eq!(calls[1].encrypted_function_args, Some(Vec::new()));
-    assert_eq!(
-        calls[1].direct_source(),
-        ToolCallSource::DirectPlaintextMessage
-    );
-    Ok(())
-}
-
-#[test]
-fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<()> {
-    let function = |name: &str| {
-        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-            name: name.to_string(),
-            description: format!("Call {name}."),
-            strict: true,
-            parameters: codex_extension_api::parse_tool_input_schema(&json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false,
-            }))
-            .expect("test schema should parse"),
-            output_schema: None,
-            defer_loading: None,
-        })
-    };
-    let router = ToolRouter::from_parts_with_projection(
-        ToolRegistry::default(),
-        vec![
-            ToolSpec::Namespace(ResponsesApiNamespace {
-                name: "collaboration".to_string(),
-                description: "Agent tools.".to_string(),
-                tools: vec![
-                    function("spawn_agent"),
-                    function("send_message"),
-                    function("followup_task"),
-                ],
-            }),
-            ToolSpec::Namespace(ResponsesApiNamespace {
-                name: "mcp__calendar".to_string(),
-                description: "Calendar tools.".to_string(),
-                tools: vec![function("lookup")],
-            }),
-        ],
-        true,
-    )
-    .map_err(anyhow::Error::msg)?;
-
-    let wire_names = router
-        .model_visible_specs()
-        .iter()
-        .map(|spec| match spec {
-            ToolSpec::Function(tool) => tool.name.clone(),
-            spec => panic!("expected projected function, got {spec:?}"),
-        })
-        .collect::<Vec<_>>();
-    let mut calls = Vec::new();
-    for (index, wire_name) in wire_names.into_iter().enumerate() {
-        let wire_item = ResponseItem::FunctionCall {
-            id: None,
-            name: wire_name,
-            namespace: None,
-            arguments: "{}".to_string(),
-            encrypted_function_args: None,
-            call_id: format!("call-{index}"),
-            internal_chat_message_metadata_passthrough: None,
-        };
-        let mut restored_item = wire_item.clone();
-        router.restore_tool_call(&mut restored_item)?;
-        assert_eq!(
-            router.project_model_input(vec![restored_item.clone()]),
-            vec![wire_item]
-        );
-        let call = ToolRouter::build_tool_call(restored_item)?;
-        calls.push(call.expect("restored item should be a tool call"));
+    for call in &calls[1..] {
+        assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+        assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
     }
-
-    let mut restored_collaboration_names = Vec::new();
-    for call in calls {
-        if call.tool_name.namespace.as_deref() == Some("collaboration") {
-            restored_collaboration_names.push(call.tool_name.name.clone());
-            assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-            assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
-        } else {
-            assert_eq!(
-                call.tool_name,
-                ToolName::namespaced("mcp__calendar", "lookup")
-            );
-            assert_eq!(call.encrypted_function_args, None);
-            assert_eq!(call.direct_source(), ToolCallSource::Direct);
-        }
-    }
-    restored_collaboration_names.sort();
-    assert_eq!(
-        restored_collaboration_names,
-        vec!["followup_task", "send_message", "spawn_agent"]
-    );
     Ok(())
 }
 
