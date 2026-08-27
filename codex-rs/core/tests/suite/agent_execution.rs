@@ -118,7 +118,9 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     }))?;
     let root_response = mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_PROMPT) && !body_contains(request, FIRST_TASK)
+        },
         sse(vec![
             ev_response_created("grok-root-response"),
             ev_function_call(
@@ -133,14 +135,13 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     let child_response = mount_completed_worker(&server, FIRST_TASK, "grok-spawn-call").await;
     let wait_response = mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| has_function_call_output(request, "grok-spawn-call"),
+        |request: &wiremock::Request| {
+            has_function_call_output(request, "grok-spawn-call")
+                && !has_function_call_output(request, "grok-wait-call")
+        },
         sse(vec![
             ev_response_created("grok-root-wait"),
-            ev_function_call(
-                "grok-wait-call",
-                GROK_WAIT_AGENT_WIRE_NAME,
-                "{}",
-            ),
+            ev_function_call("grok-wait-call", GROK_WAIT_AGENT_WIRE_NAME, "{}"),
             ev_completed("grok-root-wait"),
         ]),
     )
@@ -188,14 +189,8 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         wait_response.single_request(),
         final_response.single_request(),
     ];
-    let child_request_index = requests
-        .iter()
-        .position(|request| request.body_contains_text(CHILD_TASK_ENVELOPE))
-        .expect("one child request should contain the exact task envelope");
-    requests
-        .iter()
-        .position(|request| request.body_contains_text(CHILD_COMPLETION_ENVELOPE))
-        .expect("one parent continuation should contain the exact child completion envelope");
+    assert!(requests[1].body_contains_text(CHILD_TASK_ENVELOPE));
+    assert!(requests[3].body_contains_text(CHILD_COMPLETION_ENVELOPE));
     let bodies = requests.map(|request| request.body_json());
     const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
         "message",
@@ -214,7 +209,7 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     ];
     for (index, body) in bodies.into_iter().enumerate() {
         assert_eq!(body["model"], "grok-4.6");
-        if index != child_request_index {
+        if index != 1 {
             assert_eq!(body["reasoning"]["effort"], "xhigh");
         }
         assert!(
