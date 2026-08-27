@@ -389,8 +389,19 @@ mod tests {
             .await
             .expect("grok response should decode");
 
-        assert_eq!(response.created, None);
-        assert_eq!(response.data[0].mime_type.as_deref(), Some("image/jpeg"));
+        assert_eq!(
+            response,
+            ImageResponse {
+                created: None,
+                data: vec![ImageData {
+                    b64_json: "REDACT".to_string(),
+                    mime_type: Some("image/jpeg".to_string()),
+                }],
+                background: None,
+                quality: None,
+                size: None,
+            }
+        );
         assert_eq!(
             captured_request(&transport)
                 .body
@@ -411,7 +422,12 @@ mod tests {
                 vec![ImageUrl {
                     image_url: "one".to_string(),
                 }],
-                json!({"image":{"type":"image_url","url":"one"}}),
+                json!({
+                    "model": "grok-imagine-image-2.0",
+                    "prompt": "edit",
+                    "response_format": "b64_json",
+                    "image": {"type":"image_url","url":"one"}
+                }),
             ),
             (
                 vec![
@@ -422,7 +438,15 @@ mod tests {
                         image_url: "two".to_string(),
                     },
                 ],
-                json!({"images":[{"type":"image_url","url":"one"},{"type":"image_url","url":"two"}]}),
+                json!({
+                    "model": "grok-imagine-image-2.0",
+                    "prompt": "edit",
+                    "response_format": "b64_json",
+                    "images":[
+                        {"type":"image_url","url":"one"},
+                        {"type":"image_url","url":"two"}
+                    ]
+                }),
             ),
         ] {
             let transport = CapturingTransport::new(response_body());
@@ -449,11 +473,7 @@ mod tests {
                 .and_then(RequestBody::json)
                 .cloned()
                 .expect("json body");
-            for (key, value) in expected.as_object().expect("object") {
-                assert_eq!(body.get(key), Some(value));
-            }
-            assert_eq!(body.get("response_format"), Some(&json!("b64_json")));
-            assert!(body.get("background").is_none());
+            assert_eq!(body, expected);
         }
     }
 

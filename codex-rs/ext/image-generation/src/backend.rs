@@ -78,10 +78,6 @@ impl CodexImagesBackend {
         .with_dialect(self.provider.images_dialect()))
     }
 
-    pub(crate) fn model(&self) -> &'static str {
-        self.provider.image_generation_model()
-    }
-
     /// Sends a standalone image generation request through the configured Images client.
     pub(crate) async fn generate(
         &self,

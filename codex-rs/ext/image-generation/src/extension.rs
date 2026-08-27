@@ -100,13 +100,17 @@ impl ToolContributor for ImageGenerationExtension {
             return Vec::new();
         }
 
+        let provider =
+            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
+        let image_model = provider.image_generation_model();
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
-                create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+                provider,
                 thread_store
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
             ),
+            image_model,
             config.save_root.clone(),
             thread_store.level_id().to_string(),
         ))]

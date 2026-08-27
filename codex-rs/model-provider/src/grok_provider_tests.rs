@@ -254,20 +254,6 @@ fn grok_advertises_only_proven_provider_capabilities() {
 }
 
 #[test]
-fn grok_owns_image_model_and_wire_dialect() {
-    let provider = create_model_provider(
-        ModelProviderInfo {
-            wire_api: WireApi::GrokResponses,
-            ..ModelProviderInfo::default()
-        },
-        /*auth_manager*/ None,
-    );
-
-    assert_eq!(provider.image_generation_model(), "grok-imagine-image-2.0");
-    assert_eq!(provider.images_dialect(), codex_api::ImagesDialect::Grok);
-}
-
-#[test]
 fn grok_recognizes_only_completed_provider_hosted_x_calls() {
     let grok = create_model_provider(
         ModelProviderInfo {

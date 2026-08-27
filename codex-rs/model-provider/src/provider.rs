@@ -145,6 +145,8 @@ pub const DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL: &str = "gpt-5.6-luna";
 /// Default model used for memory consolidation when a provider does not require
 /// a backend-specific model ID.
 pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
+
+/// Default image model used when a provider does not override image policy.
 pub const DEFAULT_IMAGE_GENERATION_MODEL: &str = "gpt-image-2";
 
 /// Runtime provider abstraction used by model execution.
@@ -196,10 +198,12 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         false
     }
 
+    /// Returns the provider-owned model used for image generation and editing.
     fn image_generation_model(&self) -> &'static str {
         DEFAULT_IMAGE_GENERATION_MODEL
     }
 
+    /// Returns the request and response dialect for this provider's Images API.
     fn images_dialect(&self) -> ImagesDialect {
         ImagesDialect::OpenAi
     }

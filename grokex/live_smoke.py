@@ -468,10 +468,9 @@ def wait_for_image_turn(
                 if item.get("status") != "completed" or not isinstance(result, str):
                     raise SystemExit("image generation item was not completed")
                 try:
-                    signature = base64.b64decode(result, validate=True)[:3]
+                    decoded = base64.b64decode(result, validate=True)
                 except (ValueError, TypeError) as error:
                     raise SystemExit("image generation result was not valid base64") from error
-                decoded = base64.b64decode(result, validate=True)
                 if not (decoded.startswith(b"\xff\xd8") and decoded.endswith(b"\xff\xd9")):
                     raise SystemExit("image generation result was not JPEG")
                 artifact = Path(saved_path) if isinstance(saved_path, str) else None
