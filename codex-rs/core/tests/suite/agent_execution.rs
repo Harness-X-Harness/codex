@@ -119,7 +119,9 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     let root_response = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            body_contains(request, FIRST_PROMPT) && !body_contains(request, FIRST_TASK)
+            body_contains(request, FIRST_PROMPT)
+                && !body_contains(request, FIRST_TASK)
+                && !has_function_call_output(request, "grok-spawn-call")
         },
         sse(vec![
             ev_response_created("grok-root-response"),

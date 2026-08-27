@@ -233,10 +233,8 @@ fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<
             router.project_model_input(vec![restored_item.clone()]),
             vec![wire_item]
         );
-        calls.push(
-            ToolRouter::build_tool_call(restored_item)?
-                .expect("restored item should be a tool call"),
-        );
+        let call = ToolRouter::build_tool_call(restored_item)?;
+        calls.push(call.expect("restored item should be a tool call"));
     }
 
     let mut restored_collaboration_names = Vec::new();
@@ -259,7 +257,6 @@ fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<
         restored_collaboration_names,
         vec!["followup_task", "send_message", "spawn_agent"]
     );
-
     Ok(())
 }
 

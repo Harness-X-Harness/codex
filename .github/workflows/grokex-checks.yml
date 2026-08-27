@@ -42,7 +42,7 @@ permissions:
   contents: read
 
 env:
-  CHECKOUT_SHA: ${{ inputs.source_sha || github.sha }}
+  CHECKOUT_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   helpers:
