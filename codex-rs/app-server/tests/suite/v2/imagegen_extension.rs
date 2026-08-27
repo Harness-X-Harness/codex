@@ -22,7 +22,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
-use codex_model_provider_info::WireApi;
 use core_test_support::responses;
 use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
@@ -102,7 +101,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .with_model_provider("grok")
         .with_provider_name("Grok")
         .with_provider_base_url(&format!("{}/api/codex", server.uri()))
-        .with_wire_api(WireApi::GrokResponses)
+        .with_grok_responses_wire_api()
         .with_provider_config("supports_websockets = false\nrequires_openai_auth = true")
         .write(codex_home.path())?;
     write_chatgpt_auth(

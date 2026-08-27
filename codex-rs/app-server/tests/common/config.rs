@@ -1,15 +1,19 @@
 use codex_features::FEATURES;
 use codex_features::Feature;
-use codex_model_provider_info::WireApi;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+enum MockWireApi {
+    Responses,
+    GrokResponses,
+}
 
 /// Composes the standard mock Responses provider with test-specific configuration.
 pub struct MockResponsesConfig {
     provider_id: String,
     provider_name: String,
     provider_base_url: String,
-    wire_api: WireApi,
+    wire_api: MockWireApi,
     model: String,
     approval_policy: String,
     sandbox_mode: String,
@@ -25,7 +29,7 @@ impl MockResponsesConfig {
             provider_id: "mock_provider".to_string(),
             provider_name: "Mock provider for test".to_string(),
             provider_base_url: format!("{server_uri}/v1"),
-            wire_api: WireApi::Responses,
+            wire_api: MockWireApi::Responses,
             model: "mock-model".to_string(),
             approval_policy: "never".to_string(),
             sandbox_mode: "read-only".to_string(),
@@ -51,8 +55,8 @@ impl MockResponsesConfig {
         self
     }
 
-    pub fn with_wire_api(mut self, wire_api: WireApi) -> Self {
-        self.wire_api = wire_api;
+    pub fn with_grok_responses_wire_api(mut self) -> Self {
+        self.wire_api = MockWireApi::GrokResponses;
         self
     }
 
@@ -119,6 +123,10 @@ impl MockResponsesConfig {
             provider_config,
             extra_config,
         } = self;
+        let wire_api = match wire_api {
+            MockWireApi::Responses => "responses",
+            MockWireApi::GrokResponses => "grok_responses",
+        };
         let root_config = root_config.join("\n");
         let provider_config = provider_config.join("\n");
         let extra_config = extra_config.join("\n");
