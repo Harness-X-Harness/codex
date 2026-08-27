@@ -237,7 +237,12 @@ experimental_bearer_token = "secret"
             self.assertEqual(evidence["reasoning_replay"], "completed")
             self.assertEqual(evidence["history_response_assertion"], "exact_match")
 
-    def collaboration_messages(self, include_fork_turns: bool = False) -> list[dict[str, object]]:
+    def collaboration_messages(
+        self,
+        include_fork_turns: bool = False,
+        parent_completes_first: bool = False,
+        extra_response: bool = False,
+    ) -> list[dict[str, object]]:
         arguments: dict[str, object] = {
             "message": (
                 "Reply with exactly "
@@ -247,7 +252,7 @@ experimental_bearer_token = "secret"
         }
         if include_fork_turns:
             arguments["fork_turns"] = "all"
-        return [
+        prefix = [
             {
                 "method": "rawResponseItem/completed",
                 "params": {
@@ -272,6 +277,12 @@ experimental_bearer_token = "secret"
                 },
             },
             {
+                "method": "rawResponse/completed",
+                "params": {"threadId": "thread-1"},
+            },
+        ]
+        child = [
+            {
                 "method": "item/completed",
                 "params": {
                     "item": {
@@ -282,12 +293,18 @@ experimental_bearer_token = "secret"
                 },
             },
             {
+                "method": "rawResponse/completed",
+                "params": {"threadId": "child-1"},
+            },
+            {
                 "method": "turn/completed",
                 "params": {
                     "threadId": "child-1",
                     "turn": {"status": "completed"},
                 },
             },
+        ]
+        parent = [
             {
                 "method": "item/completed",
                 "params": {
@@ -299,6 +316,10 @@ experimental_bearer_token = "secret"
                 },
             },
             {
+                "method": "rawResponse/completed",
+                "params": {"threadId": "thread-1"},
+            },
+            {
                 "method": "turn/completed",
                 "params": {
                     "threadId": "thread-1",
@@ -306,6 +327,15 @@ experimental_bearer_token = "secret"
                 },
             },
         ]
+        if extra_response:
+            parent.insert(
+                2,
+                {
+                    "method": "rawResponse/completed",
+                    "params": {"threadId": "thread-1"},
+                },
+            )
+        return prefix + (parent + child if parent_completes_first else child + parent)
 
     def test_collaboration_scenario_proves_default_full_history(self) -> None:
         server = FakeScenarioAppServer(self.collaboration_messages())
@@ -361,6 +391,30 @@ experimental_bearer_token = "secret"
         server = FakeAppServer(self.collaboration_messages(include_fork_turns=True))
 
         with self.assertRaisesRegex(SystemExit, "did not use default full history"):
+            live_smoke.wait_for_collaboration_turn(
+                server,
+                time.monotonic() + 1,
+                "thread-1",
+            )
+
+    def test_collaboration_scenario_accepts_parent_completion_before_child(self) -> None:
+        server = FakeAppServer(
+            self.collaboration_messages(parent_completes_first=True)
+        )
+
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
+
+        self.assertEqual(evidence["operation_count"], 3)
+        self.assertEqual(evidence["child_completion"], "completed")
+
+    def test_collaboration_scenario_rejects_extra_response(self) -> None:
+        server = FakeAppServer(self.collaboration_messages(extra_response=True))
+
+        with self.assertRaisesRegex(SystemExit, "used more than two responses"):
             live_smoke.wait_for_collaboration_turn(
                 server,
                 time.monotonic() + 1,

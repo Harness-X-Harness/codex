@@ -296,16 +296,37 @@ def wait_for_collaboration_turn(
     child_thread_id = None
     default_spawn_count = 0
     parent_reply_seen = False
+    response_counts: dict[str, int] = {}
     root_status = None
     spawn_completed_count = 0
 
     while time.monotonic() < deadline:
+        if (
+            root_status == "completed"
+            and child_status == "completed"
+            and child_reply_seen
+            and parent_reply_seen
+            and default_spawn_count == 1
+            and spawn_completed_count == 1
+            and child_thread_id is not None
+            and response_counts.get(root_thread_id) == 2
+            and response_counts.get(child_thread_id) == 1
+        ):
+            break
         message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
         method = message.get("method")
         params = message.get("params")
         if not isinstance(params, dict):
             continue
         thread_id = params.get("threadId")
+
+        if method == "rawResponse/completed" and isinstance(thread_id, str):
+            response_counts[thread_id] = response_counts.get(thread_id, 0) + 1
+            if response_counts.get(root_thread_id, 0) > 2:
+                raise SystemExit("the Grok Ultra parent used more than two responses")
+            if child_thread_id is not None and response_counts.get(child_thread_id, 0) > 1:
+                raise SystemExit("the Grok Ultra child used more than one response")
+            continue
 
         if method == "rawResponseItem/completed" and thread_id == root_thread_id:
             item = params.get("item")
@@ -363,7 +384,6 @@ def wait_for_collaboration_turn(
             status = turn.get("status") if isinstance(turn, dict) else None
             if thread_id == root_thread_id:
                 root_status = status
-                break
             if child_thread_id is not None and thread_id == child_thread_id:
                 child_status = status
 
@@ -375,11 +395,19 @@ def wait_for_collaboration_turn(
         raise SystemExit("the Grok Ultra parent did not return the expected semantic reply")
     if default_spawn_count != 1 or spawn_completed_count != 1:
         raise SystemExit("the Grok Ultra Turn did not prove one default-history spawn")
+    if child_thread_id is None:
+        raise SystemExit("the Grok Ultra Turn did not identify one child")
+    if set(response_counts) != {root_thread_id, child_thread_id}:
+        raise SystemExit("the Grok Ultra Turn observed an unexpected response owner")
+    operation_count = sum(response_counts.values())
+    if response_counts != {root_thread_id: 2, child_thread_id: 1}:
+        raise SystemExit("the Grok Ultra Turn did not use exactly three responses")
     return {
         "child_completion": "completed",
         "child_response_assertion": "exact_match",
         "default_full_history": "completed",
         "parent_completion": "completed",
+        "operation_count": operation_count,
         "response_assertion": "exact_match",
         "spawn_count": 1,
         "status": root_status,
@@ -580,7 +608,7 @@ def run_smoke(
                     time.monotonic() + 120,
                     thread_id,
                 )
-                operation_count = 3
+                operation_count = turn_evidence.pop("operation_count")
 
             evidence = {
                 "archive": archive.name,
