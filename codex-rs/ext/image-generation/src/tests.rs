@@ -3,6 +3,8 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
@@ -90,6 +92,8 @@ async fn omitted_references_generate_with_fixed_defaults() {
 
 #[tokio::test]
 async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
+    let generated = BASE64_STANDARD.encode(include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg"));
+    let generated_url = format!("data:image/jpeg;base64,{generated}");
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -139,7 +143,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             id: Some(ResponseItemId::with_suffix("ig", "generated-call")),
             status: "completed".to_string(),
             revised_prompt: None,
-            result: "generated".to_string(),
+            result: generated,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
@@ -165,7 +169,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
         .expect("history-backed edit request should build"),
         ImageRequest::Edit(expected_edit_request(
             "change the lighting",
-            &["user-2", "mcp", "code-mode", "generated"],
+            &["user-2", "mcp", "code-mode", &generated_url],
         ))
     );
 }
@@ -347,7 +351,11 @@ fn expected_edit_request(prompt: &str, images: &[&str]) -> ImageEditRequest {
         images: images
             .iter()
             .map(|image| ImageUrl {
-                image_url: format!("data:image/png;base64,{image}"),
+                image_url: if image.starts_with("data:image/") {
+                    (*image).to_string()
+                } else {
+                    format!("data:image/png;base64,{image}")
+                },
             })
             .collect(),
         prompt: prompt.to_string(),

@@ -184,9 +184,9 @@ impl ImageGenerationTool {
                 .next()
                 .map(normalize_image_data)
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
-                .and_then(|result| result.map(|(data, mime)| (data, mime, transparent_background)))
+                .and_then(|result| result.map(|image| (image, transparent_background)))
         });
-        let (result, mime_type, transparent_background) = match result {
+        let (image, transparent_background) = match result {
             Ok(result) => result,
             Err((message, failure)) => {
                 let item = ImageGenerationItem {
@@ -210,15 +210,15 @@ impl ImageGenerationTool {
             call.environments.first(),
             &self.thread_id,
             &call.call_id,
-            &result,
-            image_extension(&mime_type).expect("MIME type was validated"),
+            &image.result,
+            image.extension,
         )
         .await;
         let item = ImageGenerationItem {
             id: call.call_id.clone(),
             status: "completed".to_string(),
             revised_prompt: Some(args.prompt),
-            result: result.clone(),
+            result: image.result.clone(),
             transparent_background,
             failure: None,
             saved_path: saved_path.clone(),
@@ -232,16 +232,22 @@ impl ImageGenerationTool {
             image_generation_output_hint(output_dir.display(), output_path.display())
         });
         Ok(Box::new(GeneratedImageOutput {
-            result,
-            mime_type,
+            result: image.result,
+            mime_type: image.mime_type,
             output_hint,
         }))
     }
 }
 
+struct NormalizedImage {
+    result: String,
+    mime_type: String,
+    extension: &'static str,
+}
+
 fn normalize_image_data(
     data: codex_api::ImageData,
-) -> Result<(String, String), (String, Option<ImageGenerationFailure>)> {
+) -> Result<NormalizedImage, (String, Option<ImageGenerationFailure>)> {
     let bytes = BASE64_STANDARD.decode(data.b64_json.trim()).map_err(|_| {
         ("image generation returned invalid base64 data".to_string(), None)
     })?;
@@ -257,16 +263,17 @@ fn normalize_image_data(
             None,
         ));
     }
-    image_extension(&image.mime).ok_or_else(|| {
+    let extension = image_extension(&image.mime).ok_or_else(|| {
         (
             "image generation returned an unsupported MIME type".to_string(),
             None,
         )
     })?;
-    Ok((
-        BASE64_STANDARD.encode(image.bytes.as_ref()),
-        image.mime,
-    ))
+    Ok(NormalizedImage {
+        result: BASE64_STANDARD.encode(image.bytes.as_ref()),
+        mime_type: image.mime,
+        extension,
+    })
 }
 
 fn usage_limit_failure(error: &CodexErr) -> Option<ImageGenerationFailure> {

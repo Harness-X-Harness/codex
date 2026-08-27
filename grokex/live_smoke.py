@@ -443,11 +443,16 @@ def wait_for_image_turn(
         params = message.get("params")
         if not isinstance(params, dict):
             continue
-        if message.get("method") == "rawResponse/completed":
-            item = params.get("response")
+        if message.get("method") == "rawResponseItem/completed":
+            item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "response.output_item.done":
                 output = item.get("item")
-                if isinstance(output, dict) and output.get("type") == "function_call":
+                if (
+                    isinstance(output, dict)
+                    and output.get("type") == "function_call"
+                    and output.get("namespace") == "image_gen"
+                    and output.get("name") == "imagegen"
+                ):
                     try:
                         arguments = json.loads(output.get("arguments", ""))
                     except (TypeError, json.JSONDecodeError):
@@ -580,6 +585,8 @@ def run_smoke(
                         },
                     }
                 ]
+            elif scenario == IMAGE_SCENARIO:
+                thread_params["experimentalRawEvents"] = True
             thread_response = server.request(3, "thread/start", thread_params)
             thread = thread_response.get("thread")
             if not isinstance(thread, dict) or thread_response.get("modelProvider") != "grok":

@@ -1,3 +1,4 @@
+import base64
 import json
 import tempfile
 import time
@@ -60,10 +61,11 @@ class VerifiedTurnTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifact = root / "generated.jpg"
-            artifact.write_bytes(b"\xff\xd8\xff\xd9")
-            image_item = {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": "/9j/2Q==", "savedPath": str(artifact)}}}
+            jpeg = (Path(__file__).parents[1] / "codex-rs/vendor/bubblewrap/bubblewrap.jpg").read_bytes()
+            artifact.write_bytes(jpeg)
+            image_item = {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}}
             turn_done = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
-            raw_edit = {"method": "rawResponse/completed", "params": {"response": {"type": "response.output_item.done", "item": {"type": "function_call", "arguments": json.dumps({"num_last_images_to_include": 1})}}}}
+            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "response.output_item.done", "item": {"type": "function_call", "namespace": "image_gen", "name": "imagegen", "arguments": json.dumps({"num_last_images_to_include": 1})}}}}
             server = FakeScenarioAppServer([image_item, turn_done, raw_edit, image_item, turn_done])
             archive = root / "candidate.tar.gz"
             archive.write_bytes(b"candidate")
@@ -74,6 +76,8 @@ class VerifiedTurnTest(unittest.TestCase):
                 live_smoke.run_smoke(archive, config, evidence_path, "source", "validator", "run", live_smoke.IMAGE_SCENARIO)
             turns = [request for request in server.requests if request[1] == "turn/start"]
             self.assertEqual([request[2]["threadId"] for request in turns], ["thread-1", "thread-1"])
+            thread_start = next(request for request in server.requests if request[1] == "thread/start")
+            self.assertTrue(thread_start[2]["experimentalRawEvents"])
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             self.assertTrue(evidence["history_arguments_verified"])
             self.assertNotIn("result", evidence)
@@ -82,9 +86,10 @@ class VerifiedTurnTest(unittest.TestCase):
     def test_accepts_secret_safe_completed_jpeg_item(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             artifact = Path(temporary) / "generated.jpg"
-            artifact.write_bytes(b"\xff\xd8\xff\xd9")
+            jpeg = (Path(__file__).parents[1] / "codex-rs/vendor/bubblewrap/bubblewrap.jpg").read_bytes()
+            artifact.write_bytes(jpeg)
             server = FakeAppServer([
-                {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": "/9j/2Q==", "savedPath": str(artifact)}}},
+                {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}},
                 {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
             ])
             evidence = live_smoke.wait_for_image_turn(server, time.monotonic() + 1, False)

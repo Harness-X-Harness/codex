@@ -185,6 +185,10 @@ jobs:
           cargo test -p codex-history tests::provider_hosted_tool_metadata_round_trips_beside_rollout_payload -- --exact
           cargo test -p codex-core --lib context_manager::history_tests::normalize_keeps_provider_hosted_custom_tool_call_without_output -- --exact
           cargo test -p codex-core --test all suite::x_search::grok_x_search_is_provider_hosted_and_replays_canonical_history -- --exact
+          cargo test -p codex-api endpoint::images::tests::grok_generation_uses_verified_wire_and_accepts_mime_without_created -- --exact
+          cargo test -p codex-api endpoint::images::tests::grok_edit_projects_single_and_multiple_image_shapes -- --exact
+          cargo test -p codex-extension-image-generation tests::recent_image_fallback_selects_newest_images_in_chronological_order -- --exact
+          cargo test -p codex-app-server --test all suite::v2::imagegen_extension::grok_image_generation_then_history_edit_uses_stock_lifecycle -- --exact
       - name: Require every contract group
         if: always()
         env:
