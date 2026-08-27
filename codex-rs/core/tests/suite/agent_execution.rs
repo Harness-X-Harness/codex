@@ -193,8 +193,6 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
             .collect::<Vec<_>>(),
         vec!["/v1/responses", "/v1/responses", "/v1/responses"]
     );
-    assert_eq!(requests[0].body_json()["reasoning"]["effort"], "xhigh");
-    assert_eq!(requests[2].body_json()["reasoning"]["effort"], "xhigh");
     assert!(input_message_contains(
         &requests[1],
         "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task"
@@ -203,6 +201,12 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         &requests[2],
         "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/first\nPayload:\nworker completed"
     ));
+    let bodies = requests
+        .iter()
+        .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(bodies[0]["reasoning"]["effort"], "xhigh");
+    assert_eq!(bodies[2]["reasoning"]["effort"], "xhigh");
     const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
         "message",
         "reasoning",
@@ -218,10 +222,8 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         "image_generation_call",
         "compaction",
     ];
-    for request in requests {
-        let body: serde_json::Value = serde_json::from_slice(&request.body)?;
+    for body in bodies {
         assert_eq!(body["model"], "grok-4.6");
-        assert_eq!(body["reasoning"]["effort"], "xhigh");
         assert!(
             body["input"]
                 .as_array()
