@@ -59,8 +59,6 @@ use crate::backend::CodexImagesBackend;
 
 const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
-    MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
 #[derive(Clone)]
@@ -213,7 +211,7 @@ impl ImageGenerationTool {
             call.environments.first(),
             &self.thread_id,
             &call.call_id,
-            &image.base64_data,
+            &image.bytes,
             image.extension,
         )
         .await;
@@ -243,6 +241,7 @@ impl ImageGenerationTool {
 }
 
 struct NormalizedImage {
+    bytes: Vec<u8>,
     base64_data: String,
     mime_type: String,
     extension: &'static str,
@@ -284,8 +283,10 @@ fn normalize_image_data(
             None,
         )
     })?;
+    let bytes = image.bytes.as_ref().to_vec();
     Ok(NormalizedImage {
-        base64_data: BASE64_STANDARD.encode(image.bytes.as_ref()),
+        base64_data: BASE64_STANDARD.encode(&bytes),
+        bytes,
         mime_type: image.mime,
         extension,
     })
@@ -323,7 +324,7 @@ async fn save_image_generation_result(
     environment: Option<&ToolEnvironment>,
     session_id: &str,
     call_id: &str,
-    result: &str,
+    bytes: &[u8],
     extension: &str,
 ) -> Option<AbsolutePathBuf> {
     let (output_dir, save_result) = match save_root {
@@ -331,9 +332,6 @@ async fn save_image_generation_result(
             let path = image_generation_artifact_path(save_root, session_id, call_id, extension);
             let output_dir = path.parent().unwrap_or_else(|| save_root.clone());
             let save_result: io::Result<AbsolutePathBuf> = async {
-                let bytes = BASE64_STANDARD
-                    .decode(result.trim().as_bytes())
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 if let Some(parent) = path.parent() {
                     LOCAL_FS
                         .create_directory(
@@ -349,7 +347,7 @@ async fn save_image_generation_result(
                 LOCAL_FS
                     .write_file(
                         &PathUri::from_abs_path(&path),
-                        bytes,
+                        bytes.to_vec(),
                         Default::default(),
                         /*sandbox*/ None,
                     )
@@ -363,16 +361,6 @@ async fn save_image_generation_result(
             let environment = environment?;
             let output_dir = environment.cwd.join("generated_images");
             let save_result: io::Result<AbsolutePathBuf> = async {
-                let result = result.trim();
-                if result.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "generated image exceeds the executor file size limit",
-                    ));
-                }
-                let bytes = BASE64_STANDARD
-                    .decode(result.as_bytes())
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -434,7 +422,7 @@ async fn save_image_generation_result(
 
                 environment
                     .file_system
-                    .write_file(&path_uri, bytes, Default::default(), sandbox)
+                    .write_file(&path_uri, bytes.to_vec(), Default::default(), sandbox)
                     .await?;
                 Ok(path)
             }
