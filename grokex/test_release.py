@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -293,6 +294,30 @@ class LiveEvidenceTest(unittest.TestCase):
 
 
 class ReleaseWorkflowTest(unittest.TestCase):
+    def test_preflight_allowlist_matches_validator_diff(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        workflow = (repository / ".github/workflows/grokex-release.yml").read_text(
+            encoding="utf-8"
+        )
+        allowed_paths = {
+            line.strip()
+            for line in workflow.split(
+                "          cat >\"${allowed_paths}\" <<'EOF'\n", 1
+            )[1]
+            .split("          EOF\n", 1)[0]
+            .splitlines()
+        }
+        source_sha = workflow.split("  EXPECTED_SOURCE_SHA: ", 1)[1].splitlines()[0]
+        observed_paths = set(
+            subprocess.check_output(
+                ["git", "diff", "--name-only", f"{source_sha}...HEAD"],
+                cwd=repository,
+                text=True,
+            ).splitlines()
+        )
+
+        self.assertEqual(allowed_paths, observed_paths)
+
     def test_publish_claims_exact_tag_before_creating_release(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         workflow = (repository / ".github/workflows/grokex-release.yml").read_text(

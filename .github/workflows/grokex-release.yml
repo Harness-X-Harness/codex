@@ -61,6 +61,7 @@ jobs:
           .github/workflows/grokex-checks.yml
           .github/workflows/grokex-live.yml
           .github/workflows/grokex-release.yml
+          codex-rs/core/tests/suite/agent_execution.rs
           codex-rs/core/tests/suite/web_search.rs
           grokex/live_smoke.py
           grokex/release.py
