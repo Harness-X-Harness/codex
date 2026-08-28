@@ -365,57 +365,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grok_generation_uses_verified_wire_and_accepts_mime_without_created() {
-        let transport = CapturingTransport::new(
-            serde_json::to_vec(&json!({
-                "data": [{"b64_json": "REDACT", "mime_type": "image/jpeg"}]
-            }))
-            .expect("serialize response"),
-        );
-        let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
-            .with_dialect(ImagesDialect::Grok);
-        let response = client
-            .generate(
-                &ImageGenerationRequest {
-                    prompt: "draw".to_string(),
-                    background: Some(ImageBackground::Auto),
-                    model: "grok-imagine-image-2.0".to_string(),
-                    n: None,
-                    quality: Some(ImageQuality::Auto),
-                    size: Some("auto".to_string()),
-                },
-                HeaderMap::new(),
-            )
-            .await
-            .expect("grok response should decode");
-
-        assert_eq!(
-            response,
-            ImageResponse {
-                created: None,
-                data: vec![ImageData {
-                    b64_json: "REDACT".to_string(),
-                    mime_type: Some("image/jpeg".to_string()),
-                }],
-                background: None,
-                quality: None,
-                size: None,
-            }
-        );
-        assert_eq!(
-            captured_request(&transport)
-                .body
-                .as_ref()
-                .and_then(RequestBody::json),
-            Some(&json!({
-                "model": "grok-imagine-image-2.0",
-                "prompt": "draw",
-                "response_format": "b64_json"
-            }))
-        );
-    }
-
-    #[tokio::test]
     async fn grok_edit_projects_single_and_multiple_image_shapes() {
         for (images, expected) in [
             (

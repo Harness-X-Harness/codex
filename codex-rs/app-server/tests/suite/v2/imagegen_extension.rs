@@ -34,6 +34,9 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+#[path = "grok_imagegen_extension.rs"]
+mod grok_imagegen_extension;
+
 const RESULT: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 const TINY_PNG_BYTES: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
@@ -41,138 +44,6 @@ const TINY_PNG_BYTES: &[u8] = &[
     5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
 const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-
-#[tokio::test]
-async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Result<()> {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
-
-    let jpeg = include_bytes!("../../../../vendor/bubblewrap/bubblewrap.jpg");
-    let result = STANDARD.encode(jpeg);
-    let server = responses::start_mock_server().await;
-    for path_value in ["/api/codex/images/generations", "/api/codex/images/edits"] {
-        Mock::given(method("POST"))
-            .and(path(path_value))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": [{"b64_json": result, "mime_type": "image/jpeg"}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
-    let response_mock = responses::mount_sse_sequence(
-        &server,
-        vec![
-            responses::sse(vec![
-                responses::ev_response_created("resp-1"),
-                responses::ev_function_call_with_namespace(
-                    "generate-1",
-                    "image_gen",
-                    "imagegen",
-                    &json!({"prompt": "paint a blue whale"}).to_string(),
-                ),
-                responses::ev_completed("resp-1"),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("msg-1", "Done"),
-                responses::ev_completed("resp-2"),
-            ]),
-            responses::sse(vec![
-                responses::ev_response_created("resp-3"),
-                responses::ev_function_call_with_namespace(
-                    "edit-1",
-                    "image_gen",
-                    "imagegen",
-                    &json!({"prompt": "add a red hat", "num_last_images_to_include": 1})
-                        .to_string(),
-                ),
-                responses::ev_completed("resp-3"),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("msg-2", "Done"),
-                responses::ev_completed("resp-4"),
-            ]),
-        ],
-    )
-    .await;
-
-    let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .with_model_provider("grok")
-        .with_provider_name("Grok")
-        .with_provider_base_url(&format!("{}/api/codex", server.uri()))
-        .with_grok_responses_wire_api()
-        .with_provider_config("supports_websockets = false\nrequires_openai_auth = true")
-        .write(codex_home.path())?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("access-chatgpt"),
-        AuthCredentialsStoreMode::File,
-    )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
-        .await?;
-    let thread_req = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
-        .await?;
-    let ThreadStartResponse { thread, .. } =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_req)).await??;
-    for text in ["Generate an image", "Edit the prior image"] {
-        let request = mcp
-            .send_turn_start_request(TurnStartParams {
-                thread_id: thread.id.clone(),
-                input: vec![V2UserInput::Text {
-                    text: text.to_string(),
-                    text_elements: Vec::new(),
-                }],
-                ..Default::default()
-            })
-            .await?;
-        let _: TurnStartResponse =
-            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
-        let completed = timeout(
-            DEFAULT_READ_TIMEOUT,
-            wait_for_image_generation_completed(&mut mcp),
-        )
-        .await??;
-        let ThreadItem::ImageGeneration(item) = completed.item else {
-            panic!("expected image generation item");
-        };
-        let saved = item.saved_path.context("image should be saved")?;
-        assert_eq!(
-            saved.extension().and_then(|value| value.to_str()),
-            Some("jpg")
-        );
-        assert_eq!(std::fs::read(saved)?, jpeg);
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("turn/completed"),
-        )
-        .await??;
-    }
-    let requests = server.received_requests().await.context("requests")?;
-    let generation = requests
-        .iter()
-        .find(|request| request.url.path().ends_with("/images/generations"))
-        .context("generation")?
-        .body_json::<serde_json::Value>()?;
-    assert_eq!(
-        generation,
-        json!({"model":"grok-imagine-image-2.0","prompt":"paint a blue whale","response_format":"b64_json"})
-    );
-    let edit = requests
-        .iter()
-        .find(|request| request.url.path().ends_with("/images/edits"))
-        .context("edit")?
-        .body_json::<serde_json::Value>()?;
-    assert_eq!(
-        edit,
-        json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{result}")}})
-    );
-    assert_eq!(response_mock.requests().len(), 4);
-    Ok(())
-}
 
 #[derive(Clone, Copy)]
 enum ImagegenTestMode {

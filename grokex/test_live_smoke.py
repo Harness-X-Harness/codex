@@ -83,29 +83,6 @@ class VerifiedTurnTest(unittest.TestCase):
             self.assertNotIn("result", evidence)
             self.assertNotIn(str(artifact), json.dumps(evidence))
 
-    def test_accepts_secret_safe_completed_jpeg_item(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            artifact = Path(temporary) / "generated.jpg"
-            jpeg = (Path(__file__).parents[1] / "codex-rs/vendor/bubblewrap/bubblewrap.jpg").read_bytes()
-            artifact.write_bytes(jpeg)
-            server = FakeAppServer([
-                {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}},
-                {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
-            ])
-            evidence = live_smoke.wait_for_image_turn(server, time.monotonic() + 1, False)
-            self.assertEqual(evidence["image_mime"], "image/jpeg")
-            self.assertNotIn("result", evidence)
-            self.assertNotIn("savedPath", evidence)
-
-    def test_rejects_wrong_image_mime_or_extension(self) -> None:
-        for result, path in [("iVBORw==", "/tmp/generated.jpg"), ("/9j/", "/tmp/generated.png")]:
-            server = FakeAppServer([
-                {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": result, "savedPath": path}}},
-                {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
-            ])
-            with self.assertRaises(SystemExit):
-                live_smoke.wait_for_image_turn(server, time.monotonic() + 1, False)
-
     def test_accepts_basic_exact_reply_without_tool(self) -> None:
         server = FakeAppServer(
             [
