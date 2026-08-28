@@ -288,7 +288,9 @@ class ReleaseWorkflowTest(unittest.TestCase):
             '-f sha="${{ needs.preflight.outputs.source_sha }}"', publish_step
         )
         self.assertIn("--verify-tag", publish_step)
-        self.assertNotIn("--target", publish_step)
+        self.assertIn(
+            '--target "${{ needs.preflight.outputs.source_sha }}"', publish_step
+        )
 
 
 if __name__ == "__main__":
