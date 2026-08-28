@@ -63,6 +63,8 @@ class LiveEvidenceTest(unittest.TestCase):
                     "runtime_spawn_failed_count": 0,
                     "target_child_reply_seen": True,
                     "target_child_turn_status": "completed",
+                    "target_model_match": True,
+                    "target_provider_match": True,
                     "target_runtime_child_count": 1,
                     "unpublished_canary": "must-not-enter-release-evidence",
                     "wait_completed_count": 0,
@@ -131,6 +133,8 @@ class LiveEvidenceTest(unittest.TestCase):
                                 "runtime_spawn_failed_count": 0,
                                 "target_child_reply_seen": True,
                                 "target_child_turn_status": "completed",
+                                "target_model_match": True,
+                                "target_provider_match": True,
                                 "target_runtime_child_count": 1,
                                 "wait_completed_count": 0,
                                 "wait_correlated_call_count": 0,
@@ -160,6 +164,24 @@ class LiveEvidenceTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 SystemExit,
                 "live scenario outcome mismatch: ultra-full-history-collaboration",
+            ):
+                release.build_live_evidence(
+                    evidence_dir,
+                    archive,
+                    output,
+                    "source-sha",
+                    "validator-sha",
+                    "run-id",
+                )
+
+            collaboration["semantic_acceptance"] = "proven"
+            collaboration["observations"]["target_model_match"] = False
+            (evidence_dir / "collaboration.json").write_text(
+                json.dumps(collaboration), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                SystemExit,
+                "collaboration semantic observation is invalid",
             ):
                 release.build_live_evidence(
                     evidence_dir,
@@ -212,6 +234,8 @@ class LiveEvidenceTest(unittest.TestCase):
                 "runtime_spawn_failed_count": 0,
                 "target_child_reply_seen": True,
                 "target_child_turn_status": "completed",
+                "target_model_match": True,
+                "target_provider_match": True,
                 "target_runtime_child_count": 1,
                 "wait_completed_count": 1,
                 "wait_correlated_call_count": 1,

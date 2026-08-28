@@ -69,6 +69,8 @@ COLLABORATION_OBSERVATION_KEYS = (
     "runtime_spawn_failed_count",
     "target_child_reply_seen",
     "target_child_turn_status",
+    "target_model_match",
+    "target_provider_match",
     "target_runtime_child_count",
     "wait_completed_count",
     "wait_correlated_call_count",
@@ -309,10 +311,13 @@ def bounded_live_observations(
     for key in (
         "parent_result_consumed",
         "target_child_reply_seen",
-        "wait_correlated_to_target",
+        "target_model_match",
+        "target_provider_match",
     ):
-        if not isinstance(bounded[key], bool):
-            raise SystemExit("collaboration observation boolean is invalid")
+        if bounded[key] is not True:
+            raise SystemExit("collaboration semantic observation is invalid")
+    if not isinstance(bounded["wait_correlated_to_target"], bool):
+        raise SystemExit("collaboration observation boolean is invalid")
     for key in ("parent_turn_status", "target_child_turn_status"):
         if bounded[key] != "completed":
             raise SystemExit("completed collaboration observation status is invalid")

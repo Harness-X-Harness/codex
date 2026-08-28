@@ -547,9 +547,9 @@ def wait_for_collaboration_turn(
                 task = parsed_arguments.get("message")
                 if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
                     continue
-                if "fork_turns" in parsed_arguments:
+                if parsed_arguments.get("fork_turns", "all") != "all":
                     raise SystemExit(
-                        "the Grok collaboration spawn did not use default full history"
+                        "the Grok collaboration spawn did not use full history"
                     )
                 default_history_spawn_seen = True
                 if spawn_requested_ms is None:
@@ -692,7 +692,8 @@ def wait_for_collaboration_turn(
             thread_id in runtime_spawn_receivers.get(call_id, set())
             and (
                 runtime_spawn_models.get(call_id) == "grok-4.6"
-                or call_id in spawn_expected_model_call_ids
+                if call_id in runtime_spawn_models
+                else call_id in spawn_expected_model_call_ids
             )
             for call_id in spawn_call_ids
         )
@@ -802,17 +803,8 @@ def wait_for_collaboration_turn(
         "wait_started_ms": wait_started_ms,
         "wait_timed_out_if_observable": "not_observed",
     }
-    semantic_contract_proven = (
-        default_history_spawn_seen
-        and bool(target_runtime_child_ids())
-        and target_child_completed
-        and parent_completed
-        and parent_consumed_result
-        and target_model_match
-        and target_snapshot.get("provider_match") is True
-    )
     failures: list[str] = []
-    if deadline_reached and not semantic_contract_proven:
+    if deadline_reached:
         failures.append("the bounded Grok Ultra deadline was reached")
     if not default_history_spawn_seen or not target_runtime_child_ids():
         failures.append("the Grok Ultra Turn did not prove a default-history runtime child")

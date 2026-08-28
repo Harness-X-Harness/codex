@@ -312,7 +312,7 @@ experimental_bearer_token = "secret"
 
     def collaboration_messages(
         self,
-        include_fork_turns: bool = False,
+        fork_turns: str | None = None,
         extra_response: bool = False,
     ) -> list[dict[str, object]]:
         arguments: dict[str, object] = {
@@ -322,8 +322,8 @@ experimental_bearer_token = "secret"
             ),
             "task_name": "live_child",
         }
-        if include_fork_turns:
-            arguments["fork_turns"] = "all"
+        if fork_turns is not None:
+            arguments["fork_turns"] = fork_turns
         prefix = [
             {
                 "method": "rawResponseItem/completed",
@@ -572,10 +572,21 @@ experimental_bearer_token = "secret"
             self.assertEqual(evidence["observations"]["wait_started_count"], 1)
             self.assertIsNotNone(evidence["observations"]["wait_started_ms"])
 
-    def test_collaboration_scenario_rejects_explicit_fork_turns(self) -> None:
-        server = FakeAppServer(self.collaboration_messages(include_fork_turns=True))
+    def test_collaboration_scenario_accepts_explicit_full_history(self) -> None:
+        server = FakeAppServer(self.collaboration_messages(fork_turns="all"))
 
-        with self.assertRaisesRegex(SystemExit, "did not use default full history"):
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
+
+        self.assertEqual(evidence["semantic_acceptance"], "proven")
+
+    def test_collaboration_scenario_rejects_non_full_history(self) -> None:
+        server = FakeAppServer(self.collaboration_messages(fork_turns="none"))
+
+        with self.assertRaisesRegex(SystemExit, "did not use full history"):
             live_smoke.wait_for_collaboration_turn(
                 server,
                 time.monotonic() + 1,
@@ -824,6 +835,26 @@ experimental_bearer_token = "secret"
         self.assertEqual(evidence["observations"]["parent_response_count"], 4)
         self.assertEqual(evidence["observations"]["target_child_response_count"], 1)
 
+    def test_runtime_model_overrides_requested_default(self) -> None:
+        messages = self.collaboration_messages()
+        runtime_spawn = next(
+            message
+            for message in messages
+            if message.get("params", {}).get("item", {}).get("tool")
+            == "spawnAgent"
+        )
+        runtime_spawn["params"]["item"]["model"] = "different-model"
+
+        with self.assertRaisesRegex(
+            live_smoke.ScenarioFailure,
+            "did not preserve Provider/model ownership",
+        ):
+            live_smoke.wait_for_collaboration_turn(
+                FakeAppServer(messages),
+                time.monotonic() + 1,
+                "thread-1",
+            )
+
     def test_parent_prompt_marker_without_completion_envelope_is_rejected(self) -> None:
         messages = [
             message
@@ -991,6 +1022,24 @@ experimental_bearer_token = "secret"
         self.assertEqual(
             raised.exception.evidence["root_cause_classification"], "inconclusive"
         )
+
+    def test_post_deadline_snapshots_do_not_turn_timeout_green(self) -> None:
+        messages = [
+            message
+            for message in self.collaboration_messages()
+            if message.get("method") != "turn/completed"
+        ]
+
+        with self.assertRaises(live_smoke.ScenarioFailure) as raised:
+            live_smoke.wait_for_collaboration_turn(
+                FakeAppServer(messages),
+                time.monotonic() + 1,
+                "thread-1",
+            )
+
+        evidence = raised.exception.evidence
+        self.assertIs(evidence["observations"]["deadline_reached"], True)
+        self.assertEqual(evidence["semantic_acceptance"], "not_proven")
 
     def test_deadline_writes_secret_safe_thread_snapshots(self) -> None:
         class DeadlineServer(FakeScenarioAppServer):
