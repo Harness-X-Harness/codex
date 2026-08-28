@@ -60,6 +60,23 @@ LIVE_SCENARIO_ASSERTIONS = {
         "wait_path": "completed",
     },
 }
+COLLABORATION_OBSERVATION_KEYS = (
+    "parent_result_consumed",
+    "parent_turn_status",
+    "provider_spawn_request_count",
+    "provider_wait_request_count",
+    "runtime_child_count",
+    "runtime_spawn_completed_count",
+    "runtime_spawn_failed_count",
+    "target_child_reply_seen",
+    "target_child_turn_status",
+    "target_runtime_child_count",
+    "wait_completed_count",
+    "wait_correlated_call_count",
+    "wait_correlated_to_target",
+    "wait_failed_count",
+    "wait_started_count",
+)
 
 
 def sha256(path: Path) -> str:
@@ -270,6 +287,39 @@ def verify_profile(path: Path, secret: bool) -> None:
         raise SystemExit("public profile must not contain a bearer token")
 
 
+def bounded_live_observations(
+    scenario: str, evidence: dict[str, object]
+) -> dict[str, object] | None:
+    if scenario != "ultra-full-history-collaboration":
+        return None
+    observations = evidence.get("observations")
+    if not isinstance(observations, dict):
+        raise SystemExit("collaboration observations are missing")
+    missing = set(COLLABORATION_OBSERVATION_KEYS) - set(observations)
+    if missing:
+        raise SystemExit(f"collaboration observations are incomplete: {sorted(missing)}")
+    bounded = {key: observations[key] for key in COLLABORATION_OBSERVATION_KEYS}
+    count_keys = {key for key in bounded if key.endswith("_count")}
+    if any(
+        not isinstance(bounded[key], int)
+        or isinstance(bounded[key], bool)
+        or bounded[key] < 0
+        for key in count_keys
+    ):
+        raise SystemExit("collaboration observation count is invalid")
+    for key in (
+        "parent_result_consumed",
+        "target_child_reply_seen",
+        "wait_correlated_to_target",
+    ):
+        if not isinstance(bounded[key], bool):
+            raise SystemExit("collaboration observation boolean is invalid")
+    for key in ("parent_turn_status", "target_child_turn_status"):
+        if bounded[key] != "completed":
+            raise SystemExit("completed collaboration observation status is invalid")
+    return bounded
+
+
 def build_live_evidence(
     evidence_dir: Path,
     archive: Path,
@@ -302,7 +352,11 @@ def build_live_evidence(
         expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
         if any(value.get(key) != expected for key, expected in expected_assertions.items()):
             raise SystemExit(f"live scenario outcome mismatch: {scenario}")
-        observed[scenario] = expected_assertions
+        assertions = dict(expected_assertions)
+        observations = bounded_live_observations(scenario, value)
+        if observations is not None:
+            assertions["observations"] = observations
+        observed[scenario] = assertions
     if set(observed) != set(LIVE_SCENARIO_ASSERTIONS):
         raise SystemExit("required live scenario evidence is incomplete")
 
@@ -336,6 +390,7 @@ def build_assets(
     output: Path,
     repository: Path,
     source_sha: str,
+    validator_sha: str,
     run_id: str,
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
@@ -356,6 +411,7 @@ def build_assets(
         "tag": TAG,
         "upstream_commit": UPSTREAM_COMMIT,
         "validation_run": run_id,
+        "validator_sha": validator_sha,
         "version": VERSION,
     }
     (output / "RELEASE.json").write_text(
@@ -368,7 +424,7 @@ def build_assets(
     )
 
 
-def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
+def verify_assets(dist: Path, source_sha: str, validator_sha: str, run_id: str) -> None:
     expected = {archive_name(target) for target in TARGETS} | {
         "LIVE_EVIDENCE.json",
         "RELEASE.json",
@@ -389,6 +445,7 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
         "tag": TAG,
         "upstream_commit": UPSTREAM_COMMIT,
         "validation_run": run_id,
+        "validator_sha": validator_sha,
         "version": VERSION,
     }
     if manifest != expected_manifest:
@@ -403,13 +460,33 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
             for assertions in LIVE_SCENARIO_ASSERTIONS.values()
         ),
         "provider": "grok",
-        "scenarios": LIVE_SCENARIO_ASSERTIONS,
         "source_sha": source_sha,
         "status": "completed",
         "validation_run": run_id,
+        "validator_sha": validator_sha,
     }
     if any(evidence.get(key) != value for key, value in required_evidence.items()):
         raise SystemExit("live evidence mismatch")
+    scenarios = evidence.get("scenarios")
+    if not isinstance(scenarios, dict) or set(scenarios) != set(LIVE_SCENARIO_ASSERTIONS):
+        raise SystemExit("live evidence scenario set mismatch")
+    for scenario, expected_assertions in LIVE_SCENARIO_ASSERTIONS.items():
+        scenario_evidence = scenarios.get(scenario)
+        if not isinstance(scenario_evidence, dict):
+            raise SystemExit(f"live scenario evidence is invalid: {scenario}")
+        if any(
+            scenario_evidence.get(key) != value
+            for key, value in expected_assertions.items()
+        ):
+            raise SystemExit(f"live scenario assertion mismatch: {scenario}")
+        observations = bounded_live_observations(scenario, scenario_evidence)
+        expected_keys = set(expected_assertions)
+        if observations is not None:
+            expected_keys.add("observations")
+            if scenario_evidence.get("observations") != observations:
+                raise SystemExit(f"live scenario observations mismatch: {scenario}")
+        if set(scenario_evidence) != expected_keys:
+            raise SystemExit(f"live scenario evidence shape mismatch: {scenario}")
     if evidence.get("archive_sha256") != sha256(dist / live_archive):
         raise SystemExit("live evidence archive checksum mismatch")
 
@@ -459,11 +536,13 @@ def main() -> None:
     assets_parser.add_argument("--output", type=Path, required=True)
     assets_parser.add_argument("--repository", type=Path, required=True)
     assets_parser.add_argument("--source-sha", required=True)
+    assets_parser.add_argument("--validator-sha", required=True)
     assets_parser.add_argument("--run-id", required=True)
 
     verify_assets_parser = subparsers.add_parser("verify-assets")
     verify_assets_parser.add_argument("--dist", type=Path, required=True)
     verify_assets_parser.add_argument("--source-sha", required=True)
+    verify_assets_parser.add_argument("--validator-sha", required=True)
     verify_assets_parser.add_argument("--run-id", required=True)
 
     args = parser.parse_args()
@@ -499,10 +578,11 @@ def main() -> None:
             args.output,
             args.repository,
             args.source_sha,
+            args.validator_sha,
             args.run_id,
         )
     elif args.command == "verify-assets":
-        verify_assets(args.dist, args.source_sha, args.run_id)
+        verify_assets(args.dist, args.source_sha, args.validator_sha, args.run_id)
 
 
 if __name__ == "__main__":

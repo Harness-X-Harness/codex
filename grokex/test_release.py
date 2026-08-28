@@ -55,8 +55,22 @@ class LiveEvidenceTest(unittest.TestCase):
                 "scenario": "ultra-full-history-collaboration",
                 "wait_path": "completed",
                 "observations": {
-                    "parent_response_count": 4,
+                    "parent_result_consumed": True,
+                    "parent_turn_status": "completed",
                     "provider_spawn_request_count": 2,
+                    "provider_wait_request_count": 1,
+                    "runtime_child_count": 1,
+                    "runtime_spawn_completed_count": 1,
+                    "runtime_spawn_failed_count": 0,
+                    "target_child_reply_seen": True,
+                    "target_child_turn_status": "completed",
+                    "target_runtime_child_count": 1,
+                    "unpublished_canary": "must-not-enter-release-evidence",
+                    "wait_completed_count": 1,
+                    "wait_correlated_call_count": 1,
+                    "wait_correlated_to_target": True,
+                    "wait_failed_count": 0,
+                    "wait_started_count": 1,
                 },
             }
             (evidence_dir / "basic.json").write_text(json.dumps(basic), encoding="utf-8")
@@ -108,6 +122,23 @@ class LiveEvidenceTest(unittest.TestCase):
                             "child_completion": "completed",
                             "child_response_assertion": "exact_match",
                             "default_full_history": "completed",
+                            "observations": {
+                                "parent_result_consumed": True,
+                                "parent_turn_status": "completed",
+                                "provider_spawn_request_count": 2,
+                                "provider_wait_request_count": 1,
+                                "runtime_child_count": 1,
+                                "runtime_spawn_completed_count": 1,
+                                "runtime_spawn_failed_count": 0,
+                                "target_child_reply_seen": True,
+                                "target_child_turn_status": "completed",
+                                "target_runtime_child_count": 1,
+                                "wait_completed_count": 1,
+                                "wait_correlated_call_count": 1,
+                                "wait_correlated_to_target": True,
+                                "wait_failed_count": 0,
+                                "wait_started_count": 1,
+                            },
                             "parent_completion": "completed",
                             "parent_result_consumption": "completed",
                             "response_assertion": "exact_match",
@@ -140,6 +171,124 @@ class LiveEvidenceTest(unittest.TestCase):
                     "validator-sha",
                     "run-id",
                 )
+
+    def test_release_assets_bind_validator_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = root / "raw"
+            for target in release.TARGETS:
+                target_root = raw / target
+                target_root.mkdir(parents=True)
+                suffix = ".exe" if "windows" in target else ""
+                for name in (f"codex{suffix}", f"codex-code-mode-host{suffix}"):
+                    (target_root / name).write_bytes(b"binary")
+                if "linux" in target:
+                    (target_root / "bwrap").write_bytes(b"sandbox")
+            archives = root / "archives"
+            repository = Path(__file__).resolve().parents[1]
+            release.package(raw, archives, repository, "source-sha")
+            live_archive = archives / release.archive_name(
+                "x86_64-unknown-linux-musl"
+            )
+            evidence_dir = root / "evidence"
+            evidence_dir.mkdir()
+            common = {
+                "archive": live_archive.name,
+                "archive_sha256": release.sha256(live_archive),
+                "catalog": "release-bundled",
+                "model": "grok-4.6",
+                "multi_agent_version": "v2",
+                "provider": "grok",
+                "reasoning_effort": "ultra",
+                "source_sha": "source-sha",
+                "validation_run": "run-id",
+                "validator_sha": "validator-sha",
+            }
+            observations = {
+                "parent_result_consumed": True,
+                "parent_turn_status": "completed",
+                "provider_spawn_request_count": 2,
+                "provider_wait_request_count": 1,
+                "runtime_child_count": 1,
+                "runtime_spawn_completed_count": 1,
+                "runtime_spawn_failed_count": 0,
+                "target_child_reply_seen": True,
+                "target_child_turn_status": "completed",
+                "target_runtime_child_count": 1,
+                "wait_completed_count": 1,
+                "wait_correlated_call_count": 1,
+                "wait_correlated_to_target": True,
+                "wait_failed_count": 0,
+                "wait_started_count": 1,
+            }
+            for scenario, assertions in release.LIVE_SCENARIO_ASSERTIONS.items():
+                scenario_evidence = {**common, **assertions, "scenario": scenario}
+                if scenario == "ultra-full-history-collaboration":
+                    scenario_evidence["observations"] = observations
+                (evidence_dir / f"{scenario}.json").write_text(
+                    json.dumps(scenario_evidence), encoding="utf-8"
+                )
+            live_evidence = root / "LIVE_EVIDENCE.json"
+            release.build_live_evidence(
+                evidence_dir,
+                live_archive,
+                live_evidence,
+                "source-sha",
+                "validator-sha",
+                "run-id",
+            )
+            assets = root / "assets"
+            release.build_assets(
+                archives,
+                live_evidence,
+                assets,
+                repository,
+                "source-sha",
+                "validator-sha",
+                "run-id",
+            )
+
+            release.verify_assets(
+                assets, "source-sha", "validator-sha", "run-id"
+            )
+            self.assertEqual(
+                json.loads((assets / "RELEASE.json").read_text(encoding="utf-8"))[
+                    "validator_sha"
+                ],
+                "validator-sha",
+            )
+            tampered_evidence = json.loads(
+                (assets / "LIVE_EVIDENCE.json").read_text(encoding="utf-8")
+            )
+            tampered_evidence["validator_sha"] = "wrong-validator"
+            (assets / "LIVE_EVIDENCE.json").write_text(
+                json.dumps(tampered_evidence), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(SystemExit, "live evidence mismatch"):
+                release.verify_assets(
+                    assets, "source-sha", "validator-sha", "run-id"
+                )
+
+
+class ReleaseWorkflowTest(unittest.TestCase):
+    def test_publish_claims_exact_tag_before_creating_release(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        workflow = (repository / ".github/workflows/grokex-release.yml").read_text(
+            encoding="utf-8"
+        )
+        publish_step = workflow.split("      - name: Publish once\n", 1)[1].split(
+            "      - name: Download and verify published destination\n", 1
+        )[0]
+
+        self.assertIn(
+            'gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs"', publish_step
+        )
+        self.assertIn('-f ref="refs/tags/${RELEASE_TAG}"', publish_step)
+        self.assertIn(
+            '-f sha="${{ needs.preflight.outputs.source_sha }}"', publish_step
+        )
+        self.assertIn("--verify-tag", publish_step)
+        self.assertNotIn("--target", publish_step)
 
 
 if __name__ == "__main__":

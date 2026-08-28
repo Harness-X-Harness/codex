@@ -721,19 +721,6 @@ def wait_for_collaboration_turn(
         "parent": parent_snapshot,
         "target_child": target_snapshot,
     }
-    snapshots_sufficient = (
-        parent_snapshot.get("read_status") == "completed"
-        and (
-            target_child_id is None
-            or target_snapshot.get("read_status") == "completed"
-        )
-        and len(other_snapshots) == len(runtime_child_ids - {target_child_id})
-        and all(
-            isinstance(snapshot, dict)
-            and snapshot.get("read_status") == "completed"
-            for snapshot in other_snapshots
-        )
-    )
 
     target_child_completed = (
         completed(target_child_id) if target_child_id is not None else False
@@ -828,38 +815,41 @@ def wait_for_collaboration_turn(
     if not target_model_match or target_snapshot.get("provider_match") is not True:
         failures.append("the Grok Ultra target child did not preserve Provider/model ownership")
     if failures:
+        trajectory: dict[str, str] = {}
+        if deadline_reached:
+            if parent_completed:
+                last_proven_stage = "parent_completed"
+            elif target_child_completed:
+                last_proven_stage = "target_child_completed"
+            elif target_runtime_child_ids():
+                last_proven_stage = "runtime_child_created"
+            elif spawn_call_ids:
+                last_proven_stage = "provider_spawn_requested"
+            else:
+                last_proven_stage = "parent_turn_observed"
+            if not default_history_spawn_seen or not target_runtime_child_ids():
+                trajectory_gap = "default_history_runtime_child"
+            elif not target_child_completed:
+                trajectory_gap = "target_child_completion"
+            elif not wait_correlated_to_target:
+                trajectory_gap = "correlated_stock_wait"
+            elif not parent_completed:
+                trajectory_gap = "parent_completion"
+            elif not parent_consumed_result:
+                trajectory_gap = "parent_result_consumption"
+            elif not target_model_match or target_snapshot.get("provider_match") is not True:
+                trajectory_gap = "provider_model_ownership"
+            else:
+                trajectory_gap = "semantic_terminal_proof"
+            trajectory = {
+                "last_proven_stage": last_proven_stage,
+                "trajectory_gap": trajectory_gap,
+            }
         if not deadline_reached:
             root_cause_classification = "semantic_contract_not_proven"
             oracle_sufficiency = "sufficient"
         elif spawn_call_ids & spawn_failed_call_ids and not target_runtime_child_ids():
             root_cause_classification = "runtime_spawn"
-            oracle_sufficiency = "sufficient"
-        elif not snapshots_sufficient:
-            root_cause_classification = "inconclusive"
-            oracle_sufficiency = "insufficient"
-        elif not spawn_call_ids:
-            root_cause_classification = "parent_tool_selection"
-            oracle_sufficiency = "sufficient"
-        elif not target_runtime_child_ids():
-            root_cause_classification = "runtime_spawn"
-            oracle_sufficiency = "sufficient"
-        elif wait_completed_call_ids and not target_child_completed:
-            root_cause_classification = "wait_without_child_terminal"
-            oracle_sufficiency = "sufficient"
-        elif not target_child_completed:
-            root_cause_classification = "child_execution"
-            oracle_sufficiency = "sufficient"
-        elif not provider_wait_call_ids:
-            root_cause_classification = "parent_wait_selection"
-            oracle_sufficiency = "sufficient"
-        elif not correlated_wait_call_ids():
-            root_cause_classification = "runtime_wait"
-            oracle_sufficiency = "sufficient"
-        elif not parent_consumed_result:
-            root_cause_classification = "parent_continuation"
-            oracle_sufficiency = "sufficient"
-        elif not parent_completed:
-            root_cause_classification = "app_server_terminal_lifecycle"
             oracle_sufficiency = "sufficient"
         else:
             root_cause_classification = "inconclusive"
@@ -867,6 +857,7 @@ def wait_for_collaboration_turn(
         raise ScenarioFailure(
             "; ".join(failures) + "; semantic proof is incomplete",
             {
+                **trajectory,
                 "observations": observations,
                 "oracle_sufficiency": oracle_sufficiency,
                 "root_cause_classification": root_cause_classification,

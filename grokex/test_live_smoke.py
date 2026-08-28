@@ -709,8 +709,9 @@ experimental_bearer_token = "secret"
             )
 
         evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "sufficient")
-        self.assertEqual(evidence["root_cause_classification"], "runtime_wait")
+        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
+        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
+        self.assertEqual(evidence["trajectory_gap"], "correlated_stock_wait")
         self.assertIs(evidence["observations"]["wait_correlated_to_target"], False)
 
     def test_wait_lifecycle_requires_runtime_started(self) -> None:
@@ -730,8 +731,9 @@ experimental_bearer_token = "secret"
             )
 
         evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "sufficient")
-        self.assertEqual(evidence["root_cause_classification"], "runtime_wait")
+        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
+        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
+        self.assertEqual(evidence["trajectory_gap"], "correlated_stock_wait")
         self.assertIs(evidence["observations"]["wait_correlated_to_target"], False)
 
     def test_provider_wait_request_without_runtime_wait_is_diagnosed(self) -> None:
@@ -790,8 +792,9 @@ experimental_bearer_token = "secret"
             )
 
         evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "sufficient")
-        self.assertEqual(evidence["root_cause_classification"], "runtime_wait")
+        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
+        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
+        self.assertEqual(evidence["trajectory_gap"], "correlated_stock_wait")
         self.assertEqual(
             evidence["observations"]["provider_wait_request_count"], 1
         )
@@ -975,10 +978,9 @@ experimental_bearer_token = "secret"
             )
 
         evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "sufficient")
-        self.assertEqual(
-            evidence["root_cause_classification"], "parent_tool_selection"
-        )
+        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
+        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
+        self.assertEqual(evidence["trajectory_gap"], "default_history_runtime_child")
         self.assertEqual(evidence["observations"]["runtime_spawn_failed_count"], 1)
 
     def test_deadline_without_readable_snapshots_is_inconclusive(self) -> None:
@@ -1102,10 +1104,10 @@ experimental_bearer_token = "secret"
             evidence = json.loads(evidence_text)
             self.assertEqual(evidence["status"], "failed")
             self.assertEqual(evidence["semantic_acceptance"], "not_proven")
-            self.assertEqual(evidence["oracle_sufficiency"], "sufficient")
-            self.assertEqual(
-                evidence["root_cause_classification"], "child_execution"
-            )
+            self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
+            self.assertEqual(evidence["root_cause_classification"], "inconclusive")
+            self.assertEqual(evidence["last_proven_stage"], "runtime_child_created")
+            self.assertEqual(evidence["trajectory_gap"], "target_child_completion")
             self.assertEqual(
                 evidence["observations"]["target_child_turn_status"], "failed"
             )
