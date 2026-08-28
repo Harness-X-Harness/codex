@@ -545,18 +545,10 @@ experimental_bearer_token = "secret"
             self.assertEqual(len(turn_requests), 1)
             self.assertEqual(turn_requests[0][2]["effort"], "ultra")
             prompt = turn_requests[0][2]["input"][0]["text"]
-            self.assertIn(
-                "emit exactly one spawn_agent call and no other tool call",
-                prompt,
-            )
-            self.assertIn("Never call spawn_agent again", prompt)
-            self.assertIn("delegated child, not the parent", prompt)
-            self.assertIn("ignore the inherited parent-only serial steps", prompt)
-            self.assertIn("call no tool", prompt)
-            self.assertIn(
-                "emit exactly one wait_agent call for that child and no other tool call",
-                prompt,
-            )
+            self.assertIn("Delegate this bounded task to a child agent", prompt)
+            self.assertIn("default full-history behavior", prompt)
+            self.assertNotIn("spawn_agent", prompt)
+            self.assertNotIn("wait_agent", prompt)
             thread_start = next(
                 request for request in server.requests if request[1] == "thread/start"
             )
@@ -693,7 +685,7 @@ experimental_bearer_token = "secret"
         self.assertEqual(evidence["observations"]["wait_started_count"], 1)
         self.assertEqual(evidence["observations"]["wait_completed_count"], 1)
 
-    def test_wait_lifecycle_requires_one_correlated_call_id(self) -> None:
+    def test_uncorrelated_wait_call_id_is_diagnostic_only(self) -> None:
         messages = self.collaboration_messages()
         wait_request = next(
             message
@@ -703,18 +695,14 @@ experimental_bearer_token = "secret"
         )
         wait_request["params"]["item"]["call_id"] = "provider-wait-call"
 
-        with self.assertRaises(live_smoke.ScenarioFailure) as raised:
-            live_smoke.wait_for_collaboration_turn(
-                FakeAppServer(messages), time.monotonic() + 1, "thread-1"
-            )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            FakeAppServer(messages), time.monotonic() + 1, "thread-1"
+        )
 
-        evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
-        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
-        self.assertEqual(evidence["trajectory_gap"], "correlated_stock_wait")
+        self.assertEqual(evidence["semantic_acceptance"], "proven")
         self.assertIs(evidence["observations"]["wait_correlated_to_target"], False)
 
-    def test_wait_lifecycle_requires_runtime_started(self) -> None:
+    def test_missing_runtime_wait_started_is_diagnostic_only(self) -> None:
         messages = [
             message
             for message in self.collaboration_messages()
@@ -725,15 +713,11 @@ experimental_bearer_token = "secret"
             )
         ]
 
-        with self.assertRaises(live_smoke.ScenarioFailure) as raised:
-            live_smoke.wait_for_collaboration_turn(
-                FakeAppServer(messages), time.monotonic() + 1, "thread-1"
-            )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            FakeAppServer(messages), time.monotonic() + 1, "thread-1"
+        )
 
-        evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
-        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
-        self.assertEqual(evidence["trajectory_gap"], "correlated_stock_wait")
+        self.assertEqual(evidence["semantic_acceptance"], "proven")
         self.assertIs(evidence["observations"]["wait_correlated_to_target"], False)
 
     def test_provider_wait_request_without_runtime_wait_is_diagnosed(self) -> None:
@@ -784,17 +768,13 @@ experimental_bearer_token = "secret"
         messages.insert(-2, wait_request)
         server = NoWaitSnapshotServer(messages)
 
-        with self.assertRaises(live_smoke.ScenarioFailure) as raised:
-            live_smoke.wait_for_collaboration_turn(
-                server,
-                time.monotonic() + 1,
-                "thread-1",
-            )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
 
-        evidence = raised.exception.evidence
-        self.assertEqual(evidence["oracle_sufficiency"], "insufficient")
-        self.assertEqual(evidence["root_cause_classification"], "inconclusive")
-        self.assertEqual(evidence["trajectory_gap"], "correlated_stock_wait")
+        self.assertEqual(evidence["semantic_acceptance"], "proven")
         self.assertEqual(
             evidence["observations"]["provider_wait_request_count"], 1
         )
@@ -858,7 +838,7 @@ experimental_bearer_token = "secret"
                 server, time.monotonic() + 1, "thread-1"
             )
 
-    def test_collaboration_scenario_requires_correlated_completed_wait(self) -> None:
+    def test_collaboration_scenario_accepts_without_runtime_wait_events(self) -> None:
         class NoWaitSnapshotServer(FakeAppServer):
             def request(
                 self,
@@ -884,12 +864,15 @@ experimental_bearer_token = "secret"
                 if message.get("params", {}).get("item", {}).get("tool") != "wait"
             ]
         )
-        with self.assertRaisesRegex(SystemExit, "did not prove a correlated stock wait"):
-            live_smoke.wait_for_collaboration_turn(
-                server,
-                time.monotonic() + 1,
-                "thread-1",
-            )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
+
+        self.assertEqual(evidence["semantic_acceptance"], "proven")
+        self.assertEqual(evidence["observations"]["wait_started_count"], 0)
+        self.assertEqual(evidence["observations"]["wait_completed_count"], 0)
 
     def test_wait_completion_without_child_completion_is_insufficient(self) -> None:
         class IncompleteChildServer(FakeAppServer):

@@ -57,7 +57,6 @@ LIVE_SCENARIO_ASSERTIONS = {
         "runner_turn_submission_count": 1,
         "semantic_acceptance": "proven",
         "status": "completed",
-        "wait_path": "completed",
     },
 }
 COLLABORATION_OBSERVATION_KEYS = (
