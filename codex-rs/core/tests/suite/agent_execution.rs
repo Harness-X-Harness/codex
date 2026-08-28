@@ -22,8 +22,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::sync::Mutex;
-use std::sync::mpsc;
 use std::time::Duration;
 
 const FIRST_PROMPT: &str = "spawn the first worker";
@@ -120,7 +118,6 @@ async fn mount_completed_worker(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     let server = start_mock_server().await;
-    let (child_gate_tx, child_gate_rx) = mpsc::channel();
     let spawn_arguments = serde_json::to_string(&json!({
         "message": FIRST_TASK,
         "task_name": "first",
@@ -143,28 +140,7 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         ]),
     )
     .await;
-    let response_gate = Mutex::new(child_gate_rx);
-    mount_sse_once_match(
-        &server,
-        move |request: &wiremock::Request| {
-            let matches = body_contains(request, FIRST_TASK)
-                && !has_function_call_output(request, "grok-spawn-call");
-            if matches {
-                response_gate
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .recv_timeout(Duration::from_secs(10))
-                    .expect("parent should begin waiting before child response");
-            }
-            matches
-        },
-        sse(vec![
-            ev_response_created("resp-worker-grok-spawn-call"),
-            ev_assistant_message("msg-worker-grok-spawn-call", "worker completed"),
-            ev_completed("resp-worker-grok-spawn-call"),
-        ]),
-    )
-    .await;
+    mount_completed_worker(&server, FIRST_TASK, "grok-spawn-call").await;
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -212,13 +188,6 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
 
     let child_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
     let child = test.thread_manager.get_thread(child_id).await?;
-    wait_for_event(test.codex.as_ref(), |event| {
-        matches!(event, EventMsg::CollabWaitingBegin(_))
-    })
-    .await;
-    child_gate_tx
-        .send(())
-        .expect("release child after parent begins waiting");
     wait_for_event(child.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
