@@ -19,27 +19,18 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
             .await;
     }
     let calls = [
-        (
-            "resp-1",
-            "generate-1",
-            json!({"prompt": "paint a blue whale"}),
-        ),
+        ("resp-1", "generate-1", r#"{"prompt":"paint a blue whale"}"#),
         (
             "resp-3",
             "edit-1",
-            json!({"prompt": "add a red hat", "num_last_images_to_include": 1}),
+            r#"{"prompt":"add a red hat","num_last_images_to_include":1}"#,
         ),
     ];
     let mut sequence = Vec::new();
     for (index, (response_id, call_id, arguments)) in calls.into_iter().enumerate() {
         sequence.push(responses::sse(vec![
             responses::ev_response_created(response_id),
-            responses::ev_function_call_with_namespace(
-                call_id,
-                "image_gen",
-                "imagegen",
-                &arguments.to_string(),
-            ),
+            responses::ev_function_call_with_namespace(call_id, "image_gen", "imagegen", arguments),
             responses::ev_completed(response_id),
         ]));
         sequence.push(responses::sse(vec![
@@ -47,7 +38,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
             responses::ev_completed(&format!("reply-{index}")),
         ]));
     }
-    responses::mount_sse_sequence(&server, sequence).await;
+    let response_mock = responses::mount_sse_sequence(&server, sequence).await;
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
@@ -118,5 +109,9 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
             json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{encoded}")}}),
         ]
     );
+    let responses = response_mock.requests();
+    assert_eq!(responses.len(), 4);
+    assert!(responses[0].body_contains_text("Generate an image"));
+    assert!(responses[2].body_contains_text("Edit the prior image"));
     Ok(())
 }
