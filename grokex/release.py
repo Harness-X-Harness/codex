@@ -33,15 +33,17 @@ LEGACY_KEYS = {
 }
 LIVE_SCENARIO_ASSERTIONS = {
     "basic-exact-reply": {
-        "operation_count": 1,
         "response_assertion": "exact_match",
+        "runner_turn_submission_count": 1,
+        "semantic_acceptance": "proven",
         "status": "completed",
     },
     "encrypted-reasoning-tool-continuation": {
         "history_response_assertion": "exact_match",
-        "operation_count": 2,
         "reasoning_replay": "completed",
         "response_assertion": "exact_match",
+        "runner_turn_submission_count": 2,
+        "semantic_acceptance": "proven",
         "status": "completed",
         "tool_continuation": "completed",
     },
@@ -49,12 +51,13 @@ LIVE_SCENARIO_ASSERTIONS = {
         "child_completion": "completed",
         "child_response_assertion": "exact_match",
         "default_full_history": "completed",
-        "operation_count": 4,
         "parent_completion": "completed",
+        "parent_result_consumption": "completed",
         "response_assertion": "exact_match",
-        "spawn_count": 1,
+        "runner_turn_submission_count": 1,
+        "semantic_acceptance": "proven",
         "status": "completed",
-        "wait_count": 1,
+        "wait_path": "completed",
     },
 }
 
@@ -309,8 +312,9 @@ def build_live_evidence(
         "catalog": "release-bundled",
         "model": "grok-4.6",
         "multi_agent_version": "v2",
-        "operation_count": sum(
-            assertions["operation_count"] for assertions in observed.values()
+        "runner_turn_submission_count": sum(
+            assertions["runner_turn_submission_count"]
+            for assertions in observed.values()
         ),
         "provider": "grok",
         "reasoning_effort": "ultra",
@@ -394,8 +398,8 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     live_archive = archive_name("x86_64-unknown-linux-musl")
     required_evidence = {
         "archive": live_archive,
-        "operation_count": sum(
-            assertions["operation_count"]
+        "runner_turn_submission_count": sum(
+            assertions["runner_turn_submission_count"]
             for assertions in LIVE_SCENARIO_ASSERTIONS.values()
         ),
         "provider": "grok",

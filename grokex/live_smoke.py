@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run one bounded, secret-safe Grok scenario through a packaged App Server."""
 
-from __future__ import annotations
-
 import argparse
+from collections import Counter
+from collections import deque
 import hashlib
 import json
 import os
@@ -15,7 +15,6 @@ import tempfile
 import threading
 import time
 import tomllib
-from collections import deque
 from pathlib import Path
 
 
@@ -31,6 +30,18 @@ EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
 CHILD_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_CHILD_OK"
 PARENT_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_PARENT_OK"
+
+
+class AppServerDeadline(RuntimeError):
+    def __init__(self, waiting_for: str) -> None:
+        super().__init__(waiting_for)
+        self.waiting_for = waiting_for
+
+
+class ScenarioFailure(SystemExit):
+    def __init__(self, message: str, evidence: dict[str, object]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
 
 
 def sha256(path: Path) -> str:
@@ -79,6 +90,7 @@ class AppServer:
             bufsize=1,
         )
         self.messages: queue.Queue[dict[str, object]] = queue.Queue()
+        self.deferred_messages: deque[dict[str, object]] = deque()
         self.reader = threading.Thread(target=self._read_stdout, daemon=True)
         self.stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
         self.reader.start()
@@ -108,12 +120,19 @@ class AppServer:
         self.process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
         self.process.stdin.flush()
 
-    def request(self, request_id: int, method: str, params: dict[str, object]) -> dict[str, object]:
+    def request(
+        self,
+        request_id: int,
+        method: str,
+        params: dict[str, object],
+        timeout_seconds: float = 30,
+    ) -> dict[str, object]:
         self.send({"id": request_id, "method": method, "params": params})
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            message = self.next_message(deadline, method)
+            message = self._next_transport_message(deadline, method)
             if message.get("id") != request_id:
+                self.deferred_messages.append(message)
                 continue
             if "error" in message:
                 raise SystemExit(f"App Server rejected {method}")
@@ -123,7 +142,9 @@ class AppServer:
             return response
         raise SystemExit(f"App Server timed out during {method}")
 
-    def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
+    def _next_transport_message(
+        self, deadline: float, waiting_for: str
+    ) -> dict[str, object]:
         remaining = max(0.0, deadline - time.monotonic())
         try:
             return self.messages.get(timeout=remaining)
@@ -139,9 +160,12 @@ class AppServer:
                     f"App Server exited with status {status} while waiting for {waiting_for}"
                     f"{details}"
                 ) from error
-            raise SystemExit(
-                f"App Server response deadline expired while waiting for {waiting_for}"
-            ) from error
+            raise AppServerDeadline(waiting_for) from error
+
+    def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
+        if self.deferred_messages:
+            return self.deferred_messages.popleft()
+        return self._next_transport_message(deadline, waiting_for)
 
     def close(self) -> None:
         if self.process.poll() is None:
@@ -286,143 +310,581 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]
     }
 
 
+def summarize_thread_read(
+    response: dict[str, object],
+    expected_reply: str,
+) -> dict[str, object]:
+    thread = response.get("thread")
+    if not isinstance(thread, dict):
+        return {"read_status": "invalid"}
+
+    status = thread.get("status")
+    status_type = status.get("type") if isinstance(status, dict) else None
+    allowed_thread_statuses = {"active", "idle", "notLoaded", "systemError"}
+    thread_status = (
+        status_type if status_type in allowed_thread_statuses else "unknown"
+    )
+
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        turns = []
+    turn_status_counts: Counter[str] = Counter()
+    item_type_counts: Counter[str] = Counter()
+    expected_reply_index = None
+    wait_completed_seen = False
+    item_index = 0
+    allowed_turn_statuses = {"completed", "failed", "inProgress", "interrupted"}
+    allowed_item_types = {
+        "agentMessage",
+        "collabAgentToolCall",
+        "reasoning",
+        "subAgentActivity",
+    }
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        turn_status = turn.get("status")
+        turn_status_counts[
+            turn_status if turn_status in allowed_turn_statuses else "unknown"
+        ] += 1
+        items = turn.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            item_type = item.get("type") if isinstance(item, dict) else None
+            item_type_counts[
+                item_type if item_type in allowed_item_types else "other"
+            ] += 1
+            if isinstance(item, dict) and item_type == "agentMessage":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip() == expected_reply:
+                    expected_reply_index = item_index
+            elif isinstance(item, dict) and item_type == "collabAgentToolCall":
+                if item.get("tool") == "wait" and item.get("status") == "completed":
+                    wait_completed_seen = True
+            item_index += 1
+    return {
+        "expected_reply_seen": expected_reply_index is not None,
+        "item_type_counts": dict(sorted(item_type_counts.items())),
+        "provider_match": thread.get("modelProvider") == "grok",
+        "read_status": "completed",
+        "thread_status": thread_status,
+        "latest_turn_status": (
+            turns[-1].get("status") if isinstance(turns[-1], dict) else "unknown"
+        ) if turns else "missing",
+        "turn_count": len(turns),
+        "turn_status_counts": dict(sorted(turn_status_counts.items())),
+        "wait_completed_seen": wait_completed_seen,
+    }
+
+
+def collect_thread_snapshots(
+    server: AppServer,
+    root_thread_id: str,
+    child_thread_ids: set[str],
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    roles = [("parent", root_thread_id)] + [
+        ("child", thread_id) for thread_id in sorted(child_thread_ids)
+    ]
+    parent_snapshot: dict[str, object] = {"read_status": "unavailable"}
+    child_snapshots: dict[str, dict[str, object]] = {}
+    for offset, (role, thread_id) in enumerate(roles):
+        try:
+            response = server.request(
+                9000 + offset,
+                "thread/read",
+                {"includeTurns": True, "threadId": thread_id},
+                timeout_seconds=3,
+            )
+            expected = (
+                PARENT_EXPECTED_AGENT_REPLY
+                if role == "parent"
+                else CHILD_EXPECTED_AGENT_REPLY
+            )
+            summary = summarize_thread_read(response, expected)
+        except (AppServerDeadline, SystemExit):
+            summary = {"read_status": "unavailable"}
+        if role == "child":
+            child_snapshots[thread_id] = summary
+        else:
+            parent_snapshot = summary
+    return parent_snapshot, child_snapshots
+
+
 def wait_for_collaboration_turn(
     server: AppServer,
     deadline: float,
     root_thread_id: str,
 ) -> dict[str, object]:
-    child_reply_seen = False
-    child_status = None
-    child_thread_id = None
-    default_spawn_count = 0
+    started_at = time.monotonic()
+    child_replies: dict[str, bool] = {}
+    child_reply_ms: dict[str, int] = {}
+    child_statuses: dict[str, object] = {}
+    child_completed_ms: dict[str, int] = {}
+    child_started_ms: dict[str, int] = {}
+    runtime_child_ids: set[str] = set()
+    runtime_child_paths: dict[str, str] = {}
+    runtime_spawn_models: dict[str, str] = {}
+    runtime_spawn_receivers: dict[str, set[str]] = {}
+    spawn_call_ids: set[str] = set()
+    spawn_expected_model_call_ids: set[str] = set()
+    provider_wait_call_ids: set[str] = set()
+    default_history_spawn_seen = False
+    missing_response_identity_count = 0
+    other_tool_completed_count = 0
     parent_reply_seen = False
-    response_counts: dict[str, int] = {}
+    parent_result_authors: set[str] = set()
+    response_ids_by_thread: dict[str, set[str]] = {}
     root_status = None
-    spawn_completed_count = 0
-    wait_completed_count = 0
+    spawn_completed_call_ids: set[str] = set()
+    spawn_failed_call_ids: set[str] = set()
+    spawn_completed_ms = None
+    spawn_requested_ms = None
+    wait_completed_call_ids: set[str] = set()
+    wait_failed_call_ids: set[str] = set()
+    wait_completed_ms = None
+    wait_started_call_ids: set[str] = set()
+    wait_started_ms = None
+    deadline_reached = False
+    parent_completed_ms = None
+    parent_reply_ms = None
 
-    while time.monotonic() < deadline:
-        if (
+    def elapsed_ms() -> int:
+        return int((time.monotonic() - started_at) * 1000)
+
+    def target_runtime_child_ids() -> set[str]:
+        target_ids: set[str] = set()
+        for call_id in spawn_call_ids:
+            target_ids.update(runtime_spawn_receivers.get(call_id, set()))
+        return target_ids
+
+    def completed_target_children() -> set[str]:
+        return {
+            thread_id
+            for thread_id in target_runtime_child_ids()
+            if child_statuses.get(thread_id) == "completed"
+            and child_replies.get(thread_id) is True
+        }
+
+    def correlated_wait_call_ids() -> set[str]:
+        return (
+            provider_wait_call_ids
+            & wait_started_call_ids
+            & wait_completed_call_ids
+        )
+
+    def correlated_target_children() -> set[str]:
+        return completed_target_children() if correlated_wait_call_ids() else set()
+
+    def semantic_complete() -> bool:
+        return (
             root_status == "completed"
-            and child_status == "completed"
-            and child_reply_seen
             and parent_reply_seen
-        ):
-            break
-        message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
-        method = message.get("method")
-        params = message.get("params")
-        if not isinstance(params, dict):
-            continue
-        thread_id = params.get("threadId")
+            and bool(correlated_target_children())
+            and default_history_spawn_seen
+        )
 
-        if method == "rawResponse/completed" and isinstance(thread_id, str):
-            response_counts[thread_id] = response_counts.get(thread_id, 0) + 1
-            if response_counts.get(root_thread_id, 0) > 3:
-                raise SystemExit("the Grok Ultra parent used more than three responses")
-            if child_thread_id is not None and response_counts.get(child_thread_id, 0) > 1:
-                raise SystemExit("the Grok Ultra child used more than one response")
-            continue
+    try:
+        while time.monotonic() < deadline:
+            if semantic_complete():
+                break
+            message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
+            method = message.get("method")
+            params = message.get("params")
+            if not isinstance(params, dict):
+                continue
+            thread_id = params.get("threadId")
 
-        if method == "rawResponseItem/completed" and thread_id == root_thread_id:
-            item = params.get("item")
-            if not isinstance(item, dict) or item.get("type") != "function_call":
-                continue
-            arguments = item.get("arguments")
-            if not isinstance(arguments, str):
-                continue
-            try:
-                parsed_arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed_arguments, dict):
-                continue
-            task = parsed_arguments.get("message")
-            if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
-                continue
-            if "fork_turns" in parsed_arguments:
-                raise SystemExit("the Grok collaboration spawn did not use default full history")
-            default_spawn_count += 1
-            if default_spawn_count != 1:
-                raise SystemExit("the Grok collaboration Turn requested more than one child")
-            continue
-
-        if method == "item/completed":
-            item = params.get("item")
-            if not isinstance(item, dict):
-                continue
-            if (
-                thread_id == root_thread_id
-                and item.get("type") == "collabAgentToolCall"
-            ):
-                tool = item.get("tool")
-                if item.get("status") != "completed":
-                    raise SystemExit("a Grok collaboration tool did not complete")
-                if tool == "spawnAgent":
-                    receiver_thread_ids = item.get("receiverThreadIds")
-                    if not isinstance(receiver_thread_ids, list) or len(receiver_thread_ids) != 1:
-                        raise SystemExit(
-                            "the Grok collaboration spawn returned an invalid child set"
-                        )
-                    child_thread_id = receiver_thread_ids[0]
-                    if not isinstance(child_thread_id, str) or not child_thread_id:
-                        raise SystemExit("the Grok collaboration spawn returned no child identity")
-                    spawn_completed_count += 1
-                    if spawn_completed_count != 1:
-                        raise SystemExit(
-                            "the Grok collaboration Turn completed more than one spawn"
-                        )
-                elif tool == "wait":
-                    wait_completed_count += 1
-                    if wait_completed_count != 1:
-                        raise SystemExit(
-                            "the Grok collaboration Turn completed more than one wait"
-                        )
+            if method == "rawResponse/completed" and isinstance(thread_id, str):
+                response_id = params.get("responseId")
+                if not isinstance(response_id, str) or not response_id:
+                    missing_response_identity_count += 1
                 else:
-                    raise SystemExit("the Grok collaboration Turn used an unexpected tool")
-            elif item.get("type") == "agentMessage":
-                reply = item.get("text")
+                    response_ids_by_thread.setdefault(thread_id, set()).add(response_id)
+                continue
+
+            if method == "rawResponseItem/completed" and thread_id == root_thread_id:
+                item = params.get("item")
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "agent_message":
+                    author = item.get("author")
+                    recipient = item.get("recipient")
+                    content = item.get("content")
+                    if (
+                        isinstance(author, str)
+                        and isinstance(recipient, str)
+                        and isinstance(content, list)
+                        and len(content) == 1
+                        and isinstance(content[0], dict)
+                        and content[0].get("type") == "input_text"
+                        and content[0].get("text")
+                        == (
+                            "Message Type: FINAL_ANSWER\n"
+                            f"Task name: {recipient}\nSender: {author}\nPayload:\n"
+                            f"{CHILD_EXPECTED_AGENT_REPLY}"
+                        )
+                    ):
+                        parent_result_authors.add(author)
+                    continue
+                if item.get("type") != "function_call":
+                    continue
+                name = item.get("name")
+                call_id = item.get("call_id")
+                if name == "wait_agent":
+                    if isinstance(call_id, str) and call_id:
+                        provider_wait_call_ids.add(call_id)
+                    continue
+                arguments = item.get("arguments")
+                if not isinstance(arguments, str):
+                    continue
+                try:
+                    parsed_arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(parsed_arguments, dict):
+                    continue
+                task = parsed_arguments.get("message")
+                if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
+                    continue
+                if "fork_turns" in parsed_arguments:
+                    raise SystemExit(
+                        "the Grok collaboration spawn did not use default full history"
+                    )
+                default_history_spawn_seen = True
+                if spawn_requested_ms is None:
+                    spawn_requested_ms = elapsed_ms()
+                if isinstance(call_id, str) and call_id:
+                    spawn_call_ids.add(call_id)
+                    requested_model = parsed_arguments.get("model")
+                    if requested_model is None or requested_model == "grok-4.6":
+                        spawn_expected_model_call_ids.add(call_id)
+                continue
+
+            if method in {"item/completed", "item/started"}:
+                item = params.get("item")
+                if not isinstance(item, dict):
+                    continue
+                if (
+                    thread_id == root_thread_id
+                    and item.get("type") == "collabAgentToolCall"
+                ):
+                    tool = item.get("tool")
+                    call_id = item.get("id")
+                    if method == "item/started":
+                        if tool == "wait":
+                            if isinstance(call_id, str) and call_id:
+                                wait_started_call_ids.add(call_id)
+                            if wait_started_ms is None:
+                                wait_started_ms = elapsed_ms()
+                        continue
+                    status = item.get("status")
+                    receiver_thread_ids = item.get("receiverThreadIds")
+                    receivers = {
+                        receiver
+                        for receiver in receiver_thread_ids
+                        if isinstance(receiver, str) and receiver
+                    } if isinstance(receiver_thread_ids, list) else set()
+                    if tool == "spawnAgent":
+                        if status == "failed":
+                            if isinstance(call_id, str) and call_id:
+                                spawn_failed_call_ids.add(call_id)
+                            continue
+                        if status != "completed":
+                            continue
+                        runtime_child_ids.update(receivers)
+                        if isinstance(call_id, str) and call_id:
+                            first_completion = call_id not in spawn_completed_call_ids
+                            spawn_completed_call_ids.add(call_id)
+                            if first_completion and spawn_completed_ms is None:
+                                spawn_completed_ms = elapsed_ms()
+                            runtime_spawn_receivers.setdefault(call_id, set()).update(
+                                receivers
+                            )
+                            model = item.get("model")
+                            if isinstance(model, str):
+                                runtime_spawn_models[call_id] = model
+                    elif tool == "wait":
+                        if status == "failed":
+                            if isinstance(call_id, str) and call_id:
+                                wait_failed_call_ids.add(call_id)
+                            continue
+                        if status != "completed":
+                            continue
+                        if isinstance(call_id, str) and call_id:
+                            wait_completed_call_ids.add(call_id)
+                        if wait_completed_ms is None:
+                            wait_completed_ms = elapsed_ms()
+                    else:
+                        if status != "completed":
+                            continue
+                        other_tool_completed_count += 1
+                elif item.get("type") == "agentMessage" and isinstance(thread_id, str):
+                    reply = item.get("text")
+                    if thread_id == root_thread_id:
+                        parent_reply_seen = reply == PARENT_EXPECTED_AGENT_REPLY
+                        if parent_reply_seen and parent_reply_ms is None:
+                            parent_reply_ms = elapsed_ms()
+                    else:
+                        child_replies[thread_id] = reply == CHILD_EXPECTED_AGENT_REPLY
+                        if child_replies[thread_id]:
+                            child_reply_ms.setdefault(thread_id, elapsed_ms())
+                elif item.get("type") == "subAgentActivity":
+                    child_thread_id = item.get("agentThreadId")
+                    if isinstance(child_thread_id, str) and child_thread_id:
+                        runtime_child_ids.add(child_thread_id)
+                        child_path = item.get("agentPath")
+                        if isinstance(child_path, str) and child_path:
+                            runtime_child_paths[child_thread_id] = child_path
+                        if item.get("kind") == "started":
+                            child_started_ms.setdefault(child_thread_id, elapsed_ms())
+                            call_id = item.get("id")
+                            if (
+                                isinstance(call_id, str)
+                                and call_id in spawn_call_ids
+                            ):
+                                first_completion = (
+                                    call_id not in spawn_completed_call_ids
+                                )
+                                spawn_completed_call_ids.add(call_id)
+                                runtime_spawn_receivers.setdefault(
+                                    call_id, set()
+                                ).add(child_thread_id)
+                                if first_completion and spawn_completed_ms is None:
+                                    spawn_completed_ms = elapsed_ms()
+                continue
+
+            if method == "turn/completed" and isinstance(thread_id, str):
+                turn = params.get("turn")
+                status = turn.get("status") if isinstance(turn, dict) else None
                 if thread_id == root_thread_id:
-                    parent_reply_seen = reply == PARENT_EXPECTED_AGENT_REPLY
-                elif child_thread_id is not None and thread_id == child_thread_id:
-                    child_reply_seen = reply == CHILD_EXPECTED_AGENT_REPLY
-            continue
+                    root_status = status
+                    if status in {"completed", "failed", "interrupted"}:
+                        parent_completed_ms = elapsed_ms()
+                else:
+                    child_statuses[thread_id] = status
+                    if status in {"completed", "failed", "interrupted"}:
+                        child_completed_ms[thread_id] = elapsed_ms()
+        else:
+            deadline_reached = True
+    except AppServerDeadline:
+        deadline_reached = True
 
-        if method == "turn/completed":
-            turn = params.get("turn")
-            status = turn.get("status") if isinstance(turn, dict) else None
-            if thread_id == root_thread_id:
-                root_status = status
-            if child_thread_id is not None and thread_id == child_thread_id:
-                child_status = status
+    known_target_children = target_runtime_child_ids()
+    parent_snapshot, child_snapshots = collect_thread_snapshots(
+        server,
+        root_thread_id,
+        runtime_child_ids,
+    )
+    def completed(thread_id: str) -> bool:
+        snapshot = child_snapshots.get(thread_id, {})
+        return (
+            child_statuses.get(thread_id) == "completed"
+            and child_replies.get(thread_id) is True
+        ) or (
+            deadline_reached
+            and snapshot.get("expected_reply_seen") is True
+            and snapshot.get("latest_turn_status") == "completed"
+        )
 
-    if root_status != "completed":
-        raise SystemExit("the Grok Ultra parent Turn did not complete")
-    if child_status != "completed" or not child_reply_seen:
-        raise SystemExit("the Grok Ultra child did not complete the bounded task")
-    if not parent_reply_seen:
-        raise SystemExit("the Grok Ultra parent did not return the expected semantic reply")
-    if default_spawn_count != 1 or spawn_completed_count != 1:
-        raise SystemExit("the Grok Ultra Turn did not prove one default-history spawn")
-    if wait_completed_count != 1:
-        raise SystemExit("the Grok Ultra Turn did not complete exactly one wait")
-    if child_thread_id is None:
-        raise SystemExit("the Grok Ultra Turn did not identify one child")
-    if set(response_counts) != {root_thread_id, child_thread_id}:
-        raise SystemExit("the Grok Ultra Turn observed an unexpected response owner")
-    operation_count = sum(response_counts.values())
-    if response_counts != {root_thread_id: 3, child_thread_id: 1}:
-        raise SystemExit("the Grok Ultra Turn did not use exactly four responses")
+    def model_matches(thread_id: str) -> bool:
+        return any(
+            thread_id in runtime_spawn_receivers.get(call_id, set())
+            and (
+                runtime_spawn_models.get(call_id) == "grok-4.6"
+                or call_id in spawn_expected_model_call_ids
+            )
+            for call_id in spawn_call_ids
+        )
+
+    semantic_candidates = {
+        thread_id
+        for thread_id in known_target_children
+        if completed(thread_id)
+        and runtime_child_paths.get(thread_id) in parent_result_authors
+        and model_matches(thread_id)
+        and child_snapshots.get(thread_id, {}).get("provider_match") is True
+    }
+    target_child_id = next(
+        iter(sorted(semantic_candidates or known_target_children)), None
+    )
+    target_snapshot = child_snapshots.get(target_child_id, {})
+    target_model_match = (
+        model_matches(target_child_id) if target_child_id is not None else False
+    )
+    other_snapshots = [
+        child_snapshots[thread_id]
+        for thread_id in sorted(runtime_child_ids - {target_child_id})
+    ]
+    thread_snapshots = {
+        "other_children": other_snapshots,
+        "parent": parent_snapshot,
+        "target_child": target_snapshot,
+    }
+    snapshots_sufficient = (
+        parent_snapshot.get("read_status") == "completed"
+        and (
+            target_child_id is None
+            or target_snapshot.get("read_status") == "completed"
+        )
+        and len(other_snapshots) == len(runtime_child_ids - {target_child_id})
+        and all(
+            isinstance(snapshot, dict)
+            and snapshot.get("read_status") == "completed"
+            for snapshot in other_snapshots
+        )
+    )
+
+    target_child_completed = (
+        completed(target_child_id) if target_child_id is not None else False
+    )
+    parent_completed = (
+        root_status == "completed"
+        or (
+            parent_snapshot.get("expected_reply_seen") is True
+            and parent_snapshot.get("latest_turn_status") == "completed"
+        )
+    )
+    target_child_path = runtime_child_paths.get(target_child_id)
+    parent_consumed_result = (
+        target_child_path in parent_result_authors and parent_reply_seen
+    )
+    wait_correlated_to_target = (
+        bool(correlated_wait_call_ids())
+        and target_child_completed
+        and parent_consumed_result
+    )
+    parent_response_count = len(response_ids_by_thread.get(root_thread_id, set()))
+    target_child_response_count = (
+        len(response_ids_by_thread.get(target_child_id, set()))
+        if target_child_id is not None
+        else 0
+    )
+    other_child_response_count = sum(
+        len(response_ids)
+        for thread_id, response_ids in response_ids_by_thread.items()
+        if thread_id not in {root_thread_id, target_child_id}
+    )
+    observations: dict[str, object] = {
+        "deadline_reached": deadline_reached,
+        "elapsed_ms": elapsed_ms(),
+        "missing_response_identity_count": missing_response_identity_count,
+        "other_child_response_count": other_child_response_count,
+        "other_tool_completed_count": other_tool_completed_count,
+        "parent_reply_seen": parent_reply_seen,
+        "parent_reply_ms": parent_reply_ms,
+        "parent_response_count": parent_response_count,
+        "parent_completed_ms": parent_completed_ms,
+        "parent_turn_status": (
+            root_status
+            if isinstance(root_status, str)
+            else parent_snapshot.get("latest_turn_status", "missing")
+        ),
+        "parent_result_consumed": parent_consumed_result,
+        "provider_spawn_request_count": len(spawn_call_ids),
+        "provider_wait_request_count": len(provider_wait_call_ids),
+        "runtime_child_count": len(runtime_child_ids),
+        "runtime_spawn_completed_count": len(spawn_completed_call_ids),
+        "runtime_spawn_failed_count": len(spawn_failed_call_ids),
+        "spawn_completed_ms": spawn_completed_ms,
+        "spawn_requested_ms": spawn_requested_ms,
+        "target_child_completed_ms": child_completed_ms.get(target_child_id),
+        "target_runtime_child_count": len(target_runtime_child_ids()),
+        "target_child_reply_ms": child_reply_ms.get(target_child_id),
+        "target_child_reply_seen": child_replies.get(target_child_id) is True,
+        "target_child_response_count": target_child_response_count,
+        "target_child_started_ms": child_started_ms.get(target_child_id),
+        "target_child_turn_status": (
+            child_statuses.get(
+                target_child_id,
+                target_snapshot.get("latest_turn_status", "missing"),
+            ) if target_child_id is not None else "missing"
+        ),
+        "target_model_match": target_model_match,
+        "target_provider_match": target_snapshot.get("provider_match") is True,
+        "thread_snapshots": thread_snapshots,
+        "wait_completed_count": len(wait_completed_call_ids),
+        "wait_completed_ms": wait_completed_ms,
+        "wait_correlated_call_count": len(correlated_wait_call_ids()),
+        "wait_correlated_to_target": wait_correlated_to_target,
+        "wait_failed_count": len(wait_failed_call_ids),
+        "wait_started_count": len(wait_started_call_ids),
+        "wait_started_ms": wait_started_ms,
+        "wait_timed_out_if_observable": "not_observed",
+    }
+    failures: list[str] = []
+    if deadline_reached:
+        failures.append("the bounded Grok Ultra deadline was reached")
+    if not default_history_spawn_seen or not target_runtime_child_ids():
+        failures.append("the Grok Ultra Turn did not prove a default-history runtime child")
+    if target_runtime_child_ids() and not target_child_completed:
+        failures.append("the Grok Ultra target child did not complete the bounded task")
+    if not wait_correlated_to_target:
+        failures.append("the Grok Ultra Turn did not prove a correlated stock wait")
+    if not parent_completed:
+        failures.append("the Grok Ultra parent Turn did not complete")
+    if not parent_consumed_result:
+        failures.append("the Grok Ultra parent did not consume the child result and continue")
+    if not target_model_match or target_snapshot.get("provider_match") is not True:
+        failures.append("the Grok Ultra target child did not preserve Provider/model ownership")
+    if failures:
+        if not deadline_reached:
+            root_cause_classification = "semantic_contract_not_proven"
+            oracle_sufficiency = "sufficient"
+        elif spawn_call_ids & spawn_failed_call_ids and not target_runtime_child_ids():
+            root_cause_classification = "runtime_spawn"
+            oracle_sufficiency = "sufficient"
+        elif not snapshots_sufficient:
+            root_cause_classification = "inconclusive"
+            oracle_sufficiency = "insufficient"
+        elif not spawn_call_ids:
+            root_cause_classification = "parent_tool_selection"
+            oracle_sufficiency = "sufficient"
+        elif not target_runtime_child_ids():
+            root_cause_classification = "runtime_spawn"
+            oracle_sufficiency = "sufficient"
+        elif wait_completed_call_ids and not target_child_completed:
+            root_cause_classification = "wait_without_child_terminal"
+            oracle_sufficiency = "sufficient"
+        elif not target_child_completed:
+            root_cause_classification = "child_execution"
+            oracle_sufficiency = "sufficient"
+        elif not provider_wait_call_ids:
+            root_cause_classification = "parent_wait_selection"
+            oracle_sufficiency = "sufficient"
+        elif not correlated_wait_call_ids():
+            root_cause_classification = "runtime_wait"
+            oracle_sufficiency = "sufficient"
+        elif not parent_consumed_result:
+            root_cause_classification = "parent_continuation"
+            oracle_sufficiency = "sufficient"
+        elif not parent_completed:
+            root_cause_classification = "app_server_terminal_lifecycle"
+            oracle_sufficiency = "sufficient"
+        else:
+            root_cause_classification = "inconclusive"
+            oracle_sufficiency = "insufficient"
+        raise ScenarioFailure(
+            "; ".join(failures) + "; semantic proof is incomplete",
+            {
+                "observations": observations,
+                "oracle_sufficiency": oracle_sufficiency,
+                "root_cause_classification": root_cause_classification,
+                "semantic_acceptance": "not_proven",
+                "status": "failed",
+            },
+        )
     return {
         "child_completion": "completed",
         "child_response_assertion": "exact_match",
         "default_full_history": "completed",
         "parent_completion": "completed",
-        "operation_count": operation_count,
+        "parent_result_consumption": "completed",
+        "observations": observations,
         "response_assertion": "exact_match",
-        "spawn_count": 1,
+        "semantic_acceptance": "proven",
         "status": root_status,
-        "wait_count": 1,
+        "wait_path": "completed",
     }
 
 
@@ -435,7 +897,7 @@ def run_smoke(
     run_id: str,
     scenario: str,
 ) -> None:
-    with tempfile.TemporaryDirectory() as temporary:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
         temporary_path = Path(temporary)
         root = extract_archive(archive, temporary_path / "artifact")
         codex_home = temporary_path / "home"
@@ -452,12 +914,21 @@ def run_smoke(
         if not isinstance(token, str) or not token:
             raise SystemExit("secret profile has no Grok bearer token")
 
-        server = AppServer(
-            root / "bin/grokex-bin",
-            codex_home,
-            workspace,
-            token,
-        )
+        base_evidence = {
+            "archive": archive.name,
+            "archive_sha256": sha256(archive),
+            "catalog": "release-bundled",
+            "model": "grok-4.6",
+            "multi_agent_version": "v2",
+            "provider": "grok",
+            "reasoning_effort": "ultra",
+            "scenario": scenario,
+            "source_sha": source_sha,
+            "story": f"grokex-{scenario}",
+            "validation_run": run_id,
+            "validator_sha": validator_sha,
+        }
+        server = AppServer(root / "bin/grokex-bin", codex_home, workspace, token)
         try:
             server.request(
                 1,
@@ -468,16 +939,17 @@ def run_smoke(
                 },
             )
             server.send({"method": "initialized"})
-
             models_response = server.request(
-                2,
-                "model/list",
-                {"cursor": None, "includeHidden": None, "limit": 100},
+                2, "model/list", {"cursor": None, "includeHidden": None, "limit": 100}
             )
             models = models_response.get("data")
             if not isinstance(models, list):
                 raise SystemExit("model/list did not return a catalog")
-            matching = [model for model in models if isinstance(model, dict) and model.get("id") == "grok-4.6"]
+            matching = [
+                model
+                for model in models
+                if isinstance(model, dict) and model.get("id") == "grok-4.6"
+            ]
             if len(matching) != 1:
                 raise SystemExit("release catalog does not contain exact grok-4.6")
             model = matching[0]
@@ -491,7 +963,7 @@ def run_smoke(
 
             thread_params: dict[str, object] = {
                 "cwd": str(workspace),
-                "ephemeral": True,
+                "ephemeral": scenario != COLLABORATION_SCENARIO,
                 "model": "grok-4.6",
                 "modelProvider": "grok",
             }
@@ -517,127 +989,82 @@ def run_smoke(
             if not isinstance(thread_id, str) or not thread_id:
                 raise SystemExit("thread/start returned no thread identity")
 
+            runner_turn_submission_count = 1
             if scenario == BASIC_SCENARIO:
-                prompt = (
-                    f"Reply with exactly {BASIC_EXPECTED_AGENT_REPLY} and no other text."
-                )
-                operation_count = 1
-                server.request(
-                    4,
-                    "turn/start",
-                    {
-                        "input": [
-                            {
-                                "text": prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
-                )
+                prompt = f"Reply with exactly {BASIC_EXPECTED_AGENT_REPLY} and no other text."
+                request = {"input": [{"text": prompt, "textElements": [], "type": "text"}], "threadId": thread_id}
+                server.request(4, "turn/start", request)
                 turn_evidence = wait_for_basic_turn(server, time.monotonic() + 120)
             elif scenario == CONTINUATION_SCENARIO:
                 prompt = (
                     f"Call {TOOL_NAME} exactly once. Use its result, then reply "
                     f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
                 )
-                server.request(
-                    4,
-                    "turn/start",
-                    {
-                        "input": [
-                            {
-                                "text": prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
-                )
-                turn_evidence = wait_for_verified_turn(
-                    server, time.monotonic() + 120
-                )
-
+                request = {"input": [{"text": prompt, "textElements": [], "type": "text"}], "threadId": thread_id}
+                server.request(4, "turn/start", request)
+                turn_evidence = wait_for_verified_turn(server, time.monotonic() + 120)
                 history_prompt = (
                     f"Reply with exactly {HISTORY_EXPECTED_AGENT_REPLY} and no other text. "
                     "Do not call any tool."
                 )
-                server.request(
-                    5,
-                    "turn/start",
-                    {
-                        "input": [
-                            {
-                                "text": history_prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
-                )
+                request["input"] = [{"text": history_prompt, "textElements": [], "type": "text"}]
+                server.request(5, "turn/start", request)
+                runner_turn_submission_count = 2
                 history_evidence = wait_for_exact_reply(
                     server,
                     time.monotonic() + 120,
                     HISTORY_EXPECTED_AGENT_REPLY,
                     "the Grok history-replay Turn",
                 )
-                operation_count = 2
                 turn_evidence = {
                     **turn_evidence,
-                    "history_response_assertion": history_evidence[
-                        "response_assertion"
-                    ],
+                    "history_response_assertion": history_evidence["response_assertion"],
                     "reasoning_replay": "completed",
                 }
             else:
                 prompt = (
-                    "Use spawn_agent exactly once with task_name live_child. Omit fork_turns "
-                    "so the child uses the default full-history fork. Tell the child to reply "
-                    f"with exactly {CHILD_EXPECTED_AGENT_REPLY} and no other text. Call "
-                    "wait_agent exactly once after spawning the child, wait for that child "
-                    "to complete, then reply with exactly "
+                    "Follow these steps serially. Step 1: In your first response, emit exactly "
+                    "one spawn_agent call and no other tool call. Use task_name live_child, omit "
+                    "fork_turns so the child uses the default full-history fork, and tell the "
+                    "child that it is the delegated child, not the parent; it must ignore the "
+                    "inherited parent-only serial steps, call no tool, and reply immediately "
+                    f"with exactly {CHILD_EXPECTED_AGENT_REPLY} and no other text. Never call "
+                    "spawn_agent again. Step 2: After receiving that spawn result, emit exactly "
+                    "one wait_agent call for that child and no other tool call. Step 3: After "
+                    "the child completes, call no tool and reply with exactly "
                     f"{PARENT_EXPECTED_AGENT_REPLY} and no other text."
                 )
-                server.request(
-                    4,
-                    "turn/start",
-                    {
-                        "effort": "ultra",
-                        "input": [
+                request = {
+                    "effort": "ultra",
+                    "input": [{"text": prompt, "textElements": [], "type": "text"}],
+                    "threadId": thread_id,
+                }
+                server.request(4, "turn/start", request)
+                try:
+                    turn_evidence = wait_for_collaboration_turn(
+                        server, time.monotonic() + 120, thread_id
+                    )
+                except ScenarioFailure as error:
+                    evidence_path.write_text(
+                        json.dumps(
                             {
-                                "text": prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
-                )
-                turn_evidence = wait_for_collaboration_turn(
-                    server,
-                    time.monotonic() + 120,
-                    thread_id,
-                )
-                operation_count = turn_evidence.pop("operation_count")
+                                **base_evidence,
+                                "runner_turn_submission_count": 1,
+                                **error.evidence,
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    raise
 
             evidence = {
-                "archive": archive.name,
-                "archive_sha256": sha256(archive),
-                "catalog": "release-bundled",
-                "model": "grok-4.6",
-                "multi_agent_version": "v2",
-                "operation_count": operation_count,
-                "provider": "grok",
-                "reasoning_effort": "ultra",
-                "scenario": scenario,
-                "source_sha": source_sha,
+                **base_evidence,
+                "runner_turn_submission_count": runner_turn_submission_count,
+                "semantic_acceptance": "proven",
                 **turn_evidence,
-                "story": f"grokex-{scenario}",
-                "validation_run": run_id,
-                "validator_sha": validator_sha,
             }
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"

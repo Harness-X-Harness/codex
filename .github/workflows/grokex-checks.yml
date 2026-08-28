@@ -172,8 +172,8 @@ jobs:
           cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_marks_only_plaintext_collaboration_calls -- --exact
           cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
-      - id: grok
-        name: Grok metadata-driven V2, Ultra, and hosted X Search
+      - id: multi_agent
+        name: Grok metadata-driven V2 and Ultra
         continue-on-error: true
         shell: bash
         run: |
@@ -181,6 +181,19 @@ jobs:
           cargo test -p codex-core --test all suite::agent_execution::grok_ultra_v2_full_history_is_gateway_compatible -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
+      - id: hosted_web
+        name: Grok hosted Web Search
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-core --test all suite::web_search::grok_web_search_uses_bare_live_declaration_and_replays_stock_history -- --exact
+      - id: hosted_x
+        name: Grok hosted X Search
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
           cargo test -p codex-tools tool_spec::tests::x_search_serializes_as_bare_hosted_declaration -- --exact
           cargo test -p codex-history tests::provider_hosted_tool_metadata_round_trips_beside_rollout_payload -- --exact
           cargo test -p codex-core --lib context_manager::history_tests::normalize_keeps_provider_hosted_custom_tool_call_without_output -- --exact
@@ -189,7 +202,9 @@ jobs:
         if: always()
         env:
           CONTROLS: ${{ steps.controls.outcome }}
-          GROK: ${{ steps.grok.outcome }}
+          HOSTED_WEB: ${{ steps.hosted_web.outcome }}
+          HOSTED_X: ${{ steps.hosted_x.outcome }}
+          MULTI_AGENT: ${{ steps.multi_agent.outcome }}
           PROJECTIONS: ${{ steps.projections.outcome }}
           PROVIDER: ${{ steps.provider.outcome }}
         shell: bash
@@ -199,7 +214,9 @@ jobs:
           [[ "${PROVIDER}" == "success" ]] || failures+=("Provider contracts")
           [[ "${PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
           [[ "${CONTROLS}" == "success" ]] || failures+=("stock controls")
-          [[ "${GROK}" == "success" ]] || failures+=("Grok contracts")
+          [[ "${MULTI_AGENT}" == "success" ]] || failures+=("Grok multi-agent contracts")
+          [[ "${HOSTED_WEB}" == "success" ]] || failures+=("Grok hosted Web Search contracts")
+          [[ "${HOSTED_X}" == "success" ]] || failures+=("Grok hosted X Search contracts")
           if (( ${#failures[@]} )); then
             printf 'Failed contract group: %s\n' "${failures[@]}" >&2
             exit 1

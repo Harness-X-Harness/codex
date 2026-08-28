@@ -20,9 +20,10 @@ class LiveEvidenceTest(unittest.TestCase):
                 "catalog": "release-bundled",
                 "model": "grok-4.6",
                 "multi_agent_version": "v2",
-                "operation_count": 1,
                 "provider": "grok",
                 "reasoning_effort": "ultra",
+                "runner_turn_submission_count": 1,
+                "semantic_acceptance": "proven",
                 "source_sha": "source-sha",
                 "status": "completed",
                 "validation_run": "run-id",
@@ -36,7 +37,7 @@ class LiveEvidenceTest(unittest.TestCase):
             continuation = {
                 **common,
                 "history_response_assertion": "exact_match",
-                "operation_count": 2,
+                "runner_turn_submission_count": 2,
                 "reasoning_replay": "completed",
                 "response_assertion": "exact_match",
                 "scenario": "encrypted-reasoning-tool-continuation",
@@ -47,12 +48,16 @@ class LiveEvidenceTest(unittest.TestCase):
                 "child_completion": "completed",
                 "child_response_assertion": "exact_match",
                 "default_full_history": "completed",
-                "operation_count": 4,
                 "parent_completion": "completed",
+                "parent_result_consumption": "completed",
                 "response_assertion": "exact_match",
+                "runner_turn_submission_count": 1,
                 "scenario": "ultra-full-history-collaboration",
-                "spawn_count": 1,
-                "wait_count": 1,
+                "wait_path": "completed",
+                "observations": {
+                    "parent_response_count": 4,
+                    "provider_spawn_request_count": 2,
+                },
             }
             (evidence_dir / "basic.json").write_text(json.dumps(basic), encoding="utf-8")
             (evidence_dir / "continuation.json").write_text(
@@ -80,20 +85,22 @@ class LiveEvidenceTest(unittest.TestCase):
                     "catalog": "release-bundled",
                     "model": "grok-4.6",
                     "multi_agent_version": "v2",
-                    "operation_count": 7,
                     "provider": "grok",
                     "reasoning_effort": "ultra",
+                    "runner_turn_submission_count": 4,
                     "scenarios": {
                         "basic-exact-reply": {
-                            "operation_count": 1,
                             "response_assertion": "exact_match",
+                            "runner_turn_submission_count": 1,
+                            "semantic_acceptance": "proven",
                             "status": "completed",
                         },
                         "encrypted-reasoning-tool-continuation": {
                             "history_response_assertion": "exact_match",
-                            "operation_count": 2,
                             "reasoning_replay": "completed",
                             "response_assertion": "exact_match",
+                            "runner_turn_submission_count": 2,
+                            "semantic_acceptance": "proven",
                             "status": "completed",
                             "tool_continuation": "completed",
                         },
@@ -101,12 +108,13 @@ class LiveEvidenceTest(unittest.TestCase):
                             "child_completion": "completed",
                             "child_response_assertion": "exact_match",
                             "default_full_history": "completed",
-                            "operation_count": 4,
                             "parent_completion": "completed",
+                            "parent_result_consumption": "completed",
                             "response_assertion": "exact_match",
-                            "spawn_count": 1,
+                            "runner_turn_submission_count": 1,
+                            "semantic_acceptance": "proven",
                             "status": "completed",
-                            "wait_count": 1,
+                            "wait_path": "completed",
                         },
                     },
                     "source_sha": "source-sha",
@@ -115,6 +123,23 @@ class LiveEvidenceTest(unittest.TestCase):
                     "validator_sha": "validator-sha",
                 },
             )
+
+            collaboration["semantic_acceptance"] = "not_proven"
+            (evidence_dir / "collaboration.json").write_text(
+                json.dumps(collaboration), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                SystemExit,
+                "live scenario outcome mismatch: ultra-full-history-collaboration",
+            ):
+                release.build_live_evidence(
+                    evidence_dir,
+                    archive,
+                    output,
+                    "source-sha",
+                    "validator-sha",
+                    "run-id",
+                )
 
 
 if __name__ == "__main__":

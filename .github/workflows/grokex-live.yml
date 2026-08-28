@@ -150,7 +150,47 @@ jobs:
             --validator-sha "${{ needs.prepare.outputs.validator_sha }}" \
             --run-id "${GITHUB_RUN_ID}" \
             --scenario "${SCENARIO}"
+      - name: Ensure secret-safe diagnostic envelope
+        if: always()
+        env:
+          EVIDENCE_PATH: ${{ runner.temp }}/LIVE_EVIDENCE-${{ matrix.scenario }}.json
+          SCENARIO: ${{ matrix.scenario }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          VALIDATOR_SHA: ${{ needs.prepare.outputs.validator_sha }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["EVIDENCE_PATH"])
+          if path.is_file():
+              try:
+                  json.loads(path.read_text(encoding="utf-8"))
+              except (json.JSONDecodeError, OSError):
+                  pass
+              else:
+                  raise SystemExit(0)
+          evidence = {
+              "observations": {},
+              "oracle_sufficiency": "insufficient",
+              "root_cause_classification": "scenario_setup_or_runner",
+              "runner_turn_submission_count": 0,
+              "scenario": os.environ["SCENARIO"],
+              "semantic_acceptance": "not_proven",
+              "source_sha": os.environ["SOURCE_SHA"],
+              "status": "failed",
+              "validation_run": os.environ["GITHUB_RUN_ID"],
+              "validator_sha": os.environ["VALIDATOR_SHA"],
+          }
+          path.write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
         with:
           name: grokex-live-evidence-${{ matrix.scenario }}
           path: ${{ runner.temp }}/LIVE_EVIDENCE-${{ matrix.scenario }}.json

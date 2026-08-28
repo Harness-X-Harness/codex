@@ -45,7 +45,7 @@ async fn grok_web_search_uses_bare_live_declaration_and_replays_stock_history() 
                     "type": "response.output_item.done",
                     "item": {
                         "type": "web_search_call",
-                        "id": "ws-grok-search",
+                        "id": "ws_grok-search",
                         "status": "completed",
                         "action": {
                             "type": "search",
@@ -111,7 +111,7 @@ async fn grok_web_search_uses_bare_live_declaration_and_replays_stock_history() 
         replayed_search,
         &json!({
             "type": "web_search_call",
-            "id": "ws-grok-search",
+            "id": "ws_grok-search",
             "status": "completed",
             "action": {"type": "search", "query": "current UTC date"},
         }),
