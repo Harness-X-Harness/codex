@@ -2,6 +2,12 @@ name: grokex-release
 
 on:
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact frozen product source to publish
+        required: true
+        default: 2e400c0abe1b66fccd8d194f50b384407125dfc5
+        type: string
 
 concurrency:
   group: grokex-v0.149.0-release
@@ -13,6 +19,8 @@ permissions:
 
 env:
   SOURCE_BRANCH: release/rust-v0.149.0
+  VALIDATOR_BRANCH: codex/issue-113-publication-carrier
+  EXPECTED_SOURCE_SHA: 2e400c0abe1b66fccd8d194f50b384407125dfc5
   RELEASE_TAG: grokex-v0.149.0
   UPSTREAM_COMMIT: 758ef40f50c1a458425c7cfbf1eb12cbc07af0b0
 
@@ -24,23 +32,43 @@ jobs:
       contents: read
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
+      validator_sha: ${{ steps.source.outputs.validator_sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
       - id: source
-        name: Verify exact unpublished release source
+        name: Verify exact product, validator, and unpublished destination
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${GITHUB_SHA}"
+          requested_source_sha="${{ inputs.source_sha }}"
+          [[ "${requested_source_sha}" == "${EXPECTED_SOURCE_SHA}" ]]
+          git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${requested_source_sha}"
+          git merge-base --is-ancestor "${requested_source_sha}" "${GITHUB_SHA}"
           [[ "$(<grokex/codex-release-tag)" == "rust-v0.149.0" ]]
-          [[ "${GITHUB_REF}" == "refs/heads/${SOURCE_BRANCH}" ]]
-          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
-          [[ "${GITHUB_SHA}" == "${branch_sha}" ]]
+          [[ "${GITHUB_REF}" == "refs/heads/${VALIDATOR_BRANCH}" ]]
+          source_branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          validator_branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${VALIDATOR_BRANCH}" --jq .object.sha)"
+          [[ "${requested_source_sha}" == "${source_branch_sha}" ]]
+          [[ "${GITHUB_SHA}" == "${validator_branch_sha}" ]]
+          allowed_paths="$(mktemp)"
+          observed_paths="$(mktemp)"
+          cat >"${allowed_paths}" <<'EOF'
+          .github/workflows/grokex-checks.yml
+          .github/workflows/grokex-live.yml
+          .github/workflows/grokex-release.yml
+          codex-rs/core/tests/suite/web_search.rs
+          grokex/live_smoke.py
+          grokex/release.py
+          grokex/test_live_smoke.py
+          grokex/test_release.py
+          EOF
+          git diff --name-only "${requested_source_sha}...${GITHUB_SHA}" | sort >"${observed_paths}"
+          diff -u "${allowed_paths}" "${observed_paths}"
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag already exists" >&2
             exit 1
@@ -49,7 +77,10 @@ jobs:
             echo "Destination release already exists" >&2
             exit 1
           fi
-          echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "sha=${requested_source_sha}"
+            echo "validator_sha=${GITHUB_SHA}"
+          } >> "${GITHUB_OUTPUT}"
       - name: Verify public Grok profile
         run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
 
@@ -58,7 +89,7 @@ jobs:
     needs: preflight
     uses: ./.github/workflows/grokex-checks.yml
     with:
-      source_sha: ${{ needs.preflight.outputs.source_sha }}
+      source_sha: ${{ needs.preflight.outputs.validator_sha }}
 
   build_candidate:
     name: Build x86_64-unknown-linux-musl candidate
@@ -70,6 +101,27 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
           persist-credentials: false
+      - name: Select official kernel CDN for fixed libcap source
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper=".github/scripts/install-musl-build-tools.sh"
+          old_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/\${libcap_tarball_name}"
+          new_url="https://cdn.kernel.org/pub/linux/libs/security/linux-privs/libcap2/\${libcap_tarball_name}"
+          [[ "$(grep -Fxc "libcap_download_url=\"${old_url}\"" "${helper}")" -eq 1 ]]
+          python3 - "${helper}" "${old_url}" "${new_url}" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          old_url = sys.argv[2]
+          new_url = sys.argv[3]
+          source = path.read_text(encoding="utf-8")
+          if source.count(old_url) != 1:
+              raise SystemExit("fixed libcap source URL was not unique")
+          path.write_text(source.replace(old_url, new_url), encoding="utf-8")
+          PY
+          [[ "$(grep -Fxc "libcap_download_url=\"${new_url}\"" "${helper}")" -eq 1 ]]
       - uses: ./.github/actions/build-grokex
         with:
           target: x86_64-unknown-linux-musl
@@ -119,7 +171,7 @@ jobs:
     with:
       archive_artifact: grokex-linux-candidate
       source_sha: ${{ needs.preflight.outputs.source_sha }}
-      validator_sha: ${{ needs.preflight.outputs.source_sha }}
+      validator_sha: ${{ needs.preflight.outputs.validator_sha }}
     secrets:
       GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
 
@@ -147,6 +199,28 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
           persist-credentials: false
+      - name: Select official kernel CDN for fixed libcap source
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper=".github/scripts/install-musl-build-tools.sh"
+          old_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/\${libcap_tarball_name}"
+          new_url="https://cdn.kernel.org/pub/linux/libs/security/linux-privs/libcap2/\${libcap_tarball_name}"
+          [[ "$(grep -Fxc "libcap_download_url=\"${old_url}\"" "${helper}")" -eq 1 ]]
+          python3 - "${helper}" "${old_url}" "${new_url}" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          old_url = sys.argv[2]
+          new_url = sys.argv[3]
+          source = path.read_text(encoding="utf-8")
+          if source.count(old_url) != 1:
+              raise SystemExit("fixed libcap source URL was not unique")
+          path.write_text(source.replace(old_url, new_url), encoding="utf-8")
+          PY
+          [[ "$(grep -Fxc "libcap_download_url=\"${new_url}\"" "${helper}")" -eq 1 ]]
       - uses: ./.github/actions/build-grokex
         with:
           target: ${{ matrix.target }}
@@ -207,7 +281,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
+          ref: ${{ needs.preflight.outputs.validator_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -237,8 +311,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
-          [[ "${branch_sha}" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          source_branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          validator_branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${VALIDATOR_BRANCH}" --jq .object.sha)"
+          [[ "${source_branch_sha}" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          [[ "${validator_branch_sha}" == "${{ needs.preflight.outputs.validator_sha }}" ]]
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag appeared during validation" >&2
             exit 1
@@ -272,3 +348,89 @@ jobs:
             --dist published \
             --source-sha "${{ needs.preflight.outputs.source_sha }}" \
             --run-id "${GITHUB_RUN_ID}"
+
+  publication_state:
+    name: Observe final publication state
+    needs: [preflight, publish]
+    if: always() && needs.preflight.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.validator_sha }}
+          persist-credentials: false
+      - name: Record read-only destination observation
+        env:
+          FROZEN_SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_json="${RUNNER_TEMP}/tag.json"
+          release_json="${RUNNER_TEMP}/release.json"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >"${tag_json}" 2>/dev/null; then
+            printf '{}\n' >"${tag_json}"
+          fi
+          if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >"${release_json}" 2>/dev/null; then
+            printf '{}\n' >"${release_json}"
+          fi
+          python3 - "${tag_json}" "${release_json}" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          from grokex.release import TARGETS, archive_name
+
+          tag = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          release = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          expected_assets = {archive_name(target) for target in TARGETS} | {
+              "LIVE_EVIDENCE.json",
+              "RELEASE.json",
+              "SHA256SUMS",
+              "config.toml.example",
+              "install-grokex.ps1",
+              "install-grokex.sh",
+          }
+          tag_target = tag.get("object", {}).get("sha")
+          release_target = release.get("target_commitish")
+          asset_names = sorted(
+              name
+              for asset in release.get("assets", [])
+              if isinstance((name := asset.get("name")), str)
+          )
+          frozen_source = os.environ["FROZEN_SOURCE_SHA"]
+          complete = (
+              tag_target == frozen_source
+              and release_target == frozen_source
+              and set(asset_names) == expected_assets
+          )
+          observation = {
+              "asset_count": len(asset_names),
+              "asset_names": asset_names,
+              "expected_source_sha": frozen_source,
+              "publication_job_result": os.environ["PUBLISH_RESULT"],
+              "release_exists": bool(release),
+              "release_target": release_target,
+              "state": "complete" if complete else "partial_or_absent",
+              "tag_exists": bool(tag),
+              "tag_target": tag_target,
+              "validation_run": os.environ["GITHUB_RUN_ID"],
+          }
+          Path("PUBLICATION_STATE.json").write_text(
+              json.dumps(observation, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          if os.environ["PUBLISH_RESULT"] == "success" and not complete:
+              raise SystemExit("successful publication job left an invalid destination state")
+          PY
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: grokex-publication-state
+          path: PUBLICATION_STATE.json
+          if-no-files-found: error
+          retention-days: 30
