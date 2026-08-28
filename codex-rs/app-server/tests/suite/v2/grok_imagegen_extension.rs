@@ -1,4 +1,5 @@
 use super::*;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Result<()> {
