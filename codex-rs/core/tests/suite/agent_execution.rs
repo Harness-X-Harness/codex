@@ -1,11 +1,14 @@
 use anyhow::Result;
+use codex_core::TurnInputRequest;
 use codex_features::Feature;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -19,6 +22,8 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Mutex;
+use std::sync::mpsc;
 use std::time::Duration;
 
 const FIRST_PROMPT: &str = "spawn the first worker";
@@ -26,10 +31,19 @@ const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 const GROK_SPAWN_AGENT_WIRE_NAME: &str = "local__5ca652933835aa510437f1f000cd98aa";
+const GROK_WAIT_AGENT_WIRE_NAME: &str = "local__d7c9901ea9d58f6e6022549b9b3cc7ec";
+const CHILD_TASK_ENVELOPE: &str =
+    "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task";
+const CHILD_COMPLETION_ENVELOPE: &str =
+    "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/first\nPayload:\nworker completed";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
+    let json_fragment = serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string();
     serde_json::from_slice::<serde_json::Value>(&request.body)
-        .is_ok_and(|body| body.to_string().contains(text))
+        .is_ok_and(|body| body.to_string().contains(&json_fragment))
 }
 
 fn has_function_call_output(request: &wiremock::Request, call_id: &str) -> bool {
@@ -104,16 +118,20 @@ async fn mount_completed_worker(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<()> {
+async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
     let server = start_mock_server().await;
+    let (child_gate_tx, child_gate_rx) = mpsc::channel();
     let spawn_arguments = serde_json::to_string(&json!({
         "message": FIRST_TASK,
         "task_name": "first",
-        "fork_turns": "none",
     }))?;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
+        |request: &wiremock::Request| {
+            body_contains(request, FIRST_PROMPT)
+                && !body_contains(request, FIRST_TASK)
+                && !has_function_call_output(request, "grok-spawn-call")
+        },
         sse(vec![
             ev_response_created("grok-root-response"),
             ev_function_call(
@@ -125,10 +143,44 @@ async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<(
         ]),
     )
     .await;
-    mount_completed_worker(&server, FIRST_TASK, "grok-spawn-call").await;
+    let response_gate = Mutex::new(child_gate_rx);
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| has_function_call_output(request, "grok-spawn-call"),
+        move |request: &wiremock::Request| {
+            let matches = body_contains(request, FIRST_TASK)
+                && !has_function_call_output(request, "grok-spawn-call");
+            if matches {
+                response_gate
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("parent should begin waiting before child response");
+            }
+            matches
+        },
+        sse(vec![
+            ev_response_created("resp-worker-grok-spawn-call"),
+            ev_assistant_message("msg-worker-grok-spawn-call", "worker completed"),
+            ev_completed("resp-worker-grok-spawn-call"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            has_function_call_output(request, "grok-spawn-call")
+                && !has_function_call_output(request, "grok-wait-call")
+        },
+        sse(vec![
+            ev_response_created("grok-root-wait"),
+            ev_function_call("grok-wait-call", GROK_WAIT_AGENT_WIRE_NAME, "{}"),
+            ev_completed("grok-root-wait"),
+        ]),
+    )
+    .await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "grok-wait-call"),
         sse(vec![
             ev_response_created("grok-root-complete"),
             ev_assistant_message("grok-root-message", "child completed"),
@@ -146,15 +198,32 @@ async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<(
             .features
             .enable(Feature::Collab)
             .expect("test config should allow feature update");
+        config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
     });
     let test = builder.build(&server).await?;
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
-    test.submit_turn(FIRST_PROMPT).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: FIRST_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
 
     let child_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
     let child = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(test.codex.as_ref(), |event| {
+        matches!(event, EventMsg::CollabWaitingBegin(_))
+    })
+    .await;
+    child_gate_tx
+        .send(())
+        .expect("release child after parent begins waiting");
     wait_for_event(child.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_event(test.codex.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
@@ -163,16 +232,54 @@ async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<(
     assert_eq!(child_config.model, "grok-4.6");
 
     let requests = server.received_requests().await.expect("capture requests");
+    assert_eq!(requests.len(), 4);
     assert_eq!(
         requests
             .iter()
-            .map(|request| request.url.path())
-            .collect::<Vec<_>>(),
-        vec!["/v1/responses", "/v1/responses", "/v1/responses"]
+            .filter(|request| body_contains(request, CHILD_TASK_ENVELOPE))
+            .count(),
+        1
     );
+    assert!(
+        requests
+            .iter()
+            .any(|request| body_contains(request, CHILD_COMPLETION_ENVELOPE))
+    );
+    const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "shell_call",
+        "shell_call_output",
+        "web_search_call",
+        "file_search_call",
+        "code_interpreter_call",
+        "mcp_call",
+        "custom_tool_call",
+        "image_generation_call",
+        "compaction",
+    ];
     for request in requests {
         let body: serde_json::Value = serde_json::from_slice(&request.body)?;
         assert_eq!(body["model"], "grok-4.6");
+        if !body_contains(&request, CHILD_TASK_ENVELOPE) {
+            assert_eq!(body["reasoning"]["effort"], "xhigh");
+        }
+        assert!(
+            body["input"]
+                .as_array()
+                .is_some_and(|items| items.iter().all(|item| {
+                    item["type"]
+                        .as_str()
+                        .is_some_and(|item_type| GATEWAY_SUPPORTED_INPUT_TYPES.contains(&item_type))
+                }))
+        );
+        assert!(
+            !body["input"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["type"] == "agent_message"))
+        );
     }
 
     Ok(())

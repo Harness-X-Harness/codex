@@ -45,6 +45,17 @@ LIVE_SCENARIO_ASSERTIONS = {
         "status": "completed",
         "tool_continuation": "completed",
     },
+    "ultra-full-history-collaboration": {
+        "child_completion": "completed",
+        "child_response_assertion": "exact_match",
+        "default_full_history": "completed",
+        "operation_count": 4,
+        "parent_completion": "completed",
+        "response_assertion": "exact_match",
+        "spawn_count": 1,
+        "status": "completed",
+        "wait_count": 1,
+    },
 }
 
 
