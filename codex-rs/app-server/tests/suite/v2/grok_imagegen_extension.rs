@@ -101,7 +101,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
     let bodies = requests
         .iter()
         .filter(|request| request.url.path().contains("/images/"))
-        .map(|request| request.body_json::<serde_json::Value>())
+        .map(wiremock::Request::body_json::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(
         bodies,
