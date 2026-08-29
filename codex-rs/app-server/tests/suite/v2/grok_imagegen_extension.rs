@@ -113,7 +113,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
     let responses = response_mock.requests();
     assert_eq!(responses.len(), 4);
     assert!(responses[0].body_contains_text("Generate an image"));
-    assert!(responses[0].body_contains_text("image_gen__imagegen"));
+    assert!(responses[0].tool_by_name("image_gen", "imagegen").is_some());
     assert!(responses[2].body_contains_text("Edit the prior image"));
     Ok(())
 }
