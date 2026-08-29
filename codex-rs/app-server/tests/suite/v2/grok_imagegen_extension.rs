@@ -47,7 +47,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .with_provider_name("Grok")
         .with_provider_base_url(&format!("{}/api/codex", server.uri()))
         .with_grok_responses_wire_api()
-        .with_provider_config("supports_websockets = false\nrequires_openai_auth = true")
+        .with_provider_config("supports_websockets = false\nrequires_openai_auth = false")
         .write(codex_home.path())?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -113,6 +113,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
     let responses = response_mock.requests();
     assert_eq!(responses.len(), 4);
     assert!(responses[0].body_contains_text("Generate an image"));
+    assert!(responses[0].body_contains_text("image_gen__imagegen"));
     assert!(responses[2].body_contains_text("Edit the prior image"));
     Ok(())
 }
