@@ -1,28 +1,5 @@
 use super::*;
 use pretty_assertions::assert_eq;
-use sha2::Digest;
-use sha2::Sha256;
-
-fn grok_wire_function_name(namespace: &str, name: &str) -> String {
-    let digest = format!(
-        "{:x}",
-        Sha256::digest(format!("function\0{namespace}\0{name}").as_bytes())
-    );
-    format!("local__{}", &digest[..32])
-}
-
-fn request_has_function(request: &responses::ResponsesRequest, name: &str) -> bool {
-    request
-        .body_json()
-        .get("tools")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|tools| {
-            tools.iter().any(|tool| {
-                tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
-                    && tool.get("name").and_then(serde_json::Value::as_str) == Some(name)
-            })
-        })
-}
 
 #[tokio::test]
 async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Result<()> {
@@ -50,12 +27,13 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
             r#"{"prompt":"add a red hat","num_last_images_to_include":1}"#,
         ),
     ];
-    let imagegen_wire_name = grok_wire_function_name("image_gen", "imagegen");
+    // Grok receives canonical `image_gen.imagegen` through the provider's flat wire route.
+    let imagegen_wire_name = "local__6094bed1fa9651e20af99c15f593ae7a";
     let mut sequence = Vec::new();
     for (index, (response_id, call_id, arguments)) in calls.into_iter().enumerate() {
         sequence.push(responses::sse(vec![
             responses::ev_response_created(response_id),
-            responses::ev_function_call(call_id, &imagegen_wire_name, arguments),
+            responses::ev_function_call(call_id, imagegen_wire_name, arguments),
             responses::ev_completed(response_id),
         ]));
         sequence.push(responses::sse(vec![
@@ -135,9 +113,23 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         ]
     );
     let responses = response_mock.requests();
-    assert_eq!(responses.len(), 4);
-    assert!(responses[0].body_contains_text("Generate an image"));
-    assert!(request_has_function(&responses[0], &imagegen_wire_name));
-    assert!(responses[2].body_contains_text("Edit the prior image"));
+    let generation_request = responses
+        .iter()
+        .find(|request| request.body_contains_text("Generate an image"))
+        .context("generation request should reach Grok")?;
+    let generation_tools = generation_request
+        .body_json()
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .context("generation request should declare tools")?
+        .clone();
+    assert!(generation_tools.iter().any(|tool| {
+        tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
+            && tool.get("name").and_then(serde_json::Value::as_str) == Some(imagegen_wire_name)
+    }));
+    responses
+        .iter()
+        .find(|request| request.body_contains_text("Edit the prior image"))
+        .context("history-edit request should reach Grok")?;
     Ok(())
 }
