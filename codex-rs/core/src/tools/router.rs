@@ -582,7 +582,7 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         Sha256::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
     );
     let semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
-    let semantic_name = semantic_name
+    let mut semantic_name = semantic_name
         .bytes()
         .map(|byte| {
             if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
@@ -594,11 +594,12 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         .collect::<String>();
     let digest = &digest[..WIRE_ROUTE_DIGEST_HEX_CHARS];
     if !semantic_name.is_empty() {
-        let semantic_wire_name =
-            format!("{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{digest}");
-        if semantic_wire_name.len() <= MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES {
-            return semantic_wire_name;
-        }
+        let semantic_budget = MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES
+            .saturating_sub(WIRE_NAME_PREFIX.len())
+            .saturating_sub(WIRE_NAME_SEPARATOR.len())
+            .saturating_sub(WIRE_ROUTE_DIGEST_HEX_CHARS);
+        semantic_name.truncate(semantic_budget);
+        return format!("{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{digest}");
     }
     format!("{WIRE_NAME_PREFIX}{digest}")
 }

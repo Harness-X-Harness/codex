@@ -67,8 +67,9 @@ fn flat_wire_name_preserves_complete_semantic_identity() {
 fn flat_wire_name_bounds_oversized_model_context_items() {
     let wire_name = flat_wire_name("function", &ToolName::plain("x".repeat(2_048)));
 
-    assert_eq!(wire_name.len(), "local__".len() + 32);
-    assert!(!wire_name.contains("xxxx"));
+    assert_eq!(wire_name.len(), 1_024);
+    assert!(wire_name.starts_with("local__xxxx"));
+    assert!(wire_name.ends_with("__f6a1f9c44d52f15bae32564d5f879ed8"));
 }
 
 #[test]
