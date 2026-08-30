@@ -88,24 +88,25 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     );
 }
 
+fn function(name: &str) -> ResponsesApiNamespaceTool {
+    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+        name: name.to_string(),
+        description: format!("Call {name}."),
+        strict: true,
+        parameters: codex_extension_api::parse_tool_input_schema(&json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"],
+            "additionalProperties": false,
+        }))
+        .expect("test schema should parse"),
+        output_schema: None,
+        defer_loading: None,
+    })
+}
+
 #[test]
 fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()> {
-    let function = |name: &str| {
-        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-            name: name.to_string(),
-            description: format!("Call {name}."),
-            strict: true,
-            parameters: codex_extension_api::parse_tool_input_schema(&json!({
-                "type": "object",
-                "properties": { "value": { "type": "string" } },
-                "required": ["value"],
-                "additionalProperties": false,
-            }))
-            .expect("test schema should parse"),
-            output_schema: None,
-            defer_loading: None,
-        })
-    };
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
         vec![
