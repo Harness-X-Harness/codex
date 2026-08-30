@@ -57,7 +57,7 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
-const MAX_EDIT_IMAGES: usize = 5;
+pub(crate) const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
@@ -65,6 +65,7 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
     image_model: &'static str,
+    max_edit_images: usize,
     save_root: Option<AbsolutePathBuf>,
     thread_id: String,
 }
@@ -74,12 +75,14 @@ impl ImageGenerationTool {
     pub(crate) fn new(
         backend: CodexImagesBackend,
         image_model: &'static str,
+        max_edit_images: usize,
         save_root: Option<AbsolutePathBuf>,
         thread_id: String,
     ) -> Self {
         Self {
             backend,
             image_model,
+            max_edit_images,
             save_root,
             thread_id,
         }
@@ -90,9 +93,8 @@ impl ImageGenerationTool {
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
     prompt: String,
-    #[schemars(length(max = 5))]
     referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
-    #[schemars(range(min = 1, max = 5))]
+    #[schemars(range(min = 1))]
     num_last_images_to_include: Option<usize>,
 }
 
@@ -123,7 +125,7 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
 
     /// Advertises the model contract: a rewritten prompt and optional edit references.
     fn spec(&self) -> ToolSpec {
-        imagegen_tool_spec()
+        imagegen_tool_spec(self.max_edit_images)
     }
 
     /// Exposes image generation directly and through the nested code-mode tool surface.
@@ -145,6 +147,7 @@ impl ImageGenerationTool {
             call.conversation_history.items(),
             &call.environments,
             self.image_model,
+            self.max_edit_images,
         )
         .await?;
         call.turn_item_emitter
@@ -455,11 +458,12 @@ async fn request_for_call_args(
     history: &[ResponseItem],
     environments: &[ToolEnvironment],
     image_model: &str,
+    max_edit_images: usize,
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
-    if paths.len() > MAX_EDIT_IMAGES {
+    if paths.len() > max_edit_images {
         return Err(FunctionCallError::RespondToModel(format!(
-            "`referenced_image_paths` must contain at most {MAX_EDIT_IMAGES} paths"
+            "`referenced_image_paths` must contain at most {max_edit_images} paths"
         )));
     }
     let images = match (paths.is_empty(), args.num_last_images_to_include) {
@@ -486,9 +490,9 @@ async fn request_for_call_args(
             images
         }
         (true, Some(count)) => {
-            if !(1..=MAX_EDIT_IMAGES).contains(&count) {
+            if !(1..=max_edit_images).contains(&count) {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
+                    "`num_last_images_to_include` must be between 1 and {max_edit_images}"
                 )));
             }
             // Pathless images have no stable reference, so this bounded window may include newer
@@ -664,7 +668,7 @@ fn parse_args(call: &ToolCall) -> Result<ImagegenArgs, FunctionCallError> {
 }
 
 /// Builds the namespace function schema exposed to the model.
-fn imagegen_tool_spec() -> ToolSpec {
+fn imagegen_tool_spec(max_edit_images: usize) -> ToolSpec {
     let mut schema_value = serde_json::to_value(
         SchemaSettings::draft2019_09()
             .with(|settings| settings.inline_subschemas = true)
@@ -686,7 +690,9 @@ fn imagegen_tool_spec() -> ToolSpec {
         description: default_namespace_description(IMAGE_GEN_NAMESPACE),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: IMAGEGEN_TOOL_NAME.to_string(),
-            description: IMAGEGEN_DESCRIPTION.to_string(),
+            description: format!(
+                "{IMAGEGEN_DESCRIPTION}\n- The current tool configuration accepts at most {max_edit_images} edit images."
+            ),
             strict: false,
             parameters: parse_tool_input_schema(&Value::Object(input_schema))
                 .unwrap_or_else(|err| panic!("imagegen input schema should parse: {err}")),

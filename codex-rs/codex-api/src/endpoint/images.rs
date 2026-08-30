@@ -1,6 +1,7 @@
 use crate::auth::SharedAuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::images::GROK_MAX_EDIT_IMAGES;
 use crate::images::ImageEditRequest;
 use crate::images::ImageGenerationRequest;
 use crate::images::ImageResponse;
@@ -101,10 +102,10 @@ impl<T: HttpTransport> ImagesClient<T> {
 }
 
 fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, ApiError> {
-    if !(1..=3).contains(&request.images.len()) {
-        return Err(ApiError::Stream(
-            "Grok image edits require between 1 and 3 images".to_string(),
-        ));
+    if !(1..=GROK_MAX_EDIT_IMAGES).contains(&request.images.len()) {
+        return Err(ApiError::Stream(format!(
+            "Grok image edits require between 1 and {GROK_MAX_EDIT_IMAGES} images"
+        )));
     }
     let images = request
         .images

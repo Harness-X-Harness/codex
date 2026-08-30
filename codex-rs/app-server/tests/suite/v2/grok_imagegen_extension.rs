@@ -124,10 +124,24 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .and_then(serde_json::Value::as_array)
         .context("generation request should declare tools")?
         .clone();
-    assert!(generation_tools.iter().any(|tool| {
-        tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
-            && tool.get("name").and_then(serde_json::Value::as_str) == Some(imagegen_wire_name)
-    }));
+    let imagegen_tool = generation_tools
+        .iter()
+        .find(|tool| {
+            tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
+                && tool.get("name").and_then(serde_json::Value::as_str) == Some(imagegen_wire_name)
+        })
+        .context("generation request should declare the flat image function")?;
+    let description = imagegen_tool
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .context("flat image function should retain its model guidance")?;
+    assert!(description.starts_with(
+        "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
+    ));
+    assert!(description.contains(
+        "The `image_gen.imagegen` tool enables image generation from descriptions and editing of existing images"
+    ));
+    assert!(description.contains("The current tool configuration accepts at most 3 edit images."));
     responses
         .iter()
         .find(|request| request.body_contains_text("Edit the prior image"))

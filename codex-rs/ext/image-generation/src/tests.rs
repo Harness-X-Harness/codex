@@ -23,6 +23,7 @@ use pretty_assertions::assert_eq;
 use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenArgs;
+use super::MAX_EDIT_IMAGES;
 use super::imagegen_tool_spec;
 use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
@@ -31,7 +32,6 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 
 const RESULT: &str = "cG5n";
-
 #[test]
 fn artifact_path_sanitizes_session_and_call_ids() {
     let save_root = AbsolutePathBuf::current_dir().expect("current directory should be absolute");
@@ -54,7 +54,7 @@ fn artifact_path_sanitizes_session_and_call_ids() {
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
-    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+    let ToolSpec::Namespace(spec) = imagegen_tool_spec(MAX_EDIT_IMAGES) else {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
@@ -76,6 +76,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
             &[],
             &[],
             "gpt-image-2",
+            MAX_EDIT_IMAGES,
         )
         .await
         .expect("generation request should build"),
@@ -165,6 +166,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             &history,
             &[],
             "gpt-image-2",
+            MAX_EDIT_IMAGES,
         )
         .await
         .expect("history-backed edit request should build"),
@@ -190,6 +192,7 @@ async fn conflicting_image_selectors_return_tool_error() {
         &[],
         &[],
         "gpt-image-2",
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -219,6 +222,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
         &[],
         &[],
         "gpt-image-2",
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -246,6 +250,7 @@ async fn recent_image_fallback_requires_requested_count() {
         }],
         &[],
         "gpt-image-2",
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("history-backed edit should require the requested image count");
