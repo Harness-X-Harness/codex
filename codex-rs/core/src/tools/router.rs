@@ -580,12 +580,8 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         "{:x}",
         Sha256::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
     );
-    let semantic_budget = WIRE_NAME_MAX_BYTES
-        - WIRE_NAME_PREFIX.len()
-        - WIRE_NAME_SEPARATOR.len()
-        - WIRE_ROUTE_DIGEST_HEX_CHARS;
     let semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
-    let mut semantic_name = semantic_name
+    let semantic_name = semantic_name
         .bytes()
         .map(|byte| {
             if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
@@ -594,15 +590,15 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
                 '_'
             }
         })
-        .take(semantic_budget)
         .collect::<String>();
-    if semantic_name.is_empty() {
-        semantic_name.push_str("tool");
+    let digest = &digest[..WIRE_ROUTE_DIGEST_HEX_CHARS];
+    if !semantic_name.is_empty()
+        && WIRE_NAME_PREFIX.len() + semantic_name.len() + WIRE_NAME_SEPARATOR.len() + digest.len()
+            <= WIRE_NAME_MAX_BYTES
+    {
+        return format!("{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{digest}");
     }
-    format!(
-        "{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{}",
-        &digest[..WIRE_ROUTE_DIGEST_HEX_CHARS]
-    )
+    format!("{WIRE_NAME_PREFIX}{digest}")
 }
 
 fn custom_input_key(tool_name: &str) -> &'static str {

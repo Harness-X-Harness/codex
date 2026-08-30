@@ -48,24 +48,18 @@ use super::tool_log_payload;
 struct ExtensionEchoContributor;
 
 #[test]
-fn flat_wire_name_preserves_bounded_semantic_identity() {
+fn flat_wire_name_preserves_complete_bounded_semantic_identity() {
     assert_eq!(
         flat_wire_name("function", &ToolName::namespaced("image_gen", "imagegen")),
         "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a"
     );
 
-    let wire_name = flat_wire_name(
-        "function",
-        &ToolName::namespaced(
-            "namespace.with invalid characters",
-            "tool-name-that-is-longer-than-the-semantic-budget",
+    assert_eq!(
+        flat_wire_name(
+            "function",
+            &ToolName::namespaced("collaboration", "spawn_agent")
         ),
-    );
-    assert_eq!(wire_name.len(), 64);
-    assert!(
-        wire_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        "local__5ca652933835aa510437f1f000cd98aa"
     );
 }
 

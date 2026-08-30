@@ -30,10 +30,8 @@ const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
-const GROK_SPAWN_AGENT_WIRE_NAME: &str =
-    "local__collaboration__spawn_age__5ca652933835aa510437f1f000cd98aa";
-const GROK_WAIT_AGENT_WIRE_NAME: &str =
-    "local__collaboration__wait_agen__d7c9901ea9d58f6e6022549b9b3cc7ec";
+const GROK_SPAWN_AGENT_WIRE_NAME: &str = "local__5ca652933835aa510437f1f000cd98aa";
+const GROK_WAIT_AGENT_WIRE_NAME: &str = "local__d7c9901ea9d58f6e6022549b9b3cc7ec";
 const CHILD_TASK_ENVELOPE: &str =
     "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task";
 const CHILD_COMPLETION_ENVELOPE: &str =
