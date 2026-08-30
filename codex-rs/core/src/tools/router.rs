@@ -566,7 +566,6 @@ fn insert_wire_route(
 }
 
 fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
-    const WIRE_NAME_MAX_BYTES: usize = 64;
     const WIRE_NAME_PREFIX: &str = "local__";
     const WIRE_NAME_SEPARATOR: &str = "__";
     const WIRE_ROUTE_DIGEST_HEX_CHARS: usize = 32;
@@ -592,10 +591,7 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         })
         .collect::<String>();
     let digest = &digest[..WIRE_ROUTE_DIGEST_HEX_CHARS];
-    if !semantic_name.is_empty()
-        && WIRE_NAME_PREFIX.len() + semantic_name.len() + WIRE_NAME_SEPARATOR.len() + digest.len()
-            <= WIRE_NAME_MAX_BYTES
-    {
+    if !semantic_name.is_empty() {
         return format!("{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{digest}");
     }
     format!("{WIRE_NAME_PREFIX}{digest}")

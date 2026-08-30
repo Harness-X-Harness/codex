@@ -48,7 +48,7 @@ use super::tool_log_payload;
 struct ExtensionEchoContributor;
 
 #[test]
-fn flat_wire_name_preserves_complete_bounded_semantic_identity() {
+fn flat_wire_name_preserves_complete_semantic_identity() {
     assert_eq!(
         flat_wire_name("function", &ToolName::namespaced("image_gen", "imagegen")),
         "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a"
@@ -59,7 +59,7 @@ fn flat_wire_name_preserves_complete_bounded_semantic_identity() {
             "function",
             &ToolName::namespaced("collaboration", "spawn_agent")
         ),
-        "local__5ca652933835aa510437f1f000cd98aa"
+        "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa"
     );
 }
 
@@ -127,7 +127,9 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         .collect::<Vec<_>>();
     assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
-    assert!(wire_names.iter().all(|name| name.len() <= 64));
+    assert!(wire_names.iter().any(|name| {
+        name == "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa"
+    }));
 
     let mut items = wire_names
         .iter()
