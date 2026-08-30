@@ -232,7 +232,8 @@ fn flat_projection_bounds_oversized_canonical_description_label() -> anyhow::Res
         true,
     )
     .map_err(anyhow::Error::msg)?;
-    let description = match &router.model_visible_specs()[0] {
+    let model_visible_specs = router.model_visible_specs();
+    let description = match &model_visible_specs[0] {
         ToolSpec::Function(tool) => &tool.description,
         spec => panic!("expected projected function, got {spec:?}"),
     };
