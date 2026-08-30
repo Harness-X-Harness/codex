@@ -39,6 +39,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use super::MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES;
 use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
@@ -134,8 +135,20 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             spec => panic!("expected projected function, got {spec:?}"),
         })
         .collect::<Vec<_>>();
+    let descriptions = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.description.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
     assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
+    assert!(descriptions[0].starts_with(
+        "This flat Provider function directly invokes the canonical `mcp__calendar.create_event` tool."
+    ));
+    assert!(descriptions[0].ends_with("Call create_event."));
 
     let mut items = wire_names
         .iter()
@@ -202,6 +215,71 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         assert_eq!(call.encrypted_function_args, Some(Vec::new()));
         assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
     }
+    Ok(())
+}
+
+#[test]
+fn flat_projection_bounds_oversized_canonical_description_label() -> anyhow::Result<()> {
+    let namespace = "工具".repeat(1_024);
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace,
+            description: "Oversized namespace.".to_string(),
+            tools: vec![function("create_image")],
+        })],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let description = match &router.model_visible_specs()[0] {
+        ToolSpec::Function(tool) => &tool.description,
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let canonical_label = description
+        .strip_prefix("This flat Provider function directly invokes the canonical `")
+        .and_then(|description| description.split_once("` tool."))
+        .map(|(label, _)| label)
+        .expect("projected description should contain a canonical label");
+    assert!(canonical_label.len() <= MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES);
+    assert!(canonical_label.starts_with("工具工具"));
+    assert!(canonical_label.ends_with("__bfad593478cb46ebf02f62f21b81c717"));
+    assert!(description.ends_with("Call create_image."));
+    Ok(())
+}
+
+#[test]
+fn flat_projection_description_labels_preserve_sanitized_name_identity() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "namespace".to_string(),
+            description: "Namespace tools.".to_string(),
+            tools: vec![function("create/image"), function("create?image")],
+        })],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let descriptions = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.description.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
+    let labels = descriptions
+        .iter()
+        .map(|description| {
+            description
+                .strip_prefix("This flat Provider function directly invokes the canonical `")
+                .and_then(|description| description.split_once("` tool."))
+                .map(|(label, _)| label)
+                .expect("projected description should contain a canonical label")
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(labels[0], labels[1]);
+    assert!(labels[0].starts_with("namespace.create_image__"));
+    assert!(labels[1].starts_with("namespace.create_image__"));
     Ok(())
 }
 
