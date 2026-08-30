@@ -586,13 +586,14 @@ def run_smoke(
             if len(matching) != 1:
                 raise SystemExit("release catalog does not contain exact grok-4.6")
             model = matching[0]
-            efforts = {
-                option.get("reasoningEffort")
-                for option in model.get("supportedReasoningEfforts", [])
-                if isinstance(option, dict)
-            }
-            if model.get("multiAgentVersion") != "v2" or "ultra" not in efforts:
-                raise SystemExit("grok-4.6 release metadata is incomplete")
+            if scenario == COLLABORATION_SCENARIO:
+                efforts = {
+                    option.get("reasoningEffort")
+                    for option in model.get("supportedReasoningEfforts", [])
+                    if isinstance(option, dict)
+                }
+                if model.get("multiAgentVersion") != "v2" or "ultra" not in efforts:
+                    raise SystemExit("grok-4.6 collaboration metadata is incomplete")
 
             thread_params: dict[str, object] = {
                 "cwd": str(workspace),
@@ -771,12 +772,15 @@ def run_smoke(
                 "archive_sha256": sha256(archive),
                 "catalog": "release-bundled",
                 "model": "grok-4.6",
-                "multi_agent_version": "v2",
                 "runner_turn_submission_count": runner_turn_submission_count,
                 "provider": "grok",
-                "reasoning_effort": "ultra",
                 "scenario": scenario,
                 "source_sha": source_sha,
+                **(
+                    {"multi_agent_version": "v2", "reasoning_effort": "ultra"}
+                    if scenario == COLLABORATION_SCENARIO
+                    else {}
+                ),
                 **turn_evidence,
                 "story": f"grokex-{scenario}",
                 "validation_run": run_id,

@@ -24,9 +24,18 @@ class FakeAppServer:
 
 
 class FakeScenarioAppServer(FakeAppServer):
-    def __init__(self, messages: list[dict[str, object]]) -> None:
+    def __init__(
+        self,
+        messages: list[dict[str, object]],
+        model: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(messages)
         self.requests: list[tuple[int, str, dict[str, object]]] = []
+        self.model = model or {
+            "id": "grok-4.6",
+            "multiAgentVersion": "v2",
+            "supportedReasoningEfforts": [{"reasoningEffort": "ultra"}],
+        }
 
     def request(
         self, request_id: int, method: str, params: dict[str, object]
@@ -35,17 +44,7 @@ class FakeScenarioAppServer(FakeAppServer):
         if method == "initialize":
             return {}
         if method == "model/list":
-            return {
-                "data": [
-                    {
-                        "id": "grok-4.6",
-                        "multiAgentVersion": "v2",
-                        "supportedReasoningEfforts": [
-                            {"reasoningEffort": "ultra"}
-                        ],
-                    }
-                ]
-            }
+            return {"data": [self.model]}
         if method == "thread/start":
             return {"modelProvider": "grok", "thread": {"id": "thread-1"}}
         if method == "turn/start":
@@ -68,10 +67,13 @@ class VerifiedTurnTest(unittest.TestCase):
             agent_reply = {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "done"}}}
             turn_done = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
             raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "name": live_smoke.IMAGE_FUNCTION_WIRE_NAME, "arguments": json.dumps({"num_last_images_to_include": 2})}}}
-            server = FakeScenarioAppServer([
-                failed_image_item, image_item, image_item, agent_reply, turn_done,
-                raw_edit, failed_image_item, image_item, image_item, agent_reply, turn_done,
-            ])
+            server = FakeScenarioAppServer(
+                [
+                    failed_image_item, image_item, image_item, agent_reply, turn_done,
+                    raw_edit, failed_image_item, image_item, image_item, agent_reply, turn_done,
+                ],
+                model={"id": "grok-4.6"},
+            )
             archive = root / "candidate.tar.gz"
             archive.write_bytes(b"candidate")
             config = root / "config.toml"
