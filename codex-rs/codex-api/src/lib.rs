@@ -83,6 +83,7 @@ pub use crate::images::ImageGenerationRequest;
 pub use crate::images::ImageQuality;
 pub use crate::images::ImageResponse;
 pub use crate::images::ImageUrl;
+pub use crate::images::ImagesDialect;
 pub use crate::provider::Provider;
 pub use crate::provider::ResponsesDialect;
 pub use crate::provider::RetryConfig;

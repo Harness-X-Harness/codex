@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_api::ApiError;
+use codex_api::ImagesDialect;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
@@ -145,6 +146,9 @@ pub const DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL: &str = "gpt-5.6-luna";
 /// a backend-specific model ID.
 pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 
+/// Default image model used when a provider does not override image policy.
+pub const DEFAULT_IMAGE_GENERATION_MODEL: &str = "gpt-image-2";
+
 /// Runtime provider abstraction used by model execution.
 ///
 /// Implementations own provider-specific behavior for a model backend. The
@@ -192,6 +196,16 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// This is internal runtime state. It is not a serialized provider selector or capability.
     fn projects_tools_as_flat_functions(&self) -> bool {
         false
+    }
+
+    /// Returns the provider-owned model used for image generation and editing.
+    fn image_generation_model(&self) -> &'static str {
+        DEFAULT_IMAGE_GENERATION_MODEL
+    }
+
+    /// Returns the request and response dialect for this provider's Images API.
+    fn images_dialect(&self) -> ImagesDialect {
+        ImagesDialect::OpenAi
     }
 
     /// Returns the preferred model used for automatic approval review.

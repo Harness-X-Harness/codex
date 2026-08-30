@@ -58,7 +58,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             comp_hash: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
-            input_modalities: vec![InputModality::Text],
+            input_modalities: vec![InputModality::Text, InputModality::Image],
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             use_responses_lite: false,

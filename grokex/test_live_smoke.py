@@ -1,3 +1,4 @@
+import base64
 import json
 import tempfile
 import time
@@ -23,9 +24,18 @@ class FakeAppServer:
 
 
 class FakeScenarioAppServer(FakeAppServer):
-    def __init__(self, messages: list[dict[str, object]]) -> None:
+    def __init__(
+        self,
+        messages: list[dict[str, object]],
+        model: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(messages)
         self.requests: list[tuple[int, str, dict[str, object]]] = []
+        self.model = model or {
+            "id": "grok-4.6",
+            "multiAgentVersion": "v2",
+            "supportedReasoningEfforts": [{"reasoningEffort": "ultra"}],
+        }
 
     def request(
         self, request_id: int, method: str, params: dict[str, object]
@@ -34,17 +44,7 @@ class FakeScenarioAppServer(FakeAppServer):
         if method == "initialize":
             return {}
         if method == "model/list":
-            return {
-                "data": [
-                    {
-                        "id": "grok-4.6",
-                        "multiAgentVersion": "v2",
-                        "supportedReasoningEfforts": [
-                            {"reasoningEffort": "ultra"}
-                        ],
-                    }
-                ]
-            }
+            return {"data": [self.model]}
         if method == "thread/start":
             return {"modelProvider": "grok", "thread": {"id": "thread-1"}}
         if method == "turn/start":
@@ -56,6 +56,43 @@ class FakeScenarioAppServer(FakeAppServer):
 
 
 class VerifiedTurnTest(unittest.TestCase):
+    def test_image_scenario_uses_same_thread_and_verifies_history_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = root / "generated.jpg"
+            jpeg = (Path(__file__).parents[1] / "codex-rs/vendor/bubblewrap/bubblewrap.jpg").read_bytes()
+            artifact.write_bytes(jpeg)
+            image_item = {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}}
+            failed_image_item = {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "failed"}}}
+            agent_reply = {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "done"}}}
+            turn_done = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
+            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "name": live_smoke.IMAGE_FUNCTION_WIRE_NAME, "arguments": json.dumps({"num_last_images_to_include": 2})}}}
+            server = FakeScenarioAppServer(
+                [
+                    failed_image_item, image_item, image_item, agent_reply, turn_done,
+                    raw_edit, failed_image_item, image_item, image_item, agent_reply, turn_done,
+                ],
+                model={"id": "grok-4.6"},
+            )
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text('model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n', encoding="utf-8")
+            evidence_path = root / "evidence.json"
+            with patch.object(live_smoke, "extract_archive", return_value=root), patch.object(live_smoke, "AppServer", return_value=server):
+                live_smoke.run_smoke(archive, config, evidence_path, "source", "validator", "run", live_smoke.IMAGE_SCENARIO)
+            turns = [request for request in server.requests if request[1] == "turn/start"]
+            self.assertEqual([request[2]["threadId"] for request in turns], ["thread-1", "thread-1"])
+            thread_start = next(request for request in server.requests if request[1] == "thread/start")
+            self.assertTrue(thread_start[2]["experimentalRawEvents"])
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertTrue(evidence["history_arguments_verified"])
+            self.assertTrue(evidence["agent_reply_seen"])
+            self.assertEqual(evidence["image_items_completed"], 2)
+            self.assertEqual(evidence["image_items_failed"], 1)
+            self.assertNotIn("result", evidence)
+            self.assertNotIn(str(artifact), json.dumps(evidence))
+
     def test_accepts_basic_exact_reply_without_tool(self) -> None:
         server = FakeAppServer(
             [
@@ -137,6 +174,7 @@ class VerifiedTurnTest(unittest.TestCase):
                 "response_assertion": "exact_match",
                 "status": "completed",
                 "tool_continuation": "completed",
+                "tool_request_count": 1,
             },
         )
         self.assertEqual(
@@ -156,6 +194,25 @@ class VerifiedTurnTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_repeated_semantic_tool_requests_are_diagnostic(self) -> None:
+        server = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
+        messages = list(server.messages)
+        messages.insert(
+            3,
+            {
+                "id": 42,
+                "method": "item/tool/call",
+                "params": {"tool": live_smoke.TOOL_NAME, "arguments": {}},
+            },
+        )
+        server = FakeAppServer(messages)
+
+        evidence = live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+
+        self.assertEqual(evidence["tool_continuation"], "completed")
+        self.assertEqual(evidence["tool_request_count"], 2)
+        self.assertEqual([message["id"] for message in server.sent], [41, 42])
 
     def test_rejects_completed_turn_with_wrong_agent_reply(self) -> None:
         server = self.completed_turn("not the expected reply")
@@ -233,13 +290,12 @@ experimental_bearer_token = "secret"
                 ["thread-1", "thread-1"],
             )
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-            self.assertEqual(evidence["operation_count"], 2)
+            self.assertEqual(evidence["runner_turn_submission_count"], 2)
             self.assertEqual(evidence["reasoning_replay"], "completed")
             self.assertEqual(evidence["history_response_assertion"], "exact_match")
 
     def collaboration_messages(
         self,
-        include_fork_turns: bool = False,
         parent_completes_first: bool = False,
         extra_response: bool = False,
     ) -> list[dict[str, object]]:
@@ -250,14 +306,13 @@ experimental_bearer_token = "secret"
             ),
             "task_name": "live_child",
         }
-        if include_fork_turns:
-            arguments["fork_turns"] = "all"
         prefix = [
             {
                 "method": "rawResponseItem/completed",
                 "params": {
                     "item": {
                         "arguments": json.dumps(arguments),
+                        "call_id": "spawn-1",
                         "name": "projected_spawn",
                         "type": "function_call",
                     },
@@ -268,6 +323,7 @@ experimental_bearer_token = "secret"
                 "method": "item/completed",
                 "params": {
                     "item": {
+                        "id": "spawn-1",
                         "receiverThreadIds": ["child-1"],
                         "status": "completed",
                         "tool": "spawnAgent",
@@ -396,22 +452,14 @@ experimental_bearer_token = "secret"
             )
             self.assertIs(thread_start[2]["experimentalRawEvents"], True)
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-            self.assertEqual(evidence["operation_count"], 4)
+            self.assertEqual(evidence["runner_turn_submission_count"], 1)
+            self.assertEqual(evidence["provider_response_count"], 4)
+            self.assertEqual(evidence["child_count"], 1)
             self.assertEqual(evidence["default_full_history"], "completed")
             self.assertEqual(evidence["spawn_count"], 1)
             self.assertEqual(evidence["wait_count"], 1)
             self.assertEqual(evidence["child_completion"], "completed")
             self.assertEqual(evidence["parent_completion"], "completed")
-
-    def test_collaboration_scenario_rejects_explicit_fork_turns(self) -> None:
-        server = FakeAppServer(self.collaboration_messages(include_fork_turns=True))
-
-        with self.assertRaisesRegex(SystemExit, "did not use default full history"):
-            live_smoke.wait_for_collaboration_turn(
-                server,
-                time.monotonic() + 1,
-                "thread-1",
-            )
 
     def test_collaboration_scenario_accepts_parent_completion_before_child(self) -> None:
         server = FakeAppServer(
@@ -424,31 +472,108 @@ experimental_bearer_token = "secret"
             "thread-1",
         )
 
-        self.assertEqual(evidence["operation_count"], 4)
+        self.assertEqual(evidence["provider_response_count"], 4)
         self.assertEqual(evidence["child_completion"], "completed")
 
-    def test_collaboration_scenario_rejects_extra_response(self) -> None:
+    def test_collaboration_scenario_correlates_child_when_events_arrive_first(self) -> None:
+        messages = self.collaboration_messages()
+        spawn_completed = messages.pop(1)
+        messages.insert(5, spawn_completed)
+        server = FakeAppServer(messages)
+
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
+
+        self.assertEqual(evidence["child_completion"], "completed")
+        self.assertEqual(evidence["child_count"], 1)
+
+    def test_collaboration_scenario_correlates_spawn_completion_before_raw_call(self) -> None:
+        messages = self.collaboration_messages()
+        raw_spawn = messages.pop(0)
+        messages.insert(2, raw_spawn)
+
+        evidence = live_smoke.wait_for_collaboration_turn(
+            FakeAppServer(messages),
+            time.monotonic() + 1,
+            "thread-1",
+        )
+
+        self.assertEqual(evidence["child_completion"], "completed")
+        self.assertEqual(evidence["default_full_history"], "completed")
+
+    def test_collaboration_scenario_treats_explicit_extra_spawn_as_diagnostic(self) -> None:
+        explicit_arguments = {
+            "fork_turns": "all",
+            "message": (
+                "Reply with exactly "
+                f"{live_smoke.CHILD_EXPECTED_AGENT_REPLY} and no other text."
+            ),
+            "task_name": "extra_child",
+        }
+        messages = [
+            {
+                "method": "rawResponseItem/completed",
+                "params": {
+                    "item": {
+                        "arguments": json.dumps(explicit_arguments),
+                        "call_id": "spawn-extra",
+                        "name": "projected_spawn",
+                        "type": "function_call",
+                    },
+                    "threadId": "thread-1",
+                },
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "id": "spawn-extra",
+                        "receiverThreadIds": ["child-extra"],
+                        "status": "completed",
+                        "tool": "spawnAgent",
+                        "type": "collabAgentToolCall",
+                    },
+                    "threadId": "thread-1",
+                },
+            },
+            *self.collaboration_messages(),
+        ]
+
+        evidence = live_smoke.wait_for_collaboration_turn(
+            FakeAppServer(messages),
+            time.monotonic() + 1,
+            "thread-1",
+        )
+
+        self.assertEqual(evidence["explicit_fork_spawn_count"], 1)
+        self.assertEqual(evidence["child_count"], 2)
+
+    def test_collaboration_scenario_treats_extra_response_as_diagnostic(self) -> None:
         server = FakeAppServer(self.collaboration_messages(extra_response=True))
 
-        with self.assertRaisesRegex(SystemExit, "used more than three responses"):
-            live_smoke.wait_for_collaboration_turn(
-                server,
-                time.monotonic() + 1,
-                "thread-1",
-            )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
 
-    def test_collaboration_scenario_requires_one_completed_wait(self) -> None:
+        self.assertEqual(evidence["provider_response_count"], 5)
+
+    def test_collaboration_scenario_treats_missing_wait_as_diagnostic(self) -> None:
         server = FakeAppServer([
             message
             for message in self.collaboration_messages()
             if message.get("params", {}).get("item", {}).get("tool") != "wait"
         ])
-        with self.assertRaisesRegex(SystemExit, "did not complete exactly one wait"):
-            live_smoke.wait_for_collaboration_turn(
-                server,
-                time.monotonic() + 1,
-                "thread-1",
-            )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            server,
+            time.monotonic() + 1,
+            "thread-1",
+        )
+        self.assertEqual(evidence["wait_count"], 0)
 
 
 if __name__ == "__main__":

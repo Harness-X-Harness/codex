@@ -34,6 +34,10 @@ use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
 
+// This is a Codex model-context safety bound, not a Provider protocol limit.
+const MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES: usize = 512;
+const FLAT_ROUTE_CANONICAL_LABEL_DIGEST_HEX_CHARS: usize = 32;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
     pub tool_name: ToolName,
@@ -461,14 +465,17 @@ fn project_flat_function_tools(
                 insert_wire_route(
                     &mut routes,
                     wire_name.clone(),
-                    WireToolRoute::Function(tool_name),
+                    WireToolRoute::Function(tool_name.clone()),
                 )?;
-                declarations.push(ToolSpec::Function(function_declaration(wire_name, tool)));
+                declarations.push(ToolSpec::Function(function_declaration(
+                    wire_name, &tool_name, tool,
+                )));
             }
             ToolSpec::Freeform(tool) => {
                 let tool_name = ToolName::plain(tool.name.clone());
                 let wire_name = flat_wire_name("custom", &tool_name);
-                let (tool, input_key) = custom_function_declaration(wire_name.clone(), tool);
+                let (tool, input_key) =
+                    custom_function_declaration(wire_name.clone(), &tool_name, tool);
                 insert_wire_route(
                     &mut routes,
                     wire_name,
@@ -489,17 +496,18 @@ fn project_flat_function_tools(
                             insert_wire_route(
                                 &mut routes,
                                 wire_name.clone(),
-                                WireToolRoute::Function(tool_name),
+                                WireToolRoute::Function(tool_name.clone()),
                             )?;
-                            declarations
-                                .push(ToolSpec::Function(function_declaration(wire_name, tool)));
+                            declarations.push(ToolSpec::Function(function_declaration(
+                                wire_name, &tool_name, tool,
+                            )));
                         }
                         ResponsesApiNamespaceTool::Custom(tool) => {
                             let tool_name =
                                 ToolName::namespaced(namespace.name.clone(), tool.name.clone());
                             let wire_name = flat_wire_name("custom", &tool_name);
                             let (tool, input_key) =
-                                custom_function_declaration(wire_name.clone(), tool);
+                                custom_function_declaration(wire_name.clone(), &tool_name, tool);
                             insert_wire_route(
                                 &mut routes,
                                 wire_name,
@@ -519,14 +527,20 @@ fn project_flat_function_tools(
     Ok((declarations, routes))
 }
 
-fn function_declaration(wire_name: String, mut tool: ResponsesApiTool) -> ResponsesApiTool {
+fn function_declaration(
+    wire_name: String,
+    tool_name: &ToolName,
+    mut tool: ResponsesApiTool,
+) -> ResponsesApiTool {
     tool.name = wire_name;
+    tool.description = flat_route_description(tool_name, &tool.description);
     tool.defer_loading = None;
     tool
 }
 
 fn custom_function_declaration(
     wire_name: String,
+    tool_name: &ToolName,
     tool: FreeformTool,
 ) -> (ResponsesApiTool, String) {
     let input_key = custom_input_key(&tool.name).to_string();
@@ -540,7 +554,10 @@ fn custom_function_declaration(
         Some(vec![input_key.clone()]),
         Some(false.into()),
     );
-    let description = format!("{}\n\n{}", tool.description, tool.format.definition);
+    let description = flat_route_description(
+        tool_name,
+        &format!("{}\n\n{}", tool.description, tool.format.definition),
+    );
     (
         ResponsesApiTool {
             name: wire_name,
@@ -551,6 +568,50 @@ fn custom_function_declaration(
             output_schema: None,
         },
         input_key,
+    )
+}
+
+fn flat_route_description(tool_name: &ToolName, description: &str) -> String {
+    let canonical_name = if tool_name.is_default_namespace() {
+        tool_name.name.clone()
+    } else {
+        format!(
+            "{}.{}",
+            tool_name.namespace.as_deref().unwrap_or_default(),
+            tool_name.name
+        )
+    };
+    let digest = format!("{:x}", Sha256::digest(canonical_name.as_bytes()));
+    let digest = &digest[..FLAT_ROUTE_CANONICAL_LABEL_DIGEST_HEX_CHARS];
+    let mut sanitized_name = canonical_name
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '_' | '-' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized_name != canonical_name
+        || sanitized_name.len() > MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES
+    {
+        let separator = "__";
+        let prefix_budget = MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES
+            .saturating_sub(separator.len())
+            .saturating_sub(FLAT_ROUTE_CANONICAL_LABEL_DIGEST_HEX_CHARS);
+        let prefix_end = sanitized_name
+            .char_indices()
+            .take_while(|(index, character)| index + character.len_utf8() <= prefix_budget)
+            .map(|(index, character)| index + character.len_utf8())
+            .last()
+            .unwrap_or(0);
+        sanitized_name.truncate(prefix_end);
+        sanitized_name.push_str(separator);
+        sanitized_name.push_str(digest);
+    }
+    format!(
+        "This flat Provider function directly invokes the canonical `{sanitized_name}` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface.\n\n{description}"
     )
 }
 
@@ -566,6 +627,12 @@ fn insert_wire_route(
 }
 
 fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
+    // This is a Codex model-context safety bound, not a Provider protocol limit.
+    const MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES: usize = 1_024;
+    const WIRE_NAME_PREFIX: &str = "local__";
+    const WIRE_NAME_SEPARATOR: &str = "__";
+    const WIRE_ROUTE_DIGEST_HEX_CHARS: usize = 32;
+
     let namespace = if tool_name.is_default_namespace() {
         ""
     } else {
@@ -575,7 +642,27 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         "{:x}",
         Sha256::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
     );
-    format!("local__{}", &digest[..32])
+    let semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
+    let mut semantic_name = semantic_name
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
+                char::from(byte)
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let digest = &digest[..WIRE_ROUTE_DIGEST_HEX_CHARS];
+    if !semantic_name.is_empty() {
+        let semantic_budget = MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES
+            .saturating_sub(WIRE_NAME_PREFIX.len())
+            .saturating_sub(WIRE_NAME_SEPARATOR.len())
+            .saturating_sub(WIRE_ROUTE_DIGEST_HEX_CHARS);
+        semantic_name.truncate(semantic_budget);
+        return format!("{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{digest}");
+    }
+    format!("{WIRE_NAME_PREFIX}{digest}")
 }
 
 fn custom_input_key(tool_name: &str) -> &'static str {

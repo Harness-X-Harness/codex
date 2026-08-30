@@ -64,6 +64,7 @@ use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_login::AuthManager;
+use codex_model_provider_info::WireApi;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::WebSearchMode;
@@ -656,7 +657,8 @@ fn image_generation_available(turn_context: &TurnContext) -> bool {
     }
 
     let provider = turn_context.provider.info();
-    provider.uses_openai_actor_authorization()
+    provider.wire_api == WireApi::GrokResponses
+        || provider.uses_openai_actor_authorization()
         || (provider.requires_openai_auth
             && turn_context
                 .auth_manager

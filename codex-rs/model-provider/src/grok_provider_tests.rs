@@ -242,7 +242,7 @@ fn grok_advertises_only_proven_provider_capabilities() {
         provider.capabilities(),
         ProviderCapabilities {
             namespace_tools: true,
-            image_generation: false,
+            image_generation: true,
             web_search: true,
             x_search: true,
             cached_web_search: false,
