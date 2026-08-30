@@ -45,6 +45,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
+        .with_model("grok-4.6")
         .with_model_provider("grok")
         .with_provider_name("Grok")
         .with_provider_base_url(&format!("{}/api/codex", server.uri()))
