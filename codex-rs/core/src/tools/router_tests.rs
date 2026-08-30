@@ -42,9 +42,32 @@ use tokio_util::sync::CancellationToken;
 use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
+use super::flat_wire_name;
 use super::tool_log_payload;
 
 struct ExtensionEchoContributor;
+
+#[test]
+fn flat_wire_name_preserves_bounded_semantic_identity() {
+    assert_eq!(
+        flat_wire_name("function", &ToolName::namespaced("image_gen", "imagegen")),
+        "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a"
+    );
+
+    let wire_name = flat_wire_name(
+        "function",
+        &ToolName::namespaced(
+            "namespace.with invalid characters",
+            "tool-name-that-is-longer-than-the-semantic-budget",
+        ),
+    );
+    assert_eq!(wire_name.len(), 64);
+    assert!(
+        wire_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    );
+}
 
 #[test]
 fn tool_log_payload_redacts_plaintext_multi_agent_messages() {

@@ -28,7 +28,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         ),
     ];
     // Grok receives canonical `image_gen.imagegen` through the provider's flat wire route.
-    let imagegen_wire_name = "local__6094bed1fa9651e20af99c15f593ae7a";
+    let imagegen_wire_name = "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a";
     let mut sequence = Vec::new();
     for (index, (response_id, call_id, arguments)) in calls.into_iter().enumerate() {
         sequence.push(responses::sse(vec![

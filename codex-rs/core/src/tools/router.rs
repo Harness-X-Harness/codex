@@ -566,6 +566,11 @@ fn insert_wire_route(
 }
 
 fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
+    const WIRE_NAME_MAX_BYTES: usize = 64;
+    const WIRE_NAME_PREFIX: &str = "local__";
+    const WIRE_NAME_SEPARATOR: &str = "__";
+    const WIRE_ROUTE_DIGEST_HEX_CHARS: usize = 32;
+
     let namespace = if tool_name.is_default_namespace() {
         ""
     } else {
@@ -575,7 +580,29 @@ fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         "{:x}",
         Sha256::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
     );
-    format!("local__{}", &digest[..32])
+    let semantic_budget = WIRE_NAME_MAX_BYTES
+        - WIRE_NAME_PREFIX.len()
+        - WIRE_NAME_SEPARATOR.len()
+        - WIRE_ROUTE_DIGEST_HEX_CHARS;
+    let semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
+    let mut semantic_name = semantic_name
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
+                char::from(byte)
+            } else {
+                '_'
+            }
+        })
+        .take(semantic_budget)
+        .collect::<String>();
+    if semantic_name.is_empty() {
+        semantic_name.push_str("tool");
+    }
+    format!(
+        "{WIRE_NAME_PREFIX}{semantic_name}{WIRE_NAME_SEPARATOR}{}",
+        &digest[..WIRE_ROUTE_DIGEST_HEX_CHARS]
+    )
 }
 
 fn custom_input_key(tool_name: &str) -> &'static str {
