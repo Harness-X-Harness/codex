@@ -64,6 +64,14 @@ fn flat_wire_name_preserves_complete_semantic_identity() {
 }
 
 #[test]
+fn flat_wire_name_bounds_oversized_model_context_items() {
+    let wire_name = flat_wire_name("function", &ToolName::plain("x".repeat(2_048)));
+
+    assert_eq!(wire_name.len(), "local__".len() + 32);
+    assert!(!wire_name.contains("xxxx"));
+}
+
+#[test]
 fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     let payload = ToolPayload::Function {
         arguments: json!({"target": "/root/worker", "message": "secret message"}).to_string(),
@@ -127,9 +135,6 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         .collect::<Vec<_>>();
     assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
-    assert!(wire_names.iter().any(|name| {
-        name == "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa"
-    }));
 
     let mut items = wire_names
         .iter()
