@@ -106,6 +106,39 @@ fn function(name: &str) -> ResponsesApiNamespaceTool {
 }
 
 #[test]
+fn flat_projection_disambiguates_retained_indirect_guidance() -> anyhow::Result<()> {
+    let mut imagegen = match function("imagegen") {
+        ResponsesApiNamespaceTool::Function(tool) => tool,
+        ResponsesApiNamespaceTool::Custom(_) => unreachable!("fixture is a function"),
+    };
+    imagegen.description =
+        "Generate or edit an image. In code-mode, invoke this tool through the exec wrapper."
+            .to_string();
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "image_gen".to_string(),
+            description: "Image tools.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(imagegen)],
+        })],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let description = match &router.model_visible_specs()[0] {
+        ToolSpec::Function(tool) => tool.description.clone(),
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+
+    assert!(description.starts_with(
+        "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
+    ));
+    assert!(description.ends_with(
+        "Generate or edit an image. In code-mode, invoke this tool through the exec wrapper."
+    ));
+    Ok(())
+}
+
+#[test]
 fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()> {
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
@@ -147,7 +180,7 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
     assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
     assert!(descriptions[0].starts_with(
-        "This flat Provider function directly invokes the canonical `mcp__calendar.create_event` tool."
+        "This flat Provider function directly invokes the canonical `mcp__calendar.create_event` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
     ));
     assert!(descriptions[0].ends_with("Call create_event."));
 
@@ -239,7 +272,7 @@ fn flat_projection_bounds_oversized_canonical_description_label() -> anyhow::Res
     };
     let canonical_label = description
         .strip_prefix("This flat Provider function directly invokes the canonical `")
-        .and_then(|description| description.split_once("` tool."))
+        .and_then(|description| description.split_once("` tool. Call this function itself."))
         .map(|(label, _)| label)
         .expect("projected description should contain a canonical label");
     assert!(canonical_label.len() <= MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES);
@@ -274,7 +307,9 @@ fn flat_projection_description_labels_preserve_sanitized_name_identity() -> anyh
         .map(|description| {
             description
                 .strip_prefix("This flat Provider function directly invokes the canonical `")
-                .and_then(|description| description.split_once("` tool."))
+                .and_then(|description| {
+                    description.split_once("` tool. Call this function itself.")
+                })
                 .map(|(label, _)| label)
                 .expect("projected description should contain a canonical label")
         })

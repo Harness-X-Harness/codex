@@ -611,7 +611,7 @@ fn flat_route_description(tool_name: &ToolName, description: &str) -> String {
         sanitized_name.push_str(digest);
     }
     format!(
-        "This flat Provider function directly invokes the canonical `{sanitized_name}` tool.\n\n{description}"
+        "This flat Provider function directly invokes the canonical `{sanitized_name}` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface.\n\n{description}"
     )
 }
 
