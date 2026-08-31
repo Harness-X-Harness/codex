@@ -1,14 +1,6 @@
 name: grokex-live
 
 on:
-  push:
-    branches: [release/rust-v0.151.0]
-    paths:
-      - .github/workflows/grokex-live.yml
-      - grokex/live_smoke.py
-      - grokex/release.py
-      - grokex/test_live_smoke.py
-      - grokex/test_release.py
   workflow_call:
     inputs:
       archive_artifact:

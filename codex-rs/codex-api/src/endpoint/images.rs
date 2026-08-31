@@ -100,9 +100,8 @@ impl<T: HttpTransport> ImagesClient<T> {
             .and_then(|value| value.to_str().ok())
             .filter(|request_id| !request_id.is_empty())
             .map(str::to_string);
-        let response: ImageResponse = serde_json::from_slice(&resp.body).map_err(|e| {
-            ApiError::Stream(format!("failed to decode {operation} response: {e}"))
-        })?;
+        let response: ImageResponse = serde_json::from_slice(&resp.body)
+            .map_err(|e| ApiError::Stream(format!("failed to decode {operation} response: {e}")))?;
         if self.dialect == ImagesDialect::OpenAi && response.created.is_none() {
             return Err(ApiError::Stream(format!(
                 "failed to decode {operation} response: missing field `created`"
@@ -111,7 +110,6 @@ impl<T: HttpTransport> ImagesClient<T> {
         Ok((response, imagegen_request_id))
     }
 }
-
 
 fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, ApiError> {
     if !(1..=GROK_MAX_EDIT_IMAGES).contains(&request.images.len()) {

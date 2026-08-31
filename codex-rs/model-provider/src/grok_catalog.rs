@@ -31,7 +31,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
                 reasoning_effort(ReasoningEffort::Medium, "Medium reasoning"),
                 reasoning_effort(ReasoningEffort::Low, "Low reasoning"),
             ],
-            shell_type: ConfigShellToolType::Default,
+            shell_type: ConfigShellToolType::UnifiedExec,
             visibility: ModelVisibility::List,
             supported_in_api: true,
             priority: 0,
@@ -68,6 +68,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             model_specialty: None,
             tool_mode: None,
             multi_agent_version: Some(MultiAgentVersion::V2),
+            multi_agent_reasoning_effort: Some(ReasoningEffort::XHigh),
         }],
     }
 }

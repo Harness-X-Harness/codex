@@ -29,6 +29,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ToolMode;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -39,7 +40,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use codex_protocol::openai_models::ToolMode;
 use super::MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES;
 use super::ToolCall;
 use super::ToolCallSource;
