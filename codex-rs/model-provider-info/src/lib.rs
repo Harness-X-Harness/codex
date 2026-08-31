@@ -200,6 +200,12 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.wire_api == WireApi::GrokResponses && self.supports_websockets {
+            return Err(
+                "provider grok_responses cannot be combined with supports_websockets".to_string(),
+            );
+        }
+
         if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -475,7 +481,7 @@ impl ModelProviderInfo {
     }
 
     pub fn is_openai(&self) -> bool {
-        self.name == OPENAI_PROVIDER_NAME
+        self.wire_api == WireApi::Responses && self.name == OPENAI_PROVIDER_NAME
     }
 
     pub fn supports_codex_backend_routes(&self) -> bool {

@@ -1,13 +1,20 @@
 use codex_api::ResponsesDialect;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
 use crate::create_model_provider;
+use crate::grok_catalog::static_model_catalog;
 use crate::provider::ProviderCapabilities;
 use crate::provider::RemoteCompactionSupport;
 
@@ -116,6 +123,26 @@ fn grok_advertises_only_proven_provider_capabilities() {
     );
 }
 
+#[test]
+fn grok_does_not_inherit_stock_attestation() {
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let stock = create_model_provider(
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        Some(auth_manager.clone()),
+    );
+    let grok = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        Some(auth_manager),
+    );
+
+    assert!(stock.supports_attestation());
+    assert!(!grok.supports_attestation());
+}
+
 #[tokio::test]
 async fn resolved_provider_derives_internal_responses_dialect() {
     let stock = create_model_provider(
@@ -144,5 +171,66 @@ async fn resolved_provider_derives_internal_responses_dialect() {
             .expect("Grok API provider")
             .responses_dialect,
         ResponsesDialect::Grok
+    );
+}
+
+#[tokio::test]
+async fn grok_models_manager_uses_bundle_or_exact_config_replacement() {
+    let provider = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        /*auth_manager*/ None,
+    );
+    let bundled_catalog = static_model_catalog();
+    let bundled_models = provider
+        .models_manager(PathBuf::new(), /*config_model_catalog*/ None)
+        .get_remote_models()
+        .await;
+
+    assert_eq!(bundled_models, bundled_catalog.models);
+    let bundled_model = bundled_models
+        .first()
+        .expect("bundled Grok catalog should contain a model");
+    assert_eq!(
+        (
+            bundled_model.default_reasoning_level.clone(),
+            bundled_model
+                .supported_reasoning_levels
+                .iter()
+                .map(|preset| preset.effort.clone())
+                .collect::<Vec<_>>(),
+            bundled_model.multi_agent_version,
+        ),
+        (
+            Some(ReasoningEffort::High),
+            vec![
+                ReasoningEffort::Ultra,
+                ReasoningEffort::XHigh,
+                ReasoningEffort::High,
+                ReasoningEffort::Medium,
+                ReasoningEffort::Low,
+            ],
+            Some(MultiAgentVersion::V2),
+        )
+    );
+
+    let mut replacement_model = static_model_catalog()
+        .models
+        .into_iter()
+        .next()
+        .expect("bundled Grok catalog should contain a model");
+    replacement_model.slug = "configured-grok".to_string();
+    let configured_catalog = ModelsResponse {
+        models: vec![replacement_model],
+    };
+
+    assert_eq!(
+        provider
+            .models_manager(PathBuf::new(), Some(configured_catalog.clone()))
+            .get_remote_models()
+            .await,
+        configured_catalog.models
     );
 }

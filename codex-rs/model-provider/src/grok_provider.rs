@@ -6,15 +6,13 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
-use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 
-use crate::grok_catalog::GrokModelsResponseDecoder;
-use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::grok_catalog::static_model_catalog;
 use crate::provider::ConfiguredModelProvider;
 use crate::provider::ModelProvider;
 use crate::provider::ModelProviderFuture;
@@ -43,20 +41,10 @@ impl GrokModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         let auth_manager = self.inner.auth_manager();
-        match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(auth_manager, model_catalog)),
-            None => {
-                let endpoint = Arc::new(OpenAiModelsEndpoint::new_with_decoder(
-                    self.inner.info().clone(),
-                    auth_manager.clone(),
-                    Arc::new(GrokModelsResponseDecoder),
-                ));
-                Arc::new(OpenAiModelsManager::new_authoritative_without_cache(
-                    endpoint,
-                    auth_manager,
-                ))
-            }
-        }
+        Arc::new(StaticModelsManager::new(
+            auth_manager,
+            config_model_catalog.unwrap_or_else(static_model_catalog),
+        ))
     }
 }
 
@@ -103,7 +91,7 @@ impl ModelProvider for GrokModelProvider {
     }
 
     fn supports_attestation(&self) -> bool {
-        self.inner.supports_attestation()
+        false
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {

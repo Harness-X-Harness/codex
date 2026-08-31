@@ -430,30 +430,6 @@ async fn manager_without_cache_fetches_on_every_refresh() {
 }
 
 #[tokio::test]
-async fn authoritative_manager_starts_empty_and_uses_only_the_provider_catalog() {
-    let remote_models = vec![remote_model("grok-4.6", "Grok 4.6", /*priority*/ 0)];
-    let endpoint = TestModelsEndpoint::without_refresh(vec![remote_models.clone()]);
-    let manager = OpenAiModelsManager::new_authoritative_without_cache(
-        endpoint.clone(),
-        /*auth_manager*/ None,
-    );
-
-    assert_eq!(manager.get_remote_models().await, Vec::<ModelInfo>::new());
-
-    let catalog = manager
-        .raw_model_catalog(RefreshStrategy::Online, DEFAULT_HTTP_CLIENT_FACTORY)
-        .await;
-
-    assert_eq!(
-        catalog,
-        ModelsResponse {
-            models: remote_models,
-        }
-    );
-    assert_eq!(endpoint.fetch_count(), 1);
-}
-
-#[tokio::test]
 async fn injected_cache_hit_avoids_remote_fetch() {
     let cached_models = vec![remote_model("cached", "Cached", /*priority*/ 0)];
     let cache = TestModelsCache::with_entry(ModelsCacheEntry {

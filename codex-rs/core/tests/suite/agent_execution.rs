@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
@@ -13,6 +14,7 @@ use codex_protocol::protocol::TurnEnvironmentSelections;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
@@ -30,6 +32,7 @@ const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const GROK_SPAWN_AGENT_WIRE_NAME: &str = "local__5ca652933835aa510437f1f000cd98aa";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<serde_json::Value>(&request.body)
@@ -105,6 +108,81 @@ async fn mount_completed_worker(
         ]),
     )
     .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_v2_root_child_completion_uses_one_provider_lifecycle() -> Result<()> {
+    let server = start_mock_server().await;
+    let spawn_arguments = serde_json::to_string(&json!({
+        "message": FIRST_TASK,
+        "task_name": "first",
+        "fork_turns": "none",
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| body_contains(request, FIRST_PROMPT),
+        sse(vec![
+            ev_response_created("grok-root-response"),
+            ev_function_call(
+                "grok-spawn-call",
+                GROK_SPAWN_AGENT_WIRE_NAME,
+                &spawn_arguments,
+            ),
+            ev_completed("grok-root-response"),
+        ]),
+    )
+    .await;
+    mount_completed_worker(&server, FIRST_TASK, "grok-spawn-call").await;
+    mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| has_function_call_output(request, "grok-spawn-call"),
+        sse(vec![
+            ev_response_created("grok-root-complete"),
+            ev_assistant_message("grok-root-message", "child completed"),
+            ev_completed("grok-root-complete"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("grok-4.6").with_config(|config| {
+        config.model_provider_id = "grok".to_string();
+        config.model_provider.name = "Grok".to_string();
+        config.model_provider.wire_api = WireApi::GrokResponses;
+        config.model_provider.requires_openai_auth = false;
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+
+    test.submit_turn(FIRST_PROMPT).await?;
+
+    let child_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+    let child = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(child.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let child_config = child.config_snapshot().await;
+    assert_eq!(child_config.model_provider_id, "grok");
+    assert_eq!(child_config.model, "grok-4.6");
+
+    let requests = server.received_requests().await.expect("capture requests");
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>(),
+        vec!["/v1/responses", "/v1/responses", "/v1/responses"]
+    );
+    for request in requests {
+        let body: serde_json::Value = serde_json::from_slice(&request.body)?;
+        assert_eq!(body["model"], "grok-4.6");
+    }
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -137,6 +137,18 @@ supports_websockets = true
 }
 
 #[test]
+fn test_grok_wire_api_is_not_openai_by_name() {
+    let stock = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let grok = ModelProviderInfo {
+        wire_api: WireApi::GrokResponses,
+        ..stock.clone()
+    };
+
+    assert!(stock.is_openai());
+    assert!(!grok.is_openai());
+}
+
+#[test]
 fn test_personal_access_token_uses_chatgpt_codex_base_url() {
     let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         .to_api_provider(Some(AuthMode::PersonalAccessToken))
@@ -613,6 +625,20 @@ fn test_validate_provider_aws_rejects_websockets() {
     assert_eq!(
         provider.validate(),
         Err("provider aws cannot be combined with supports_websockets".to_string())
+    );
+}
+
+#[test]
+fn test_validate_grok_provider_rejects_websockets() {
+    let provider = ModelProviderInfo {
+        wire_api: WireApi::GrokResponses,
+        supports_websockets: true,
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err("provider grok_responses cannot be combined with supports_websockets".to_string())
     );
 }
 
