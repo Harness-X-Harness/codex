@@ -305,6 +305,17 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
     }
 
 
+
+def is_default_full_history_spawn(parsed_arguments: dict[str, object]) -> bool:
+    fork_turns = parsed_arguments.get("fork_turns")
+    if fork_turns is None:
+        return True
+    if not isinstance(fork_turns, str):
+        return False
+    fork_turns = fork_turns.strip()
+    return fork_turns == "" or fork_turns.casefold() == "all"
+
+
 def classify_collaboration_stage(
     *,
     root_status: str | None,
@@ -422,6 +433,7 @@ def wait_for_collaboration_turn(
     short_spawn_agent_count = 0
     item_type_counts: dict[str, int] = {}
     spawn_namespace_counts: dict[str, int] = {}
+    pending_child_thread_ids: set[str] = set()
 
     while time.monotonic() < deadline:
         if (
@@ -503,11 +515,14 @@ def wait_for_collaboration_turn(
             if not isinstance(call_id, str) or not call_id:
                 missing_spawn_identity_count += 1
                 continue
-            if "fork_turns" in parsed_arguments:
+            if is_default_full_history_spawn(parsed_arguments):
+                default_spawn_call_ids.add(call_id)
+                default_child_thread_ids.update(
+                    completed_spawn_receivers.get(call_id, set())
+                )
+                default_child_thread_ids.update(pending_child_thread_ids)
+            else:
                 explicit_fork_spawn_count += 1
-                continue
-            default_spawn_call_ids.add(call_id)
-            default_child_thread_ids.update(completed_spawn_receivers.get(call_id, set()))
             continue
 
         if method == "item/completed":
@@ -517,6 +532,17 @@ def wait_for_collaboration_turn(
             item_type = item.get("type")
             if isinstance(item_type, str):
                 item_type_counts[item_type] = item_type_counts.get(item_type, 0) + 1
+            if item.get("type") == "subAgentActivity":
+                agent_thread_id = item.get("agentThreadId")
+                kind = item.get("kind")
+                if isinstance(agent_thread_id, str) and agent_thread_id:
+                    child_thread_ids.add(agent_thread_id)
+                    pending_child_thread_ids.add(agent_thread_id)
+                    if kind == "started":
+                        spawn_completed_count += 1
+                    if default_spawn_call_ids:
+                        default_child_thread_ids.add(agent_thread_id)
+                continue
             if (
                 thread_id == root_thread_id
                 and item.get("type") == "collabAgentToolCall"

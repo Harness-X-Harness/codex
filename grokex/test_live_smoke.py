@@ -519,7 +519,7 @@ experimental_bearer_token = "secret"
 
     def test_collaboration_scenario_treats_explicit_extra_spawn_as_diagnostic(self) -> None:
         explicit_arguments = {
-            "fork_turns": "all",
+            "fork_turns": "none",
             "message": (
                 "Reply with exactly "
                 f"{live_smoke.CHILD_EXPECTED_AGENT_REPLY} and no other text."
@@ -563,6 +563,54 @@ experimental_bearer_token = "secret"
 
         self.assertEqual(evidence["explicit_fork_spawn_count"], 1)
         self.assertEqual(evidence["child_count"], 2)
+
+    def test_collaboration_scenario_treats_fork_turns_all_as_default_full_history(
+        self,
+    ) -> None:
+        messages = self.collaboration_messages()
+        raw_spawn = messages[0]
+        raw_item = raw_spawn["params"]["item"]
+        arguments = json.loads(raw_item["arguments"])
+        arguments["fork_turns"] = "all"
+        raw_item["arguments"] = json.dumps(arguments)
+        evidence = live_smoke.wait_for_collaboration_turn(
+            FakeAppServer(messages),
+            time.monotonic() + 1,
+            "thread-1",
+        )
+        self.assertEqual(evidence["default_full_history"], "completed")
+        self.assertEqual(evidence["explicit_fork_spawn_count"], 0)
+
+    def test_collaboration_scenario_correlates_sub_agent_activity_child(self) -> None:
+        messages = self.collaboration_messages()
+        messages = [
+            message
+            for message in messages
+            if message.get("params", {}).get("item", {}).get("type")
+            != "collabAgentToolCall"
+            or message.get("params", {}).get("item", {}).get("tool") != "spawnAgent"
+        ]
+        messages.insert(
+            1,
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "agentThreadId": "child-1",
+                        "kind": "started",
+                        "type": "subAgentActivity",
+                    },
+                    "threadId": "thread-1",
+                },
+            },
+        )
+        evidence = live_smoke.wait_for_collaboration_turn(
+            FakeAppServer(messages),
+            time.monotonic() + 1,
+            "thread-1",
+        )
+        self.assertEqual(evidence["default_full_history"], "completed")
+        self.assertEqual(evidence["child_count"], 1)
 
     def test_collaboration_scenario_treats_extra_response_as_diagnostic(self) -> None:
         server = FakeAppServer(self.collaboration_messages(extra_response=True))
