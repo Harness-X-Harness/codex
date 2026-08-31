@@ -14,7 +14,7 @@ import tomllib
 from pathlib import Path
 
 
-VERSION = "0.149.0"
+VERSION = "0.151.0"
 TAG = f"grokex-v{VERSION}"
 UPSTREAM_COMMIT = "78c290807ce710180111df227df3b7a4fe845452"
 TARGETS = (

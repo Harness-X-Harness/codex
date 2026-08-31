@@ -20,7 +20,7 @@ from collections import deque
 from pathlib import Path
 
 
-TAG = "grokex-v0.149.0"
+TAG = "grokex-v0.151.0"
 BASIC_SCENARIO = "basic-exact-reply"
 CONTINUATION_SCENARIO = "encrypted-reasoning-tool-continuation"
 COLLABORATION_SCENARIO = "ultra-full-history-collaboration"
@@ -568,7 +568,7 @@ def run_smoke(
                 1,
                 "initialize",
                 {
-                    "clientInfo": {"name": "grokex-release", "version": "0.149.0"},
+                    "clientInfo": {"name": "grokex-release", "version": "0.151.0"},
                     "capabilities": {"experimentalApi": True},
                 },
             )

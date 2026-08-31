@@ -10,7 +10,7 @@ class LiveEvidenceTest(unittest.TestCase):
     def test_builds_manifest_from_every_required_scenario(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            archive = root / "grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz"
+            archive = root / "grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz"
             archive.write_bytes(b"candidate")
             evidence_dir = root / "evidence"
             evidence_dir.mkdir()

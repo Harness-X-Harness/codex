@@ -2,7 +2,7 @@ name: grokex-checks
 
 on:
   pull_request:
-    branches: [release/rust-v0.149.0]
+    branches: [release/rust-v0.151.0]
     paths:
       - .github/workflows/grokex-checks.yml
       - .github/workflows/grokex-live.yml
@@ -15,7 +15,7 @@ on:
       - codex-rs/tools/**
       - grokex/**
   push:
-    branches: [release/rust-v0.149.0]
+    branches: [release/rust-v0.151.0]
     paths:
       - .github/workflows/grokex-checks.yml
       - .github/workflows/grokex-live.yml
@@ -93,7 +93,7 @@ jobs:
             --dist "${fixture}/dist" \
             --source-sha "${CHECKOUT_SHA}" \
             --target x86_64-unknown-linux-musl
-          candidate="${fixture}/dist/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz"
+          candidate="${fixture}/dist/grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz"
           candidate_sha="$(sha256sum "${candidate}" | awk '{print $1}')"
           python3 grokex/release.py package \
             --raw-root "${fixture}/raw" \

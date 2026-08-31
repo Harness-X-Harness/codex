@@ -2,7 +2,7 @@ name: grokex-live
 
 on:
   push:
-    branches: [release/rust-v0.149.0]
+    branches: [release/rust-v0.151.0]
     paths:
       - .github/workflows/grokex-live.yml
       - grokex/live_smoke.py
@@ -28,7 +28,7 @@ on:
       release_tag:
         description: Immutable published Grokex tag to validate
         required: true
-        default: grokex-v0.149.0
+        default: grokex-v0.151.0
         type: string
 
 concurrency:
@@ -63,7 +63,7 @@ jobs:
         env:
           ARCHIVE_ARTIFACT: ${{ inputs.archive_artifact }}
           REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
-          REQUESTED_TAG: ${{ inputs.release_tag || 'grokex-v0.149.0' }}
+          REQUESTED_TAG: ${{ inputs.release_tag || 'grokex-v0.151.0' }}
           REQUESTED_VALIDATOR_SHA: ${{ inputs.validator_sha || github.sha }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -83,7 +83,7 @@ jobs:
             git merge-base --is-ancestor "${source_sha}" "${REQUESTED_VALIDATOR_SHA}"
             gh release download "${REQUESTED_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz' \
+              --pattern 'grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz' \
               --dir archives
             artifact_name="grokex-published-linux-candidate"
           fi
@@ -144,7 +144,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 grokex/live_smoke.py \
-            --archive archives/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz \
+            --archive archives/grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz \
             --config "${RUNNER_TEMP}/config.toml" \
             --evidence "${RUNNER_TEMP}/LIVE_EVIDENCE-${SCENARIO}.json" \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
@@ -184,7 +184,7 @@ jobs:
         run: |
           python3 grokex/release.py build-live-evidence \
             --evidence-dir evidence \
-            --archive archives/grokex-v0.149.0-x86_64-unknown-linux-musl.tar.gz \
+            --archive archives/grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz \
             --output LIVE_EVIDENCE.json \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
             --validator-sha "${{ needs.prepare.outputs.validator_sha }}" \
