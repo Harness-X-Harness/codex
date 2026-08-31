@@ -16,7 +16,7 @@ from pathlib import Path
 
 VERSION = "0.149.0"
 TAG = f"grokex-v{VERSION}"
-UPSTREAM_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
+UPSTREAM_COMMIT = "78c290807ce710180111df227df3b7a4fe845452"
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",

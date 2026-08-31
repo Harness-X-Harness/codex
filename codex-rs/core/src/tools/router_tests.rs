@@ -39,6 +39,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use codex_protocol::openai_models::ToolMode;
 use super::MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES;
 use super::ToolCall;
 use super::ToolCallSource;
@@ -121,6 +122,10 @@ fn flat_projection_disambiguates_retained_indirect_guidance() -> anyhow::Result<
             description: "Image tools.".to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(imagegen)],
         })],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
         true,
     )
     .map_err(anyhow::Error::msg)?;
@@ -158,6 +163,10 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
                 ],
             }),
         ],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
         true,
     )
     .map_err(anyhow::Error::msg)?;
@@ -262,6 +271,10 @@ fn flat_projection_bounds_oversized_canonical_description_label() -> anyhow::Res
             description: "Oversized namespace.".to_string(),
             tools: vec![function("create_image")],
         })],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
         true,
     )
     .map_err(anyhow::Error::msg)?;
@@ -291,6 +304,10 @@ fn flat_projection_description_labels_preserve_sanitized_name_identity() -> anyh
             description: "Namespace tools.".to_string(),
             tools: vec![function("create/image"), function("create?image")],
         })],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
         true,
     )
     .map_err(anyhow::Error::msg)?;

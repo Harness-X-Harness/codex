@@ -1,6 +1,6 @@
 # Install Grokex
 
-The archive contains the Codex `0.149.0` harness with the release-bundled
+The archive contains the Codex `0.151.0` harness with the release-bundled
 `grok-4.6` Provider catalog.
 
 ## Unix
