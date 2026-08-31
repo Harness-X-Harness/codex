@@ -64,7 +64,9 @@ pub struct ProviderCapabilities {
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
+    pub cached_web_search: bool,
     pub external_web_access: bool,
+    pub indexed_web_search: bool,
     pub remote_compaction: RemoteCompactionSupport,
 }
 
@@ -74,7 +76,9 @@ impl Default for ProviderCapabilities {
             namespace_tools: true,
             image_generation: true,
             web_search: true,
+            cached_web_search: true,
             external_web_access: true,
+            indexed_web_search: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     }

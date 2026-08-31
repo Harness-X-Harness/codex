@@ -6270,6 +6270,95 @@ fn web_search_mode_for_turn_falls_back_when_provider_disallows_external_web_acce
 }
 
 #[test]
+fn web_search_mode_for_turn_uses_live_when_provider_disallows_cached_search() {
+    let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::read_only(),
+        ProviderCapabilities {
+            cached_web_search: false,
+            ..ProviderCapabilities::default()
+        },
+    );
+
+    assert_eq!(mode, WebSearchMode::Live);
+}
+
+#[test]
+fn web_search_mode_for_turn_uses_live_when_provider_disallows_indexed_search() {
+    let web_search_mode = Constrained::allow_any(WebSearchMode::Indexed);
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::read_only(),
+        ProviderCapabilities {
+            cached_web_search: false,
+            indexed_web_search: false,
+            ..ProviderCapabilities::default()
+        },
+    );
+
+    assert_eq!(mode, WebSearchMode::Live);
+}
+
+#[test]
+fn web_search_mode_for_turn_disables_when_only_cached_is_allowed_but_unsupported()
+-> anyhow::Result<()> {
+    let allowed = [WebSearchMode::Cached, WebSearchMode::Disabled];
+    let web_search_mode = Constrained::new(WebSearchMode::Cached, move |candidate| {
+        if allowed.contains(candidate) {
+            Ok(())
+        } else {
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: format!("{candidate:?}"),
+                allowed: format!("{allowed:?}"),
+                requirement_source: RequirementSource::Unknown,
+            })
+        }
+    })?;
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::read_only(),
+        ProviderCapabilities {
+            cached_web_search: false,
+            ..ProviderCapabilities::default()
+        },
+    );
+
+    assert_eq!(mode, WebSearchMode::Disabled);
+    Ok(())
+}
+
+#[test]
+fn web_search_mode_for_turn_disables_when_only_indexed_is_allowed_but_unsupported()
+-> anyhow::Result<()> {
+    let allowed = [WebSearchMode::Indexed, WebSearchMode::Disabled];
+    let web_search_mode = Constrained::new(WebSearchMode::Indexed, move |candidate| {
+        if allowed.contains(candidate) {
+            Ok(())
+        } else {
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: format!("{candidate:?}"),
+                allowed: format!("{allowed:?}"),
+                requirement_source: RequirementSource::Unknown,
+            })
+        }
+    })?;
+    let mode = resolve_web_search_mode_for_turn(
+        &web_search_mode,
+        &PermissionProfile::read_only(),
+        ProviderCapabilities {
+            indexed_web_search: false,
+            ..ProviderCapabilities::default()
+        },
+    );
+
+    assert_eq!(mode, WebSearchMode::Disabled);
+    Ok(())
+}
+
+#[test]
 fn web_search_mode_for_turn_disables_when_external_access_and_cached_are_disallowed()
 -> anyhow::Result<()> {
     let allowed = [
