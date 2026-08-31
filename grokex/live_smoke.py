@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one bounded, secret-safe Grok Turn through a packaged App Server."""
+"""Run one bounded, secret-safe Grok scenario through a packaged App Server."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
+HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
 
 
 def sha256(path: Path) -> str:
@@ -149,12 +150,17 @@ class AppServer:
                 self.process.wait(timeout=5)
 
 
-def wait_for_basic_turn(server: AppServer, deadline: float) -> dict[str, str]:
+def wait_for_exact_reply(
+    server: AppServer,
+    deadline: float,
+    expected_reply: str,
+    turn_name: str,
+) -> dict[str, str]:
     agent_reply = None
     status = None
 
     while time.monotonic() < deadline:
-        message = server.next_message(deadline, "the single basic Grok Turn")
+        message = server.next_message(deadline, turn_name)
         method = message.get("method")
         params = message.get("params")
         if not isinstance(params, dict):
@@ -171,16 +177,25 @@ def wait_for_basic_turn(server: AppServer, deadline: float) -> dict[str, str]:
     if status != "completed":
         safe_status = status if isinstance(status, str) else "missing"
         raise SystemExit(
-            "the single basic Grok Turn did not complete "
+            f"{turn_name} did not complete "
             f"(status={safe_status}, "
             f"agent_reply_seen={str(isinstance(agent_reply, str)).lower()})"
         )
-    if not isinstance(agent_reply, str) or agent_reply.strip() != BASIC_EXPECTED_AGENT_REPLY:
-        raise SystemExit("the basic Grok Turn did not return the expected semantic reply")
+    if not isinstance(agent_reply, str) or agent_reply.strip() != expected_reply:
+        raise SystemExit(f"{turn_name} did not return the expected semantic reply")
     return {
         "response_assertion": "exact_match",
         "status": status,
     }
+
+
+def wait_for_basic_turn(server: AppServer, deadline: float) -> dict[str, str]:
+    return wait_for_exact_reply(
+        server,
+        deadline,
+        BASIC_EXPECTED_AGENT_REPLY,
+        "the single basic Grok Turn",
+    )
 
 
 def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]:
@@ -262,7 +277,6 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, str]
     if not isinstance(agent_reply, str) or agent_reply.strip() != EXPECTED_AGENT_REPLY:
         raise SystemExit("the Grok Turn did not return the expected semantic reply")
     return {
-        "reasoning_replay": "completed",
         "response_assertion": "exact_match",
         "status": status,
         "tool_continuation": "completed",
@@ -362,30 +376,77 @@ def run_smoke(
                 prompt = (
                     f"Reply with exactly {BASIC_EXPECTED_AGENT_REPLY} and no other text."
                 )
-                wait_for_turn = wait_for_basic_turn
+                operation_count = 1
+                server.request(
+                    4,
+                    "turn/start",
+                    {
+                        "input": [
+                            {
+                                "text": prompt,
+                                "textElements": [],
+                                "type": "text",
+                            }
+                        ],
+                        "threadId": thread_id,
+                    },
+                )
+                turn_evidence = wait_for_basic_turn(server, time.monotonic() + 120)
             else:
                 prompt = (
                     f"Call {TOOL_NAME} exactly once. Use its result, then reply "
                     f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
                 )
-                wait_for_turn = wait_for_verified_turn
+                server.request(
+                    4,
+                    "turn/start",
+                    {
+                        "input": [
+                            {
+                                "text": prompt,
+                                "textElements": [],
+                                "type": "text",
+                            }
+                        ],
+                        "threadId": thread_id,
+                    },
+                )
+                turn_evidence = wait_for_verified_turn(
+                    server, time.monotonic() + 120
+                )
 
-            operation_count = 1
-            server.request(
-                4,
-                "turn/start",
-                {
-                    "input": [
-                        {
-                            "text": prompt,
-                            "textElements": [],
-                            "type": "text",
-                        }
+                history_prompt = (
+                    f"Reply with exactly {HISTORY_EXPECTED_AGENT_REPLY} and no other text. "
+                    "Do not call any tool."
+                )
+                server.request(
+                    5,
+                    "turn/start",
+                    {
+                        "input": [
+                            {
+                                "text": history_prompt,
+                                "textElements": [],
+                                "type": "text",
+                            }
+                        ],
+                        "threadId": thread_id,
+                    },
+                )
+                history_evidence = wait_for_exact_reply(
+                    server,
+                    time.monotonic() + 120,
+                    HISTORY_EXPECTED_AGENT_REPLY,
+                    "the Grok history-replay Turn",
+                )
+                operation_count = 2
+                turn_evidence = {
+                    **turn_evidence,
+                    "history_response_assertion": history_evidence[
+                        "response_assertion"
                     ],
-                    "threadId": thread_id,
-                },
-            )
-            turn_evidence = wait_for_turn(server, time.monotonic() + 120)
+                    "reasoning_replay": "completed",
+                }
 
             evidence = {
                 "archive": archive.name,

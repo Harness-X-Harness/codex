@@ -135,7 +135,7 @@ jobs:
           umask 077
           printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
           python3 grokex/release.py verify-profile --path "${RUNNER_TEMP}/config.toml" --secret
-      - name: Execute one bounded semantic operation
+      - name: Execute bounded semantic scenario
         env:
           SCENARIO: ${{ matrix.scenario }}
         shell: bash

@@ -3,14 +3,17 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
+use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::path::PathBuf;
 
 use crate::create_model_provider;
@@ -65,13 +68,22 @@ fn stock_provider_keeps_canonical_history_unchanged() {
         ModelProviderInfo::create_openai_provider(/*base_url*/ None),
         /*auth_manager*/ None,
     );
-    let input = canonical_history(
+    let mut input = canonical_history(
         Some(InternalChatMessageMetadataPassthrough {
             turn_id: Some("turn-1".to_owned()),
             ..Default::default()
         }),
         Some(vec!["encrypted".to_owned()]),
     );
+    input.push(ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_owned(),
+        }],
+        content: None,
+        encrypted_content: Some("opaque-encrypted-reasoning".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    });
 
     assert_eq!(provider.project_model_input(input.clone()), input);
 }
@@ -98,6 +110,53 @@ fn grok_provider_projects_text_and_tool_continuation() {
         canonical_history(
             /*metadata*/ None, /*encrypted_function_args*/ None
         )
+    );
+}
+
+#[test]
+fn grok_provider_replays_encrypted_reasoning_without_null_content() {
+    let provider = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..ModelProviderInfo::default()
+        },
+        /*auth_manager*/ None,
+    );
+    let input = vec![ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_owned(),
+        }],
+        content: None,
+        encrypted_content: Some("opaque-encrypted-reasoning".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    let projected = provider.project_model_input(input.clone());
+
+    assert_eq!(
+        serde_json::to_value(projected).expect("projected reasoning should serialize"),
+        json!([{
+            "id": "rs_reasoning-id",
+            "type": "reasoning",
+            "summary": [{
+                "type": "summary_text",
+                "text": "summary"
+            }],
+            "encrypted_content": "opaque-encrypted-reasoning"
+        }])
+    );
+    assert_eq!(
+        input,
+        vec![ResponseItem::Reasoning {
+            id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".to_owned(),
+            }],
+            content: None,
+            encrypted_content: Some("opaque-encrypted-reasoning".to_owned()),
+            internal_chat_message_metadata_passthrough: None,
+        }]
     );
 }
 

@@ -35,6 +35,8 @@ class LiveEvidenceTest(unittest.TestCase):
             }
             continuation = {
                 **common,
+                "history_response_assertion": "exact_match",
+                "operation_count": 2,
                 "reasoning_replay": "completed",
                 "response_assertion": "exact_match",
                 "scenario": "encrypted-reasoning-tool-continuation",
@@ -63,7 +65,7 @@ class LiveEvidenceTest(unittest.TestCase):
                     "catalog": "release-bundled",
                     "model": "grok-4.6",
                     "multi_agent_version": "v2",
-                    "operation_count": 2,
+                    "operation_count": 3,
                     "provider": "grok",
                     "reasoning_effort": "ultra",
                     "scenarios": {
@@ -73,7 +75,8 @@ class LiveEvidenceTest(unittest.TestCase):
                             "status": "completed",
                         },
                         "encrypted-reasoning-tool-continuation": {
-                            "operation_count": 1,
+                            "history_response_assertion": "exact_match",
+                            "operation_count": 2,
                             "reasoning_replay": "completed",
                             "response_assertion": "exact_match",
                             "status": "completed",

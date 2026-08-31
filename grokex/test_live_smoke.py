@@ -1,6 +1,10 @@
+import json
+import tempfile
 import time
 import unittest
 from collections import deque
+from pathlib import Path
+from unittest.mock import patch
 
 from grokex import live_smoke
 
@@ -16,6 +20,39 @@ class FakeAppServer:
 
     def send(self, message: dict[str, object]) -> None:
         self.sent.append(message)
+
+
+class FakeScenarioAppServer(FakeAppServer):
+    def __init__(self, messages: list[dict[str, object]]) -> None:
+        super().__init__(messages)
+        self.requests: list[tuple[int, str, dict[str, object]]] = []
+
+    def request(
+        self, request_id: int, method: str, params: dict[str, object]
+    ) -> dict[str, object]:
+        self.requests.append((request_id, method, params))
+        if method == "initialize":
+            return {}
+        if method == "model/list":
+            return {
+                "data": [
+                    {
+                        "id": "grok-4.6",
+                        "multiAgentVersion": "v2",
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "ultra"}
+                        ],
+                    }
+                ]
+            }
+        if method == "thread/start":
+            return {"modelProvider": "grok", "thread": {"id": "thread-1"}}
+        if method == "turn/start":
+            return {}
+        raise AssertionError(f"unexpected request method: {method}")
+
+    def close(self) -> None:
+        pass
 
 
 class VerifiedTurnTest(unittest.TestCase):
@@ -97,7 +134,6 @@ class VerifiedTurnTest(unittest.TestCase):
         self.assertEqual(
             evidence,
             {
-                "reasoning_replay": "completed",
                 "response_assertion": "exact_match",
                 "status": "completed",
                 "tool_continuation": "completed",
@@ -135,6 +171,71 @@ class VerifiedTurnTest(unittest.TestCase):
             "status=failed.*reasoning_completed=true.*tool_requests=1.*tool_completed=true",
         ):
             live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+
+    def test_continuation_scenario_replays_history_in_second_turn(self) -> None:
+        first_turn = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
+        server = FakeScenarioAppServer(
+            [
+                *first_turn.messages,
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "type": "agentMessage",
+                            "text": "GROKEX_HISTORY_RESPONSE_OK",
+                        }
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {"turn": {"status": "completed"}},
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text(
+                """
+model = "grok-4.6"
+model_provider = "grok"
+
+[model_providers.grok]
+experimental_bearer_token = "secret"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            evidence_path = root / "evidence.json"
+            with (
+                patch.object(live_smoke, "extract_archive", return_value=root),
+                patch.object(live_smoke, "AppServer", return_value=server),
+            ):
+                live_smoke.run_smoke(
+                    archive,
+                    config,
+                    evidence_path,
+                    "source-sha",
+                    "validator-sha",
+                    "run-id",
+                    live_smoke.CONTINUATION_SCENARIO,
+                )
+
+            turn_requests = [
+                request for request in server.requests if request[1] == "turn/start"
+            ]
+            self.assertEqual([request[0] for request in turn_requests], [4, 5])
+            self.assertEqual(
+                [request[2]["threadId"] for request in turn_requests],
+                ["thread-1", "thread-1"],
+            )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["operation_count"], 2)
+            self.assertEqual(evidence["reasoning_replay"], "completed")
+            self.assertEqual(evidence["history_response_assertion"], "exact_match")
 
 
 if __name__ == "__main__":
