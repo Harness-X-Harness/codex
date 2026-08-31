@@ -90,7 +90,11 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             ToolSpec::Namespace(ResponsesApiNamespace {
                 name: "collaboration".to_string(),
                 description: "Agent tools.".to_string(),
-                tools: vec![function("spawn_agent")],
+                tools: vec![
+                    function("spawn_agent"),
+                    function("send_message"),
+                    function("followup_task"),
+                ],
             }),
         ],
         true,
@@ -104,7 +108,7 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             spec => panic!("expected projected function, got {spec:?}"),
         })
         .collect::<Vec<_>>();
-    assert_eq!(wire_names.len(), 2);
+    assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
     assert!(wire_names.iter().all(|name| name.len() <= 64));
 
@@ -143,6 +147,8 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         vec![
             ToolName::namespaced("mcp__calendar", "create_event"),
             ToolName::namespaced("collaboration", "spawn_agent"),
+            ToolName::namespaced("collaboration", "send_message"),
+            ToolName::namespaced("collaboration", "followup_task"),
         ]
     );
     assert_eq!(
@@ -157,8 +163,20 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             ToolPayload::Function {
                 arguments: json!({"value": "argument-1"}).to_string(),
             },
+            ToolPayload::Function {
+                arguments: json!({"value": "argument-2"}).to_string(),
+            },
+            ToolPayload::Function {
+                arguments: json!({"value": "argument-3"}).to_string(),
+            },
         ]
     );
+    assert_eq!(calls[0].encrypted_function_args, None);
+    assert_eq!(calls[0].direct_source(), ToolCallSource::Direct);
+    for call in &calls[1..] {
+        assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+        assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    }
     Ok(())
 }
 
