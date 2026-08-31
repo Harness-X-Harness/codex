@@ -950,12 +950,12 @@ impl ModelProvider for MockMemoryModelProvider {
         self.delegate.info()
     }
 
-    fn memory_extraction_preferred_model(&self) -> &'static str {
-        MOCK_PROVIDER_PHASE_ONE_MODEL
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(MOCK_PROVIDER_PHASE_ONE_MODEL)
     }
 
-    fn memory_consolidation_preferred_model(&self) -> &'static str {
-        MOCK_PROVIDER_PHASE_TWO_MODEL
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(MOCK_PROVIDER_PHASE_TWO_MODEL)
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {

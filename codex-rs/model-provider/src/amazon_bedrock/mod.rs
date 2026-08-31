@@ -204,25 +204,25 @@ impl ModelProvider for AmazonBedrockModelProvider {
         }
     }
 
-    fn approval_review_preferred_model(&self) -> &'static str {
-        match self.endpoint {
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(match self.endpoint {
             BedrockEndpoint::Mantle => AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
             BedrockEndpoint::Runtime => AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-        }
+        })
     }
 
-    fn memory_extraction_preferred_model(&self) -> &'static str {
-        match self.endpoint {
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(match self.endpoint {
             BedrockEndpoint::Mantle => AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
             BedrockEndpoint::Runtime => AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-        }
+        })
     }
 
-    fn memory_consolidation_preferred_model(&self) -> &'static str {
-        match self.endpoint {
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(match self.endpoint {
             BedrockEndpoint::Mantle => AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
             BedrockEndpoint::Runtime => AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID,
-        }
+        })
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -635,9 +635,9 @@ mod tests {
                 mantle_provider.memory_consolidation_preferred_model(),
             ),
             (
-                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
+                Some(AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID),
             )
         );
         assert_eq!(
@@ -647,9 +647,9 @@ mod tests {
                 runtime_provider.memory_consolidation_preferred_model(),
             ),
             (
-                AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID,
+                Some(AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID),
             )
         );
     }

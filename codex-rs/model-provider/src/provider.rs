@@ -15,6 +15,7 @@ use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -30,6 +31,7 @@ use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
+use crate::grok_provider::GrokModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
 pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
@@ -149,23 +151,26 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
 
     /// Returns the preferred model used for automatic approval review.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn approval_review_preferred_model(&self) -> &'static str {
-        DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; review then uses an
+    /// explicit override or the selected parent model.
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
     }
 
     /// Returns the preferred model used for memory extraction.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn memory_extraction_preferred_model(&self) -> &'static str {
-        DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; callers must require an
+    /// explicit model instead of sending another provider's model ID.
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
     }
 
     /// Returns the preferred model used for memory consolidation.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn memory_consolidation_preferred_model(&self) -> &'static str {
-        DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; callers must require an
+    /// explicit model instead of sending another provider's model ID.
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -309,22 +314,27 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
-    } else {
-        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+    match provider_info.wire_api {
+        WireApi::GrokResponses => Arc::new(GrokModelProvider::new(provider_info, auth_manager)),
+        WireApi::Responses if provider_info.is_amazon_bedrock() => {
+            Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
+        }
+        WireApi::Responses => Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager)),
     }
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
 #[derive(Clone, Debug)]
-struct ConfiguredModelProvider {
+pub(crate) struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl ConfiguredModelProvider {
-    fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
+    pub(crate) fn new(
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
         let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
             info: provider_info,
@@ -353,17 +363,19 @@ impl ModelProvider for ConfiguredModelProvider {
         }
     }
 
-    fn approval_review_preferred_model(&self) -> &'static str {
-        if self
-            .auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.is_api_key_auth())
-        {
-            API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
-        } else {
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
-        }
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(
+            if self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_cached())
+                .is_some_and(|auth| auth.is_api_key_auth())
+            {
+                API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
+            } else {
+                DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            },
+        )
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -644,6 +656,19 @@ mod tests {
     }
 
     #[test]
+    fn grok_wire_api_selects_grok_provider() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                wire_api: WireApi::GrokResponses,
+                ..ModelProviderInfo::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert!(format!("{provider:?}").starts_with("GrokModelProvider"));
+    }
+
+    #[test]
     fn configured_provider_remote_compaction_matches_provider_support() {
         let cases = [
             (
@@ -687,7 +712,7 @@ mod tests {
 
         assert_eq!(
             provider.approval_review_preferred_model(),
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
         );
     }
 
@@ -700,7 +725,10 @@ mod tests {
             ))),
         );
 
-        assert_eq!(provider.approval_review_preferred_model(), "gpt-5.6-luna");
+        assert_eq!(
+            provider.approval_review_preferred_model(),
+            Some("gpt-5.6-luna")
+        );
     }
 
     #[test]
@@ -714,7 +742,7 @@ mod tests {
 
         assert_eq!(
             provider.approval_review_preferred_model(),
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
         );
     }
 

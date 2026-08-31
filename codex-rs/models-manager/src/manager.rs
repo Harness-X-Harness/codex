@@ -213,6 +213,12 @@ pub type ModelsManagerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 /// Shared model manager handle used across runtime services.
 pub type SharedModelsManager = Arc<dyn ModelsManager>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteCatalogAuthority {
+    Stock,
+    Provider,
+}
+
 /// OpenAI-compatible model manager backed by bundled models, cache, and `/models`.
 #[derive(Debug)]
 pub struct OpenAiModelsManager {
@@ -221,6 +227,7 @@ pub struct OpenAiModelsManager {
     cache: Option<Arc<dyn ModelsCache>>,
     endpoint_client: SharedModelsEndpointClient,
     auth_manager: Option<Arc<AuthManager>>,
+    catalog_authority: RemoteCatalogAuthority,
 }
 
 /// Static model manager backed by an authoritative in-process catalog.
@@ -245,6 +252,7 @@ impl OpenAiModelsManager {
             ))),
             endpoint_client,
             auth_manager,
+            RemoteCatalogAuthority::Stock,
         )
     }
 
@@ -253,7 +261,28 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        Self::new_with_optional_cache(/*cache*/ None, endpoint_client, auth_manager)
+        Self::new_with_optional_cache(
+            /*cache*/ None,
+            endpoint_client,
+            auth_manager,
+            RemoteCatalogAuthority::Stock,
+        )
+    }
+
+    /// Construct a manager whose remote Provider catalog is the complete model authority.
+    ///
+    /// This mode starts empty, always permits remote refresh, and neither loads bundled models nor
+    /// uses the provider-agnostic Stock disk cache.
+    pub fn new_authoritative_without_cache(
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
+        Self::new_with_optional_cache(
+            /*cache*/ None,
+            endpoint_client,
+            auth_manager,
+            RemoteCatalogAuthority::Provider,
+        )
     }
 
     /// Constructs an OpenAI-compatible model manager with a caller-provided cache.
@@ -265,21 +294,31 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        Self::new_with_optional_cache(Some(cache), endpoint_client, auth_manager)
+        Self::new_with_optional_cache(
+            Some(cache),
+            endpoint_client,
+            auth_manager,
+            RemoteCatalogAuthority::Stock,
+        )
     }
 
     fn new_with_optional_cache(
         cache: Option<Arc<dyn ModelsCache>>,
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
+        catalog_authority: RemoteCatalogAuthority,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let remote_models = match catalog_authority {
+            RemoteCatalogAuthority::Stock => load_remote_models_from_file().unwrap_or_default(),
+            RemoteCatalogAuthority::Provider => Vec::new(),
+        };
         Self {
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
             cache,
             endpoint_client,
             auth_manager,
+            catalog_authority,
         }
     }
 }
@@ -435,7 +474,9 @@ impl OpenAiModelsManager {
     }
 
     async fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.uses_codex_backend().await || self.endpoint_client.has_command_auth()
+        self.catalog_authority == RemoteCatalogAuthority::Provider
+            || self.endpoint_client.uses_codex_backend().await
+            || self.endpoint_client.has_command_auth()
     }
 
     async fn get_etag(&self) -> Option<String> {
@@ -444,6 +485,11 @@ impl OpenAiModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
+        if self.catalog_authority == RemoteCatalogAuthority::Provider {
+            *self.remote_models.write().await = models;
+            return;
+        }
+
         // Use the remote models list as the source of truth if it contains at least one
         // non-hidden model and the user is using ChatGPT auth.
         let should_use_remote_models_only = !models.is_empty()

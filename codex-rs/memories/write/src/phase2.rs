@@ -90,14 +90,10 @@ pub async fn run(
         context.provider(),
     ) else {
         // If we can't get the config, we can't consolidate.
-        tracing::error!("failed to get agent config");
-        job::failed(
-            context.as_ref(),
-            db.as_ref(),
-            &claim,
-            "failed_sandbox_policy",
-        )
-        .await;
+        tracing::error!(
+            "failed to build memory consolidation agent config: provider has no preferred model and no model override is configured"
+        );
+        job::failed(context.as_ref(), db.as_ref(), &claim, "failed_agent_config").await;
         return;
     };
 
@@ -314,6 +310,11 @@ mod agent {
         parent_permission_profile: PermissionProfile,
         provider: &dyn ModelProvider,
     ) -> Option<Config> {
+        let model = config.memories.consolidation_model.clone().or_else(|| {
+            provider
+                .memory_consolidation_preferred_model()
+                .map(str::to_string)
+        })?;
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.clone();
 
@@ -357,13 +358,7 @@ mod agent {
         }
         .ok()?;
 
-        agent_config.model = Some(
-            config
-                .memories
-                .consolidation_model
-                .clone()
-                .unwrap_or_else(|| provider.memory_consolidation_preferred_model().to_string()),
-        );
+        agent_config.model = Some(model);
         agent_config.model_reasoning_effort = Some(crate::stage_two::REASONING_EFFORT);
 
         Some(agent_config)
