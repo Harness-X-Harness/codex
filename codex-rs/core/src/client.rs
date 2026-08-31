@@ -798,7 +798,11 @@ impl ModelClient {
             model: model_info.slug.clone(),
             raw_memories,
             reasoning: effort
-                .map(|effort| reasoning_effort_for_request(model_info, effort))
+                .map(|effort| {
+                    self.state
+                        .provider
+                        .project_reasoning_effort(reasoning_effort_for_request(model_info, effort))
+                })
                 .map(|effort| Reasoning {
                     effort: Some(effort),
                     summary: None,
@@ -904,7 +908,11 @@ impl ModelClient {
         Reasoning {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())
-                .map(|effort| reasoning_effort_for_request(model_info, effort)),
+                .map(|effort| {
+                    self.state
+                        .provider
+                        .project_reasoning_effort(reasoning_effort_for_request(model_info, effort))
+                }),
             summary: (model_info.supports_reasoning_summary_parameter
                 && summary != ReasoningSummaryConfig::None)
                 .then_some(summary),

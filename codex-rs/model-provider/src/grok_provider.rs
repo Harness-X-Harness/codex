@@ -9,6 +9,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::grok_catalog::GrokModelsResponseDecoder;
 use crate::models_endpoint::OpenAiModelsEndpoint;
@@ -69,6 +70,13 @@ impl ModelProvider for GrokModelProvider {
             web_search: false,
             external_web_access: false,
             remote_compaction: RemoteCompactionSupport::Unsupported,
+        }
+    }
+
+    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
+        match effort {
+            ReasoningEffort::Ultra => ReasoningEffort::XHigh,
+            effort => effort,
         }
     }
 

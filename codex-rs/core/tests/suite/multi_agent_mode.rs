@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_model_provider_info::WireApi;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::MultiAgentMessages;
 use codex_protocol::openai_models::MultiAgentModeMessages;
@@ -155,6 +156,35 @@ async fn ultra_reasoning_uses_highest_non_ultra_and_proactive_mode() -> Result<(
             count_containing(&texts, PROACTIVE_TEXT),
         ),
         (0, 1)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_ultra_reasoning_uses_xhigh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.4", add_ultra_reasoning)
+        .with_config(|config| {
+            configure_ultra(config);
+            config.model_provider.wire_api = WireApi::GrokResponses;
+        })
+        .build(&server)
+        .await?;
+
+    submit_turn(&test.codex, "hello", /*effort*/ None).await?;
+
+    assert_eq!(
+        response.single_request().body_json()["reasoning"]["effort"].as_str(),
+        Some("xhigh")
     );
 
     Ok(())
