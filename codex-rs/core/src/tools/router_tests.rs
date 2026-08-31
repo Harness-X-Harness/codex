@@ -306,6 +306,60 @@ fn restore_tool_call_marks_short_name_collaboration_calls_as_plaintext() -> anyh
 }
 
 #[test]
+fn restore_tool_call_marks_short_name_collaboration_calls_under_default_namespace()
+-> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "collaboration".to_string(),
+            description: "Agent tools.".to_string(),
+            tools: vec![
+                function("spawn_agent"),
+                function("send_message"),
+                function("followup_task"),
+                function("wait_agent"),
+            ],
+        })],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    for namespace in [
+        None,
+        Some(""),
+        Some(DEFAULT_FUNCTION_NAMESPACE),
+        Some("collaboration"),
+        Some("functions.collaboration"),
+    ] {
+        let mut item = ResponseItem::FunctionCall {
+            id: None,
+            name: "spawn_agent".to_string(),
+            namespace: namespace.map(str::to_string),
+            arguments: r#"{"message":"hello"}"#.to_string(),
+            encrypted_function_args: None,
+            call_id: "call-short".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        router.restore_tool_call(&mut item)?;
+        let call = ToolRouter::build_tool_call(item)
+            .expect("restored call should parse")
+            .expect("restored item should be a tool call");
+        assert_eq!(
+            call.tool_name,
+            ToolName::namespaced("collaboration", "spawn_agent"),
+            "namespace={namespace:?}"
+        );
+        assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+        assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    }
+    Ok(())
+}
+
+#[test]
 fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<()> {
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),

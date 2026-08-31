@@ -15,6 +15,7 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 #[cfg(test)]
@@ -437,17 +438,33 @@ impl ToolRouter {
             return Some(route);
         }
         // Grok may echo the canonical short name from prompts instead of the
-        // hashed flat wire name advertised on the request.
+        // hashed flat wire name advertised on the request. 0.151 can also put
+        // that short name under the default `functions` namespace.
         self.wire_tool_routes.values().find(|route| {
             let tool_name = match route {
                 WireToolRoute::Function(tool_name) => tool_name,
                 WireToolRoute::Custom { tool_name, .. } => tool_name,
             };
-            tool_name.name == name
-                && namespace
-                    .as_deref()
-                    .is_none_or(|ns| tool_name.namespace.as_deref() == Some(ns))
+            Self::echoed_name_matches_wire_route(tool_name, name, namespace.as_deref())
         })
+    }
+
+    fn echoed_name_matches_wire_route(
+        tool_name: &ToolName,
+        name: &str,
+        namespace: Option<&str>,
+    ) -> bool {
+        if tool_name.name != name {
+            return false;
+        }
+        let requested = namespace.unwrap_or("").trim();
+        requested.is_empty()
+            || requested == DEFAULT_FUNCTION_NAMESPACE
+            || Some(requested) == tool_name.namespace.as_deref()
+            || tool_name.namespace.as_deref().is_some_and(|route_ns| {
+                requested == format!("{DEFAULT_FUNCTION_NAMESPACE}.{route_ns}")
+                    || requested.ends_with(&format!(".{route_ns}"))
+            })
     }
 
     pub(crate) fn restore_tool_call(

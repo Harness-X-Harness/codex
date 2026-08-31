@@ -172,6 +172,7 @@ jobs:
           cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_marks_only_plaintext_collaboration_calls -- --exact
           cargo test -p codex-core --lib tools::router::tests::restore_tool_call_marks_short_name_collaboration_calls_as_plaintext -- --exact
+          cargo test -p codex-core --lib tools::router::tests::restore_tool_call_marks_short_name_collaboration_calls_under_default_namespace -- --exact
           cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
       - id: grok
         name: Grok metadata-driven V2, Ultra, and hosted X Search

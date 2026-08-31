@@ -359,6 +359,7 @@ def collaboration_last_stage(
     hashed_collab_spawn_count: int,
     short_spawn_agent_count: int,
     item_type_counts: dict[str, int],
+    spawn_namespace_counts: dict[str, int],
 ) -> dict[str, object]:
     completed_default_child_count = len(
         default_child_thread_ids & child_completed_thread_ids & child_reply_thread_ids
@@ -393,6 +394,7 @@ def collaboration_last_stage(
         "hashed_collab_spawn_count": hashed_collab_spawn_count,
         "short_spawn_agent_count": short_spawn_agent_count,
         "item_type_counts": item_type_counts,
+        "spawn_namespace_counts": spawn_namespace_counts,
     }
 
 
@@ -419,6 +421,7 @@ def wait_for_collaboration_turn(
     hashed_collab_spawn_count = 0
     short_spawn_agent_count = 0
     item_type_counts: dict[str, int] = {}
+    spawn_namespace_counts: dict[str, int] = {}
 
     while time.monotonic() < deadline:
         if (
@@ -454,6 +457,7 @@ def wait_for_collaboration_turn(
                     hashed_collab_spawn_count=hashed_collab_spawn_count,
                     short_spawn_agent_count=short_spawn_agent_count,
                     item_type_counts=item_type_counts,
+                    spawn_namespace_counts=spawn_namespace_counts,
                 ),
             ) from error
         method = message.get("method")
@@ -488,6 +492,13 @@ def wait_for_collaboration_turn(
                     hashed_collab_spawn_count += 1
                 elif wire_name == "spawn_agent":
                     short_spawn_agent_count += 1
+                namespace = item.get("namespace")
+                namespace_key = (
+                    namespace if isinstance(namespace, str) and namespace else "none"
+                )
+                spawn_namespace_counts[namespace_key] = (
+                    spawn_namespace_counts.get(namespace_key, 0) + 1
+                )
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 missing_spawn_identity_count += 1
@@ -573,6 +584,7 @@ def wait_for_collaboration_turn(
         hashed_collab_spawn_count=hashed_collab_spawn_count,
         short_spawn_agent_count=short_spawn_agent_count,
         item_type_counts=item_type_counts,
+        spawn_namespace_counts=spawn_namespace_counts,
     )
     if last_stage["last_proven_stage"] != "completed":
         raise LiveDeadlineExpired("the Grok Ultra collaboration Turn", last_stage)
