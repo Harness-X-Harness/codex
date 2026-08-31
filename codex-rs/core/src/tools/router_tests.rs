@@ -262,6 +262,118 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
 }
 
 #[test]
+fn restore_tool_call_marks_short_name_collaboration_calls_as_plaintext() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "collaboration".to_string(),
+            description: "Agent tools.".to_string(),
+            tools: vec![
+                function("spawn_agent"),
+                function("send_message"),
+                function("followup_task"),
+                function("wait_agent"),
+            ],
+        })],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let mut item = ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: None,
+        arguments: r#"{"message":"hello"}"#.to_string(),
+        encrypted_function_args: None,
+        call_id: "call-short".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    router.restore_tool_call(&mut item)?;
+    let call = ToolRouter::build_tool_call(item)
+        .expect("restored call should parse")
+        .expect("restored item should be a tool call");
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("collaboration", "spawn_agent")
+    );
+    assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+    assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    Ok(())
+}
+
+#[test]
+fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "collaboration".to_string(),
+            description: "Agent tools.".to_string(),
+            tools: vec![function("spawn_agent"), function("wait_agent")],
+        })],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let wire_names = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.name.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wire_names.len(), 2);
+
+    let mut items = wire_names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ResponseItem::FunctionCall {
+            id: None,
+            name: name.clone(),
+            namespace: None,
+            arguments: format!(r#"{{"value":"{index}"}}"#),
+            encrypted_function_args: None,
+            call_id: format!("call-{index}"),
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect::<Vec<_>>();
+    for item in &mut items {
+        router.restore_tool_call(item)?;
+    }
+    let calls = items
+        .into_iter()
+        .map(|item| {
+            ToolRouter::build_tool_call(item)
+                .expect("restored call should parse")
+                .expect("restored item should be a tool call")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        calls[0].tool_name,
+        ToolName::namespaced("collaboration", "spawn_agent")
+    );
+    assert_eq!(calls[0].encrypted_function_args, Some(Vec::new()));
+    assert_eq!(
+        calls[0].direct_source(),
+        ToolCallSource::DirectPlaintextMessage
+    );
+    assert_eq!(
+        calls[1].tool_name,
+        ToolName::namespaced("collaboration", "wait_agent")
+    );
+    assert_eq!(calls[1].encrypted_function_args, None);
+    assert_eq!(calls[1].direct_source(), ToolCallSource::Direct);
+    Ok(())
+}
+
+#[test]
 fn flat_projection_bounds_oversized_canonical_description_label() -> anyhow::Result<()> {
     let namespace = "工具".repeat(1_024);
     let router = ToolRouter::from_parts_with_projection(

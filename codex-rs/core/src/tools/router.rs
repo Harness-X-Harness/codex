@@ -432,6 +432,28 @@ impl ToolRouter {
         }
     }
 
+    fn resolve_wire_route(
+        &self,
+        name: &str,
+        namespace: &Option<String>,
+    ) -> Option<&WireToolRoute> {
+        if let Some(route) = self.wire_tool_routes.get(name) {
+            return Some(route);
+        }
+        // Grok may echo the canonical short name from prompts instead of the
+        // hashed flat wire name advertised on the request.
+        self.wire_tool_routes.values().find(|route| {
+            let tool_name = match route {
+                WireToolRoute::Function(tool_name) => tool_name,
+                WireToolRoute::Custom { tool_name, .. } => tool_name,
+            };
+            tool_name.name == name
+                && namespace
+                    .as_deref()
+                    .is_none_or(|ns| tool_name.namespace.as_deref() == Some(ns))
+        })
+    }
+
     pub(crate) fn restore_tool_call(
         &self,
         item: &mut ResponseItem,
@@ -449,7 +471,11 @@ impl ToolRouter {
         else {
             return Ok(());
         };
-        let Some(route) = self.wire_tool_routes.get(name) else {
+        let Some(route) = self.resolve_wire_route(name, namespace) else {
+            let tool_name = ToolName::new(namespace.clone(), name.clone());
+            if is_plaintext_collaboration_tool(&tool_name) {
+                *encrypted_function_args = Some(Vec::new());
+            }
             return Ok(());
         };
         match route {

@@ -356,6 +356,9 @@ def collaboration_last_stage(
     spawn_completed_count: int,
     wait_completed_count: int,
     unexpected_tool_count: int,
+    hashed_collab_spawn_count: int,
+    short_spawn_agent_count: int,
+    item_type_counts: dict[str, int],
 ) -> dict[str, object]:
     completed_default_child_count = len(
         default_child_thread_ids & child_completed_thread_ids & child_reply_thread_ids
@@ -387,6 +390,9 @@ def collaboration_last_stage(
         "spawn_count": spawn_completed_count,
         "unexpected_collaboration_tool_count": unexpected_tool_count,
         "wait_count": wait_completed_count,
+        "hashed_collab_spawn_count": hashed_collab_spawn_count,
+        "short_spawn_agent_count": short_spawn_agent_count,
+        "item_type_counts": item_type_counts,
     }
 
 
@@ -410,6 +416,9 @@ def wait_for_collaboration_turn(
     wait_completed_count = 0
     failed_tool_count = 0
     unexpected_tool_count = 0
+    hashed_collab_spawn_count = 0
+    short_spawn_agent_count = 0
+    item_type_counts: dict[str, int] = {}
 
     while time.monotonic() < deadline:
         if (
@@ -442,6 +451,9 @@ def wait_for_collaboration_turn(
                     spawn_completed_count=spawn_completed_count,
                     wait_completed_count=wait_completed_count,
                     unexpected_tool_count=unexpected_tool_count,
+                    hashed_collab_spawn_count=hashed_collab_spawn_count,
+                    short_spawn_agent_count=short_spawn_agent_count,
+                    item_type_counts=item_type_counts,
                 ),
             ) from error
         method = message.get("method")
@@ -470,6 +482,12 @@ def wait_for_collaboration_turn(
             task = parsed_arguments.get("message")
             if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
                 continue
+            wire_name = item.get("name")
+            if isinstance(wire_name, str):
+                if wire_name.startswith("local__collaboration__spawn_agent__"):
+                    hashed_collab_spawn_count += 1
+                elif wire_name == "spawn_agent":
+                    short_spawn_agent_count += 1
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 missing_spawn_identity_count += 1
@@ -485,6 +503,9 @@ def wait_for_collaboration_turn(
             item = params.get("item")
             if not isinstance(item, dict):
                 continue
+            item_type = item.get("type")
+            if isinstance(item_type, str):
+                item_type_counts[item_type] = item_type_counts.get(item_type, 0) + 1
             if (
                 thread_id == root_thread_id
                 and item.get("type") == "collabAgentToolCall"
@@ -549,6 +570,9 @@ def wait_for_collaboration_turn(
         spawn_completed_count=spawn_completed_count,
         wait_completed_count=wait_completed_count,
         unexpected_tool_count=unexpected_tool_count,
+        hashed_collab_spawn_count=hashed_collab_spawn_count,
+        short_spawn_agent_count=short_spawn_agent_count,
+        item_type_counts=item_type_counts,
     )
     if last_stage["last_proven_stage"] != "completed":
         raise LiveDeadlineExpired("the Grok Ultra collaboration Turn", last_stage)
