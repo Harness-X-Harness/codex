@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_api::ResponsesDialect;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -115,6 +116,16 @@ impl ModelProvider for GrokModelProvider {
 
     fn account_state(&self) -> ProviderAccountResult {
         self.inner.account_state()
+    }
+
+    fn api_provider(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<codex_api::Provider>> {
+        Box::pin(async move {
+            let mut provider = self.inner.api_provider().await?;
+            provider.responses_dialect = ResponsesDialect::Grok;
+            Ok(provider)
+        })
     }
 
     fn models_manager(

@@ -6,6 +6,7 @@
 //!      key. These override or extend the defaults at runtime.
 
 use codex_api::Provider as ApiProvider;
+use codex_api::ResponsesDialect;
 use codex_api::RetryConfig as ApiRetryConfig;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -338,6 +339,7 @@ impl ModelProviderInfo {
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            responses_dialect: ResponsesDialect::OpenAi,
         })
     }
 

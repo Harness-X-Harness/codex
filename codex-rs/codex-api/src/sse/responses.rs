@@ -879,6 +879,68 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn parses_xai_text_and_whole_parallel_function_calls() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_text.delta",
+                "delta": "Checking both."
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "name": "local__one",
+                    "arguments": "{\"city\":\"Paris\"}",
+                    "call_id": "call_1",
+                    "status": "completed"
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_2",
+                    "name": "local__two",
+                    "arguments": "{\"city\":\"Tokyo\"}",
+                    "call_id": "call_2",
+                    "status": "completed"
+                }
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        assert_matches!(&events[0], ResponseEvent::OutputTextDelta(delta) if delta == "Checking both.");
+        assert_matches!(
+            &events[1],
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            }) if name == "local__one"
+                && arguments == r#"{"city":"Paris"}"#
+                && call_id == "call_1"
+        );
+        assert_matches!(
+            &events[2],
+            ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+                ..
+            }) if name == "local__two"
+                && arguments == r#"{"city":"Tokyo"}"#
+                && call_id == "call_2"
+        );
+        assert_matches!(&events[3], ResponseEvent::Completed { response_id, .. } if response_id == "resp1");
+    }
+
     #[test]
     fn parses_cache_write_token_usage() {
         let usage: ResponseCompletedUsage = serde_json::from_value(json!({
