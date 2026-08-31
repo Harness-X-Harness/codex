@@ -489,14 +489,16 @@ pub(crate) fn finalize_tool_router(
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    Ok(ToolRouter::from_parts(
+    ToolRouter::from_parts_with_projection(
         registry,
         model_visible_specs,
         tool_mode,
         code_mode_tool_names,
         tool_namespaces_info,
         &child_management_tools,
-    ))
+        turn_context.provider.projects_tools_as_flat_functions(),
+    )
+    .map_err(|wire_name| CodexErrorDetails::ToolCollision(wire_name).into())
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -567,7 +569,9 @@ fn build_model_visible_specs(
     merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
+            namespace_tools_enabled(turn_context)
+                || turn_context.provider.projects_tools_as_flat_functions()
+                || !matches!(spec, ToolSpec::Namespace(_))
         })
         .collect()
 }

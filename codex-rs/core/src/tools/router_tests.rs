@@ -9,6 +9,7 @@ use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
+use crate::tools::registry::ToolRegistry;
 use crate::tools::spec_plan::append_source_tools;
 use crate::tools::spec_plan::build_core_tool_registry;
 use crate::tools::spec_plan::extension_tool_executors;
@@ -58,6 +59,107 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
         tool_log_payload(&payload, &ToolCallSource::Direct),
         payload.log_payload()
     );
+}
+
+#[test]
+fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()> {
+    let function = |name: &str| {
+        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+            name: name.to_string(),
+            description: format!("Call {name}."),
+            strict: true,
+            parameters: codex_extension_api::parse_tool_input_schema(&json!({
+                "type": "object",
+                "properties": { "value": { "type": "string" } },
+                "required": ["value"],
+                "additionalProperties": false,
+            }))
+            .expect("test schema should parse"),
+            output_schema: None,
+            defer_loading: None,
+        })
+    };
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "mcp__calendar".to_string(),
+                description: "Calendar tools.".to_string(),
+                tools: vec![function("create_event")],
+            }),
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "collaboration".to_string(),
+                description: "Agent tools.".to_string(),
+                tools: vec![function("spawn_agent")],
+            }),
+        ],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let wire_names = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.name.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wire_names.len(), 2);
+    assert_ne!(wire_names[0], wire_names[1]);
+    assert!(wire_names.iter().all(|name| name.len() <= 64));
+
+    let mut items = wire_names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| ResponseItem::FunctionCall {
+            id: None,
+            name: name.clone(),
+            namespace: None,
+            arguments: json!({"value": format!("argument-{index}")}).to_string(),
+            encrypted_function_args: None,
+            call_id: format!("call-{index}"),
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect::<Vec<_>>();
+    let wire_items = items.clone();
+    for item in &mut items {
+        router.restore_tool_call(item)?;
+    }
+    assert_eq!(router.project_model_input(items.clone()), wire_items);
+    let calls = items
+        .into_iter()
+        .map(|item| {
+            ToolRouter::build_tool_call(item)
+                .expect("restored call should parse")
+                .expect("restored item should be a tool call")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call.tool_name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ToolName::namespaced("mcp__calendar", "create_event"),
+            ToolName::namespaced("collaboration", "spawn_agent"),
+        ]
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call.payload.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ToolPayload::Function {
+                arguments: json!({"value": "argument-0"}).to_string(),
+            },
+            ToolPayload::Function {
+                arguments: json!({"value": "argument-1"}).to_string(),
+            },
+        ]
+    );
+    Ok(())
 }
 
 impl codex_extension_api::ToolContributor for ExtensionEchoContributor {

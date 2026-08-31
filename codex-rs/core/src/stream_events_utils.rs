@@ -293,8 +293,13 @@ pub(crate) async fn handle_output_item_done(
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.mode() == ModeKind::Plan;
+    let mut item = item;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    match ctx
+        .tool_runtime
+        .restore_tool_call(&mut item)
+        .and_then(|()| ToolRouter::build_tool_call(item.clone()))
+    {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess

@@ -21,9 +21,14 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::DiscoverableTool;
+use codex_tools::FreeformTool;
+use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use sha2::Digest;
+use sha2::Sha256;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -78,6 +83,16 @@ pub struct ToolRouter {
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     can_manage_children: bool,
+    wire_tool_routes: BTreeMap<String, WireToolRoute>,
+}
+
+#[derive(Clone, Debug)]
+enum WireToolRoute {
+    Function(ToolName),
+    Custom {
+        tool_name: ToolName,
+        input_key: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,12 +141,50 @@ impl ToolRouter {
             code_mode_tool_names,
             tool_namespaces_info,
             can_manage_children: false,
+            wire_tool_routes: BTreeMap::new(),
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
                 .iter()
                 .all(|name| router.exposes_tool(name));
         router
+    }
+
+    pub(crate) fn from_parts_with_projection(
+        registry: ToolRegistry,
+        model_visible_specs: Vec<ToolSpec>,
+        tool_mode: ToolMode,
+        code_mode_tool_names: BTreeMap<String, ToolName>,
+        tool_namespaces_info: Option<TurnToolNamespacesInfo>,
+        child_management_tools: &[ToolName],
+        project_as_flat_functions: bool,
+    ) -> Result<Self, String> {
+        if !project_as_flat_functions {
+            return Ok(Self::from_parts(
+                registry,
+                model_visible_specs,
+                tool_mode,
+                code_mode_tool_names,
+                tool_namespaces_info,
+                child_management_tools,
+            ));
+        }
+        let (model_visible_specs, wire_tool_routes) =
+            project_flat_function_tools(model_visible_specs)?;
+        let mut router = Self {
+            registry,
+            model_visible_specs: model_visible_specs.into(),
+            tool_mode,
+            code_mode_tool_names,
+            tool_namespaces_info,
+            can_manage_children: false,
+            wire_tool_routes,
+        };
+        router.can_manage_children = !child_management_tools.is_empty()
+            && child_management_tools
+                .iter()
+                .all(|name| router.exposes_tool(name));
+        Ok(router)
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
@@ -206,6 +259,48 @@ impl ToolRouter {
                     && (tool.runtime.immutable_spec().is_some()
                         || tool.runtime.search_info().is_some())
             })
+    }
+
+    pub(crate) fn project_model_input(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        if self.wire_tool_routes.is_empty() {
+            return input;
+        }
+        for item in &mut input {
+            match item {
+                ResponseItem::FunctionCall {
+                    name, namespace, ..
+                } => {
+                    let tool_name = ToolName::new(namespace.take(), name.clone());
+                    *name = flat_wire_name("function", &tool_name);
+                }
+                ResponseItem::CustomToolCall {
+                    id,
+                    call_id,
+                    name,
+                    namespace,
+                    input,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } => {
+                    let tool_name = ToolName::new(namespace.clone(), name.clone());
+                    *item = ResponseItem::FunctionCall {
+                        id: id.clone(),
+                        name: flat_wire_name("custom", &tool_name),
+                        namespace: None,
+                        arguments: serde_json::json!({
+                            (custom_input_key(&tool_name.name)): input,
+                        })
+                        .to_string(),
+                        encrypted_function_args: None,
+                        call_id: call_id.clone(),
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
+                    };
+                }
+                _ => {}
+            }
+        }
+        input
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
@@ -297,6 +392,50 @@ impl ToolRouter {
         }
     }
 
+    pub(crate) fn restore_tool_call(
+        &self,
+        item: &mut ResponseItem,
+    ) -> Result<(), FunctionCallError> {
+        let ResponseItem::FunctionCall {
+            id,
+            name,
+            namespace,
+            arguments,
+            call_id,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = item
+        else {
+            return Ok(());
+        };
+        let Some(route) = self.wire_tool_routes.get(name) else {
+            return Ok(());
+        };
+        match route {
+            WireToolRoute::Function(tool_name) => {
+                *name = tool_name.name.clone();
+                *namespace = tool_name.namespace.clone();
+            }
+            WireToolRoute::Custom {
+                tool_name,
+                input_key,
+            } => {
+                let restored = ResponseItem::CustomToolCall {
+                    id: id.clone(),
+                    status: None,
+                    call_id: call_id.clone(),
+                    name: tool_name.name.clone(),
+                    namespace: tool_name.namespace.clone(),
+                    input: decode_custom_input(name, arguments, input_key)?,
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                };
+                *item = restored;
+            }
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call_with_code_mode_result(
@@ -380,6 +519,165 @@ impl ToolRouter {
             .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
             .await
     }
+}
+
+fn project_flat_function_tools(
+    specs: Vec<ToolSpec>,
+) -> Result<(Vec<ToolSpec>, BTreeMap<String, WireToolRoute>), String> {
+    let mut declarations = Vec::new();
+    let mut routes = BTreeMap::new();
+    for spec in specs {
+        match spec {
+            ToolSpec::Function(tool) => {
+                let tool_name = ToolName::plain(tool.name.clone());
+                let wire_name = flat_wire_name("function", &tool_name);
+                insert_wire_route(
+                    &mut routes,
+                    wire_name.clone(),
+                    WireToolRoute::Function(tool_name),
+                )?;
+                declarations.push(ToolSpec::Function(function_declaration(wire_name, tool)));
+            }
+            ToolSpec::Freeform(tool) => {
+                let tool_name = ToolName::plain(tool.name.clone());
+                let wire_name = flat_wire_name("custom", &tool_name);
+                let (tool, input_key) = custom_function_declaration(wire_name.clone(), tool);
+                insert_wire_route(
+                    &mut routes,
+                    wire_name,
+                    WireToolRoute::Custom {
+                        tool_name,
+                        input_key,
+                    },
+                )?;
+                declarations.push(ToolSpec::Function(tool));
+            }
+            ToolSpec::Namespace(namespace) => {
+                for tool in namespace.tools {
+                    match tool {
+                        ResponsesApiNamespaceTool::Function(tool) => {
+                            let tool_name =
+                                ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                            let wire_name = flat_wire_name("function", &tool_name);
+                            insert_wire_route(
+                                &mut routes,
+                                wire_name.clone(),
+                                WireToolRoute::Function(tool_name),
+                            )?;
+                            declarations
+                                .push(ToolSpec::Function(function_declaration(wire_name, tool)));
+                        }
+                        ResponsesApiNamespaceTool::Custom(tool) => {
+                            let tool_name =
+                                ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                            let wire_name = flat_wire_name("custom", &tool_name);
+                            let (tool, input_key) =
+                                custom_function_declaration(wire_name.clone(), tool);
+                            insert_wire_route(
+                                &mut routes,
+                                wire_name,
+                                WireToolRoute::Custom {
+                                    tool_name,
+                                    input_key,
+                                },
+                            )?;
+                            declarations.push(ToolSpec::Function(tool));
+                        }
+                    }
+                }
+            }
+            hosted => declarations.push(hosted),
+        }
+    }
+    Ok((declarations, routes))
+}
+
+fn function_declaration(wire_name: String, mut tool: ResponsesApiTool) -> ResponsesApiTool {
+    tool.name = wire_name;
+    tool.defer_loading = None;
+    tool
+}
+
+fn custom_function_declaration(
+    wire_name: String,
+    tool: FreeformTool,
+) -> (ResponsesApiTool, String) {
+    let input_key = custom_input_key(&tool.name).to_string();
+    let parameters = JsonSchema::object(
+        BTreeMap::from([(
+            input_key.clone(),
+            JsonSchema::string(Some(
+                "Freeform input passed unchanged to Codex.".to_string(),
+            )),
+        )]),
+        Some(vec![input_key.clone()]),
+        Some(false.into()),
+    );
+    let description = format!("{}\n\n{}", tool.description, tool.format.definition);
+    (
+        ResponsesApiTool {
+            name: wire_name,
+            description,
+            strict: true,
+            defer_loading: None,
+            parameters,
+            output_schema: None,
+        },
+        input_key,
+    )
+}
+
+fn insert_wire_route(
+    routes: &mut BTreeMap<String, WireToolRoute>,
+    wire_name: String,
+    route: WireToolRoute,
+) -> Result<(), String> {
+    if routes.insert(wire_name.clone(), route).is_some() {
+        return Err(wire_name);
+    }
+    Ok(())
+}
+
+fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
+    let namespace = if tool_name.is_default_namespace() {
+        ""
+    } else {
+        tool_name.namespace.as_deref().unwrap_or_default()
+    };
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
+    );
+    format!("local__{}", &digest[..32])
+}
+
+fn custom_input_key(tool_name: &str) -> &'static str {
+    match tool_name {
+        "apply_patch" => "patch",
+        "exec" => "source",
+        _ => "input",
+    }
+}
+
+fn decode_custom_input(
+    wire_name: &str,
+    arguments: &str,
+    input_key: &str,
+) -> Result<String, FunctionCallError> {
+    let value: serde_json::Value = serde_json::from_str(arguments).map_err(|error| {
+        FunctionCallError::RespondToModel(format!("invalid arguments for `{wire_name}`: {error}"))
+    })?;
+    let input = value
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .and_then(|object| object.get(input_key))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "invalid arguments for `{wire_name}`: expected one string field `{input_key}`"
+            ))
+        })?;
+    Ok(input.to_string())
 }
 
 #[cfg(test)]

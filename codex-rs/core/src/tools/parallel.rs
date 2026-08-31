@@ -27,6 +27,7 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 
 struct ToolCallTimingGuard {
     started_at: Instant,
@@ -67,6 +68,13 @@ impl ToolCallRuntime {
         self.step_context
             .tool_router
             .create_diff_consumer(tool_name)
+    }
+
+    pub(crate) fn restore_tool_call(
+        &self,
+        item: &mut ResponseItem,
+    ) -> Result<(), FunctionCallError> {
+        self.step_context.tool_router.restore_tool_call(item)
     }
 
     #[instrument(level = "trace", skip_all)]
