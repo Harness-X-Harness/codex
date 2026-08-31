@@ -39,12 +39,39 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use super::MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES;
 use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
+use super::flat_wire_name;
 use super::tool_log_payload;
 
 struct ExtensionEchoContributor;
+
+#[test]
+fn flat_wire_name_preserves_complete_semantic_identity() {
+    assert_eq!(
+        flat_wire_name("function", &ToolName::namespaced("image_gen", "imagegen")),
+        "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a"
+    );
+
+    assert_eq!(
+        flat_wire_name(
+            "function",
+            &ToolName::namespaced("collaboration", "spawn_agent")
+        ),
+        "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa"
+    );
+}
+
+#[test]
+fn flat_wire_name_bounds_oversized_model_context_items() {
+    let wire_name = flat_wire_name("function", &ToolName::plain("x".repeat(2_048)));
+
+    assert_eq!(wire_name.len(), 1_024);
+    assert!(wire_name.starts_with("local__xxxx"));
+    assert!(wire_name.ends_with("__f6a1f9c44d52f15bae32564d5f879ed8"));
+}
 
 #[test]
 fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
@@ -61,24 +88,58 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     );
 }
 
+fn function(name: &str) -> ResponsesApiNamespaceTool {
+    ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+        name: name.to_string(),
+        description: format!("Call {name}."),
+        strict: true,
+        parameters: codex_extension_api::parse_tool_input_schema(&json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"],
+            "additionalProperties": false,
+        }))
+        .expect("test schema should parse"),
+        output_schema: None,
+        defer_loading: None,
+    })
+}
+
+#[test]
+fn flat_projection_disambiguates_retained_indirect_guidance() -> anyhow::Result<()> {
+    let mut imagegen = match function("imagegen") {
+        ResponsesApiNamespaceTool::Function(tool) => tool,
+        ResponsesApiNamespaceTool::Custom(_) => unreachable!("fixture is a function"),
+    };
+    imagegen.description =
+        "Generate or edit an image. In code-mode, invoke this tool through the exec wrapper."
+            .to_string();
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "image_gen".to_string(),
+            description: "Image tools.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(imagegen)],
+        })],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let description = match &router.model_visible_specs()[0] {
+        ToolSpec::Function(tool) => tool.description.clone(),
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+
+    assert!(description.starts_with(
+        "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
+    ));
+    assert!(description.ends_with(
+        "Generate or edit an image. In code-mode, invoke this tool through the exec wrapper."
+    ));
+    Ok(())
+}
+
 #[test]
 fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()> {
-    let function = |name: &str| {
-        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-            name: name.to_string(),
-            description: format!("Call {name}."),
-            strict: true,
-            parameters: codex_extension_api::parse_tool_input_schema(&json!({
-                "type": "object",
-                "properties": { "value": { "type": "string" } },
-                "required": ["value"],
-                "additionalProperties": false,
-            }))
-            .expect("test schema should parse"),
-            output_schema: None,
-            defer_loading: None,
-        })
-    };
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
         vec![
@@ -108,9 +169,20 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
             spec => panic!("expected projected function, got {spec:?}"),
         })
         .collect::<Vec<_>>();
+    let descriptions = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.description.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
     assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
-    assert!(wire_names.iter().all(|name| name.len() <= 64));
+    assert!(descriptions[0].starts_with(
+        "This flat Provider function directly invokes the canonical `mcp__calendar.create_event` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
+    ));
+    assert!(descriptions[0].ends_with("Call create_event."));
 
     let mut items = wire_names
         .iter()
@@ -177,6 +249,74 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         assert_eq!(call.encrypted_function_args, Some(Vec::new()));
         assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
     }
+    Ok(())
+}
+
+#[test]
+fn flat_projection_bounds_oversized_canonical_description_label() -> anyhow::Result<()> {
+    let namespace = "工具".repeat(1_024);
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace,
+            description: "Oversized namespace.".to_string(),
+            tools: vec![function("create_image")],
+        })],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let model_visible_specs = router.model_visible_specs();
+    let description = match &model_visible_specs[0] {
+        ToolSpec::Function(tool) => &tool.description,
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let canonical_label = description
+        .strip_prefix("This flat Provider function directly invokes the canonical `")
+        .and_then(|description| description.split_once("` tool. Call this function itself."))
+        .map(|(label, _)| label)
+        .expect("projected description should contain a canonical label");
+    assert!(canonical_label.len() <= MAX_FLAT_ROUTE_CANONICAL_LABEL_BYTES);
+    assert!(canonical_label.starts_with("工具工具"));
+    assert!(canonical_label.ends_with("__bfad593478cb46ebf02f62f21b81c717"));
+    assert!(description.ends_with("Call create_image."));
+    Ok(())
+}
+
+#[test]
+fn flat_projection_description_labels_preserve_sanitized_name_identity() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "namespace".to_string(),
+            description: "Namespace tools.".to_string(),
+            tools: vec![function("create/image"), function("create?image")],
+        })],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let descriptions = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.description.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
+    let labels = descriptions
+        .iter()
+        .map(|description| {
+            description
+                .strip_prefix("This flat Provider function directly invokes the canonical `")
+                .and_then(|description| {
+                    description.split_once("` tool. Call this function itself.")
+                })
+                .map(|(label, _)| label)
+                .expect("projected description should contain a canonical label")
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(labels[0], labels[1]);
+    assert!(labels[0].starts_with("namespace.create_image__"));
+    assert!(labels[1].starts_with("namespace.create_image__"));
     Ok(())
 }
 

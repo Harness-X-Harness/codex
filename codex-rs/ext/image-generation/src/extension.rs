@@ -14,10 +14,12 @@ use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
+use crate::tool::MAX_EDIT_IMAGES;
 
 #[derive(Clone)]
 struct ImageGenerationExtension {
@@ -38,13 +40,18 @@ impl ImageGenerationExtensionConfig {
     /// Resolves the image provider and save root for a thread.
     fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
         Self {
-            available: config.model_provider.is_openai()
-                || config.model_provider.requires_openai_auth
-                || config.model_provider.uses_openai_actor_authorization(),
+            available: image_generation_available(&config.model_provider),
             provider: config.model_provider.clone(),
             save_root: resolve_save_root(config),
         }
     }
+}
+
+fn image_generation_available(provider: &ModelProviderInfo) -> bool {
+    provider.is_openai()
+        || provider.requires_openai_auth
+        || provider.uses_openai_actor_authorization()
+        || provider.wire_api == WireApi::GrokResponses
 }
 
 impl ThreadLifecycleContributor<Config> for ImageGenerationExtension {
@@ -94,13 +101,21 @@ impl ToolContributor for ImageGenerationExtension {
             return Vec::new();
         }
 
+        let provider =
+            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
+        let image_model = provider.image_generation_model();
+        let max_edit_images = provider
+            .images_dialect()
+            .effective_max_edit_images(MAX_EDIT_IMAGES);
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
-                create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+                provider,
                 thread_store
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
             ),
+            image_model,
+            max_edit_images,
             config.save_root.clone(),
             thread_store.level_id().to_string(),
         ))]
@@ -121,3 +136,7 @@ pub fn install(
     registry.config_contributor(extension.clone());
     registry.tool_contributor(extension);
 }
+
+#[cfg(test)]
+#[path = "extension_tests.rs"]
+mod tests;

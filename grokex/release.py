@@ -33,13 +33,11 @@ LEGACY_KEYS = {
 }
 LIVE_SCENARIO_ASSERTIONS = {
     "basic-exact-reply": {
-        "operation_count": 1,
         "response_assertion": "exact_match",
         "status": "completed",
     },
     "encrypted-reasoning-tool-continuation": {
         "history_response_assertion": "exact_match",
-        "operation_count": 2,
         "reasoning_replay": "completed",
         "response_assertion": "exact_match",
         "status": "completed",
@@ -49,13 +47,45 @@ LIVE_SCENARIO_ASSERTIONS = {
         "child_completion": "completed",
         "child_response_assertion": "exact_match",
         "default_full_history": "completed",
-        "operation_count": 4,
+        "multi_agent_version": "v2",
         "parent_completion": "completed",
+        "reasoning_effort": "ultra",
         "response_assertion": "exact_match",
-        "spawn_count": 1,
         "status": "completed",
-        "wait_count": 1,
     },
+    "image-generation-history-edit": {
+        "agent_reply_seen": True,
+        "artifact_extension": ".jpg",
+        "artifact_match": True,
+        "history_edit": "completed",
+        "history_arguments_verified": True,
+        "image_mime": "image/jpeg",
+        "same_thread": True,
+        "status": "completed",
+    },
+}
+LIVE_SCENARIO_DIAGNOSTICS = {
+    "basic-exact-reply": ("runner_turn_submission_count",),
+    "encrypted-reasoning-tool-continuation": (
+        "runner_turn_submission_count",
+        "tool_request_count",
+    ),
+    "ultra-full-history-collaboration": (
+        "child_count",
+        "explicit_fork_spawn_count",
+        "failed_collaboration_tool_count",
+        "missing_spawn_identity_count",
+        "provider_response_count",
+        "runner_turn_submission_count",
+        "spawn_count",
+        "unexpected_collaboration_tool_count",
+        "wait_count",
+    ),
+    "image-generation-history-edit": (
+        "image_items_completed",
+        "image_items_failed",
+        "runner_turn_submission_count",
+    ),
 }
 
 
@@ -281,9 +311,7 @@ def build_live_evidence(
         "archive_sha256": archive_digest,
         "catalog": "release-bundled",
         "model": "grok-4.6",
-        "multi_agent_version": "v2",
         "provider": "grok",
-        "reasoning_effort": "ultra",
         "source_sha": source_sha,
         "validation_run": run_id,
         "validator_sha": validator_sha,
@@ -299,7 +327,13 @@ def build_live_evidence(
         expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
         if any(value.get(key) != expected for key, expected in expected_assertions.items()):
             raise SystemExit(f"live scenario outcome mismatch: {scenario}")
-        observed[scenario] = expected_assertions
+        diagnostics: dict[str, int] = {}
+        for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
+            diagnostic = value.get(key)
+            if not isinstance(diagnostic, int) or isinstance(diagnostic, bool) or diagnostic < 0:
+                raise SystemExit(f"live scenario diagnostic is invalid: {scenario}")
+            diagnostics[key] = diagnostic
+        observed[scenario] = {**expected_assertions, **diagnostics}
     if set(observed) != set(LIVE_SCENARIO_ASSERTIONS):
         raise SystemExit("required live scenario evidence is incomplete")
 
@@ -308,12 +342,10 @@ def build_live_evidence(
         "archive_sha256": archive_digest,
         "catalog": "release-bundled",
         "model": "grok-4.6",
-        "multi_agent_version": "v2",
-        "operation_count": sum(
-            assertions["operation_count"] for assertions in observed.values()
+        "runner_turn_submission_count": sum(
+            assertions["runner_turn_submission_count"] for assertions in observed.values()
         ),
         "provider": "grok",
-        "reasoning_effort": "ultra",
         "scenarios": observed,
         "source_sha": source_sha,
         "status": "completed",
@@ -394,18 +426,37 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     live_archive = archive_name("x86_64-unknown-linux-musl")
     required_evidence = {
         "archive": live_archive,
-        "operation_count": sum(
-            assertions["operation_count"]
-            for assertions in LIVE_SCENARIO_ASSERTIONS.values()
-        ),
         "provider": "grok",
-        "scenarios": LIVE_SCENARIO_ASSERTIONS,
         "source_sha": source_sha,
         "status": "completed",
         "validation_run": run_id,
     }
     if any(evidence.get(key) != value for key, value in required_evidence.items()):
         raise SystemExit("live evidence mismatch")
+    runner_turn_submission_count = evidence.get("runner_turn_submission_count")
+    if (
+        not isinstance(runner_turn_submission_count, int)
+        or isinstance(runner_turn_submission_count, bool)
+        or runner_turn_submission_count < 0
+    ):
+        raise SystemExit("live evidence diagnostics are invalid")
+    scenarios = evidence.get("scenarios")
+    if not isinstance(scenarios, dict) or set(scenarios) != set(LIVE_SCENARIO_ASSERTIONS):
+        raise SystemExit("live evidence scenario set mismatch")
+    for scenario, expected in LIVE_SCENARIO_ASSERTIONS.items():
+        actual = scenarios.get(scenario)
+        if not isinstance(actual, dict) or any(
+            actual.get(key) != value for key, value in expected.items()
+        ):
+            raise SystemExit(f"live evidence scenario mismatch: {scenario}")
+        for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
+            diagnostic = actual.get(key)
+            if (
+                not isinstance(diagnostic, int)
+                or isinstance(diagnostic, bool)
+                or diagnostic < 0
+            ):
+                raise SystemExit(f"live evidence diagnostic is invalid: {scenario}")
     if evidence.get("archive_sha256") != sha256(dist / live_archive):
         raise SystemExit("live evidence archive checksum mismatch")
 

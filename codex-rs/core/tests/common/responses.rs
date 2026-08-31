@@ -438,7 +438,14 @@ pub fn namespace_child_tool<'a>(
     namespace: &str,
     tool_name: &str,
 ) -> Option<&'a Value> {
-    let tools = body.get("tools")?.as_array()?;
+    let tools = body.get("tools").and_then(Value::as_array).or_else(|| {
+        body.get("input")?
+            .as_array()?
+            .iter()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))?
+            .get("tools")?
+            .as_array()
+    })?;
     for tool in tools {
         if tool.get("name").and_then(Value::as_str) != Some(namespace)
             || tool.get("type").and_then(Value::as_str) != Some("namespace")
