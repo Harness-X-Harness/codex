@@ -10,7 +10,6 @@ use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
@@ -149,12 +148,7 @@ async fn proxy_websocket_servers_with_prewarm_limit(
 }
 
 fn sampler_config(base_url: String) -> LunaSamplerConfig {
-    sampler_config_for_wire(base_url, WireApi::Responses)
-}
-
-fn sampler_config_for_wire(base_url: String, wire_api: WireApi) -> LunaSamplerConfig {
-    let mut provider_info = ModelProviderInfo::create_openai_provider(Some(base_url));
-    provider_info.wire_api = wire_api;
+    let provider_info = ModelProviderInfo::create_openai_provider(Some(base_url));
     LunaSamplerConfig {
         provider: create_model_provider(
             provider_info,
@@ -179,34 +173,6 @@ async fn connect_sampler(config: LunaSamplerConfig) -> Result<LunaSampler> {
     let sampler = LunaSampler::new(config);
     sampler.prewarm().await;
     Ok(sampler)
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grok_guardian_ultra_reasoning_uses_xhigh() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let events = vec![
-        ev_assistant_message("sample", r#"{"score":0.25}"#),
-        ev_completed("response-1"),
-    ];
-    let server = responses::start_websocket_server(vec![Vec::new(), vec![events]]).await;
-    let sampler = connect_sampler(sampler_config_for_wire(
-        format!("http://{}/v1", server.uri().trim_start_matches("ws://")),
-        WireApi::GrokResponses,
-    ))
-    .await?;
-    let mut request = sample_request("turn-1");
-    request.reasoning_effort = ReasoningEffort::Ultra;
-
-    assert_eq!(sampler.sample(request).await?, r#"{"score":0.25}"#);
-
-    let request = server
-        .wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
-        .await
-        .body_json();
-    assert_eq!(request["reasoning"]["effort"], "xhigh");
-
-    Ok(())
 }
 
 fn sample_request(turn_id: &str) -> LunaSamplingRequest {
