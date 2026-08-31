@@ -1,0 +1,270 @@
+name: grokex-release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-v0.149.0-release
+  cancel-in-progress: false
+
+env:
+  SOURCE_BRANCH: release/rust-v0.149.0
+  RELEASE_TAG: grokex-v0.149.0
+  UPSTREAM_COMMIT: 758ef40f50c1a458425c7cfbf1eb12cbc07af0b0
+
+jobs:
+  preflight:
+    name: Freeze unpublished source and destination
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: source
+        name: Verify exact unpublished release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${GITHUB_SHA}"
+          [[ "$(<grokex/codex-release-tag)" == "rust-v0.149.0" ]]
+          [[ "${GITHUB_REF}" == "refs/heads/${SOURCE_BRANCH}" ]]
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          [[ "${GITHUB_SHA}" == "${branch_sha}" ]]
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Destination tag already exists" >&2
+            exit 1
+          fi
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Destination release already exists" >&2
+            exit 1
+          fi
+          echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Verify public Grok profile
+        run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
+
+  checks:
+    name: Deterministic release gates
+    needs: preflight
+    uses: ./.github/workflows/grokex-checks.yml
+    with:
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+
+  build_candidate:
+    name: Build x86_64-unknown-linux-musl candidate
+    needs: [preflight, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/build-grokex
+        with:
+          target: x86_64-unknown-linux-musl
+
+  package_candidate:
+    name: Package final Linux x86_64 candidate
+    needs: [preflight, build_candidate]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: raw-x86_64-unknown-linux-musl
+          path: raw
+      - name: Normalize candidate artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p raw/x86_64-unknown-linux-musl
+          find raw -maxdepth 1 -type f -exec mv {} raw/x86_64-unknown-linux-musl/ \;
+      - name: Build and verify candidate archive
+        run: |
+          python3 grokex/release.py package \
+            --raw-root raw \
+            --output archives \
+            --repository . \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target x86_64-unknown-linux-musl
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-linux-candidate
+          path: archives
+          if-no-files-found: error
+          retention-days: 1
+
+  live:
+    name: Required Grok Live scenarios
+    needs: [preflight, package_candidate]
+    uses: ./.github/workflows/grokex-live.yml
+    with:
+      archive_artifact: grokex-linux-candidate
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+      validator_sha: ${{ needs.preflight.outputs.source_sha }}
+    secrets:
+      GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
+
+  build_remaining:
+    name: Build ${{ matrix.target }}
+    needs: [preflight, live]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/build-grokex
+        with:
+          target: ${{ matrix.target }}
+
+  package:
+    name: Assemble and verify exact six archives
+    needs: [preflight, live, build_remaining]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-linux-candidate
+          path: archives
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: raw-*
+          path: raw
+      - name: Normalize artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in raw/raw-*; do
+            target="${directory#raw/raw-}"
+            mv "${directory}" "raw/${target}"
+          done
+      - name: Build remaining archives and verify exact six
+        run: |
+          python3 grokex/release.py package \
+            --raw-root raw \
+            --output archives \
+            --repository . \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --target aarch64-unknown-linux-musl \
+            --target aarch64-pc-windows-msvc \
+            --target x86_64-pc-windows-msvc
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-archives
+          path: archives
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish and independently verify
+    needs: [preflight, package, live]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-archives
+          path: archives
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-live-evidence
+          path: evidence
+      - name: Assemble and verify release assets
+        run: |
+          python3 grokex/release.py build-assets \
+            --archives archives \
+            --evidence evidence/LIVE_EVIDENCE.json \
+            --output release-assets \
+            --repository . \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
+          python3 grokex/release.py verify-assets \
+            --dist release-assets \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
+      - name: Recheck immutable source and empty destination
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          [[ "${branch_sha}" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Destination tag appeared during validation" >&2
+            exit 1
+          fi
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Destination release appeared during validation" >&2
+            exit 1
+          fi
+      - name: Publish once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${{ needs.preflight.outputs.source_sha }}" \
+            --title "Grokex 0.149.0" \
+            --notes "Stock Codex 0.149.0 harness with the release-bundled grok-4.6 Provider catalog."
+      - name: Download and verify published destination
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          mkdir published
+          gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --dir published
+          python3 grokex/release.py verify-assets \
+            --dist published \
+            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --run-id "${GITHUB_RUN_ID}"
