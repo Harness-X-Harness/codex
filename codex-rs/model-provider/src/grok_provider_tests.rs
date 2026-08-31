@@ -56,7 +56,9 @@ fn canonical_history(
         },
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call-1".to_owned(),
+            call_id: Some("call-1".to_owned()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("rain".to_owned()),
             internal_chat_message_metadata_passthrough: metadata,
         },
