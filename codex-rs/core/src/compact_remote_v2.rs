@@ -881,6 +881,7 @@ mod tests {
                     None,
                     Some(CodexHarnessMetadata {
                         client_authored: true,
+                        ..Default::default()
                     }),
                     Some(CodexHarnessMetadata::default()),
                     None,
@@ -904,6 +905,7 @@ mod tests {
                         item: client.clone(),
                         metadata: Some(CodexHarnessMetadata {
                             client_authored: true,
+                            ..Default::default()
                         }),
                     },
                 );

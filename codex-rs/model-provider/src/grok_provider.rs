@@ -58,6 +58,7 @@ impl ModelProvider for GrokModelProvider {
             namespace_tools: true,
             image_generation: false,
             web_search: true,
+            x_search: true,
             cached_web_search: false,
             external_web_access: true,
             indexed_web_search: false,
@@ -86,6 +87,29 @@ impl ModelProvider for GrokModelProvider {
             }
         }
         input
+    }
+
+    fn is_provider_hosted_tool_call(&self, item: &ResponseItem) -> bool {
+        matches!(
+            item,
+            ResponseItem::CustomToolCall {
+                id: Some(id),
+                status: Some(status),
+                call_id,
+                name,
+                namespace: None,
+                ..
+            } if !id.is_empty()
+                && !call_id.is_empty()
+                && status == "completed"
+                && matches!(
+                    name.as_str(),
+                    "x_keyword_search"
+                        | "x_semantic_search"
+                        | "x_user_search"
+                        | "x_thread_fetch"
+                )
+        )
     }
 
     fn projects_tools_as_flat_functions(&self) -> bool {

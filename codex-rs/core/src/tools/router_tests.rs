@@ -749,6 +749,7 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
             | ToolSpec::Freeform(_)
             | ToolSpec::ToolSearch { .. }
             | ToolSpec::WebSearch { .. }
+            | ToolSpec::XSearch
             | ToolSpec::Namespace(_) => None,
         })
         .unwrap_or_default()

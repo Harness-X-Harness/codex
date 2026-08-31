@@ -266,6 +266,11 @@ impl ToolRouter {
             return input;
         }
         for item in &mut input {
+            if matches!(item, ResponseItem::CustomToolCall { .. })
+                && !self.has_wire_route_for_custom_call(item)
+            {
+                continue;
+            }
             match item {
                 ResponseItem::FunctionCall {
                     name, namespace, ..
@@ -301,6 +306,27 @@ impl ToolRouter {
             }
         }
         input
+    }
+
+    fn has_wire_route_for_custom_call(&self, item: &ResponseItem) -> bool {
+        let ResponseItem::CustomToolCall {
+            name, namespace, ..
+        } = item
+        else {
+            return false;
+        };
+        let tool_name = ToolName::new(namespace.clone(), name.clone());
+        let wire_name = flat_wire_name("custom", &tool_name);
+        matches!(
+            self.wire_tool_routes.get(&wire_name),
+            Some(WireToolRoute::Custom { .. })
+        )
+    }
+
+    pub(crate) fn exposes_x_search(&self) -> bool {
+        self.model_visible_specs
+            .iter()
+            .any(|spec| matches!(spec, ToolSpec::XSearch))
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
