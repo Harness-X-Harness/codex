@@ -98,7 +98,7 @@ async fn select_reviewer_model(
     let selected_review_model = parent_model_info
         .auto_review_model_override
         .as_deref()
-        .unwrap_or(preferred_review_model);
+        .or(preferred_review_model);
     let available_models = models_manager
         .list_models(
             RefreshStrategy::Offline,
@@ -107,8 +107,10 @@ async fn select_reviewer_model(
         .await;
     let review_model = available_models
         .iter()
-        .find(|model| model.model == selected_review_model);
-    let (model, reasoning_effort) = if let Some(review_model) = review_model {
+        .find(|model| Some(model.model.as_str()) == selected_review_model);
+    let (model, reasoning_effort) = if let (Some(review_model), Some(selected_review_model)) =
+        (review_model, selected_review_model)
+    {
         (
             selected_review_model.to_string(),
             preferred_reasoning_effort(

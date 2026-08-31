@@ -1075,7 +1075,7 @@ impl ModelClient {
             && crate::guardian::is_basic_session_source(&self.state.session_source)
             && self.uses_codex_backend(auth)
             && self.state.provider.info().supports_codex_backend_routes()
-            && model == self.state.provider.approval_review_preferred_model()
+            && Some(model) == self.state.provider.approval_review_preferred_model()
         {
             ResponsesEndpoint::Guardian
         } else {
