@@ -408,6 +408,7 @@ async fn grok_no_tool_request_omits_tool_controls() -> Result<()> {
         prompt_cache_key: None,
         text: None,
         client_metadata: None,
+        access_programs: None,
     };
 
     let _stream = client
