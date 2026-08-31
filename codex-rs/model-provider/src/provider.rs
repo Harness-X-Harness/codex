@@ -22,6 +22,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use http::HeaderValue;
@@ -159,6 +160,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
             ReasoningEffort::Ultra => ReasoningEffort::Max,
             effort => effort,
         }
+    }
+
+    /// Projects canonical model input onto this provider's request wire.
+    ///
+    /// The default keeps stock input unchanged. Implementations may remove or transform only
+    /// provider-incompatible wire fields; durable Session history remains canonical.
+    fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        input
     }
 
     /// Returns the preferred model used for automatic approval review.
@@ -373,6 +382,23 @@ impl ModelProvider for ConfiguredModelProvider {
             remote_compaction,
             ..ProviderCapabilities::default()
         }
+    }
+
+    fn project_model_input(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        if self.info.is_openai() {
+            return input;
+        }
+        for item in &mut input {
+            item.clear_internal_chat_message_metadata_passthrough();
+            if let ResponseItem::FunctionCall {
+                encrypted_function_args,
+                ..
+            } = item
+            {
+                *encrypted_function_args = None;
+            }
+        }
+        input
     }
 
     fn approval_review_preferred_model(&self) -> Option<&'static str> {

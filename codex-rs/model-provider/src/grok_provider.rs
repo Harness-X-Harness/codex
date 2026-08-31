@@ -8,6 +8,7 @@ use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 
@@ -80,6 +81,10 @@ impl ModelProvider for GrokModelProvider {
         }
     }
 
+    fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        self.inner.project_model_input(input)
+    }
+
     fn approval_review_preferred_model(&self) -> Option<&'static str> {
         None
     }
@@ -131,3 +136,7 @@ impl ModelProvider for GrokModelProvider {
         self.authoritative_models_manager(config_model_catalog)
     }
 }
+
+#[cfg(test)]
+#[path = "grok_provider_tests.rs"]
+mod tests;
