@@ -39,6 +39,18 @@ EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
 CHILD_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_CHILD_OK"
 PARENT_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_PARENT_OK"
+BASIC_TURN_SECONDS = 120
+CONTINUATION_TURN_SECONDS = 120
+COLLABORATION_TURN_SECONDS = 360
+IMAGE_TURN_SECONDS = 180
+
+
+class LiveDeadlineExpired(SystemExit):
+    def __init__(self, waiting_for: str, last_stage: dict[str, object]) -> None:
+        super().__init__(
+            f"App Server response deadline expired while waiting for {waiting_for}"
+        )
+        self.last_stage = last_stage
 
 
 def sha256(path: Path) -> str:
@@ -293,6 +305,91 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
     }
 
 
+def classify_collaboration_stage(
+    *,
+    root_status: str | None,
+    parent_reply_seen: bool,
+    default_spawn_count: int,
+    default_child_count: int,
+    completed_default_child_count: int,
+    spawn_completed_count: int,
+    provider_response_count: int,
+) -> str:
+    if (
+        root_status == "completed"
+        and completed_default_child_count
+        and parent_reply_seen
+        and default_spawn_count
+        and default_child_count
+    ):
+        return "completed"
+    if parent_reply_seen:
+        return "parent_reply_seen"
+    if root_status == "completed":
+        return "parent_turn_completed"
+    if completed_default_child_count:
+        return "child_completed"
+    if default_child_count:
+        return "child_created"
+    if spawn_completed_count:
+        return "spawn_completed"
+    if default_spawn_count:
+        return "default_spawn_requested"
+    if provider_response_count:
+        return "provider_response_seen"
+    return "no_events"
+
+
+def collaboration_last_stage(
+    *,
+    root_status: str | None,
+    child_thread_ids: set[str],
+    default_child_thread_ids: set[str],
+    child_completed_thread_ids: set[str],
+    child_reply_thread_ids: set[str],
+    default_spawn_call_ids: set[str],
+    explicit_fork_spawn_count: int,
+    failed_tool_count: int,
+    missing_spawn_identity_count: int,
+    parent_reply_seen: bool,
+    response_counts: dict[str, int],
+    spawn_completed_count: int,
+    wait_completed_count: int,
+    unexpected_tool_count: int,
+) -> dict[str, object]:
+    completed_default_child_count = len(
+        default_child_thread_ids & child_completed_thread_ids & child_reply_thread_ids
+    )
+    return {
+        "child_completed_count": len(child_completed_thread_ids),
+        "child_count": len(child_thread_ids),
+        "child_reply_count": len(child_reply_thread_ids),
+        "completed_default_child_count": completed_default_child_count,
+        "default_child_count": len(default_child_thread_ids),
+        "default_spawn_count": len(default_spawn_call_ids),
+        "does_not_prove": "product_root_cause",
+        "explicit_fork_spawn_count": explicit_fork_spawn_count,
+        "failed_collaboration_tool_count": failed_tool_count,
+        "last_proven_stage": classify_collaboration_stage(
+            root_status=root_status,
+            parent_reply_seen=parent_reply_seen,
+            default_spawn_count=len(default_spawn_call_ids),
+            default_child_count=len(default_child_thread_ids),
+            completed_default_child_count=completed_default_child_count,
+            spawn_completed_count=spawn_completed_count,
+            provider_response_count=sum(response_counts.values()),
+        ),
+        "missing_spawn_identity_count": missing_spawn_identity_count,
+        "outcome": "deadline_expired",
+        "parent_reply_seen": parent_reply_seen,
+        "provider_response_count": sum(response_counts.values()),
+        "root_status": root_status,
+        "spawn_count": spawn_completed_count,
+        "unexpected_collaboration_tool_count": unexpected_tool_count,
+        "wait_count": wait_completed_count,
+    }
+
+
 def wait_for_collaboration_turn(
     server: AppServer,
     deadline: float,
@@ -323,7 +420,30 @@ def wait_for_collaboration_turn(
             and parent_reply_seen
         ):
             break
-        message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
+        try:
+            message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
+        except SystemExit as error:
+            if "deadline expired" not in str(error):
+                raise
+            raise LiveDeadlineExpired(
+                "the Grok Ultra collaboration Turn",
+                collaboration_last_stage(
+                    root_status=root_status,
+                    child_thread_ids=child_thread_ids,
+                    default_child_thread_ids=default_child_thread_ids,
+                    child_completed_thread_ids=child_completed_thread_ids,
+                    child_reply_thread_ids=child_reply_thread_ids,
+                    default_spawn_call_ids=default_spawn_call_ids,
+                    explicit_fork_spawn_count=explicit_fork_spawn_count,
+                    failed_tool_count=failed_tool_count,
+                    missing_spawn_identity_count=missing_spawn_identity_count,
+                    parent_reply_seen=parent_reply_seen,
+                    response_counts=response_counts,
+                    spawn_completed_count=spawn_completed_count,
+                    wait_completed_count=wait_completed_count,
+                    unexpected_tool_count=unexpected_tool_count,
+                ),
+            ) from error
         method = message.get("method")
         params = message.get("params")
         if not isinstance(params, dict):
@@ -414,6 +534,24 @@ def wait_for_collaboration_turn(
             if thread_id != root_thread_id and status == "completed":
                 child_completed_thread_ids.add(thread_id)
 
+    last_stage = collaboration_last_stage(
+        root_status=root_status,
+        child_thread_ids=child_thread_ids,
+        default_child_thread_ids=default_child_thread_ids,
+        child_completed_thread_ids=child_completed_thread_ids,
+        child_reply_thread_ids=child_reply_thread_ids,
+        default_spawn_call_ids=default_spawn_call_ids,
+        explicit_fork_spawn_count=explicit_fork_spawn_count,
+        failed_tool_count=failed_tool_count,
+        missing_spawn_identity_count=missing_spawn_identity_count,
+        parent_reply_seen=parent_reply_seen,
+        response_counts=response_counts,
+        spawn_completed_count=spawn_completed_count,
+        wait_completed_count=wait_completed_count,
+        unexpected_tool_count=unexpected_tool_count,
+    )
+    if last_stage["last_proven_stage"] != "completed":
+        raise LiveDeadlineExpired("the Grok Ultra collaboration Turn", last_stage)
     if root_status != "completed":
         raise SystemExit("the Grok Ultra parent Turn did not complete")
     completed_children = (
@@ -444,6 +582,53 @@ def wait_for_collaboration_turn(
     }
 
 
+def classify_image_stage(
+    *,
+    completed: int,
+    failed: int,
+    agent_reply_seen: bool,
+    history_args_seen: bool,
+    require_history: bool,
+) -> str:
+    if completed and agent_reply_seen and (history_args_seen or not require_history):
+        return "completed"
+    if completed:
+        return "image_completed"
+    if agent_reply_seen:
+        return "agent_reply_seen"
+    if require_history and history_args_seen:
+        return "history_arguments_seen"
+    if failed:
+        return "image_failed"
+    return "no_events"
+
+
+def image_last_stage(
+    *,
+    completed: int,
+    failed: int,
+    agent_reply_seen: bool,
+    history_args_seen: bool,
+    require_history: bool,
+) -> dict[str, object]:
+    return {
+        "agent_reply_seen": agent_reply_seen,
+        "does_not_prove": "product_root_cause",
+        "history_arguments_seen": history_args_seen,
+        "image_items_completed": completed,
+        "image_items_failed": failed,
+        "last_proven_stage": classify_image_stage(
+            completed=completed,
+            failed=failed,
+            agent_reply_seen=agent_reply_seen,
+            history_args_seen=history_args_seen,
+            require_history=require_history,
+        ),
+        "outcome": "deadline_expired",
+        "require_history": require_history,
+    }
+
+
 def wait_for_image_turn(
     server: AppServer, deadline: float, require_history: bool
 ) -> dict[str, object]:
@@ -452,7 +637,21 @@ def wait_for_image_turn(
     history_args_seen = not require_history
     agent_reply_seen = False
     while time.monotonic() < deadline:
-        message = server.next_message(deadline, "the Grok image Turn")
+        try:
+            message = server.next_message(deadline, "the Grok image Turn")
+        except SystemExit as error:
+            if "deadline expired" not in str(error):
+                raise
+            raise LiveDeadlineExpired(
+                "the Grok image Turn",
+                image_last_stage(
+                    completed=completed,
+                    failed=failed,
+                    agent_reply_seen=agent_reply_seen,
+                    history_args_seen=history_args_seen,
+                    require_history=require_history,
+                ),
+            ) from error
         params = message.get("params")
         if not isinstance(params, dict):
             continue
@@ -528,7 +727,16 @@ def wait_for_image_turn(
                 "artifact_extension": ".jpg",
                 "status": "completed",
             }
-    raise SystemExit("Grok image Turn timed out")
+    raise LiveDeadlineExpired(
+        "the Grok image Turn",
+        image_last_stage(
+            completed=completed,
+            failed=failed,
+            agent_reply_seen=agent_reply_seen,
+            history_args_seen=history_args_seen,
+            require_history=require_history,
+        ),
+    )
 
 
 def run_smoke(
@@ -563,6 +771,7 @@ def run_smoke(
             workspace,
             token,
         )
+        runner_turn_submission_count = 0
         try:
             server.request(
                 1,
@@ -644,12 +853,13 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
-                turn_evidence = wait_for_basic_turn(server, time.monotonic() + 120)
+                turn_evidence = wait_for_basic_turn(server, time.monotonic() + BASIC_TURN_SECONDS)
             elif scenario == CONTINUATION_SCENARIO:
                 prompt = (
                     f"Use the {TOOL_NAME} result, then reply "
                     f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
                 )
+                runner_turn_submission_count = 1
                 server.request(
                     4,
                     "turn/start",
@@ -665,7 +875,7 @@ def run_smoke(
                     },
                 )
                 turn_evidence = wait_for_verified_turn(
-                    server, time.monotonic() + 120
+                    server, time.monotonic() + CONTINUATION_TURN_SECONDS
                 )
 
                 history_prompt = (
@@ -686,13 +896,13 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
+                runner_turn_submission_count = 2
                 history_evidence = wait_for_exact_reply(
                     server,
-                    time.monotonic() + 120,
+                    time.monotonic() + CONTINUATION_TURN_SECONDS,
                     HISTORY_EXPECTED_AGENT_REPLY,
                     "the Grok history-replay Turn",
                 )
-                runner_turn_submission_count = 2
                 turn_evidence = {
                     **turn_evidence,
                     "history_response_assertion": history_evidence[
@@ -708,6 +918,7 @@ def run_smoke(
                     "that child to complete, then reply with exactly "
                     f"{PARENT_EXPECTED_AGENT_REPLY} and no other text."
                 )
+                runner_turn_submission_count = 1
                 server.request(
                     4,
                     "turn/start",
@@ -725,10 +936,9 @@ def run_smoke(
                 )
                 turn_evidence = wait_for_collaboration_turn(
                     server,
-                    time.monotonic() + 120,
+                    time.monotonic() + COLLABORATION_TURN_SECONDS,
                     thread_id,
                 )
-                runner_turn_submission_count = 1
             else:
                 for request_id, prompt, require_history in [
                     (
@@ -743,6 +953,7 @@ def run_smoke(
                         True,
                     ),
                 ]:
+                    runner_turn_submission_count += 1
                     server.request(
                         request_id,
                         "turn/start",
@@ -758,9 +969,8 @@ def run_smoke(
                         },
                     )
                     image_evidence = wait_for_image_turn(
-                        server, time.monotonic() + 120, require_history
+                        server, time.monotonic() + IMAGE_TURN_SECONDS, require_history
                     )
-                runner_turn_submission_count = 2
                 turn_evidence = {
                     **image_evidence,
                     "history_edit": "completed",
@@ -789,6 +999,30 @@ def run_smoke(
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+        except LiveDeadlineExpired as error:
+            evidence = {
+                "archive": archive.name,
+                "archive_sha256": sha256(archive),
+                "catalog": "release-bundled",
+                "model": "grok-4.6",
+                "provider": "grok",
+                "runner_turn_submission_count": runner_turn_submission_count,
+                "scenario": scenario,
+                "source_sha": source_sha,
+                "story": f"grokex-{scenario}",
+                "validation_run": run_id,
+                "validator_sha": validator_sha,
+                **(
+                    {"multi_agent_version": "v2", "reasoning_effort": "ultra"}
+                    if scenario == COLLABORATION_SCENARIO
+                    else {}
+                ),
+                **error.last_stage,
+            }
+            evidence_path.write_text(
+                json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            raise
         finally:
             server.close()
 

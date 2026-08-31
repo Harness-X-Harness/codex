@@ -100,7 +100,7 @@ jobs:
     name: Live ${{ matrix.scenario }}
     needs: prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -144,10 +144,11 @@ jobs:
             --run-id "${GITHUB_RUN_ID}" \
             --scenario "${SCENARIO}"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
         with:
           name: grokex-live-evidence-${{ matrix.scenario }}
           path: ${{ runner.temp }}/LIVE_EVIDENCE-${{ matrix.scenario }}.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 1
 
   aggregate:

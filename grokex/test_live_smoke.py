@@ -23,6 +23,19 @@ class FakeAppServer:
         self.sent.append(message)
 
 
+class DeadlineAfterMessages(FakeAppServer):
+    def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
+        del deadline
+        if not self.messages:
+            raise SystemExit(
+                f"App Server response deadline expired while waiting for {waiting_for}"
+            )
+        return self.messages.popleft()
+
+    def send(self, message: dict[str, object]) -> None:
+        self.sent.append(message)
+
+
 class FakeScenarioAppServer(FakeAppServer):
     def __init__(
         self,
@@ -574,6 +587,124 @@ experimental_bearer_token = "secret"
             "thread-1",
         )
         self.assertEqual(evidence["wait_count"], 0)
+
+    def test_collaboration_deadline_preserves_last_stage_without_thread_ids(self) -> None:
+        spawn_arguments = {
+            "message": (
+                "Reply with exactly "
+                f"{live_smoke.CHILD_EXPECTED_AGENT_REPLY} and no other text."
+            ),
+            "task_name": "live_child",
+        }
+        server = DeadlineAfterMessages(
+            [
+                {
+                    "method": "rawResponseItem/completed",
+                    "params": {
+                        "item": {
+                            "arguments": json.dumps(spawn_arguments),
+                            "call_id": "spawn-1",
+                            "name": "projected_spawn",
+                            "type": "function_call",
+                        },
+                        "threadId": "thread-1",
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "id": "spawn-1",
+                            "receiverThreadIds": ["child-1"],
+                            "status": "completed",
+                            "tool": "spawnAgent",
+                            "type": "collabAgentToolCall",
+                        },
+                        "threadId": "thread-1",
+                    },
+                },
+            ]
+        )
+
+        with self.assertRaises(live_smoke.LiveDeadlineExpired) as raised:
+            live_smoke.wait_for_collaboration_turn(
+                server,
+                time.monotonic() + 1,
+                "thread-1",
+            )
+
+        evidence = raised.exception.last_stage
+        self.assertEqual(evidence["outcome"], "deadline_expired")
+        self.assertEqual(evidence["does_not_prove"], "product_root_cause")
+        self.assertEqual(evidence["last_proven_stage"], "child_created")
+        self.assertEqual(evidence["spawn_count"], 1)
+        self.assertEqual(evidence["default_child_count"], 1)
+        self.assertEqual(evidence["child_completed_count"], 0)
+        dumped = json.dumps(evidence)
+        self.assertNotIn("thread-1", dumped)
+        self.assertNotIn("child-1", dumped)
+
+    def test_collaboration_run_writes_last_stage_evidence_on_deadline(self) -> None:
+        class TimeoutScenarioServer(FakeScenarioAppServer):
+            def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
+                del deadline
+                raise SystemExit(
+                    f"App Server response deadline expired while waiting for {waiting_for}"
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text(
+                'model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n',
+                encoding="utf-8",
+            )
+            evidence_path = root / "evidence.json"
+            server = TimeoutScenarioServer([])
+            with patch.object(live_smoke, "extract_archive", return_value=root), patch.object(
+                live_smoke, "AppServer", return_value=server
+            ):
+                with self.assertRaises(live_smoke.LiveDeadlineExpired):
+                    live_smoke.run_smoke(
+                        archive,
+                        config,
+                        evidence_path,
+                        "source",
+                        "validator",
+                        "run",
+                        live_smoke.COLLABORATION_SCENARIO,
+                    )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["outcome"], "deadline_expired")
+            self.assertEqual(evidence["does_not_prove"], "product_root_cause")
+            self.assertEqual(evidence["last_proven_stage"], "no_events")
+            self.assertEqual(evidence["runner_turn_submission_count"], 1)
+            self.assertEqual(evidence["spawn_count"], 0)
+            self.assertNotIn("thread-1", json.dumps(evidence))
+
+    def test_image_deadline_preserves_last_stage_counts(self) -> None:
+        server = DeadlineAfterMessages(
+            [
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {"type": "imageGeneration", "status": "failed"},
+                    },
+                }
+            ]
+        )
+
+        with self.assertRaises(live_smoke.LiveDeadlineExpired) as raised:
+            live_smoke.wait_for_image_turn(server, time.monotonic() + 1, False)
+
+        evidence = raised.exception.last_stage
+        self.assertEqual(evidence["outcome"], "deadline_expired")
+        self.assertEqual(evidence["does_not_prove"], "product_root_cause")
+        self.assertEqual(evidence["last_proven_stage"], "image_failed")
+        self.assertEqual(evidence["image_items_failed"], 1)
+        self.assertEqual(evidence["image_items_completed"], 0)
 
 
 if __name__ == "__main__":
