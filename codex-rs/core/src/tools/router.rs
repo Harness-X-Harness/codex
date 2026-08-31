@@ -432,11 +432,7 @@ impl ToolRouter {
         }
     }
 
-    fn resolve_wire_route(
-        &self,
-        name: &str,
-        namespace: &Option<String>,
-    ) -> Option<&WireToolRoute> {
+    fn resolve_wire_route(&self, name: &str, namespace: &Option<String>) -> Option<&WireToolRoute> {
         if let Some(route) = self.wire_tool_routes.get(name) {
             return Some(route);
         }
