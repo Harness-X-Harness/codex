@@ -115,8 +115,8 @@ impl WireToolRoute {
 #[derive(Default)]
 struct FlatToolRoutes {
     by_wire_name: BTreeMap<String, WireToolRoute>,
-    by_canonical_name: BTreeMap<ToolName, WireToolRoute>,
-    by_unique_short_name: BTreeMap<String, Option<WireToolRoute>>,
+    by_canonical_name: BTreeMap<ToolName, String>,
+    by_unique_short_name: BTreeMap<String, Option<String>>,
 }
 
 impl FlatToolRoutes {
@@ -128,12 +128,10 @@ impl FlatToolRoutes {
         if self.by_wire_name.contains_key(&wire_name) {
             return Err(wire_name);
         }
-        self.by_wire_name.insert(wire_name.clone(), route.clone());
-
         let canonical_name = route.tool_name().clone().with_default_namespace();
         if self
             .by_canonical_name
-            .insert(canonical_name, route.clone())
+            .insert(canonical_name, wire_name.clone())
             .is_some()
         {
             return Err(route.tool_name().to_string());
@@ -142,7 +140,8 @@ impl FlatToolRoutes {
         self.by_unique_short_name
             .entry(route.tool_name().name.clone())
             .and_modify(|entry| *entry = None)
-            .or_insert(Some(route));
+            .or_insert_with(|| Some(wire_name.clone()));
+        self.by_wire_name.insert(wire_name.clone(), route);
         Ok(wire_name)
     }
 
@@ -153,7 +152,10 @@ impl FlatToolRoutes {
 
         let canonical_name = ToolName::new(namespace.clone(), name).with_default_namespace();
         if !canonical_name.is_default_namespace() {
-            return self.by_canonical_name.get(&canonical_name);
+            return self
+                .by_canonical_name
+                .get(&canonical_name)
+                .and_then(|wire_name| self.by_wire_name.get(wire_name));
         }
 
         // A Provider-default or unqualified echo is a lexical short name. The
@@ -162,6 +164,32 @@ impl FlatToolRoutes {
         self.by_canonical_name
             .get(&canonical_name)
             .or_else(|| self.by_unique_short_name.get(name).and_then(Option::as_ref))
+            .and_then(|wire_name| self.by_wire_name.get(wire_name))
+    }
+
+    fn wire_name_for_function(&self, tool_name: &ToolName) -> Option<&str> {
+        self.wire_name_for(tool_name, |route| {
+            matches!(route, WireToolRoute::Function(_))
+        })
+    }
+
+    fn wire_name_for_custom(&self, tool_name: &ToolName) -> Option<&str> {
+        self.wire_name_for(tool_name, |route| {
+            matches!(route, WireToolRoute::Custom { .. })
+        })
+    }
+
+    fn wire_name_for(
+        &self,
+        tool_name: &ToolName,
+        matches_kind: impl FnOnce(&WireToolRoute) -> bool,
+    ) -> Option<&str> {
+        let canonical_name = tool_name.clone().with_default_namespace();
+        let wire_name = self.by_canonical_name.get(&canonical_name)?;
+        self.by_wire_name
+            .get(wire_name)
+            .filter(|route| matches_kind(route))
+            .map(|_| wire_name.as_str())
     }
 }
 
@@ -338,11 +366,6 @@ impl ToolRouter {
             return input;
         }
         for item in &mut input {
-            if matches!(item, ResponseItem::CustomToolCall { .. })
-                && !self.has_wire_route_for_custom_call(item)
-            {
-                continue;
-            }
             match item {
                 ResponseItem::FunctionCall {
                     name,
@@ -351,8 +374,14 @@ impl ToolRouter {
                     ..
                 } => {
                     let tool_name = ToolName::new(namespace.take(), name.clone());
-                    *name = flat_wire_name("function", &tool_name);
-                    *encrypted_function_args = None;
+                    if let Some(wire_name) =
+                        self.flat_tool_routes.wire_name_for_function(&tool_name)
+                    {
+                        *name = wire_name.to_string();
+                        *encrypted_function_args = None;
+                    } else {
+                        *namespace = tool_name.namespace;
+                    }
                 }
                 ResponseItem::CustomToolCall {
                     id,
@@ -364,39 +393,27 @@ impl ToolRouter {
                     ..
                 } => {
                     let tool_name = ToolName::new(namespace.clone(), name.clone());
-                    *item = ResponseItem::FunctionCall {
-                        id: id.clone(),
-                        name: flat_wire_name("custom", &tool_name),
-                        namespace: None,
-                        arguments: serde_json::json!({
-                            (custom_input_key(&tool_name.name)): input,
-                        })
-                        .to_string(),
-                        encrypted_function_args: None,
-                        call_id: call_id.clone(),
-                        internal_chat_message_metadata_passthrough:
-                            internal_chat_message_metadata_passthrough.clone(),
-                    };
+                    if let Some(wire_name) = self.flat_tool_routes.wire_name_for_custom(&tool_name)
+                    {
+                        *item = ResponseItem::FunctionCall {
+                            id: id.clone(),
+                            name: wire_name.to_string(),
+                            namespace: None,
+                            arguments: serde_json::json!({
+                                (custom_input_key(&tool_name.name)): input,
+                            })
+                            .to_string(),
+                            encrypted_function_args: None,
+                            call_id: call_id.clone(),
+                            internal_chat_message_metadata_passthrough:
+                                internal_chat_message_metadata_passthrough.clone(),
+                        };
+                    }
                 }
                 _ => {}
             }
         }
         input
-    }
-
-    fn has_wire_route_for_custom_call(&self, item: &ResponseItem) -> bool {
-        let ResponseItem::CustomToolCall {
-            name, namespace, ..
-        } = item
-        else {
-            return false;
-        };
-        let tool_name = ToolName::new(namespace.clone(), name.clone());
-        let wire_name = flat_wire_name("custom", &tool_name);
-        matches!(
-            self.flat_tool_routes.by_wire_name.get(&wire_name),
-            Some(WireToolRoute::Custom { .. })
-        )
     }
 
     pub(crate) fn exposes_x_search(&self) -> bool {
