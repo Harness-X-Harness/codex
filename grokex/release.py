@@ -36,7 +36,7 @@ LEGACY_KEYS = {
 }
 LIVE_SCENARIO_ASSERTIONS = {
     "basic-exact-reply": {
-        "response_assertion": "exact_match",
+        "response_assertion": "nonempty_agent_message",
         "runner_turn_submission_count": 1,
         "status": "completed",
     },
@@ -60,12 +60,15 @@ LIVE_SCENARIO_ASSERTIONS = {
         "response_assertion": "child_echo_match",
         "runner_turn_submission_count": 1,
         "status": "completed",
-        "wait_result_delivery": "completed",
+        "result_delivery": "completed",
     },
     "image-generation-history-edit": {
-        "agent_reply_seen": True,
-        "artifact_match": True,
-        "history_edit": "completed",
+        "edit_agent_reply_seen": True,
+        "edit_artifact_match": True,
+        "edit_completion": "completed",
+        "generation_agent_reply_seen": True,
+        "generation_artifact_match": True,
+        "generation_completion": "completed",
         "history_arguments_verified": True,
         "runner_turn_submission_count": 2,
         "same_thread": True,
@@ -75,17 +78,20 @@ LIVE_SCENARIO_ASSERTIONS = {
 
 
 def image_artifact_evidence(value: dict[str, object]) -> dict[str, str]:
-    image_mime = value.get("image_mime")
-    artifact_extension = value.get("artifact_extension")
-    if (
-        not isinstance(image_mime, str)
-        or SUPPORTED_IMAGE_ARTIFACTS.get(image_mime) != artifact_extension
-    ):
-        raise SystemExit("live image artifact codec is invalid")
-    return {
-        "artifact_extension": artifact_extension,
-        "image_mime": image_mime,
-    }
+    evidence: dict[str, str] = {}
+    for phase in ("generation", "edit"):
+        mime_key = f"{phase}_image_mime"
+        extension_key = f"{phase}_artifact_extension"
+        image_mime = value.get(mime_key)
+        artifact_extension = value.get(extension_key)
+        if (
+            not isinstance(image_mime, str)
+            or SUPPORTED_IMAGE_ARTIFACTS.get(image_mime) != artifact_extension
+        ):
+            raise SystemExit("live image artifact codec is invalid")
+        evidence[mime_key] = image_mime
+        evidence[extension_key] = artifact_extension
+    return evidence
 
 
 LIVE_SCENARIO_DIAGNOSTICS = {

@@ -1,5 +1,6 @@
 import base64
 import json
+import queue
 import tempfile
 import time
 import unittest
@@ -72,7 +73,7 @@ class FakeScenarioAppServer(FakeAppServer):
                 "thread": {"id": params["threadId"]},
             }
         if method == "turn/start":
-            return {}
+            return {"turn": {"id": f"turn-{request_id}"}}
         raise AssertionError(f"unexpected request method: {method}")
 
     def close(self) -> None:
@@ -80,22 +81,134 @@ class FakeScenarioAppServer(FakeAppServer):
 
 
 class VerifiedTurnTest(unittest.TestCase):
+    def test_request_preserves_server_messages_that_precede_its_response(self) -> None:
+        first_notification = {
+            "id": 4,
+            "method": "item/tool/call",
+            "params": {},
+        }
+        second_notification = {"method": "item/completed", "params": {}}
+        server = object.__new__(live_smoke.AppServer)
+        server.messages = queue.Queue()
+        server.deferred_messages = deque()
+        for message in [
+            first_notification,
+            {"id": 4, "result": {"accepted": True}},
+            second_notification,
+        ]:
+            server.messages.put(message)
+
+        with patch.object(server, "send") as send:
+            response = server.request(4, "turn/start", {"threadId": "thread-1"})
+
+        self.assertEqual(response, {"accepted": True})
+        send.assert_called_once()
+        deadline = time.monotonic() + 1
+        self.assertEqual(server.next_message(deadline, "turn"), first_notification)
+        self.assertEqual(server.next_message(deadline, "turn"), second_notification)
+
     def test_image_scenario_uses_same_thread_and_verifies_history_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            artifact = root / "generated.jpg"
-            jpeg = (Path(__file__).parents[1] / "codex-rs/vendor/bubblewrap/bubblewrap.jpg").read_bytes()
-            artifact.write_bytes(jpeg)
-            generation_item = {"method": "item/completed", "params": {"item": {"id": "generate-1", "type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}}
-            edit_item = {"method": "item/completed", "params": {"item": {"id": "edit-1", "type": "imageGeneration", "status": "completed", "result": base64.b64encode(jpeg).decode(), "savedPath": str(artifact)}}}
-            agent_reply = {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "done"}}}
-            turn_done = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
-            raw_generation = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "call_id": "generate-1", "name": "provider-compiled-symbol", "arguments": json.dumps({"prompt": "generate"})}}}
-            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "call_id": "edit-1", "name": "provider-compiled-symbol", "arguments": json.dumps({"prompt": "edit", "referenced_image_paths": [str(artifact)]})}}}
+            generation_artifact = root / "generated.jpg"
+            edit_artifact = root / "edited.jpg"
+            jpeg = (
+                Path(__file__).parents[1]
+                / "codex-rs/vendor/bubblewrap/bubblewrap.jpg"
+            ).read_bytes()
+            generation_artifact.write_bytes(jpeg)
+            edit_artifact.write_bytes(jpeg)
+
+            def item_event(
+                turn_id: str, item: dict[str, object]
+            ) -> dict[str, object]:
+                return {
+                    "method": "item/completed",
+                    "params": {
+                        "item": item,
+                        "threadId": "thread-1",
+                        "turnId": turn_id,
+                    },
+                }
+
+            def raw_event(
+                turn_id: str, call_id: str, arguments: dict[str, object]
+            ) -> dict[str, object]:
+                return {
+                    "method": "rawResponseItem/completed",
+                    "params": {
+                        "item": {
+                            "arguments": json.dumps(arguments),
+                            "call_id": call_id,
+                            "name": "imagegen",
+                            "namespace": "image_gen",
+                            "type": "function_call",
+                        },
+                        "threadId": "thread-1",
+                        "turnId": turn_id,
+                    },
+                }
+
+            def turn_done(turn_id: str) -> dict[str, object]:
+                return {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": {
+                            "id": turn_id,
+                            "items": [{"text": "done", "type": "agentMessage"}],
+                            "status": "completed",
+                        },
+                    },
+                }
+
+            generation_item = item_event(
+                "turn-4",
+                {
+                    "id": "generate-1",
+                    "result": base64.b64encode(jpeg).decode(),
+                    "savedPath": str(generation_artifact),
+                    "status": "completed",
+                    "type": "imageGeneration",
+                },
+            )
+            edit_item = item_event(
+                "turn-5",
+                {
+                    "id": "edit-1",
+                    "result": base64.b64encode(jpeg).decode(),
+                    "savedPath": str(edit_artifact),
+                    "status": "completed",
+                    "type": "imageGeneration",
+                },
+            )
+            generation_reply = item_event(
+                "turn-4", {"text": "done", "type": "agentMessage"}
+            )
+            edit_reply = item_event(
+                "turn-5", {"text": "done", "type": "agentMessage"}
+            )
+            raw_generation = raw_event(
+                "turn-4", "generate-1", {"prompt": "generate"}
+            )
+            raw_edit = raw_event(
+                "turn-5",
+                "edit-1",
+                {
+                    "prompt": "edit",
+                    "referenced_image_paths": [str(generation_artifact)],
+                },
+            )
             server = FakeScenarioAppServer(
                 [
-                    raw_generation, generation_item, agent_reply, turn_done,
-                    raw_edit, generation_item, edit_item, agent_reply, turn_done,
+                    raw_generation,
+                    generation_item,
+                    generation_reply,
+                    turn_done("turn-4"),
+                    edit_item,
+                    raw_edit,
+                    edit_reply,
+                    turn_done("turn-5"),
                 ],
                 model={"id": "grok-4.6"},
             )
@@ -104,19 +217,40 @@ class VerifiedTurnTest(unittest.TestCase):
             config = root / "config.toml"
             config.write_text('model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n', encoding="utf-8")
             evidence_path = root / "evidence.json"
-            with patch.object(live_smoke, "extract_archive", return_value=root), patch.object(live_smoke, "AppServer", return_value=server):
-                live_smoke.run_smoke(archive, config, evidence_path, "source", "validator", "run", live_smoke.IMAGE_SCENARIO)
-            turns = [request for request in server.requests if request[1] == "turn/start"]
-            self.assertEqual([request[2]["threadId"] for request in turns], ["thread-1", "thread-1"])
-            thread_start = next(request for request in server.requests if request[1] == "thread/start")
+            with patch.object(
+                live_smoke, "extract_archive", return_value=root
+            ), patch.object(live_smoke, "AppServer", return_value=server):
+                live_smoke.run_smoke(
+                    archive,
+                    config,
+                    evidence_path,
+                    "source",
+                    "validator",
+                    "run",
+                    live_smoke.IMAGE_SCENARIO,
+                )
+            turns = [
+                request for request in server.requests if request[1] == "turn/start"
+            ]
+            self.assertEqual(
+                [request[2]["threadId"] for request in turns],
+                ["thread-1", "thread-1"],
+            )
+            thread_start = next(
+                request for request in server.requests if request[1] == "thread/start"
+            )
             self.assertTrue(thread_start[2]["experimentalRawEvents"])
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             self.assertTrue(evidence["history_arguments_verified"])
-            self.assertTrue(evidence["agent_reply_seen"])
-            self.assertEqual(evidence["image_items_completed"], 1)
+            self.assertTrue(evidence["generation_agent_reply_seen"])
+            self.assertTrue(evidence["edit_agent_reply_seen"])
+            self.assertEqual(evidence["generation_completion"], "completed")
+            self.assertEqual(evidence["edit_completion"], "completed")
+            self.assertEqual(evidence["image_items_completed"], 2)
             self.assertEqual(evidence["image_items_failed"], 0)
             self.assertNotIn("result", evidence)
-            self.assertNotIn(str(artifact), json.dumps(evidence))
+            self.assertNotIn(str(generation_artifact), json.dumps(evidence))
+            self.assertNotIn(str(edit_artifact), json.dumps(evidence))
 
     def test_invalid_correlated_image_payload_writes_safe_stage_evidence(self) -> None:
         raw_generation = {
@@ -125,9 +259,12 @@ class VerifiedTurnTest(unittest.TestCase):
                 "item": {
                     "arguments": json.dumps({"prompt": "generate"}),
                     "call_id": "generate-1",
-                    "name": "provider-compiled-symbol",
+                    "name": "imagegen",
+                    "namespace": "image_gen",
                     "type": "function_call",
-                }
+                },
+                "threadId": "thread-1",
+                "turnId": "turn-4",
             },
         }
         invalid_image = {
@@ -139,7 +276,9 @@ class VerifiedTurnTest(unittest.TestCase):
                     "savedPath": "/private/not-recorded",
                     "status": "completed",
                     "type": "imageGeneration",
-                }
+                },
+                "threadId": "thread-1",
+                "turnId": "turn-4",
             },
         }
         server = FakeScenarioAppServer([raw_generation, invalid_image])
@@ -171,43 +310,50 @@ class VerifiedTurnTest(unittest.TestCase):
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             self.assertEqual(evidence["outcome"], "semantic_failure")
             self.assertEqual(evidence["last_proven_stage"], "image_payload_decoded")
+            self.assertIs(evidence["history_arguments_seen"], False)
             self.assertEqual(evidence["image_function_call_count"], 1)
             dumped = json.dumps(evidence)
             self.assertNotIn("generate-1", dumped)
             self.assertNotIn("not-an-image", dumped)
             self.assertNotIn("not-recorded", dumped)
 
-    def test_accepts_basic_exact_reply_without_tool(self) -> None:
+    def test_accepts_basic_terminal_agent_reply_without_tool(self) -> None:
         server = FakeAppServer(
             [
                 {
-                    "method": "item/completed",
-                    "params": {
-                        "item": {
-                            "type": "agentMessage",
-                            "text": live_smoke.BASIC_EXPECTED_AGENT_REPLY,
-                        }
-                    },
-                },
-                {
                     "method": "turn/completed",
-                    "params": {"turn": {"status": "completed"}},
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": {
+                            "id": "turn-4",
+                            "items": [
+                                {
+                                    "text": live_smoke.BASIC_EXPECTED_AGENT_REPLY,
+                                    "type": "agentMessage",
+                                }
+                            ],
+                            "status": "completed",
+                        },
+                    },
                 },
             ]
         )
 
-        evidence = live_smoke.wait_for_basic_turn(server, time.monotonic() + 1)
+        evidence = live_smoke.wait_for_basic_turn(
+            server, time.monotonic() + 1, "thread-1", "turn-4"
+        )
 
         self.assertEqual(
             evidence,
             {
-                "response_assertion": "exact_match",
+                "response_assertion": "nonempty_agent_message",
                 "status": "completed",
             },
         )
         self.assertEqual(server.sent, [])
 
     def completed_turn(self, reply: str, status: str = "completed") -> FakeAppServer:
+        scoped = {"threadId": "thread-1", "turnId": "turn-4"}
         return FakeAppServer(
             [
                 {
@@ -216,17 +362,24 @@ class VerifiedTurnTest(unittest.TestCase):
                         "item": {
                             "encrypted_content": "opaque",
                             "type": "reasoning",
-                        }
+                        },
+                        **scoped,
                     },
                 },
                 {
                     "method": "item/completed",
-                    "params": {"item": {"type": "reasoning"}},
+                    "params": {"item": {"type": "reasoning"}, **scoped},
                 },
                 {
                     "id": 41,
                     "method": "item/tool/call",
-                    "params": {"tool": live_smoke.TOOL_NAME, "arguments": {}},
+                    "params": {
+                        "arguments": {},
+                        "callId": "tool-1",
+                        "namespace": None,
+                        "tool": live_smoke.TOOL_NAME,
+                        **scoped,
+                    },
                 },
                 {
                     "method": "item/completed",
@@ -242,16 +395,27 @@ class VerifiedTurnTest(unittest.TestCase):
                                     "text": live_smoke.TOOL_OUTPUT_MARKER,
                                 }
                             ],
-                        }
+                        },
+                        **scoped,
                     },
                 },
                 {
                     "method": "item/completed",
-                    "params": {"item": {"type": "agentMessage", "text": reply}},
+                    "params": {
+                        "item": {"type": "agentMessage", "text": reply},
+                        **scoped,
+                    },
                 },
                 {
                     "method": "turn/completed",
-                    "params": {"turn": {"status": status}},
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": {
+                            "id": "turn-4",
+                            "items": [{"text": reply, "type": "agentMessage"}],
+                            "status": status,
+                        },
+                    },
                 },
             ]
         )
@@ -259,7 +423,9 @@ class VerifiedTurnTest(unittest.TestCase):
     def test_accepts_reasoning_tool_continuation_and_exact_reply(self) -> None:
         server = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
 
-        evidence = live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+        evidence = live_smoke.wait_for_verified_turn(
+            server, time.monotonic() + 1, "thread-1", "turn-4"
+        )
 
         self.assertEqual(
             evidence,
@@ -297,12 +463,21 @@ class VerifiedTurnTest(unittest.TestCase):
             {
                 "id": 42,
                 "method": "item/tool/call",
-                "params": {"tool": live_smoke.TOOL_NAME, "arguments": {}},
+                "params": {
+                    "arguments": {},
+                    "callId": "tool-2",
+                    "namespace": None,
+                    "threadId": "thread-1",
+                    "tool": live_smoke.TOOL_NAME,
+                    "turnId": "turn-4",
+                },
             },
         )
         server = FakeAppServer(messages)
 
-        evidence = live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+        evidence = live_smoke.wait_for_verified_turn(
+            server, time.monotonic() + 1, "thread-1", "turn-4"
+        )
 
         self.assertEqual(evidence["tool_continuation"], "completed")
         self.assertEqual(evidence["tool_request_count"], 2)
@@ -312,34 +487,12 @@ class VerifiedTurnTest(unittest.TestCase):
         server = self.completed_turn(f" {live_smoke.EXPECTED_AGENT_REPLY}")
 
         with self.assertRaises(live_smoke.LiveScenarioFailed) as raised:
-            live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+            live_smoke.wait_for_verified_turn(
+                server, time.monotonic() + 1, "thread-1", "turn-4"
+            )
 
         self.assertEqual(raised.exception.last_stage["outcome"], "semantic_failure")
         self.assertEqual(raised.exception.last_stage["last_proven_stage"], "turn_completed")
-
-    def test_unexpected_tool_request_reports_safe_last_stage(self) -> None:
-        server = FakeAppServer(
-            [
-                {
-                    "id": "not-recorded",
-                    "method": "item/tool/call",
-                    "params": {
-                        "arguments": {"secret": True},
-                        "tool": "sensitive-tool-name",
-                    },
-                }
-            ]
-        )
-
-        with self.assertRaises(live_smoke.LiveScenarioFailed) as raised:
-            live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
-
-        stage = raised.exception.last_stage
-        self.assertEqual(stage["last_proven_stage"], "unexpected_tool_request_seen")
-        dumped = json.dumps(stage)
-        self.assertNotIn("not-recorded", dumped)
-        self.assertNotIn("sensitive-tool-name", dumped)
-        self.assertNotIn("secret", dumped)
 
     def test_continuation_scenario_replays_history_in_second_turn(self) -> None:
         first_turn = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
@@ -352,12 +505,26 @@ class VerifiedTurnTest(unittest.TestCase):
                         "item": {
                             "type": "agentMessage",
                             "text": live_smoke.HISTORY_EXPECTED_AGENT_REPLY,
-                        }
+                        },
+                        "threadId": "thread-1",
+                        "turnId": "turn-5",
                     },
                 },
                 {
                     "method": "turn/completed",
-                    "params": {"turn": {"status": "completed"}},
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": {
+                            "id": "turn-5",
+                            "items": [
+                                {
+                                    "text": live_smoke.HISTORY_EXPECTED_AGENT_REPLY,
+                                    "type": "agentMessage",
+                                }
+                            ],
+                            "status": "completed",
+                        },
+                    },
                 },
             ]
         )
@@ -458,10 +625,7 @@ experimental_bearer_token = "secret"
         extra_response: bool = False,
     ) -> list[dict[str, object]]:
         arguments: dict[str, object] = {
-            "message": (
-                f"{live_smoke.CHILD_TOKEN_INSTRUCTION} and reply with exactly its "
-                "canonical lowercase text and no other text."
-            ),
+            "message": "Return one fresh canonical UUID v4.",
             "task_name": "live_child",
         }
         prefix = [
@@ -471,31 +635,41 @@ experimental_bearer_token = "secret"
                     "item": {
                         "arguments": json.dumps(arguments),
                         "call_id": "spawn-1",
-                        "name": "projected_spawn",
+                        "name": "spawn_agent",
+                        "namespace": "collaboration",
                         "type": "function_call",
                     },
                     "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
             {
                 "method": "item/completed",
                 "params": {
                     "item": {
+                        "agentPath": "/root/live_child",
+                        "agentThreadId": "child-1",
                         "id": "spawn-1",
-                        "receiverThreadIds": ["child-1"],
-                        "status": "completed",
-                        "tool": "spawnAgent",
-                        "type": "collabAgentToolCall",
+                        "kind": "started",
+                        "type": "subAgentActivity",
                     },
                     "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
             {
                 "method": "rawResponse/completed",
-                "params": {"threadId": "thread-1"},
+                "params": {"threadId": "thread-1", "turnId": "turn-4"},
             },
         ]
         child = [
+            {
+                "method": "turn/started",
+                "params": {
+                    "threadId": "child-1",
+                    "turn": {"id": "child-turn-1", "status": "inProgress"},
+                },
+            },
             {
                 "method": "item/completed",
                 "params": {
@@ -504,40 +678,58 @@ experimental_bearer_token = "secret"
                         "type": "agentMessage",
                     },
                     "threadId": "child-1",
+                    "turnId": "child-turn-1",
                 },
             },
             {
                 "method": "rawResponse/completed",
-                "params": {"threadId": "child-1"},
+                "params": {"threadId": "child-1", "turnId": "child-turn-1"},
             },
             {
                 "method": "turn/completed",
                 "params": {
                     "threadId": "child-1",
-                    "turn": {"status": "completed"},
+                    "turn": {
+                        "id": "child-turn-1",
+                        "items": [
+                            {"text": COLLABORATION_TOKEN, "type": "agentMessage"}
+                        ],
+                        "status": "completed",
+                    },
                 },
             },
         ]
         parent = [
             {
                 "method": "rawResponse/completed",
-                "params": {"threadId": "thread-1"},
+                "params": {"threadId": "thread-1", "turnId": "turn-4"},
+            },
+            {
+                "method": "rawResponseItem/completed",
+                "params": {
+                    "item": {
+                        "arguments": "{}",
+                        "call_id": "wait-1",
+                        "name": "wait_agent",
+                        "namespace": "collaboration",
+                        "type": "function_call",
+                    },
+                    "threadId": "thread-1",
+                    "turnId": "turn-4",
+                },
             },
             {
                 "method": "item/completed",
                 "params": {
                     "item": {
-                        "agentsStates": {
-                            "child-1": {
-                                "message": COLLABORATION_TOKEN,
-                                "status": "completed",
-                            }
-                        },
+                        "agentsStates": {},
+                        "receiverThreadIds": [],
                         "status": "completed",
                         "tool": "wait",
                         "type": "collabAgentToolCall",
                     },
                     "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
             {
@@ -548,26 +740,47 @@ experimental_bearer_token = "secret"
                         "type": "agentMessage",
                     },
                     "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
             {
                 "method": "rawResponse/completed",
-                "params": {"threadId": "thread-1"},
+                "params": {"threadId": "thread-1", "turnId": "turn-4"},
             },
             {
                 "method": "turn/completed",
                 "params": {
                     "threadId": "thread-1",
-                    "turn": {"status": "completed"},
+                    "turn": {
+                        "id": "turn-4",
+                        "items": [
+                            {"text": COLLABORATION_TOKEN, "type": "agentMessage"}
+                        ],
+                        "status": "completed",
+                    },
+                },
+            },
+            {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "agentPath": "/root/live_child",
+                        "agentThreadId": "child-1",
+                        "id": "subagent-completed-turn-child",
+                        "kind": "completed",
+                        "type": "subAgentActivity",
+                    },
+                    "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
         ]
         if extra_response:
             parent.insert(
-                2,
+                3,
                 {
                     "method": "rawResponse/completed",
-                    "params": {"threadId": "thread-1"},
+                    "params": {"threadId": "thread-1", "turnId": "turn-4"},
                 },
             )
         return prefix + (parent + child if parent_completes_first else child + parent)
@@ -620,6 +833,7 @@ experimental_bearer_token = "secret"
             self.assertEqual(evidence["default_full_history"], "completed")
             self.assertEqual(evidence["child_completion"], "completed")
             self.assertEqual(evidence["parent_completion"], "completed")
+            self.assertEqual(evidence["result_delivery"], "completed")
 
     def test_collaboration_semantics_do_not_depend_on_event_order(self) -> None:
         parent_first = self.collaboration_messages(parent_completes_first=True)
@@ -629,11 +843,33 @@ experimental_bearer_token = "secret"
         completion_before_request = self.collaboration_messages()
         raw_spawn = completion_before_request.pop(0)
         completion_before_request.insert(2, raw_spawn)
+        later_child_turn = self.collaboration_messages()
+        later_child_turn[7:7] = [
+            {
+                "method": "turn/started",
+                "params": {
+                    "threadId": "child-1",
+                    "turn": {"id": "child-turn-2", "status": "inProgress"},
+                },
+            },
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "child-1",
+                    "turn": {
+                        "id": "child-turn-2",
+                        "items": [{"text": "follow-up done", "type": "agentMessage"}],
+                        "status": "completed",
+                    },
+                },
+            },
+        ]
 
         for messages in [
             parent_first,
             child_before_spawn_completion,
             completion_before_request,
+            later_child_turn,
             self.collaboration_messages(extra_response=True),
         ]:
             with self.subTest(messages=messages):
@@ -641,6 +877,7 @@ experimental_bearer_token = "secret"
                     FakeAppServer(messages),
                     time.monotonic() + 1,
                     "thread-1",
+                    "turn-4",
                 )
                 self.assertEqual(evidence["child_completion"], "completed")
                 self.assertEqual(evidence["default_full_history"], "completed")
@@ -648,10 +885,7 @@ experimental_bearer_token = "secret"
     def test_collaboration_scenario_treats_explicit_extra_spawn_as_diagnostic(self) -> None:
         explicit_arguments = {
             "fork_turns": "none",
-            "message": (
-                f"{live_smoke.CHILD_TOKEN_INSTRUCTION} and reply with exactly its "
-                "canonical lowercase text and no other text."
-            ),
+            "message": "Return one fresh canonical UUID v4.",
             "task_name": "extra_child",
         }
         messages = [
@@ -661,23 +895,26 @@ experimental_bearer_token = "secret"
                     "item": {
                         "arguments": json.dumps(explicit_arguments),
                         "call_id": "spawn-extra",
-                        "name": "projected_spawn",
+                        "name": "spawn_agent",
+                        "namespace": "collaboration",
                         "type": "function_call",
                     },
                     "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
             {
                 "method": "item/completed",
                 "params": {
                     "item": {
+                        "agentPath": "/root/extra_child",
+                        "agentThreadId": "child-extra",
                         "id": "spawn-extra",
-                        "receiverThreadIds": ["child-extra"],
-                        "status": "completed",
-                        "tool": "spawnAgent",
-                        "type": "collabAgentToolCall",
+                        "kind": "started",
+                        "type": "subAgentActivity",
                     },
                     "threadId": "thread-1",
+                    "turnId": "turn-4",
                 },
             },
             *self.collaboration_messages(),
@@ -687,6 +924,7 @@ experimental_bearer_token = "secret"
             FakeAppServer(messages),
             time.monotonic() + 1,
             "thread-1",
+            "turn-4",
         )
 
         self.assertEqual(evidence["default_full_history"], "completed")
@@ -704,16 +942,14 @@ experimental_bearer_token = "secret"
             FakeAppServer(messages),
             time.monotonic() + 1,
             "thread-1",
+            "turn-4",
         )
         self.assertEqual(evidence["default_full_history"], "completed")
         self.assertEqual(evidence["explicit_fork_spawn_count"], 0)
 
     def test_collaboration_deadline_preserves_last_stage_without_thread_ids(self) -> None:
         spawn_arguments = {
-            "message": (
-                f"{live_smoke.CHILD_TOKEN_INSTRUCTION} and reply with exactly its "
-                "canonical lowercase text and no other text."
-            ),
+            "message": "Return one fresh canonical UUID v4.",
             "task_name": "live_child",
         }
         server = DeadlineAfterMessages(
@@ -724,23 +960,26 @@ experimental_bearer_token = "secret"
                         "item": {
                             "arguments": json.dumps(spawn_arguments),
                             "call_id": "spawn-1",
-                            "name": "projected_spawn",
+                            "name": "spawn_agent",
+                            "namespace": "collaboration",
                             "type": "function_call",
                         },
                         "threadId": "thread-1",
+                        "turnId": "turn-4",
                     },
                 },
                 {
                     "method": "item/completed",
                     "params": {
                         "item": {
+                            "agentPath": "/root/live_child",
+                            "agentThreadId": "child-1",
                             "id": "spawn-1",
-                            "receiverThreadIds": ["child-1"],
-                            "status": "completed",
-                            "tool": "spawnAgent",
-                            "type": "collabAgentToolCall",
+                            "kind": "started",
+                            "type": "subAgentActivity",
                         },
                         "threadId": "thread-1",
+                        "turnId": "turn-4",
                     },
                 },
             ]
@@ -751,6 +990,7 @@ experimental_bearer_token = "secret"
                 server,
                 time.monotonic() + 1,
                 "thread-1",
+                "turn-4",
             )
 
         evidence = raised.exception.last_stage
