@@ -91,7 +91,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
     let generated =
         BASE64_STANDARD.encode(include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg"));
