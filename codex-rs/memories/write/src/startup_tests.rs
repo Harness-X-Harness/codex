@@ -19,6 +19,7 @@ use codex_model_provider::ProviderAccountResult;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
@@ -740,6 +741,55 @@ async fn memories_startup_phase2_explicit_model_override_drives_request_model() 
         Some("override.phase-two")
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn memories_without_provider_model_policy_do_not_egress() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let test = build_test_codex(&server, Arc::clone(&home)).await?;
+    let provider = create_model_provider(
+        ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..test.config.model_provider.clone()
+        },
+        Some(test.thread_manager.auth_manager()),
+    );
+    let db = test
+        .codex
+        .state_db()
+        .ok_or_else(|| anyhow::anyhow!("state db should be enabled for memory startup test"))?;
+    seed_stage1_candidate(
+        db.as_ref(),
+        home.path(),
+        chrono::Utc::now() - chrono::Duration::hours(2),
+        "no-model-policy-phase-one",
+    )
+    .await?;
+    seed_stage1_output(
+        db.as_ref(),
+        home.path(),
+        chrono::Utc::now(),
+        "raw memory for phase two",
+        "rollout summary for phase two",
+        "no-model-policy-phase-two",
+    )
+    .await?;
+
+    let (context, config) = memory_startup_context_with_provider(&test, provider).await;
+    phase1::run(Arc::clone(&context), Arc::clone(&config)).await;
+    let parent_permission_profile = config.permissions.effective_permission_profile();
+    phase2::run(context, config, parent_permission_profile).await;
+
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty()
+    );
+    shutdown_test_codex(&test).await?;
     Ok(())
 }
 

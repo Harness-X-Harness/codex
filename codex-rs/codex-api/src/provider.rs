@@ -90,7 +90,7 @@ fn project_grok_web_search_tool(tool: &mut Value) -> serde_json::Result<()> {
     }
     if object.len() != 1 {
         return Err(<serde_json::Error as serde::ser::Error>::custom(
-            "Grok Web Search does not support indexed access or optional search fields",
+            "Grok Web Search projection requires the verified bare declaration",
         ));
     }
 

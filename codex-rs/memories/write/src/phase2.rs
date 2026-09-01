@@ -53,6 +53,23 @@ pub async fn run(
 ) {
     let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
 
+    if config.memories.consolidation_model.is_none()
+        && context
+            .provider()
+            .memory_consolidation_preferred_model()
+            .is_none()
+    {
+        tracing::warn!(
+            "memory consolidation skipped: provider has no preferred model and no model override is configured"
+        );
+        context.counter(
+            MEMORY_PHASE_TWO_JOBS,
+            /*inc*/ 1,
+            &[("status", "skipped_no_model_policy")],
+        );
+        return;
+    }
+
     let Some(db) = context.state_db() else {
         // This should not happen.
         return;
@@ -90,10 +107,14 @@ pub async fn run(
         context.provider(),
     ) else {
         // If we can't get the config, we can't consolidate.
-        tracing::error!(
-            "failed to build memory consolidation agent config: provider has no preferred model and no model override is configured"
-        );
-        job::failed(context.as_ref(), db.as_ref(), &claim, "failed_agent_config").await;
+        tracing::error!("failed to get agent config");
+        job::failed(
+            context.as_ref(),
+            db.as_ref(),
+            &claim,
+            "failed_sandbox_policy",
+        )
+        .await;
         return;
     };
 

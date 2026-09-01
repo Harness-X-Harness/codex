@@ -14,7 +14,6 @@ use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::backend::CodexImagesBackend;
@@ -31,7 +30,6 @@ type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync
 
 #[derive(Clone)]
 struct ImageGenerationExtensionConfig {
-    available: bool,
     provider: ModelProviderInfo,
     save_root: Option<AbsolutePathBuf>,
 }
@@ -40,18 +38,10 @@ impl ImageGenerationExtensionConfig {
     /// Resolves the image provider and save root for a thread.
     fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
         Self {
-            available: image_generation_available(&config.model_provider),
             provider: config.model_provider.clone(),
             save_root: resolve_save_root(config),
         }
     }
-}
-
-fn image_generation_available(provider: &ModelProviderInfo) -> bool {
-    provider.is_openai()
-        || provider.requires_openai_auth
-        || provider.uses_openai_actor_authorization()
-        || provider.wire_api == WireApi::GrokResponses
 }
 
 impl ThreadLifecycleContributor<Config> for ImageGenerationExtension {
@@ -97,12 +87,11 @@ impl ToolContributor for ImageGenerationExtension {
         let Some(config) = thread_store.get::<ImageGenerationExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.available {
-            return Vec::new();
-        }
-
         let provider =
             create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
+        if !provider.capabilities().image_generation {
+            return Vec::new();
+        }
         let image_model = provider.image_generation_model();
         let max_edit_images = provider
             .images_dialect()

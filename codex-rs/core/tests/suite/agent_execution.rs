@@ -22,6 +22,7 @@ use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
@@ -30,15 +31,14 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
-const GROK_SPAWN_AGENT_WIRE_NAME: &str =
-    "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa";
-const GROK_WAIT_AGENT_WIRE_NAME: &str =
-    "local__collaboration__wait_agent__d7c9901ea9d58f6e6022549b9b3cc7ec";
 const CHILD_TASK_ENVELOPE: &str =
     "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task";
 const CHILD_COMPLETION_ENVELOPE: &str =
@@ -65,6 +65,52 @@ fn has_function_call_output(request: &wiremock::Request, call_id: &str) -> bool 
                 })
             })
     })
+}
+
+fn flat_function_name(request: &wiremock::Request, canonical_label: &str) -> String {
+    let body: serde_json::Value =
+        serde_json::from_slice(&request.body).expect("request body should be JSON");
+    body.get("tools")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find(|tool| {
+                tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
+                    && tool
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|description| description.contains(canonical_label))
+            })
+        })
+        .and_then(|tool| tool.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .expect("request should declare the canonical flat function")
+        .to_string()
+}
+
+async fn mount_flat_function_call<M>(
+    server: &wiremock::MockServer,
+    matcher: M,
+    canonical_label: &'static str,
+    call_id: &'static str,
+    response_id: &'static str,
+    arguments: String,
+) where
+    M: wiremock::Match + Send + Sync + 'static,
+{
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .and(matcher)
+        .respond_with(move |request: &wiremock::Request| {
+            let wire_name = flat_function_name(request, canonical_label);
+            sse_response(sse(vec![
+                ev_response_created(response_id),
+                ev_function_call(call_id, &wire_name, &arguments),
+                ev_completed(response_id),
+            ]))
+        })
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
 }
 
 async fn mount_root_collaboration_call(
@@ -131,28 +177,24 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         "message": FIRST_TASK,
         "task_name": "first",
     }))?;
-    mount_sse_once_match(
+    mount_flat_function_call(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, FIRST_PROMPT)
                 && !body_contains(request, FIRST_TASK)
                 && !has_function_call_output(request, "grok-spawn-call")
         },
-        sse(vec![
-            ev_response_created("grok-root-response"),
-            ev_function_call(
-                "grok-spawn-call",
-                GROK_SPAWN_AGENT_WIRE_NAME,
-                &spawn_arguments,
-            ),
-            ev_completed("grok-root-response"),
-        ]),
+        "canonical `collaboration.spawn_agent` tool",
+        "grok-spawn-call",
+        "grok-root-response",
+        spawn_arguments,
     )
     .await;
     mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| {
             body_contains(request, FIRST_TASK)
+                && body_contains(request, FIRST_PROMPT)
                 && !has_function_call_output(request, "grok-spawn-call")
         },
         sse(vec![
@@ -162,22 +204,24 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
         ]),
     )
     .await;
-    mount_sse_once_match(
+    mount_flat_function_call(
         &server,
         |request: &wiremock::Request| {
             has_function_call_output(request, "grok-spawn-call")
                 && !has_function_call_output(request, "grok-wait-call")
         },
-        sse(vec![
-            ev_response_created("grok-root-wait"),
-            ev_function_call("grok-wait-call", GROK_WAIT_AGENT_WIRE_NAME, "{}"),
-            ev_completed("grok-root-wait"),
-        ]),
+        "canonical `collaboration.wait_agent` tool",
+        "grok-wait-call",
+        "grok-root-wait",
+        "{}".to_string(),
     )
     .await;
     mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| has_function_call_output(request, "grok-wait-call"),
+        |request: &wiremock::Request| {
+            has_function_call_output(request, "grok-wait-call")
+                && body_contains(request, CHILD_COMPLETION_ENVELOPE)
+        },
         sse(vec![
             ev_response_created("grok-root-complete"),
             ev_assistant_message("grok-root-message", "child completed"),

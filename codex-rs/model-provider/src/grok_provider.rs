@@ -139,22 +139,6 @@ impl ModelProvider for GrokModelProvider {
         ImagesDialect::Grok
     }
 
-    fn approval_review_preferred_model(&self) -> Option<&'static str> {
-        None
-    }
-
-    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
-        None
-    }
-
-    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
-        None
-    }
-
-    fn supports_attestation(&self) -> bool {
-        false
-    }
-
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.inner.auth_manager()
     }

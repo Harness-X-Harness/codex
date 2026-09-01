@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Build and verify the small Grokex release envelope around Codex binaries."""
 
-from __future__ import annotations
-
 import argparse
 import gzip
 import hashlib
@@ -25,6 +23,11 @@ TARGETS = (
     "aarch64-pc-windows-msvc",
     "x86_64-pc-windows-msvc",
 )
+SUPPORTED_IMAGE_ARTIFACTS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 LEGACY_KEYS = {
     "model_provider_adapter",
     "model_provider_registrations",
@@ -34,40 +37,60 @@ LEGACY_KEYS = {
 LIVE_SCENARIO_ASSERTIONS = {
     "basic-exact-reply": {
         "response_assertion": "exact_match",
+        "runner_turn_submission_count": 1,
         "status": "completed",
     },
     "encrypted-reasoning-tool-continuation": {
+        "encrypted_reasoning_observed": True,
         "history_response_assertion": "exact_match",
-        "reasoning_replay": "completed",
         "response_assertion": "exact_match",
+        "runner_turn_submission_count": 2,
+        "same_thread_history": "completed",
         "status": "completed",
         "tool_continuation": "completed",
     },
     "ultra-full-history-collaboration": {
         "child_completion": "completed",
-        "child_response_assertion": "exact_match",
+        "child_provider_binding": "grok/grok-4.6",
+        "child_response_assertion": "canonical_uuid_v4",
         "default_full_history": "completed",
         "multi_agent_version": "v2",
         "parent_completion": "completed",
         "reasoning_effort": "ultra",
-        "response_assertion": "exact_match",
+        "response_assertion": "child_echo_match",
+        "runner_turn_submission_count": 1,
         "status": "completed",
+        "wait_result_delivery": "completed",
     },
     "image-generation-history-edit": {
         "agent_reply_seen": True,
-        "artifact_extension": ".jpg",
         "artifact_match": True,
         "history_edit": "completed",
         "history_arguments_verified": True,
-        "image_mime": "image/jpeg",
+        "runner_turn_submission_count": 2,
         "same_thread": True,
         "status": "completed",
     },
 }
+
+
+def image_artifact_evidence(value: dict[str, object]) -> dict[str, str]:
+    image_mime = value.get("image_mime")
+    artifact_extension = value.get("artifact_extension")
+    if (
+        not isinstance(image_mime, str)
+        or SUPPORTED_IMAGE_ARTIFACTS.get(image_mime) != artifact_extension
+    ):
+        raise SystemExit("live image artifact codec is invalid")
+    return {
+        "artifact_extension": artifact_extension,
+        "image_mime": image_mime,
+    }
+
+
 LIVE_SCENARIO_DIAGNOSTICS = {
-    "basic-exact-reply": ("runner_turn_submission_count",),
+    "basic-exact-reply": (),
     "encrypted-reasoning-tool-continuation": (
-        "runner_turn_submission_count",
         "tool_request_count",
     ),
     "ultra-full-history-collaboration": (
@@ -76,7 +99,6 @@ LIVE_SCENARIO_DIAGNOSTICS = {
         "failed_collaboration_tool_count",
         "missing_spawn_identity_count",
         "provider_response_count",
-        "runner_turn_submission_count",
         "spawn_count",
         "unexpected_collaboration_tool_count",
         "wait_count",
@@ -84,8 +106,13 @@ LIVE_SCENARIO_DIAGNOSTICS = {
     "image-generation-history-edit": (
         "image_items_completed",
         "image_items_failed",
-        "runner_turn_submission_count",
     ),
+}
+STORY_BY_SCENARIO = {
+    "basic-exact-reply": "grokex-provider-profile-startup",
+    "encrypted-reasoning-tool-continuation": "grokex-encrypted-reasoning-history-continuation",
+    "ultra-full-history-collaboration": "grokex-provider-binding-lifecycle",
+    "image-generation-history-edit": "grokex-image-generation-history-edit",
 }
 
 
@@ -324,16 +351,29 @@ def build_live_evidence(
             raise SystemExit("live scenario evidence set is invalid")
         if any(value.get(key) != expected for key, expected in common.items()):
             raise SystemExit(f"live scenario evidence mismatch: {scenario}")
+        story = STORY_BY_SCENARIO[scenario]
+        if value.get("story") != story:
+            raise SystemExit(f"live scenario Story mismatch: {scenario}")
         expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
         if any(value.get(key) != expected for key, expected in expected_assertions.items()):
             raise SystemExit(f"live scenario outcome mismatch: {scenario}")
+        codec_evidence = (
+            image_artifact_evidence(value)
+            if scenario == "image-generation-history-edit"
+            else {}
+        )
         diagnostics: dict[str, int] = {}
         for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
             diagnostic = value.get(key)
             if not isinstance(diagnostic, int) or isinstance(diagnostic, bool) or diagnostic < 0:
                 raise SystemExit(f"live scenario diagnostic is invalid: {scenario}")
             diagnostics[key] = diagnostic
-        observed[scenario] = {**expected_assertions, **diagnostics}
+        observed[scenario] = {
+            **expected_assertions,
+            **codec_evidence,
+            **diagnostics,
+            "story": story,
+        }
     if set(observed) != set(LIVE_SCENARIO_ASSERTIONS):
         raise SystemExit("required live scenario evidence is incomplete")
 
@@ -434,12 +474,8 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     if any(evidence.get(key) != value for key, value in required_evidence.items()):
         raise SystemExit("live evidence mismatch")
     runner_turn_submission_count = evidence.get("runner_turn_submission_count")
-    if (
-        not isinstance(runner_turn_submission_count, int)
-        or isinstance(runner_turn_submission_count, bool)
-        or runner_turn_submission_count < 0
-    ):
-        raise SystemExit("live evidence diagnostics are invalid")
+    if runner_turn_submission_count != 6:
+        raise SystemExit("live evidence Turn contract is invalid")
     scenarios = evidence.get("scenarios")
     if not isinstance(scenarios, dict) or set(scenarios) != set(LIVE_SCENARIO_ASSERTIONS):
         raise SystemExit("live evidence scenario set mismatch")
@@ -449,6 +485,10 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
             actual.get(key) != value for key, value in expected.items()
         ):
             raise SystemExit(f"live evidence scenario mismatch: {scenario}")
+        if scenario == "image-generation-history-edit":
+            image_artifact_evidence(actual)
+        if actual.get("story") != STORY_BY_SCENARIO[scenario]:
+            raise SystemExit(f"live evidence Story mismatch: {scenario}")
         for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
             diagnostic = actual.get(key)
             if (

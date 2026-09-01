@@ -1,6 +1,4 @@
 use codex_api::ResponsesDialect;
-use codex_login::AuthManager;
-use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::ResponseItemId;
@@ -100,27 +98,6 @@ fn grok_projects_only_plaintext_agent_message_on_request_copy() {
             internal_chat_message_metadata_passthrough: None,
         }]
     );
-}
-
-#[test]
-fn grok_leaves_encrypted_or_mixed_agent_message_for_wire_rejection() {
-    let grok = create_model_provider(
-        ModelProviderInfo {
-            wire_api: WireApi::GrokResponses,
-            ..ModelProviderInfo::default()
-        },
-        /*auth_manager*/ None,
-    );
-    let encrypted = vec![canonical_agent_message(vec![
-        AgentMessageInputContent::InputText {
-            text: "Message Type: MESSAGE".to_string(),
-        },
-        AgentMessageInputContent::EncryptedContent {
-            encrypted_content: "opaque".to_string(),
-        },
-    ])];
-
-    assert_eq!(grok.project_model_input(encrypted.clone()), encrypted);
 }
 
 #[test]
@@ -225,21 +202,6 @@ fn grok_recognizes_only_completed_provider_hosted_x_calls() {
     assert!(!grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", None)));
     assert!(!grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", Some("in_progress"))));
     assert!(!grok.is_provider_hosted_tool_call(&x_call("unverified_search", Some("completed"))));
-}
-
-#[test]
-fn grok_does_not_inherit_stock_attestation() {
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let grok = create_model_provider(
-        ModelProviderInfo {
-            wire_api: WireApi::GrokResponses,
-            ..ModelProviderInfo::default()
-        },
-        Some(auth_manager),
-    );
-
-    assert!(!grok.supports_attestation());
 }
 
 #[tokio::test]

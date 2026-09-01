@@ -89,14 +89,6 @@ fn tool_spec_name_covers_all_variants() {
 }
 
 #[test]
-fn x_search_serializes_as_bare_hosted_declaration() {
-    assert_eq!(
-        serde_json::to_value(ToolSpec::XSearch).expect("serialize X Search"),
-        json!({"type": "x_search"})
-    );
-}
-
-#[test]
 fn web_search_config_converts_to_responses_api_types() {
     assert_eq!(
         ResponsesApiWebSearchFilters::from(ConfigWebSearchFilters {

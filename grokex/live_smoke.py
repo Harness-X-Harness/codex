@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Run one bounded, secret-safe Grok scenario through a packaged App Server."""
 
-from __future__ import annotations
-
 import argparse
 import base64
 import hashlib
@@ -16,6 +14,7 @@ import tempfile
 import threading
 import time
 import tomllib
+import uuid
 from collections import deque
 from pathlib import Path
 
@@ -31,15 +30,18 @@ SCENARIOS = (
     COLLABORATION_SCENARIO,
     IMAGE_SCENARIO,
 )
+STORY_BY_SCENARIO = {
+    BASIC_SCENARIO: "grokex-provider-profile-startup",
+    CONTINUATION_SCENARIO: "grokex-encrypted-reasoning-history-continuation",
+    COLLABORATION_SCENARIO: "grokex-provider-binding-lifecycle",
+    IMAGE_SCENARIO: "grokex-image-generation-history-edit",
+}
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
-IMAGE_FUNCTION_WIRE_PREFIX = "local__image_gen__imagegen__"
-SPAWN_FUNCTION_WIRE_PREFIX = "local__collaboration__spawn_agent__"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
-HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
-CHILD_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_CHILD_OK"
-PARENT_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_PARENT_OK"
+HISTORY_EXPECTED_AGENT_REPLY = TOOL_OUTPUT_MARKER
+CHILD_TOKEN_INSTRUCTION = "Generate a fresh UUID v4"
 BASIC_TURN_SECONDS = 120
 CONTINUATION_TURN_SECONDS = 120
 COLLABORATION_TURN_SECONDS = 360
@@ -180,7 +182,7 @@ def wait_for_exact_reply(
     expected_reply: str,
     turn_name: str,
 ) -> dict[str, str]:
-    agent_reply = None
+    agent_replies: list[object] = []
     status = None
 
     while time.monotonic() < deadline:
@@ -192,7 +194,7 @@ def wait_for_exact_reply(
         if method == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                agent_reply = item.get("text")
+                agent_replies.append(item.get("text"))
         elif method == "turn/completed":
             turn = params.get("turn")
             status = turn.get("status") if isinstance(turn, dict) else None
@@ -203,9 +205,9 @@ def wait_for_exact_reply(
         raise SystemExit(
             f"{turn_name} did not complete "
             f"(status={safe_status}, "
-            f"agent_reply_seen={str(isinstance(agent_reply, str)).lower()})"
+            f"agent_reply_count={len(agent_replies)})"
         )
-    if not isinstance(agent_reply, str) or agent_reply.strip() != expected_reply:
+    if not agent_replies or agent_replies[-1] != expected_reply:
         raise SystemExit(f"{turn_name} did not return the expected semantic reply")
     return {
         "response_assertion": "exact_match",
@@ -224,15 +226,25 @@ def wait_for_basic_turn(server: AppServer, deadline: float) -> dict[str, str]:
 
 def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, object]:
     reasoning_completed = False
+    encrypted_reasoning_seen = False
     tool_request_count = 0
     tool_completed = False
-    agent_reply = None
+    agent_replies: list[object] = []
     status = None
 
     while time.monotonic() < deadline:
         message = server.next_message(deadline, "the single Grok Turn")
         method = message.get("method")
         params = message.get("params")
+        if method == "rawResponseItem/completed" and isinstance(params, dict):
+            item = params.get("item")
+            encrypted_reasoning_seen = encrypted_reasoning_seen or (
+                isinstance(item, dict)
+                and item.get("type") == "reasoning"
+                and isinstance(item.get("encrypted_content"), str)
+                and bool(item["encrypted_content"])
+            )
+            continue
         if method == "item/tool/call":
             request_id = message.get("id")
             if not isinstance(request_id, (int, str)) or not isinstance(params, dict):
@@ -276,7 +288,7 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
                     )
                 )
             elif item_type == "agentMessage":
-                agent_reply = item.get("text")
+                agent_replies.append(item.get("text"))
         elif method == "turn/completed":
             turn = params.get("turn")
             status = turn.get("status") if isinstance(turn, dict) else None
@@ -290,15 +302,18 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
             f"reasoning_completed={str(reasoning_completed).lower()}, "
             f"tool_requests={tool_request_count}, "
             f"tool_completed={str(tool_completed).lower()}, "
-            f"agent_reply_seen={str(isinstance(agent_reply, str)).lower()})"
+            f"agent_reply_count={len(agent_replies)})"
         )
     if not reasoning_completed:
         raise SystemExit("the Grok Turn did not expose a completed reasoning item")
+    if not encrypted_reasoning_seen:
+        raise SystemExit("the Grok Turn did not expose encrypted reasoning")
     if tool_request_count < 1 or not tool_completed:
         raise SystemExit("the Grok Turn did not complete the semantic tool continuation")
-    if not isinstance(agent_reply, str) or agent_reply.strip() != EXPECTED_AGENT_REPLY:
+    if not agent_replies or agent_replies[-1] != EXPECTED_AGENT_REPLY:
         raise SystemExit("the Grok Turn did not return the expected semantic reply")
     return {
+        "encrypted_reasoning_observed": True,
         "response_assertion": "exact_match",
         "status": status,
         "tool_continuation": "completed",
@@ -315,6 +330,20 @@ def is_default_full_history_spawn(parsed_arguments: dict[str, object]) -> bool:
         return False
     fork_turns = fork_turns.strip()
     return fork_turns == "" or fork_turns.casefold() == "all"
+
+
+def is_canonical_uuid_v4(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError:
+        return False
+    return parsed.version == 4 and str(parsed) == value
+
+
+def final_agent_reply(replies: list[object] | None) -> object:
+    return replies[-1] if replies else None
 
 
 def classify_collaboration_stage(
@@ -352,18 +381,6 @@ def classify_collaboration_stage(
     return "no_events"
 
 
-KNOWN_SPAWN_ARGUMENT_KEYS = {
-    "agent_type",
-    "fork_context",
-    "fork_turns",
-    "message",
-    "model",
-    "reasoning_effort",
-    "service_tier",
-    "task_name",
-}
-
-
 def collaboration_last_stage(
     *,
     root_status: str | None,
@@ -371,6 +388,7 @@ def collaboration_last_stage(
     default_child_thread_ids: set[str],
     child_completed_thread_ids: set[str],
     child_reply_thread_ids: set[str],
+    wait_delivered_child_thread_ids: set[str],
     default_spawn_call_ids: set[str],
     explicit_fork_spawn_count: int,
     failed_tool_count: int,
@@ -380,21 +398,18 @@ def collaboration_last_stage(
     spawn_completed_count: int,
     wait_completed_count: int,
     unexpected_tool_count: int,
-    projected_spawn_agent_count: int,
-    short_spawn_agent_count: int,
-    item_type_counts: dict[str, int],
-    spawn_namespace_counts: dict[str, int],
-    spawn_argument_keys: list[str],
-    spawn_missing_task_name_count: int,
-    spawn_unknown_argument_key_count: int,
 ) -> dict[str, object]:
     completed_default_child_count = len(
-        default_child_thread_ids & child_completed_thread_ids & child_reply_thread_ids
+        default_child_thread_ids
+        & child_completed_thread_ids
+        & child_reply_thread_ids
+        & wait_delivered_child_thread_ids
     )
     return {
         "child_completed_count": len(child_completed_thread_ids),
         "child_count": len(child_thread_ids),
         "child_reply_count": len(child_reply_thread_ids),
+        "wait_delivered_child_count": len(wait_delivered_child_thread_ids),
         "completed_default_child_count": completed_default_child_count,
         "default_child_count": len(default_child_thread_ids),
         "default_spawn_count": len(default_spawn_call_ids),
@@ -418,13 +433,6 @@ def collaboration_last_stage(
         "spawn_count": spawn_completed_count,
         "unexpected_collaboration_tool_count": unexpected_tool_count,
         "wait_count": wait_completed_count,
-        "projected_spawn_agent_count": projected_spawn_agent_count,
-        "short_spawn_agent_count": short_spawn_agent_count,
-        "item_type_counts": item_type_counts,
-        "spawn_namespace_counts": spawn_namespace_counts,
-        "spawn_argument_keys": spawn_argument_keys,
-        "spawn_missing_task_name_count": spawn_missing_task_name_count,
-        "spawn_unknown_argument_key_count": spawn_unknown_argument_key_count,
     }
 
 
@@ -432,7 +440,7 @@ def wait_for_collaboration_turn(
     server: AppServer,
     deadline: float,
     root_thread_id: str,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], frozenset[str]]:
     child_completed_thread_ids: set[str] = set()
     child_reply_thread_ids: set[str] = set()
     child_thread_ids: set[str] = set()
@@ -446,23 +454,35 @@ def wait_for_collaboration_turn(
     root_status = None
     spawn_completed_count = 0
     wait_completed_count = 0
+    wait_delivered_child_replies: dict[str, str] = {}
     failed_tool_count = 0
     unexpected_tool_count = 0
-    projected_spawn_agent_count = 0
-    short_spawn_agent_count = 0
-    item_type_counts: dict[str, int] = {}
-    spawn_namespace_counts: dict[str, int] = {}
-    spawn_argument_keys: set[str] = set()
-    spawn_missing_task_name_count = 0
-    spawn_unknown_argument_key_count = 0
-    pending_child_thread_ids: set[str] = set()
+    agent_replies: dict[str, list[object]] = {}
 
     while time.monotonic() < deadline:
+        root_reply = final_agent_reply(agent_replies.get(root_thread_id))
+        parent_reply_seen = (
+            is_canonical_uuid_v4(root_reply)
+            and any(
+                final_agent_reply(agent_replies.get(child_thread_id)) == root_reply
+                and wait_delivered_child_replies.get(child_thread_id)
+                == root_reply
+                for child_thread_id in child_reply_thread_ids
+            )
+        )
         if (
             root_status == "completed"
-            and default_child_thread_ids
-            & child_completed_thread_ids
-            & child_reply_thread_ids
+            and any(
+                final_agent_reply(agent_replies.get(child_thread_id)) == root_reply
+                for child_thread_id in (
+                    default_child_thread_ids
+                    & child_completed_thread_ids
+                    & child_reply_thread_ids
+                    & wait_delivered_child_replies.keys()
+                )
+                if wait_delivered_child_replies.get(child_thread_id)
+                == final_agent_reply(agent_replies.get(child_thread_id))
+            )
             and parent_reply_seen
         ):
             break
@@ -479,6 +499,9 @@ def wait_for_collaboration_turn(
                     default_child_thread_ids=default_child_thread_ids,
                     child_completed_thread_ids=child_completed_thread_ids,
                     child_reply_thread_ids=child_reply_thread_ids,
+                    wait_delivered_child_thread_ids=set(
+                        wait_delivered_child_replies
+                    ),
                     default_spawn_call_ids=default_spawn_call_ids,
                     explicit_fork_spawn_count=explicit_fork_spawn_count,
                     failed_tool_count=failed_tool_count,
@@ -488,13 +511,6 @@ def wait_for_collaboration_turn(
                     spawn_completed_count=spawn_completed_count,
                     wait_completed_count=wait_completed_count,
                     unexpected_tool_count=unexpected_tool_count,
-                    projected_spawn_agent_count=projected_spawn_agent_count,
-                    short_spawn_agent_count=short_spawn_agent_count,
-                    item_type_counts=item_type_counts,
-                    spawn_namespace_counts=spawn_namespace_counts,
-                    spawn_argument_keys=sorted(spawn_argument_keys),
-                    spawn_missing_task_name_count=spawn_missing_task_name_count,
-                    spawn_unknown_argument_key_count=spawn_unknown_argument_key_count,
                 ),
             ) from error
         method = message.get("method")
@@ -521,30 +537,8 @@ def wait_for_collaboration_turn(
             if not isinstance(parsed_arguments, dict):
                 continue
             task = parsed_arguments.get("message")
-            if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
+            if not isinstance(task, str) or CHILD_TOKEN_INSTRUCTION not in task:
                 continue
-            spawn_argument_keys.update(parsed_arguments)
-            task_name = parsed_arguments.get("task_name")
-            if not isinstance(task_name, str) or not task_name.strip():
-                spawn_missing_task_name_count += 1
-            unknown_keys = [
-                key for key in parsed_arguments if key not in KNOWN_SPAWN_ARGUMENT_KEYS
-            ]
-            if unknown_keys:
-                spawn_unknown_argument_key_count += 1
-            wire_name = item.get("name")
-            if isinstance(wire_name, str):
-                if wire_name.startswith(SPAWN_FUNCTION_WIRE_PREFIX):
-                    projected_spawn_agent_count += 1
-                elif wire_name == "spawn_agent":
-                    short_spawn_agent_count += 1
-                namespace = item.get("namespace")
-                namespace_key = (
-                    namespace if isinstance(namespace, str) and namespace else "none"
-                )
-                spawn_namespace_counts[namespace_key] = (
-                    spawn_namespace_counts.get(namespace_key, 0) + 1
-                )
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
                 missing_spawn_identity_count += 1
@@ -554,7 +548,6 @@ def wait_for_collaboration_turn(
                 default_child_thread_ids.update(
                     completed_spawn_receivers.get(call_id, set())
                 )
-                default_child_thread_ids.update(pending_child_thread_ids)
             else:
                 explicit_fork_spawn_count += 1
             continue
@@ -563,19 +556,13 @@ def wait_for_collaboration_turn(
             item = params.get("item")
             if not isinstance(item, dict):
                 continue
-            item_type = item.get("type")
-            if isinstance(item_type, str):
-                item_type_counts[item_type] = item_type_counts.get(item_type, 0) + 1
             if item.get("type") == "subAgentActivity":
                 agent_thread_id = item.get("agentThreadId")
                 kind = item.get("kind")
                 if isinstance(agent_thread_id, str) and agent_thread_id:
                     child_thread_ids.add(agent_thread_id)
-                    pending_child_thread_ids.add(agent_thread_id)
                     if kind == "started":
                         spawn_completed_count += 1
-                    if default_spawn_call_ids:
-                        default_child_thread_ids.add(agent_thread_id)
                 continue
             if (
                 thread_id == root_thread_id
@@ -608,14 +595,30 @@ def wait_for_collaboration_turn(
                     spawn_completed_count += 1
                 elif tool == "wait":
                     wait_completed_count += 1
+                    agents_states = item.get("agentsStates")
+                    if isinstance(agents_states, dict):
+                        for child_thread_id, state in agents_states.items():
+                            if not isinstance(child_thread_id, str) or not isinstance(
+                                state, dict
+                            ):
+                                continue
+                            message = state.get("message")
+                            if (
+                                state.get("status") == "completed"
+                                and is_canonical_uuid_v4(message)
+                            ):
+                                wait_delivered_child_replies[child_thread_id] = message
                 else:
                     unexpected_tool_count += 1
             elif item.get("type") == "agentMessage":
                 reply = item.get("text")
-                if thread_id == root_thread_id:
-                    parent_reply_seen = reply == PARENT_EXPECTED_AGENT_REPLY
-                elif thread_id != root_thread_id and reply == CHILD_EXPECTED_AGENT_REPLY:
-                    child_reply_thread_ids.add(thread_id)
+                if isinstance(thread_id, str):
+                    agent_replies.setdefault(thread_id, []).append(reply)
+                if thread_id != root_thread_id:
+                    if is_canonical_uuid_v4(final_agent_reply(agent_replies[thread_id])):
+                        child_reply_thread_ids.add(thread_id)
+                    else:
+                        child_reply_thread_ids.discard(thread_id)
             continue
 
         if method == "turn/completed":
@@ -632,6 +635,7 @@ def wait_for_collaboration_turn(
         default_child_thread_ids=default_child_thread_ids,
         child_completed_thread_ids=child_completed_thread_ids,
         child_reply_thread_ids=child_reply_thread_ids,
+        wait_delivered_child_thread_ids=set(wait_delivered_child_replies),
         default_spawn_call_ids=default_spawn_call_ids,
         explicit_fork_spawn_count=explicit_fork_spawn_count,
         failed_tool_count=failed_tool_count,
@@ -641,21 +645,25 @@ def wait_for_collaboration_turn(
         spawn_completed_count=spawn_completed_count,
         wait_completed_count=wait_completed_count,
         unexpected_tool_count=unexpected_tool_count,
-        projected_spawn_agent_count=projected_spawn_agent_count,
-        short_spawn_agent_count=short_spawn_agent_count,
-        item_type_counts=item_type_counts,
-        spawn_namespace_counts=spawn_namespace_counts,
-        spawn_argument_keys=sorted(spawn_argument_keys),
-        spawn_missing_task_name_count=spawn_missing_task_name_count,
-        spawn_unknown_argument_key_count=spawn_unknown_argument_key_count,
     )
     if last_stage["last_proven_stage"] != "completed":
         raise LiveDeadlineExpired("the Grok Ultra collaboration Turn", last_stage)
     if root_status != "completed":
         raise SystemExit("the Grok Ultra parent Turn did not complete")
     completed_children = (
-        default_child_thread_ids & child_completed_thread_ids & child_reply_thread_ids
+        default_child_thread_ids
+        & child_completed_thread_ids
+        & child_reply_thread_ids
+        & wait_delivered_child_replies.keys()
     )
+    completed_children = {
+        child_thread_id
+        for child_thread_id in completed_children
+        if final_agent_reply(agent_replies.get(child_thread_id))
+        == final_agent_reply(agent_replies.get(root_thread_id))
+        and wait_delivered_child_replies.get(child_thread_id)
+        == final_agent_reply(agent_replies.get(root_thread_id))
+    }
     if not completed_children:
         raise SystemExit("the Grok Ultra child did not complete the bounded task")
     if not parent_reply_seen:
@@ -663,22 +671,23 @@ def wait_for_collaboration_turn(
     if not default_spawn_call_ids or not default_child_thread_ids:
         raise SystemExit("the Grok Ultra Turn did not prove a default-history spawn")
     provider_response_count = sum(response_counts.values())
-    return {
+    return ({
         "child_completion": "completed",
         "child_count": len(child_thread_ids),
-        "child_response_assertion": "exact_match",
+        "child_response_assertion": "canonical_uuid_v4",
         "default_full_history": "completed",
         "explicit_fork_spawn_count": explicit_fork_spawn_count,
         "failed_collaboration_tool_count": failed_tool_count,
         "missing_spawn_identity_count": missing_spawn_identity_count,
         "parent_completion": "completed",
         "provider_response_count": provider_response_count,
-        "response_assertion": "exact_match",
+        "response_assertion": "child_echo_match",
         "spawn_count": spawn_completed_count,
         "status": root_status,
         "unexpected_collaboration_tool_count": unexpected_tool_count,
         "wait_count": wait_completed_count,
-    }
+        "wait_result_delivery": "completed",
+    }, frozenset(completed_children))
 
 
 def classify_image_stage(
@@ -748,15 +757,21 @@ def supported_image_codec(data: bytes) -> tuple[str, str] | None:
 
 
 def wait_for_image_turn(
-    server: AppServer, deadline: float, require_history: bool
-) -> dict[str, object]:
+    server: AppServer,
+    deadline: float,
+    require_history: bool,
+    prior_artifacts: frozenset[Path] = frozenset(),
+) -> tuple[dict[str, object], frozenset[Path]]:
     completed = 0
     failed = 0
     history_args_seen = not require_history
+    image_candidate_call_ids: set[str] = set()
+    history_qualified_call_ids: set[str] = set()
     agent_reply_seen = False
     image_function_call_count = 0
     image_mime: str | None = None
     artifact_extension: str | None = None
+    artifacts: set[Path] = set()
     while time.monotonic() < deadline:
         try:
             message = server.next_message(deadline, "the Grok image Turn")
@@ -779,34 +794,39 @@ def wait_for_image_turn(
             continue
         if message.get("method") == "rawResponseItem/completed":
             item = params.get("item")
-            is_image_call = isinstance(item, dict) and item.get("type") == "function_call" and (
-                (
-                    item.get("namespace") == "image_gen"
-                    and item.get("name") == "imagegen"
-                )
-                or (
-                    item.get("namespace") is None
-                    and isinstance(item.get("name"), str)
-                    and item["name"].startswith(IMAGE_FUNCTION_WIRE_PREFIX)
-                )
-            )
-            if is_image_call:
-                image_function_call_count += 1
+            if isinstance(item, dict) and item.get("type") == "function_call":
                 try:
                     arguments = json.loads(item.get("arguments", ""))
                 except (TypeError, json.JSONDecodeError):
                     arguments = None
+                call_id = item.get("call_id")
+                if (
+                    not isinstance(arguments, dict)
+                    or not isinstance(arguments.get("prompt"), str)
+                    or not isinstance(call_id, str)
+                    or not call_id
+                ):
+                    continue
+                image_function_call_count += 1
+                image_candidate_call_ids.add(call_id)
                 recent_images = (
                     arguments.get("num_last_images_to_include")
-                    if isinstance(arguments, dict)
-                    else None
                 )
-                history_args_seen = history_args_seen or (
+                referenced_images = (
+                    arguments.get("referenced_image_paths")
+                )
+                references_prior_artifact = isinstance(referenced_images, list) and any(
+                    isinstance(path, str) and Path(path).resolve() in prior_artifacts
+                    for path in referenced_images
+                )
+                recent_history = (
                     isinstance(recent_images, int)
                     and not isinstance(recent_images, bool)
                     and recent_images > 0
-                    and arguments.get("referenced_image_paths") is None
+                    and not referenced_images
                 )
+                if recent_history or references_prior_artifact:
+                    history_qualified_call_ids.add(call_id)
         elif message.get("method") == "item/completed":
             item = params.get("item")
             if isinstance(item, dict) and item.get("type") == "agentMessage":
@@ -816,6 +836,11 @@ def wait_for_image_turn(
                 saved_path = item.get("savedPath")
                 if item.get("status") != "completed":
                     failed += 1
+                    continue
+                item_id = item.get("id")
+                if item_id not in image_candidate_call_ids:
+                    continue
+                if require_history and item_id not in history_qualified_call_ids:
                     continue
                 if not isinstance(result, str):
                     raise SystemExit("completed image generation item had no result")
@@ -836,7 +861,9 @@ def wait_for_image_turn(
                     raise SystemExit("image generation artifact codec did not match result")
                 if artifact.stat().st_size > 32 * 1024 * 1024 or artifact.read_bytes() != decoded:
                     raise SystemExit("image generation artifact did not match result")
+                artifacts.add(artifact.resolve())
                 completed += 1
+                history_args_seen = True
         elif message.get("method") == "turn/completed":
             turn = params.get("turn")
             if (
@@ -847,7 +874,7 @@ def wait_for_image_turn(
                 or not history_args_seen
             ):
                 raise SystemExit("Grok image Turn did not complete an image")
-            return {
+            return ({
                 "agent_reply_seen": True,
                 "artifact_match": True,
                 "history_arguments_verified": require_history,
@@ -856,7 +883,7 @@ def wait_for_image_turn(
                 "image_mime": image_mime,
                 "artifact_extension": artifact_extension,
                 "status": "completed",
-            }
+            }, frozenset(artifacts))
     raise LiveDeadlineExpired(
         "the Grok image Turn",
         image_last_stage(
@@ -903,6 +930,7 @@ def run_smoke(
             token,
         )
         runner_turn_submission_count = 0
+        thread_model: str | None = None
         try:
             server.request(
                 1,
@@ -944,6 +972,7 @@ def run_smoke(
             if scenario == COLLABORATION_SCENARIO:
                 thread_params["experimentalRawEvents"] = True
             if scenario == CONTINUATION_SCENARIO:
+                thread_params["experimentalRawEvents"] = True
                 thread_params["dynamicTools"] = [
                     {
                         "name": TOOL_NAME,
@@ -959,8 +988,13 @@ def run_smoke(
                 thread_params["experimentalRawEvents"] = True
             thread_response = server.request(3, "thread/start", thread_params)
             thread = thread_response.get("thread")
-            if not isinstance(thread, dict) or thread_response.get("modelProvider") != "grok":
-                raise SystemExit("thread/start did not bind Provider grok")
+            thread_model = thread_response.get("model")
+            if (
+                not isinstance(thread, dict)
+                or thread_response.get("modelProvider") != "grok"
+                or thread_model != "grok-4.6"
+            ):
+                raise SystemExit("thread/start did not bind grok/grok-4.6")
             thread_id = thread.get("id")
             if not isinstance(thread_id, str) or not thread_id:
                 raise SystemExit("thread/start returned no thread identity")
@@ -1010,8 +1044,8 @@ def run_smoke(
                 )
 
                 history_prompt = (
-                    f"Reply with exactly {HISTORY_EXPECTED_AGENT_REPLY} and no other text. "
-                    "Do not call any tool."
+                    "Reply with exactly the result returned by grokex_live_probe in the "
+                    "previous Turn and no other text. Do not call any tool."
                 )
                 server.request(
                     5,
@@ -1039,15 +1073,15 @@ def run_smoke(
                     "history_response_assertion": history_evidence[
                         "response_assertion"
                     ],
-                    "reasoning_replay": "completed",
+                    "same_thread_history": "completed",
                 }
             elif scenario == COLLABORATION_SCENARIO:
                 prompt = (
                     "Delegate one bounded task to a child named live_child using the default "
-                    "full-history fork. Tell the child to reply "
-                    f"with exactly {CHILD_EXPECTED_AGENT_REPLY} and no other text. Wait for "
-                    "that child to complete, then reply with exactly "
-                    f"{PARENT_EXPECTED_AGENT_REPLY} and no other text."
+                    "full-history fork. Tell the child: Generate a fresh UUID v4 and reply with "
+                    "exactly its canonical lowercase text and no other text. Wait for that child "
+                    "to complete, then reply with exactly the UUID returned by the child and no "
+                    "other text."
                 )
                 runner_turn_submission_count = 1
                 server.request(
@@ -1065,12 +1099,32 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
-                turn_evidence = wait_for_collaboration_turn(
+                turn_evidence, completed_child_thread_ids = wait_for_collaboration_turn(
                     server,
                     time.monotonic() + COLLABORATION_TURN_SECONDS,
                     thread_id,
                 )
+                for offset, child_thread_id in enumerate(
+                    sorted(completed_child_thread_ids), start=10
+                ):
+                    child_response = server.request(
+                        offset,
+                        "thread/resume",
+                        {"excludeTurns": True, "threadId": child_thread_id},
+                    )
+                    child_thread = child_response.get("thread")
+                    if (
+                        not isinstance(child_thread, dict)
+                        or child_thread.get("id") != child_thread_id
+                        or child_response.get("modelProvider") != "grok"
+                        or child_response.get("model") != "grok-4.6"
+                    ):
+                        raise SystemExit(
+                            "the completed child did not bind grok/grok-4.6"
+                        )
+                turn_evidence["child_provider_binding"] = "grok/grok-4.6"
             else:
+                prior_artifacts: frozenset[Path] = frozenset()
                 for request_id, prompt, require_history in [
                     (
                         4,
@@ -1099,8 +1153,11 @@ def run_smoke(
                             "threadId": thread_id,
                         },
                     )
-                    image_evidence = wait_for_image_turn(
-                        server, time.monotonic() + IMAGE_TURN_SECONDS, require_history
+                    image_evidence, prior_artifacts = wait_for_image_turn(
+                        server,
+                        time.monotonic() + IMAGE_TURN_SECONDS,
+                        require_history,
+                        prior_artifacts,
                     )
                 turn_evidence = {
                     **image_evidence,
@@ -1112,7 +1169,7 @@ def run_smoke(
                 "archive": archive.name,
                 "archive_sha256": sha256(archive),
                 "catalog": "release-bundled",
-                "model": "grok-4.6",
+                "model": thread_model,
                 "runner_turn_submission_count": runner_turn_submission_count,
                 "provider": "grok",
                 "scenario": scenario,
@@ -1123,7 +1180,7 @@ def run_smoke(
                     else {}
                 ),
                 **turn_evidence,
-                "story": f"grokex-{scenario}",
+                "story": STORY_BY_SCENARIO[scenario],
                 "validation_run": run_id,
                 "validator_sha": validator_sha,
             }
@@ -1135,12 +1192,12 @@ def run_smoke(
                 "archive": archive.name,
                 "archive_sha256": sha256(archive),
                 "catalog": "release-bundled",
-                "model": "grok-4.6",
+                "model": thread_model,
                 "provider": "grok",
                 "runner_turn_submission_count": runner_turn_submission_count,
                 "scenario": scenario,
                 "source_sha": source_sha,
-                "story": f"grokex-{scenario}",
+                "story": STORY_BY_SCENARIO[scenario],
                 "validation_run": run_id,
                 "validator_sha": validator_sha,
                 **(

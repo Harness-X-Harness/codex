@@ -15,33 +15,62 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": [{"b64_json": encoded, "mime_type": "image/jpeg"}]
             })))
-            .expect(1)
             .mount(&server)
             .await;
     }
-    let calls = [
-        ("resp-1", "generate-1", r#"{"prompt":"paint a blue whale"}"#),
-        (
-            "resp-3",
-            "edit-1",
-            r#"{"prompt":"add a red hat","num_last_images_to_include":1}"#,
-        ),
-    ];
-    // Grok receives canonical `image_gen.imagegen` through the provider's flat wire route.
-    let imagegen_wire_name = "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a";
-    let mut sequence = Vec::new();
-    for (index, (response_id, call_id, arguments)) in calls.into_iter().enumerate() {
-        sequence.push(responses::sse(vec![
-            responses::ev_response_created(response_id),
-            responses::ev_function_call(call_id, imagegen_wire_name, arguments),
-            responses::ev_completed(response_id),
-        ]));
-        sequence.push(responses::sse(vec![
-            responses::ev_assistant_message(&format!("msg-{index}"), "Done"),
-            responses::ev_completed(&format!("reply-{index}")),
-        ]));
-    }
-    let response_mock = responses::mount_sse_sequence(&server, sequence).await;
+    Mock::given(method("POST"))
+        .and(path("/api/codex/responses"))
+        .respond_with(|request: &wiremock::Request| {
+            let body = request
+                .body_json::<serde_json::Value>()
+                .expect("JSON request");
+            let is_edit = body.to_string().contains("Edit the prior image");
+            let (call_id, response_id, arguments) = if is_edit {
+                (
+                    "edit-1",
+                    "resp-edit",
+                    r#"{"prompt":"add a red hat","num_last_images_to_include":1}"#,
+                )
+            } else {
+                (
+                    "generate-1",
+                    "resp-generate",
+                    r#"{"prompt":"paint a blue whale"}"#,
+                )
+            };
+            let has_output = body["input"].as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["type"] == "function_call_output" && item["call_id"] == call_id
+                })
+            });
+            let events = if has_output {
+                vec![
+                    responses::ev_assistant_message(&format!("msg-{call_id}"), "Done"),
+                    responses::ev_completed(&format!("reply-{call_id}")),
+                ]
+            } else {
+                let imagegen_wire_name = body["tools"]
+                    .as_array()
+                    .and_then(|tools| {
+                        tools.iter().find(|tool| {
+                            tool["type"] == "function"
+                                && tool["description"].as_str().is_some_and(|description| {
+                                    description.contains("canonical `image_gen.imagegen` tool")
+                                })
+                        })
+                    })
+                    .and_then(|tool| tool["name"].as_str())
+                    .expect("request should declare the flat image function");
+                vec![
+                    responses::ev_response_created(response_id),
+                    responses::ev_function_call(call_id, imagegen_wire_name, arguments),
+                    responses::ev_completed(response_id),
+                ]
+            };
+            responses::sse_response(responses::sse(events))
+        })
+        .mount(&server)
+        .await;
 
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
@@ -106,15 +135,13 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .filter(|request| request.url.path().contains("/images/"))
         .map(wiremock::Request::body_json::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(
-        bodies,
-        vec![
-            json!({"model":"grok-imagine-image-2.0","prompt":"paint a blue whale","response_format":"b64_json"}),
-            json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{encoded}")}}),
-        ]
-    );
-    let responses = response_mock.requests();
-    let generation_request = responses
+    assert!(bodies.iter().any(|body| body == &json!({"model":"grok-imagine-image-2.0","prompt":"paint a blue whale","response_format":"b64_json"})));
+    assert!(bodies.iter().any(|body| body == &json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{encoded}")}})));
+    let response_requests = requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/responses"))
+        .collect::<Vec<_>>();
+    let generation_request = response_requests
         .iter()
         .find(|request| request.body_contains_text("Generate an image"))
         .context("generation request should reach Grok")?;
@@ -128,7 +155,12 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .iter()
         .find(|tool| {
             tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
-                && tool.get("name").and_then(serde_json::Value::as_str) == Some(imagegen_wire_name)
+                && tool
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| {
+                        description.contains("canonical `image_gen.imagegen` tool")
+                    })
         })
         .context("generation request should declare the flat image function")?;
     let description = imagegen_tool
@@ -141,7 +173,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         "The `image_gen.imagegen` tool enables image generation from descriptions and editing of existing images"
     ));
     assert!(description.contains("The current tool configuration accepts at most 3 edit images."));
-    responses
+    response_requests
         .iter()
         .find(|request| request.body_contains_text("Edit the prior image"))
         .context("history-edit request should reach Grok")?;

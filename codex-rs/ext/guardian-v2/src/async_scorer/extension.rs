@@ -151,7 +151,11 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     return;
                 }
             };
-            if !input.config.model_provider.is_openai() {
+            let provider = create_model_provider(
+                input.config.model_provider.clone(),
+                Some(Arc::clone(&self.auth_manager)),
+            );
+            if provider.approval_review_preferred_model().is_none() {
                 self.event_sink.emit_warning(ExtensionWarning {
                     thread_id,
                     turn_id: None,
@@ -169,10 +173,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 None
             };
             let sampler_config = LunaSamplerConfig {
-                provider: create_model_provider(
-                    input.config.model_provider.clone(),
-                    Some(Arc::clone(&self.auth_manager)),
-                ),
+                provider,
                 http_client_factory: input.config.http_client_factory(),
                 agent_identity_policy: if input.config.features.enabled(Feature::UseAgentIdentity) {
                     AgentIdentityAuthPolicy::ChatGptAuth
@@ -642,8 +643,7 @@ impl GuardianV2Extension {
                     );
                     let review_model_id = review_model_override
                         .as_deref()
-                        .or_else(|| provider.approval_review_preferred_model())
-                        .or_else(|| parent_model.as_ref().map(|model| model.slug.as_str()));
+                        .or_else(|| provider.approval_review_preferred_model());
                     match review_model_id {
                         Some(review_model_id) => {
                             let review_model = manager

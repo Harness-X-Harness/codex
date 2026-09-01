@@ -12,7 +12,7 @@ codex_rust_crate(
         "//codex-rs/cli:codex",
     ],
     integration_compile_data_extra = [
-        "//codex-rs:vendor/bubblewrap/bubblewrap.jpg",
+        "//codex-rs/vendor:bubblewrap_jpeg",
     ],
     integration_test_timeout = "long",
     run_tests_with_wine_exec = True,

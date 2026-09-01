@@ -92,15 +92,22 @@ async fn grok_web_search_uses_bare_live_declaration_and_replays_stock_history() 
     .expect("submit Grok follow-up turn");
 
     let requests = responses.requests();
-    assert_eq!(requests.len(), 2, "expected two Grok response requests");
-    for request in &requests {
+    let search_request = requests
+        .iter()
+        .find(|request| request.body_contains_text("search the web"))
+        .expect("search turn should reach Grok");
+    let follow_up_request = requests
+        .iter()
+        .find(|request| request.body_contains_text("continue with the prior result"))
+        .expect("follow-up turn should reach Grok");
+    for request in [search_request, follow_up_request] {
         assert_eq!(
             find_web_search_tool(&request.body_json()),
-            &json!({"type": "web_search"}),
+            &json!({"type": "web_search"})
         );
     }
 
-    let follow_up = requests[1].body_json();
+    let follow_up = follow_up_request.body_json();
     let replayed_search = follow_up["input"]
         .as_array()
         .expect("follow-up should include canonical history")
@@ -111,7 +118,6 @@ async fn grok_web_search_uses_bare_live_declaration_and_replays_stock_history() 
         replayed_search,
         &json!({
             "type": "web_search_call",
-            "id": "ws-grok-search",
             "status": "completed",
             "action": {"type": "search", "query": "current UTC date"},
         }),

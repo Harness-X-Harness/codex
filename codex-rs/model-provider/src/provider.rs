@@ -199,7 +199,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Providers without a verified backend-specific model return `None`; review must then require
     /// an explicit override instead of sending another provider's model ID.
     fn approval_review_preferred_model(&self) -> Option<&'static str> {
-        Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
+        None
     }
 
     /// Returns the preferred model used for memory extraction.
@@ -207,7 +207,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Providers without a verified backend-specific model return `None`; callers must require an
     /// explicit model instead of sending another provider's model ID.
     fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
-        Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+        None
     }
 
     /// Returns the preferred model used for memory consolidation.
@@ -215,7 +215,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Providers without a verified backend-specific model return `None`; callers must require an
     /// explicit model instead of sending another provider's model ID.
     fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
-        Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
+        None
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -401,8 +401,15 @@ impl ModelProvider for ConfiguredModelProvider {
         } else {
             RemoteCompactionSupport::Unsupported
         };
+        let image_generation = self.info.uses_openai_actor_authorization()
+            || (self.info.requires_openai_auth
+                && self
+                    .auth_manager
+                    .as_deref()
+                    .is_some_and(AuthManager::current_auth_uses_codex_backend));
 
         ProviderCapabilities {
+            image_generation,
             remote_compaction,
             ..ProviderCapabilities::default()
         }
@@ -438,6 +445,14 @@ impl ModelProvider for ConfiguredModelProvider {
                 DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
             },
         )
+    }
+
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+    }
+
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -753,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_uses_default_approval_review_preferred_model() {
+    fn configured_provider_uses_stock_background_models() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
@@ -762,6 +777,31 @@ mod tests {
         assert_eq!(
             provider.approval_review_preferred_model(),
             Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            provider.memory_extraction_preferred_model(),
+            Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            provider.memory_consolidation_preferred_model(),
+            Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
+        );
+
+        let custom_provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            /*auth_manager*/ None,
+        );
+        assert_eq!(
+            custom_provider.approval_review_preferred_model(),
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            custom_provider.memory_extraction_preferred_model(),
+            Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            custom_provider.memory_consolidation_preferred_model(),
+            Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
         );
     }
 

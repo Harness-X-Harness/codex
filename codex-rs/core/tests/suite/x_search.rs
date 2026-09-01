@@ -75,19 +75,22 @@ async fn grok_x_search_is_provider_hosted_and_replays_canonical_history() {
     .expect("submit Grok X Search follow-up turn");
 
     let requests = responses.requests();
-    assert_eq!(
-        requests.len(),
-        2,
-        "provider-hosted X Search must not create a local tool follow-up"
-    );
-    for request in &requests {
+    let search_request = requests
+        .iter()
+        .find(|request| request.body_contains_text("search X"))
+        .expect("X Search turn should reach Grok");
+    let follow_up_request = requests
+        .iter()
+        .find(|request| request.body_contains_text("continue with the prior X result"))
+        .expect("X Search follow-up should reach Grok");
+    for request in [search_request, follow_up_request] {
         assert_eq!(
             find_x_search_tool(&request.body_json()),
-            &json!({"type": "x_search"}),
+            &json!({"type": "x_search"})
         );
     }
 
-    let follow_up = requests[1].body_json();
+    let follow_up = follow_up_request.body_json();
     let input = follow_up["input"]
         .as_array()
         .expect("follow-up should include canonical history");

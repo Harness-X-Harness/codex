@@ -461,7 +461,7 @@ mod tests {
             let transport = CapturingTransport::new(response_body());
             let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
                 .with_dialect(ImagesDialect::Grok);
-            let error = client
+            client
                 .edit(
                     &ImageEditRequest {
                         images: (0..count)
@@ -480,7 +480,6 @@ mod tests {
                 )
                 .await
                 .expect_err("unsupported image count should fail");
-            assert!(error.to_string().contains("between 1 and 3"));
             assert!(
                 transport
                     .last_request

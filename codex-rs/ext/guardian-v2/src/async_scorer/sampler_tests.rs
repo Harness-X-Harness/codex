@@ -148,10 +148,9 @@ async fn proxy_websocket_servers_with_prewarm_limit(
 }
 
 fn sampler_config(base_url: String) -> LunaSamplerConfig {
-    let provider_info = ModelProviderInfo::create_openai_provider(Some(base_url));
     LunaSamplerConfig {
         provider: create_model_provider(
-            provider_info,
+            ModelProviderInfo::create_openai_provider(Some(base_url)),
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "test-api-key",
             ))),

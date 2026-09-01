@@ -138,13 +138,11 @@ supports_websockets = true
 
 #[test]
 fn test_grok_wire_api_is_not_openai_by_name() {
-    let stock = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     let grok = ModelProviderInfo {
         wire_api: WireApi::GrokResponses,
-        ..stock.clone()
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
     };
 
-    assert!(stock.is_openai());
     assert!(!grok.is_openai());
 }
 
