@@ -66,12 +66,31 @@ impl ToolCall {
     }
 }
 
+fn is_plaintext_collaboration_name(name: &str) -> bool {
+    matches!(name, "spawn_agent" | "send_message" | "followup_task")
+}
+
+fn is_collaboration_namespace(requested: &str) -> bool {
+    requested == "collaboration"
+        || requested == format!("{DEFAULT_FUNCTION_NAMESPACE}.collaboration")
+        || requested.ends_with(".collaboration")
+}
+
 fn is_plaintext_collaboration_tool(tool_name: &ToolName) -> bool {
-    tool_name.namespace.as_deref() == Some("collaboration")
-        && matches!(
-            tool_name.name.as_str(),
-            "spawn_agent" | "send_message" | "followup_task"
-        )
+    if !is_plaintext_collaboration_name(tool_name.name.as_str()) {
+        return false;
+    }
+    match tool_name.namespace.as_deref() {
+        None => true,
+        Some("collaboration") => true,
+        Some(namespace) if namespace == DEFAULT_FUNCTION_NAMESPACE => true,
+        Some(_) => false,
+    }
+}
+
+fn echoed_collaboration_plaintext(name: &str, namespace: Option<&str>) -> bool {
+    is_plaintext_collaboration_name(name)
+        && is_collaboration_namespace(namespace.unwrap_or("").trim())
 }
 
 pub(crate) fn tool_log_payload<'a>(
@@ -465,6 +484,7 @@ impl ToolRouter {
                 requested == format!("{DEFAULT_FUNCTION_NAMESPACE}.{route_ns}")
                     || requested.ends_with(&format!(".{route_ns}"))
             })
+            || (is_plaintext_collaboration_name(name) && is_collaboration_namespace(requested))
     }
 
     pub(crate) fn restore_tool_call(
@@ -484,9 +504,13 @@ impl ToolRouter {
         else {
             return Ok(());
         };
+        let echoed_name = name.clone();
+        let echoed_namespace = namespace.clone();
         let Some(route) = self.resolve_wire_route(name, namespace) else {
             let tool_name = ToolName::new(namespace.clone(), name.clone());
-            if is_plaintext_collaboration_tool(&tool_name) {
+            if is_plaintext_collaboration_tool(&tool_name)
+                || echoed_collaboration_plaintext(&echoed_name, echoed_namespace.as_deref())
+            {
                 *encrypted_function_args = Some(Vec::new());
             }
             return Ok(());
@@ -495,7 +519,9 @@ impl ToolRouter {
             WireToolRoute::Function(tool_name) => {
                 *name = tool_name.name.clone();
                 *namespace = tool_name.namespace.clone();
-                if is_plaintext_collaboration_tool(tool_name) {
+                if is_plaintext_collaboration_tool(tool_name)
+                    || echoed_collaboration_plaintext(&echoed_name, echoed_namespace.as_deref())
+                {
                     *encrypted_function_args = Some(Vec::new());
                 }
             }

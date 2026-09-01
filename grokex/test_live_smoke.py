@@ -688,9 +688,71 @@ experimental_bearer_token = "secret"
         self.assertEqual(evidence["spawn_count"], 1)
         self.assertEqual(evidence["default_child_count"], 1)
         self.assertEqual(evidence["child_completed_count"], 0)
+        self.assertEqual(evidence["spawn_missing_task_name_count"], 0)
+        self.assertEqual(evidence["spawn_unknown_argument_key_count"], 0)
+        self.assertEqual(evidence["spawn_argument_keys"], ["message", "task_name"])
         dumped = json.dumps(evidence)
         self.assertNotIn("thread-1", dumped)
         self.assertNotIn("child-1", dumped)
+
+
+    def test_collaboration_deadline_records_spawn_argument_keys(self) -> None:
+        spawn_arguments = {
+            "message": (
+                "Reply with exactly "
+                f"{live_smoke.CHILD_EXPECTED_AGENT_REPLY} and no other text."
+            ),
+            "nickname": "live_child",
+        }
+        server = DeadlineAfterMessages(
+            [
+                {
+                    "method": "rawResponseItem/completed",
+                    "params": {
+                        "item": {
+                            "arguments": json.dumps(spawn_arguments),
+                            "call_id": "spawn-1",
+                            "name": "spawn_agent",
+                            "namespace": "collaboration",
+                            "type": "function_call",
+                        },
+                        "threadId": "thread-1",
+                    },
+                },
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "item": {
+                            "text": live_smoke.PARENT_EXPECTED_AGENT_REPLY,
+                            "type": "agentMessage",
+                        },
+                        "threadId": "thread-1",
+                    },
+                },
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": {"status": "completed"},
+                    },
+                },
+            ]
+        )
+
+        with self.assertRaises(live_smoke.LiveDeadlineExpired) as raised:
+            live_smoke.wait_for_collaboration_turn(
+                server,
+                time.monotonic() + 1,
+                "thread-1",
+            )
+
+        evidence = raised.exception.last_stage
+        self.assertEqual(evidence["short_spawn_agent_count"], 1)
+        self.assertEqual(evidence["spawn_namespace_counts"], {"collaboration": 1})
+        self.assertEqual(evidence["spawn_missing_task_name_count"], 1)
+        self.assertEqual(evidence["spawn_unknown_argument_key_count"], 1)
+        self.assertEqual(evidence["spawn_argument_keys"], ["message", "nickname"])
+        self.assertEqual(evidence["child_count"], 0)
 
     def test_collaboration_run_writes_last_stage_evidence_on_deadline(self) -> None:
         class TimeoutScenarioServer(FakeScenarioAppServer):
@@ -753,6 +815,7 @@ experimental_bearer_token = "secret"
         self.assertEqual(evidence["last_proven_stage"], "image_failed")
         self.assertEqual(evidence["image_items_failed"], 1)
         self.assertEqual(evidence["image_items_completed"], 0)
+        self.assertEqual(evidence["image_function_call_count"], 0)
 
 
 if __name__ == "__main__":

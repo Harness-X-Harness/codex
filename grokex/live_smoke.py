@@ -351,6 +351,18 @@ def classify_collaboration_stage(
     return "no_events"
 
 
+KNOWN_SPAWN_ARGUMENT_KEYS = {
+    "agent_type",
+    "fork_context",
+    "fork_turns",
+    "message",
+    "model",
+    "reasoning_effort",
+    "service_tier",
+    "task_name",
+}
+
+
 def collaboration_last_stage(
     *,
     root_status: str | None,
@@ -371,6 +383,9 @@ def collaboration_last_stage(
     short_spawn_agent_count: int,
     item_type_counts: dict[str, int],
     spawn_namespace_counts: dict[str, int],
+    spawn_argument_keys: list[str],
+    spawn_missing_task_name_count: int,
+    spawn_unknown_argument_key_count: int,
 ) -> dict[str, object]:
     completed_default_child_count = len(
         default_child_thread_ids & child_completed_thread_ids & child_reply_thread_ids
@@ -406,6 +421,9 @@ def collaboration_last_stage(
         "short_spawn_agent_count": short_spawn_agent_count,
         "item_type_counts": item_type_counts,
         "spawn_namespace_counts": spawn_namespace_counts,
+        "spawn_argument_keys": spawn_argument_keys,
+        "spawn_missing_task_name_count": spawn_missing_task_name_count,
+        "spawn_unknown_argument_key_count": spawn_unknown_argument_key_count,
     }
 
 
@@ -433,6 +451,9 @@ def wait_for_collaboration_turn(
     short_spawn_agent_count = 0
     item_type_counts: dict[str, int] = {}
     spawn_namespace_counts: dict[str, int] = {}
+    spawn_argument_keys: set[str] = set()
+    spawn_missing_task_name_count = 0
+    spawn_unknown_argument_key_count = 0
     pending_child_thread_ids: set[str] = set()
 
     while time.monotonic() < deadline:
@@ -470,6 +491,9 @@ def wait_for_collaboration_turn(
                     short_spawn_agent_count=short_spawn_agent_count,
                     item_type_counts=item_type_counts,
                     spawn_namespace_counts=spawn_namespace_counts,
+                    spawn_argument_keys=sorted(spawn_argument_keys),
+                    spawn_missing_task_name_count=spawn_missing_task_name_count,
+                    spawn_unknown_argument_key_count=spawn_unknown_argument_key_count,
                 ),
             ) from error
         method = message.get("method")
@@ -498,6 +522,15 @@ def wait_for_collaboration_turn(
             task = parsed_arguments.get("message")
             if not isinstance(task, str) or CHILD_EXPECTED_AGENT_REPLY not in task:
                 continue
+            spawn_argument_keys.update(parsed_arguments)
+            task_name = parsed_arguments.get("task_name")
+            if not isinstance(task_name, str) or not task_name.strip():
+                spawn_missing_task_name_count += 1
+            unknown_keys = [
+                key for key in parsed_arguments if key not in KNOWN_SPAWN_ARGUMENT_KEYS
+            ]
+            if unknown_keys:
+                spawn_unknown_argument_key_count += 1
             wire_name = item.get("name")
             if isinstance(wire_name, str):
                 if wire_name.startswith("local__collaboration__spawn_agent__"):
@@ -611,6 +644,9 @@ def wait_for_collaboration_turn(
         short_spawn_agent_count=short_spawn_agent_count,
         item_type_counts=item_type_counts,
         spawn_namespace_counts=spawn_namespace_counts,
+        spawn_argument_keys=sorted(spawn_argument_keys),
+        spawn_missing_task_name_count=spawn_missing_task_name_count,
+        spawn_unknown_argument_key_count=spawn_unknown_argument_key_count,
     )
     if last_stage["last_proven_stage"] != "completed":
         raise LiveDeadlineExpired("the Grok Ultra collaboration Turn", last_stage)
@@ -672,11 +708,13 @@ def image_last_stage(
     agent_reply_seen: bool,
     history_args_seen: bool,
     require_history: bool,
+    image_function_call_count: int,
 ) -> dict[str, object]:
     return {
         "agent_reply_seen": agent_reply_seen,
         "does_not_prove": "product_root_cause",
         "history_arguments_seen": history_args_seen,
+        "image_function_call_count": image_function_call_count,
         "image_items_completed": completed,
         "image_items_failed": failed,
         "last_proven_stage": classify_image_stage(
@@ -698,6 +736,7 @@ def wait_for_image_turn(
     failed = 0
     history_args_seen = not require_history
     agent_reply_seen = False
+    image_function_call_count = 0
     while time.monotonic() < deadline:
         try:
             message = server.next_message(deadline, "the Grok image Turn")
@@ -712,6 +751,7 @@ def wait_for_image_turn(
                     agent_reply_seen=agent_reply_seen,
                     history_args_seen=history_args_seen,
                     require_history=require_history,
+                    image_function_call_count=image_function_call_count,
                 ),
             ) from error
         params = message.get("params")
@@ -730,6 +770,7 @@ def wait_for_image_turn(
                 )
             )
             if is_image_call:
+                image_function_call_count += 1
                 try:
                     arguments = json.loads(item.get("arguments", ""))
                 except (TypeError, json.JSONDecodeError):
@@ -797,6 +838,7 @@ def wait_for_image_turn(
             agent_reply_seen=agent_reply_seen,
             history_args_seen=history_args_seen,
             require_history=require_history,
+            image_function_call_count=image_function_call_count,
         ),
     )
 

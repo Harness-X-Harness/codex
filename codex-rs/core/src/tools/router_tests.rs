@@ -305,6 +305,48 @@ fn restore_tool_call_marks_short_name_collaboration_calls_as_plaintext() -> anyh
     Ok(())
 }
 
+fn function_spec(name: &str) -> ToolSpec {
+    match function(name) {
+        ResponsesApiNamespaceTool::Function(tool) => ToolSpec::Function(tool),
+        ResponsesApiNamespaceTool::Custom(_) => unreachable!("fixture is a function"),
+    }
+}
+
+#[test]
+fn restore_tool_call_maps_collaboration_echo_onto_plain_flat_spawn_route() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![function_spec("spawn_agent")],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let mut item = ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: Some("collaboration".to_string()),
+        arguments: r#"{"message":"hello","task_name":"live_child"}"#.to_string(),
+        encrypted_function_args: None,
+        call_id: "call-plain".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    router.restore_tool_call(&mut item)?;
+    let call = ToolRouter::build_tool_call(item)
+        .expect("restored call should parse")
+        .expect("restored item should be a tool call");
+    assert_eq!(
+        call.tool_name,
+        ToolName::plain("spawn_agent").with_default_namespace()
+    );
+    assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+    assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    Ok(())
+}
+
 #[test]
 fn restore_tool_call_marks_short_name_collaboration_calls_under_default_namespace()
 -> anyhow::Result<()> {
