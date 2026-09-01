@@ -34,7 +34,8 @@ SCENARIOS = (
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
-IMAGE_FUNCTION_WIRE_NAME = "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a"
+IMAGE_FUNCTION_WIRE_NAME = "local__image_gen__imagegen"
+SPAWN_FUNCTION_WIRE_NAME = "local__collaboration__spawn_agent"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
 CHILD_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_CHILD_OK"
@@ -379,7 +380,7 @@ def collaboration_last_stage(
     spawn_completed_count: int,
     wait_completed_count: int,
     unexpected_tool_count: int,
-    hashed_collab_spawn_count: int,
+    projected_spawn_agent_count: int,
     short_spawn_agent_count: int,
     item_type_counts: dict[str, int],
     spawn_namespace_counts: dict[str, int],
@@ -417,7 +418,7 @@ def collaboration_last_stage(
         "spawn_count": spawn_completed_count,
         "unexpected_collaboration_tool_count": unexpected_tool_count,
         "wait_count": wait_completed_count,
-        "hashed_collab_spawn_count": hashed_collab_spawn_count,
+        "projected_spawn_agent_count": projected_spawn_agent_count,
         "short_spawn_agent_count": short_spawn_agent_count,
         "item_type_counts": item_type_counts,
         "spawn_namespace_counts": spawn_namespace_counts,
@@ -447,7 +448,7 @@ def wait_for_collaboration_turn(
     wait_completed_count = 0
     failed_tool_count = 0
     unexpected_tool_count = 0
-    hashed_collab_spawn_count = 0
+    projected_spawn_agent_count = 0
     short_spawn_agent_count = 0
     item_type_counts: dict[str, int] = {}
     spawn_namespace_counts: dict[str, int] = {}
@@ -487,7 +488,7 @@ def wait_for_collaboration_turn(
                     spawn_completed_count=spawn_completed_count,
                     wait_completed_count=wait_completed_count,
                     unexpected_tool_count=unexpected_tool_count,
-                    hashed_collab_spawn_count=hashed_collab_spawn_count,
+                    projected_spawn_agent_count=projected_spawn_agent_count,
                     short_spawn_agent_count=short_spawn_agent_count,
                     item_type_counts=item_type_counts,
                     spawn_namespace_counts=spawn_namespace_counts,
@@ -533,8 +534,8 @@ def wait_for_collaboration_turn(
                 spawn_unknown_argument_key_count += 1
             wire_name = item.get("name")
             if isinstance(wire_name, str):
-                if wire_name.startswith("local__collaboration__spawn_agent__"):
-                    hashed_collab_spawn_count += 1
+                if wire_name == SPAWN_FUNCTION_WIRE_NAME:
+                    projected_spawn_agent_count += 1
                 elif wire_name == "spawn_agent":
                     short_spawn_agent_count += 1
                 namespace = item.get("namespace")
@@ -640,7 +641,7 @@ def wait_for_collaboration_turn(
         spawn_completed_count=spawn_completed_count,
         wait_completed_count=wait_completed_count,
         unexpected_tool_count=unexpected_tool_count,
-        hashed_collab_spawn_count=hashed_collab_spawn_count,
+        projected_spawn_agent_count=projected_spawn_agent_count,
         short_spawn_agent_count=short_spawn_agent_count,
         item_type_counts=item_type_counts,
         spawn_namespace_counts=spawn_namespace_counts,

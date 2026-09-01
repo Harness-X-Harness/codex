@@ -15,7 +15,6 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
-use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 #[cfg(test)]
@@ -66,31 +65,12 @@ impl ToolCall {
     }
 }
 
-fn is_plaintext_collaboration_name(name: &str) -> bool {
-    matches!(name, "spawn_agent" | "send_message" | "followup_task")
-}
-
-fn is_collaboration_namespace(requested: &str) -> bool {
-    requested == "collaboration"
-        || requested == format!("{DEFAULT_FUNCTION_NAMESPACE}.collaboration")
-        || requested.ends_with(".collaboration")
-}
-
 fn is_plaintext_collaboration_tool(tool_name: &ToolName) -> bool {
-    if !is_plaintext_collaboration_name(tool_name.name.as_str()) {
-        return false;
-    }
-    match tool_name.namespace.as_deref() {
-        None => true,
-        Some("collaboration") => true,
-        Some(namespace) if namespace == DEFAULT_FUNCTION_NAMESPACE => true,
-        Some(_) => false,
-    }
-}
-
-fn echoed_collaboration_plaintext(name: &str, namespace: Option<&str>) -> bool {
-    is_plaintext_collaboration_name(name)
-        && is_collaboration_namespace(namespace.unwrap_or("").trim())
+    tool_name.namespace.as_deref() == Some("collaboration")
+        && matches!(
+            tool_name.name.as_str(),
+            "spawn_agent" | "send_message" | "followup_task"
+        )
 }
 
 pub(crate) fn tool_log_payload<'a>(
@@ -111,7 +91,7 @@ pub struct ToolRouter {
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     can_manage_children: bool,
-    wire_tool_routes: BTreeMap<String, WireToolRoute>,
+    flat_tool_routes: FlatToolRoutes,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +101,68 @@ enum WireToolRoute {
         tool_name: ToolName,
         input_key: String,
     },
+}
+
+impl WireToolRoute {
+    fn tool_name(&self) -> &ToolName {
+        match self {
+            Self::Function(tool_name) | Self::Custom { tool_name, .. } => tool_name,
+        }
+    }
+}
+
+/// Compiled symbols for one finalized model-visible tool plan.
+#[derive(Default)]
+struct FlatToolRoutes {
+    by_wire_name: BTreeMap<String, WireToolRoute>,
+    by_canonical_name: BTreeMap<ToolName, WireToolRoute>,
+    by_unique_short_name: BTreeMap<String, Option<WireToolRoute>>,
+}
+
+impl FlatToolRoutes {
+    fn insert(&mut self, kind: &str, route: WireToolRoute) -> Result<String, String> {
+        let mut wire_name = flat_wire_name(kind, route.tool_name());
+        if self.by_wire_name.contains_key(&wire_name) {
+            wire_name = digested_flat_wire_name(kind, route.tool_name());
+        }
+        if self.by_wire_name.contains_key(&wire_name) {
+            return Err(wire_name);
+        }
+        self.by_wire_name.insert(wire_name.clone(), route.clone());
+
+        let canonical_name = route.tool_name().clone().with_default_namespace();
+        if self
+            .by_canonical_name
+            .insert(canonical_name, route.clone())
+            .is_some()
+        {
+            return Err(route.tool_name().to_string());
+        }
+
+        self.by_unique_short_name
+            .entry(route.tool_name().name.clone())
+            .and_modify(|entry| *entry = None)
+            .or_insert(Some(route));
+        Ok(wire_name)
+    }
+
+    fn resolve(&self, name: &str, namespace: &Option<String>) -> Option<&WireToolRoute> {
+        if let Some(route) = self.by_wire_name.get(name) {
+            return Some(route);
+        }
+
+        let canonical_name = ToolName::new(namespace.clone(), name).with_default_namespace();
+        if !canonical_name.is_default_namespace() {
+            return self.by_canonical_name.get(&canonical_name);
+        }
+
+        // A Provider-default or unqualified echo is a lexical short name. The
+        // compiler publishes that alias only when this finalized plan has one
+        // matching canonical tool.
+        self.by_canonical_name
+            .get(&canonical_name)
+            .or_else(|| self.by_unique_short_name.get(name).and_then(Option::as_ref))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,7 +211,7 @@ impl ToolRouter {
             code_mode_tool_names,
             tool_namespaces_info,
             can_manage_children: false,
-            wire_tool_routes: BTreeMap::new(),
+            flat_tool_routes: FlatToolRoutes::default(),
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
@@ -197,7 +239,7 @@ impl ToolRouter {
                 child_management_tools,
             ));
         }
-        let (model_visible_specs, wire_tool_routes) =
+        let (model_visible_specs, flat_tool_routes) =
             project_flat_function_tools(model_visible_specs)?;
         let mut router = Self {
             registry,
@@ -206,7 +248,7 @@ impl ToolRouter {
             code_mode_tool_names,
             tool_namespaces_info,
             can_manage_children: false,
-            wire_tool_routes,
+            flat_tool_routes,
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
@@ -292,7 +334,7 @@ impl ToolRouter {
     }
 
     pub(crate) fn project_model_input(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        if self.wire_tool_routes.is_empty() {
+        if self.flat_tool_routes.by_wire_name.is_empty() {
             return input;
         }
         for item in &mut input {
@@ -352,7 +394,7 @@ impl ToolRouter {
         let tool_name = ToolName::new(namespace.clone(), name.clone());
         let wire_name = flat_wire_name("custom", &tool_name);
         matches!(
-            self.wire_tool_routes.get(&wire_name),
+            self.flat_tool_routes.by_wire_name.get(&wire_name),
             Some(WireToolRoute::Custom { .. })
         )
     }
@@ -453,38 +495,7 @@ impl ToolRouter {
     }
 
     fn resolve_wire_route(&self, name: &str, namespace: &Option<String>) -> Option<&WireToolRoute> {
-        if let Some(route) = self.wire_tool_routes.get(name) {
-            return Some(route);
-        }
-        // Grok may echo the canonical short name from prompts instead of the
-        // hashed flat wire name advertised on the request. 0.151 can also put
-        // that short name under the default `functions` namespace.
-        self.wire_tool_routes.values().find(|route| {
-            let tool_name = match route {
-                WireToolRoute::Function(tool_name) => tool_name,
-                WireToolRoute::Custom { tool_name, .. } => tool_name,
-            };
-            Self::echoed_name_matches_wire_route(tool_name, name, namespace.as_deref())
-        })
-    }
-
-    fn echoed_name_matches_wire_route(
-        tool_name: &ToolName,
-        name: &str,
-        namespace: Option<&str>,
-    ) -> bool {
-        if tool_name.name != name {
-            return false;
-        }
-        let requested = namespace.unwrap_or("").trim();
-        requested.is_empty()
-            || requested == DEFAULT_FUNCTION_NAMESPACE
-            || Some(requested) == tool_name.namespace.as_deref()
-            || tool_name.namespace.as_deref().is_some_and(|route_ns| {
-                requested == format!("{DEFAULT_FUNCTION_NAMESPACE}.{route_ns}")
-                    || requested.ends_with(&format!(".{route_ns}"))
-            })
-            || (is_plaintext_collaboration_name(name) && is_collaboration_namespace(requested))
+        self.flat_tool_routes.resolve(name, namespace)
     }
 
     pub(crate) fn restore_tool_call(
@@ -504,24 +515,14 @@ impl ToolRouter {
         else {
             return Ok(());
         };
-        let echoed_name = name.clone();
-        let echoed_namespace = namespace.clone();
         let Some(route) = self.resolve_wire_route(name, namespace) else {
-            let tool_name = ToolName::new(namespace.clone(), name.clone());
-            if is_plaintext_collaboration_tool(&tool_name)
-                || echoed_collaboration_plaintext(&echoed_name, echoed_namespace.as_deref())
-            {
-                *encrypted_function_args = Some(Vec::new());
-            }
             return Ok(());
         };
         match route {
             WireToolRoute::Function(tool_name) => {
                 *name = tool_name.name.clone();
                 *namespace = tool_name.namespace.clone();
-                if is_plaintext_collaboration_tool(tool_name)
-                    || echoed_collaboration_plaintext(&echoed_name, echoed_namespace.as_deref())
-                {
+                if is_plaintext_collaboration_tool(tool_name) {
                     *encrypted_function_args = Some(Vec::new());
                 }
             }
@@ -632,36 +633,30 @@ impl ToolRouter {
 
 fn project_flat_function_tools(
     specs: Vec<ToolSpec>,
-) -> Result<(Vec<ToolSpec>, BTreeMap<String, WireToolRoute>), String> {
+) -> Result<(Vec<ToolSpec>, FlatToolRoutes), String> {
     let mut declarations = Vec::new();
-    let mut routes = BTreeMap::new();
+    let mut routes = FlatToolRoutes::default();
     for spec in specs {
         match spec {
             ToolSpec::Function(tool) => {
                 let tool_name = ToolName::plain(tool.name.clone());
-                let wire_name = flat_wire_name("function", &tool_name);
-                insert_wire_route(
-                    &mut routes,
-                    wire_name.clone(),
-                    WireToolRoute::Function(tool_name.clone()),
-                )?;
+                let wire_name =
+                    routes.insert("function", WireToolRoute::Function(tool_name.clone()))?;
                 declarations.push(ToolSpec::Function(function_declaration(
                     wire_name, &tool_name, tool,
                 )));
             }
             ToolSpec::Freeform(tool) => {
                 let tool_name = ToolName::plain(tool.name.clone());
-                let wire_name = flat_wire_name("custom", &tool_name);
-                let (tool, input_key) =
-                    custom_function_declaration(wire_name.clone(), &tool_name, tool);
-                insert_wire_route(
-                    &mut routes,
-                    wire_name,
+                let input_key = custom_input_key(&tool_name.name).to_string();
+                let wire_name = routes.insert(
+                    "custom",
                     WireToolRoute::Custom {
-                        tool_name,
-                        input_key,
+                        tool_name: tool_name.clone(),
+                        input_key: input_key.clone(),
                     },
                 )?;
+                let tool = custom_function_declaration(wire_name, &tool_name, tool, &input_key);
                 declarations.push(ToolSpec::Function(tool));
             }
             ToolSpec::Namespace(namespace) => {
@@ -670,12 +665,8 @@ fn project_flat_function_tools(
                         ResponsesApiNamespaceTool::Function(tool) => {
                             let tool_name =
                                 ToolName::namespaced(namespace.name.clone(), tool.name.clone());
-                            let wire_name = flat_wire_name("function", &tool_name);
-                            insert_wire_route(
-                                &mut routes,
-                                wire_name.clone(),
-                                WireToolRoute::Function(tool_name.clone()),
-                            )?;
+                            let wire_name = routes
+                                .insert("function", WireToolRoute::Function(tool_name.clone()))?;
                             declarations.push(ToolSpec::Function(function_declaration(
                                 wire_name, &tool_name, tool,
                             )));
@@ -683,17 +674,17 @@ fn project_flat_function_tools(
                         ResponsesApiNamespaceTool::Custom(tool) => {
                             let tool_name =
                                 ToolName::namespaced(namespace.name.clone(), tool.name.clone());
-                            let wire_name = flat_wire_name("custom", &tool_name);
-                            let (tool, input_key) =
-                                custom_function_declaration(wire_name.clone(), &tool_name, tool);
-                            insert_wire_route(
-                                &mut routes,
-                                wire_name,
+                            let input_key = custom_input_key(&tool_name.name).to_string();
+                            let wire_name = routes.insert(
+                                "custom",
                                 WireToolRoute::Custom {
-                                    tool_name,
-                                    input_key,
+                                    tool_name: tool_name.clone(),
+                                    input_key: input_key.clone(),
                                 },
                             )?;
+                            let tool = custom_function_declaration(
+                                wire_name, &tool_name, tool, &input_key,
+                            );
                             declarations.push(ToolSpec::Function(tool));
                         }
                     }
@@ -720,33 +711,30 @@ fn custom_function_declaration(
     wire_name: String,
     tool_name: &ToolName,
     tool: FreeformTool,
-) -> (ResponsesApiTool, String) {
-    let input_key = custom_input_key(&tool.name).to_string();
+    input_key: &str,
+) -> ResponsesApiTool {
     let parameters = JsonSchema::object(
         BTreeMap::from([(
-            input_key.clone(),
+            input_key.to_string(),
             JsonSchema::string(Some(
                 "Freeform input passed unchanged to Codex.".to_string(),
             )),
         )]),
-        Some(vec![input_key.clone()]),
+        Some(vec![input_key.to_string()]),
         Some(false.into()),
     );
     let description = flat_route_description(
         tool_name,
         &format!("{}\n\n{}", tool.description, tool.format.definition),
     );
-    (
-        ResponsesApiTool {
-            name: wire_name,
-            description,
-            strict: true,
-            defer_loading: None,
-            parameters,
-            output_schema: None,
-        },
-        input_key,
-    )
+    ResponsesApiTool {
+        name: wire_name,
+        description,
+        strict: true,
+        defer_loading: None,
+        parameters,
+        output_schema: None,
+    }
 }
 
 fn flat_route_description(tool_name: &ToolName, description: &str) -> String {
@@ -793,19 +781,32 @@ fn flat_route_description(tool_name: &ToolName, description: &str) -> String {
     )
 }
 
-fn insert_wire_route(
-    routes: &mut BTreeMap<String, WireToolRoute>,
-    wire_name: String,
-    route: WireToolRoute,
-) -> Result<(), String> {
-    if routes.insert(wire_name.clone(), route).is_some() {
-        return Err(wire_name);
-    }
-    Ok(())
-}
-
 fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
     // This is a Codex model-context safety bound, not a Provider protocol limit.
+    const MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES: usize = 1_024;
+    const WIRE_NAME_PREFIX: &str = "local__";
+
+    let original_semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
+    let mut semantic_name = original_semantic_name
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
+                char::from(byte)
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if !semantic_name.is_empty()
+        && semantic_name == original_semantic_name
+        && WIRE_NAME_PREFIX.len() + semantic_name.len() <= MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES
+    {
+        return format!("{WIRE_NAME_PREFIX}{semantic_name}");
+    }
+    digested_flat_wire_name(kind, tool_name)
+}
+
+fn digested_flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
     const MAX_MODEL_CONTEXT_FLAT_WIRE_NAME_BYTES: usize = 1_024;
     const WIRE_NAME_PREFIX: &str = "local__";
     const WIRE_NAME_SEPARATOR: &str = "__";

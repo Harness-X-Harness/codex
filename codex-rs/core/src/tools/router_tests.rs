@@ -53,7 +53,7 @@ struct ExtensionEchoContributor;
 fn flat_wire_name_preserves_complete_semantic_identity() {
     assert_eq!(
         flat_wire_name("function", &ToolName::namespaced("image_gen", "imagegen")),
-        "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a"
+        "local__image_gen__imagegen"
     );
 
     assert_eq!(
@@ -61,7 +61,7 @@ fn flat_wire_name_preserves_complete_semantic_identity() {
             "function",
             &ToolName::namespaced("collaboration", "spawn_agent")
         ),
-        "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa"
+        "local__collaboration__spawn_agent"
     );
 }
 
@@ -262,94 +262,7 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
 }
 
 #[test]
-fn restore_tool_call_marks_short_name_collaboration_calls_as_plaintext() -> anyhow::Result<()> {
-    let router = ToolRouter::from_parts_with_projection(
-        ToolRegistry::default(),
-        vec![ToolSpec::Namespace(ResponsesApiNamespace {
-            name: "collaboration".to_string(),
-            description: "Agent tools.".to_string(),
-            tools: vec![
-                function("spawn_agent"),
-                function("send_message"),
-                function("followup_task"),
-                function("wait_agent"),
-            ],
-        })],
-        ToolMode::Direct,
-        BTreeMap::new(),
-        None,
-        &[],
-        true,
-    )
-    .map_err(anyhow::Error::msg)?;
-
-    let mut item = ResponseItem::FunctionCall {
-        id: None,
-        name: "spawn_agent".to_string(),
-        namespace: None,
-        arguments: r#"{"message":"hello"}"#.to_string(),
-        encrypted_function_args: None,
-        call_id: "call-short".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    };
-    router.restore_tool_call(&mut item)?;
-    let call = ToolRouter::build_tool_call(item)
-        .expect("restored call should parse")
-        .expect("restored item should be a tool call");
-    assert_eq!(
-        call.tool_name,
-        ToolName::namespaced("collaboration", "spawn_agent")
-    );
-    assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-    assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
-    Ok(())
-}
-
-fn function_spec(name: &str) -> ToolSpec {
-    match function(name) {
-        ResponsesApiNamespaceTool::Function(tool) => ToolSpec::Function(tool),
-        ResponsesApiNamespaceTool::Custom(_) => unreachable!("fixture is a function"),
-    }
-}
-
-#[test]
-fn restore_tool_call_maps_collaboration_echo_onto_plain_flat_spawn_route() -> anyhow::Result<()> {
-    let router = ToolRouter::from_parts_with_projection(
-        ToolRegistry::default(),
-        vec![function_spec("spawn_agent")],
-        ToolMode::Direct,
-        BTreeMap::new(),
-        None,
-        &[],
-        true,
-    )
-    .map_err(anyhow::Error::msg)?;
-
-    let mut item = ResponseItem::FunctionCall {
-        id: None,
-        name: "spawn_agent".to_string(),
-        namespace: Some("collaboration".to_string()),
-        arguments: r#"{"message":"hello","task_name":"live_child"}"#.to_string(),
-        encrypted_function_args: None,
-        call_id: "call-plain".to_string(),
-        internal_chat_message_metadata_passthrough: None,
-    };
-    router.restore_tool_call(&mut item)?;
-    let call = ToolRouter::build_tool_call(item)
-        .expect("restored call should parse")
-        .expect("restored item should be a tool call");
-    assert_eq!(
-        call.tool_name,
-        ToolName::plain("spawn_agent").with_default_namespace()
-    );
-    assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-    assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
-    Ok(())
-}
-
-#[test]
-fn restore_tool_call_marks_short_name_collaboration_calls_under_default_namespace()
--> anyhow::Result<()> {
+fn flat_projection_restores_observed_collaboration_symbols() -> anyhow::Result<()> {
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
         vec![ToolSpec::Namespace(ResponsesApiNamespace {
@@ -372,10 +285,8 @@ fn restore_tool_call_marks_short_name_collaboration_calls_under_default_namespac
 
     for namespace in [
         None,
-        Some(""),
         Some(DEFAULT_FUNCTION_NAMESPACE),
         Some("collaboration"),
-        Some("functions.collaboration"),
     ] {
         let mut item = ResponseItem::FunctionCall {
             id: None,
