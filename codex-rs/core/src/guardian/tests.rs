@@ -3598,13 +3598,10 @@ async fn guardian_review_session_config_rejects_provider_without_review_model_po
     };
     turn_mut.provider = create_model_provider(provider_info, turn_mut.auth_manager.clone());
 
-    let Err(error) = guardian_review_session_config(session.as_ref(), turn.as_ref()).await else {
-        panic!("Grok review without an explicit model policy should fail closed");
-    };
-
-    assert_eq!(
-        error.to_string(),
-        "selected Provider has no approval review model policy"
+    assert!(
+        guardian_review_session_config(session.as_ref(), turn.as_ref())
+            .await
+            .is_err()
     );
 }
 

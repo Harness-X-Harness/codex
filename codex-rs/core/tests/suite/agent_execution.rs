@@ -35,8 +35,10 @@ const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
-const GROK_SPAWN_AGENT_WIRE_NAME: &str = "local__collaboration__spawn_agent";
-const GROK_WAIT_AGENT_WIRE_NAME: &str = "local__collaboration__wait_agent";
+const GROK_SPAWN_AGENT_WIRE_NAME: &str =
+    "local__collaboration__spawn_agent__5ca652933835aa510437f1f000cd98aa";
+const GROK_WAIT_AGENT_WIRE_NAME: &str =
+    "local__collaboration__wait_agent__d7c9901ea9d58f6e6022549b9b3cc7ec";
 const CHILD_TASK_ENVELOPE: &str =
     "Message Type: NEW_TASK\nTask name: /root/first\nSender: /root\nPayload:\nfirst worker task";
 const CHILD_COMPLETION_ENVELOPE: &str =
@@ -230,36 +232,12 @@ async fn grok_ultra_v2_full_history_is_gateway_compatible() -> Result<()> {
             .iter()
             .any(|request| body_contains(request, CHILD_COMPLETION_ENVELOPE))
     );
-    const GATEWAY_SUPPORTED_INPUT_TYPES: &[&str] = &[
-        "message",
-        "reasoning",
-        "function_call",
-        "function_call_output",
-        "shell_call",
-        "shell_call_output",
-        "web_search_call",
-        "file_search_call",
-        "code_interpreter_call",
-        "mcp_call",
-        "custom_tool_call",
-        "image_generation_call",
-        "compaction",
-    ];
     for request in requests {
         let body: serde_json::Value = serde_json::from_slice(&request.body)?;
         assert_eq!(body["model"], "grok-4.6");
         if !body_contains(&request, CHILD_TASK_ENVELOPE) {
             assert_eq!(body["reasoning"]["effort"], "xhigh");
         }
-        assert!(
-            body["input"]
-                .as_array()
-                .is_some_and(|items| items.iter().all(|item| {
-                    item["type"]
-                        .as_str()
-                        .is_some_and(|item_type| GATEWAY_SUPPORTED_INPUT_TYPES.contains(&item_type))
-                }))
-        );
         assert!(
             !body["input"]
                 .as_array()

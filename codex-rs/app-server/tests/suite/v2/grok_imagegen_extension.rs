@@ -28,7 +28,7 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         ),
     ];
     // Grok receives canonical `image_gen.imagegen` through the provider's flat wire route.
-    let imagegen_wire_name = "local__image_gen__imagegen";
+    let imagegen_wire_name = "local__image_gen__imagegen__6094bed1fa9651e20af99c15f593ae7a";
     let mut sequence = Vec::new();
     for (index, (response_id, call_id, arguments)) in calls.into_iter().enumerate() {
         sequence.push(responses::sse(vec![
@@ -135,9 +135,8 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .get("description")
         .and_then(serde_json::Value::as_str)
         .context("flat image function should retain its model guidance")?;
-    assert!(description.starts_with(
-        "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
-    ));
+    assert!(description.contains("canonical `image_gen.imagegen` tool"));
+    assert!(description.contains("Call this function itself."));
     assert!(description.contains(
         "The `image_gen.imagegen` tool enables image generation from descriptions and editing of existing images"
     ));

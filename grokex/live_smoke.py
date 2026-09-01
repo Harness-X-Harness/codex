@@ -34,8 +34,8 @@ SCENARIOS = (
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
-IMAGE_FUNCTION_WIRE_NAME = "local__image_gen__imagegen"
-SPAWN_FUNCTION_WIRE_NAME = "local__collaboration__spawn_agent"
+IMAGE_FUNCTION_WIRE_PREFIX = "local__image_gen__imagegen__"
+SPAWN_FUNCTION_WIRE_PREFIX = "local__collaboration__spawn_agent__"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 HISTORY_EXPECTED_AGENT_REPLY = "GROKEX_HISTORY_RESPONSE_OK"
 CHILD_EXPECTED_AGENT_REPLY = "GROKEX_ULTRA_CHILD_OK"
@@ -534,7 +534,7 @@ def wait_for_collaboration_turn(
                 spawn_unknown_argument_key_count += 1
             wire_name = item.get("name")
             if isinstance(wire_name, str):
-                if wire_name == SPAWN_FUNCTION_WIRE_NAME:
+                if wire_name.startswith(SPAWN_FUNCTION_WIRE_PREFIX):
                     projected_spawn_agent_count += 1
                 elif wire_name == "spawn_agent":
                     short_spawn_agent_count += 1
@@ -730,6 +730,23 @@ def image_last_stage(
     }
 
 
+def supported_image_codec(data: bytes) -> tuple[str, str] | None:
+    if data.startswith(b"\xff\xd8\xff") and data.endswith(b"\xff\xd9"):
+        return ("image/jpeg", ".jpg")
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and data.endswith(
+        b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
+    ):
+        return ("image/png", ".png")
+    if (
+        len(data) >= 12
+        and data.startswith(b"RIFF")
+        and data[8:12] == b"WEBP"
+        and int.from_bytes(data[4:8], "little") + 8 == len(data)
+    ):
+        return ("image/webp", ".webp")
+    return None
+
+
 def wait_for_image_turn(
     server: AppServer, deadline: float, require_history: bool
 ) -> dict[str, object]:
@@ -738,6 +755,8 @@ def wait_for_image_turn(
     history_args_seen = not require_history
     agent_reply_seen = False
     image_function_call_count = 0
+    image_mime: str | None = None
+    artifact_extension: str | None = None
     while time.monotonic() < deadline:
         try:
             message = server.next_message(deadline, "the Grok image Turn")
@@ -767,7 +786,8 @@ def wait_for_image_turn(
                 )
                 or (
                     item.get("namespace") is None
-                    and item.get("name") == IMAGE_FUNCTION_WIRE_NAME
+                    and isinstance(item.get("name"), str)
+                    and item["name"].startswith(IMAGE_FUNCTION_WIRE_PREFIX)
                 )
             )
             if is_image_call:
@@ -803,11 +823,17 @@ def wait_for_image_turn(
                     decoded = base64.b64decode(result, validate=True)
                 except (ValueError, TypeError) as error:
                     raise SystemExit("image generation result was not valid base64") from error
-                if not (decoded.startswith(b"\xff\xd8") and decoded.endswith(b"\xff\xd9")):
-                    raise SystemExit("image generation result was not JPEG")
+                codec = supported_image_codec(decoded)
+                if codec is None:
+                    raise SystemExit("image generation result had an unsupported image codec")
+                image_mime, artifact_extension = codec
                 artifact = Path(saved_path) if isinstance(saved_path, str) else None
-                if artifact is None or artifact.suffix != ".jpg" or not artifact.is_file():
-                    raise SystemExit("image generation artifact was not JPEG")
+                if (
+                    artifact is None
+                    or artifact.suffix.lower() != artifact_extension
+                    or not artifact.is_file()
+                ):
+                    raise SystemExit("image generation artifact codec did not match result")
                 if artifact.stat().st_size > 32 * 1024 * 1024 or artifact.read_bytes() != decoded:
                     raise SystemExit("image generation artifact did not match result")
                 completed += 1
@@ -827,8 +853,8 @@ def wait_for_image_turn(
                 "history_arguments_verified": require_history,
                 "image_items_failed": failed,
                 "image_items_completed": completed,
-                "image_mime": "image/jpeg",
-                "artifact_extension": ".jpg",
+                "image_mime": image_mime,
+                "artifact_extension": artifact_extension,
                 "status": "completed",
             }
     raise LiveDeadlineExpired(
@@ -1048,7 +1074,7 @@ def run_smoke(
                 for request_id, prompt, require_history in [
                     (
                         4,
-                        "Generate a JPEG image of a blue circle on a plain white background.",
+                        "Generate an image of a blue circle on a plain white background.",
                         False,
                     ),
                     (

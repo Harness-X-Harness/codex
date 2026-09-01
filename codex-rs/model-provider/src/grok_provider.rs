@@ -13,7 +13,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
 
 use crate::grok_catalog::static_model_catalog;
 use crate::provider::ConfiguredModelProvider;
@@ -66,13 +65,6 @@ impl ModelProvider for GrokModelProvider {
             external_web_access: true,
             indexed_web_search: false,
             remote_compaction: RemoteCompactionSupport::Unsupported,
-        }
-    }
-
-    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
-        match effort {
-            ReasoningEffort::Ultra => ReasoningEffort::XHigh,
-            effort => effort,
         }
     }
 

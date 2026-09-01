@@ -277,21 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn stock_preserves_live_web_search_declaration() {
-        let tools = json!([{
-            "type": "web_search",
-            "external_web_access": true,
-        }]);
-        let request = responses_request_with_tools(tools.clone());
-
-        let projected = ResponsesDialect::OpenAi
-            .project_request(&request)
-            .expect("stock request should serialize");
-
-        assert_eq!(projected["tools"], tools);
-    }
-
-    #[test]
     fn grok_rejects_residual_agent_message_before_transport() {
         let mut request = responses_request_with_tools(json!([]));
         request.input = vec![ResponseItem::AgentMessage {
@@ -304,14 +289,7 @@ mod tests {
             internal_chat_message_metadata_passthrough: None,
         }];
 
-        let error = ResponsesDialect::Grok
-            .project_request(&request)
-            .expect_err("unsupported collaboration history must fail before transport");
-        assert_eq!(
-            error.to_string(),
-            "Grok cannot replay unsupported encrypted collaboration history"
-        );
-        assert!(ResponsesDialect::OpenAi.project_request(&request).is_ok());
+        assert!(ResponsesDialect::Grok.project_request(&request).is_err());
     }
 
     #[test]

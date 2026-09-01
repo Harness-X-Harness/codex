@@ -79,7 +79,7 @@ class VerifiedTurnTest(unittest.TestCase):
             failed_image_item = {"method": "item/completed", "params": {"item": {"type": "imageGeneration", "status": "failed"}}}
             agent_reply = {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "done"}}}
             turn_done = {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
-            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "name": live_smoke.IMAGE_FUNCTION_WIRE_NAME, "arguments": json.dumps({"num_last_images_to_include": 2})}}}
+            raw_edit = {"method": "rawResponseItem/completed", "params": {"item": {"type": "function_call", "name": f"{live_smoke.IMAGE_FUNCTION_WIRE_PREFIX}fixture", "arguments": json.dumps({"num_last_images_to_include": 2})}}}
             server = FakeScenarioAppServer(
                 [
                     failed_image_item, image_item, image_item, agent_reply, turn_done,

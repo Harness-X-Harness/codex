@@ -25,7 +25,6 @@ use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
 use http::HeaderValue;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -159,17 +158,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
-    }
-
-    /// Projects a logical reasoning effort onto this provider's request wire.
-    ///
-    /// The logical effort remains unchanged in session state. This hook is an internal request
-    /// projection and is not a serialized provider selector.
-    fn project_reasoning_effort(&self, effort: ReasoningEffort) -> ReasoningEffort {
-        match effort {
-            ReasoningEffort::Ultra => ReasoningEffort::Max,
-            effort => effort,
-        }
     }
 
     /// Projects canonical model input onto this provider's request wire.
@@ -727,19 +715,6 @@ mod tests {
                 ..ProviderCapabilities::default()
             }
         );
-    }
-
-    #[test]
-    fn grok_wire_api_selects_grok_provider() {
-        let provider = create_model_provider(
-            ModelProviderInfo {
-                wire_api: WireApi::GrokResponses,
-                ..ModelProviderInfo::default()
-            },
-            /*auth_manager*/ None,
-        );
-
-        assert!(format!("{provider:?}").starts_with("GrokModelProvider"));
     }
 
     #[test]

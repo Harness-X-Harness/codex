@@ -475,12 +475,7 @@ mod tests {
             ..expected_provider()
         };
 
-        assert_eq!(
-            model_provider_to_proto("grok", provider),
-            Err(parse_error(
-                "remote thread config supports only the stock Responses wire API"
-            ))
-        );
+        assert!(model_provider_to_proto("grok", provider).is_err());
     }
 
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {

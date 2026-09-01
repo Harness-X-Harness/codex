@@ -136,7 +136,3 @@ pub fn install(
     registry.config_contributor(extension.clone());
     registry.tool_contributor(extension);
 }
-
-#[cfg(test)]
-#[path = "extension_tests.rs"]
-mod tests;

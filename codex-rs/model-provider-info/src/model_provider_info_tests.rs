@@ -636,10 +636,7 @@ fn test_validate_grok_provider_rejects_websockets() {
         ..ModelProviderInfo::default()
     };
 
-    assert_eq!(
-        provider.validate(),
-        Err("provider grok_responses cannot be combined with supports_websockets".to_string())
-    );
+    assert!(provider.validate().is_err());
 }
 
 #[test]

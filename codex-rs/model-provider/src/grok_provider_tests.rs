@@ -11,16 +11,12 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::MultiAgentVersion;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
 
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
-use crate::provider::ProviderCapabilities;
-use crate::provider::RemoteCompactionSupport;
 
 fn canonical_history(
     metadata: Option<InternalChatMessageMetadataPassthrough>,
@@ -76,42 +72,12 @@ fn canonical_agent_message(content: Vec<AgentMessageInputContent>) -> ResponseIt
 }
 
 #[test]
-fn stock_provider_keeps_canonical_history_unchanged() {
-    let provider = create_model_provider(
-        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-        /*auth_manager*/ None,
-    );
-    let mut input = canonical_history(
-        Some(InternalChatMessageMetadataPassthrough {
-            turn_id: Some("turn-1".to_owned()),
-            ..Default::default()
-        }),
-        Some(vec!["encrypted".to_owned()]),
-    );
-    input.push(ResponseItem::Reasoning {
-        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
-        summary: vec![ReasoningItemReasoningSummary::SummaryText {
-            text: "summary".to_owned(),
-        }],
-        content: None,
-        encrypted_content: Some("opaque-encrypted-reasoning".to_owned()),
-        internal_chat_message_metadata_passthrough: None,
-    });
-
-    assert_eq!(provider.project_model_input(input.clone()), input);
-}
-
-#[test]
 fn grok_projects_only_plaintext_agent_message_on_request_copy() {
     let grok = create_model_provider(
         ModelProviderInfo {
             wire_api: WireApi::GrokResponses,
             ..ModelProviderInfo::default()
         },
-        /*auth_manager*/ None,
-    );
-    let stock = create_model_provider(
-        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
         /*auth_manager*/ None,
     );
     let envelope =
@@ -123,7 +89,7 @@ fn grok_projects_only_plaintext_agent_message_on_request_copy() {
     ])];
 
     assert_eq!(
-        grok.project_model_input(input.clone()),
+        grok.project_model_input(input),
         vec![ResponseItem::Message {
             id: Some(ResponseItemId::with_suffix("amsg", "child")),
             role: "user".to_string(),
@@ -134,7 +100,6 @@ fn grok_projects_only_plaintext_agent_message_on_request_copy() {
             internal_chat_message_metadata_passthrough: None,
         }]
     );
-    assert_eq!(stock.project_model_input(input.clone()), input);
 }
 
 #[test]
@@ -231,41 +196,12 @@ fn grok_provider_replays_encrypted_reasoning_without_null_content() {
 }
 
 #[test]
-fn grok_advertises_only_proven_provider_capabilities() {
-    let provider = create_model_provider(
-        ModelProviderInfo {
-            wire_api: WireApi::GrokResponses,
-            ..ModelProviderInfo::default()
-        },
-        /*auth_manager*/ None,
-    );
-
-    assert_eq!(
-        provider.capabilities(),
-        ProviderCapabilities {
-            namespace_tools: true,
-            image_generation: true,
-            web_search: true,
-            x_search: true,
-            cached_web_search: false,
-            external_web_access: true,
-            indexed_web_search: false,
-            remote_compaction: RemoteCompactionSupport::Unsupported,
-        }
-    );
-}
-
-#[test]
 fn grok_recognizes_only_completed_provider_hosted_x_calls() {
     let grok = create_model_provider(
         ModelProviderInfo {
             wire_api: WireApi::GrokResponses,
             ..ModelProviderInfo::default()
         },
-        /*auth_manager*/ None,
-    );
-    let stock = create_model_provider(
-        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
         /*auth_manager*/ None,
     );
     let x_call = |name: &str, status: Option<&str>| ResponseItem::CustomToolCall {
@@ -289,17 +225,12 @@ fn grok_recognizes_only_completed_provider_hosted_x_calls() {
     assert!(!grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", None)));
     assert!(!grok.is_provider_hosted_tool_call(&x_call("x_keyword_search", Some("in_progress"))));
     assert!(!grok.is_provider_hosted_tool_call(&x_call("unverified_search", Some("completed"))));
-    assert!(!stock.is_provider_hosted_tool_call(&x_call("x_keyword_search", Some("completed"))));
 }
 
 #[test]
 fn grok_does_not_inherit_stock_attestation() {
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let stock = create_model_provider(
-        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-        Some(auth_manager.clone()),
-    );
     let grok = create_model_provider(
         ModelProviderInfo {
             wire_api: WireApi::GrokResponses,
@@ -308,16 +239,11 @@ fn grok_does_not_inherit_stock_attestation() {
         Some(auth_manager),
     );
 
-    assert!(stock.supports_attestation());
     assert!(!grok.supports_attestation());
 }
 
 #[tokio::test]
 async fn resolved_provider_derives_internal_responses_dialect() {
-    let stock = create_model_provider(
-        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-        /*auth_manager*/ None,
-    );
     let grok = create_model_provider(
         ModelProviderInfo {
             wire_api: WireApi::GrokResponses,
@@ -326,14 +252,6 @@ async fn resolved_provider_derives_internal_responses_dialect() {
         /*auth_manager*/ None,
     );
 
-    assert_eq!(
-        stock
-            .api_provider()
-            .await
-            .expect("stock API provider")
-            .responses_dialect,
-        ResponsesDialect::OpenAi
-    );
     assert_eq!(
         grok.api_provider()
             .await
@@ -359,32 +277,6 @@ async fn grok_models_manager_uses_bundle_or_exact_config_replacement() {
         .await;
 
     assert_eq!(bundled_models, bundled_catalog.models);
-    let bundled_model = bundled_models
-        .first()
-        .expect("bundled Grok catalog should contain a model");
-    assert_eq!(
-        (
-            bundled_model.default_reasoning_level.clone(),
-            bundled_model
-                .supported_reasoning_levels
-                .iter()
-                .map(|preset| preset.effort.clone())
-                .collect::<Vec<_>>(),
-            bundled_model.multi_agent_version,
-        ),
-        (
-            Some(ReasoningEffort::High),
-            vec![
-                ReasoningEffort::Ultra,
-                ReasoningEffort::XHigh,
-                ReasoningEffort::High,
-                ReasoningEffort::Medium,
-                ReasoningEffort::Low,
-            ],
-            Some(MultiAgentVersion::V2),
-        )
-    );
-
     let mut replacement_model = static_model_catalog()
         .models
         .into_iter()

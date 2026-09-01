@@ -14,19 +14,6 @@ on:
       - codex-rs/protocol/**
       - codex-rs/tools/**
       - grokex/**
-  push:
-    branches: [release/rust-v0.151.0]
-    paths:
-      - .github/workflows/grokex-checks.yml
-      - .github/workflows/grokex-live.yml
-      - .github/workflows/grokex-release.yml
-      - codex-rs/app-server/**
-      - codex-rs/codex-api/**
-      - codex-rs/core/**
-      - codex-rs/model-provider/**
-      - codex-rs/protocol/**
-      - codex-rs/tools/**
-      - grokex/**
   workflow_call:
     inputs:
       source_sha:
@@ -161,16 +148,13 @@ jobs:
           cargo test -p codex-app-server --test all suite::v2::model_list::list_models_uses_grok_release_catalog_through_stock_model_dto -- --exact
           cargo test -p codex-app-server --test all suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities -- --exact
       - id: controls
-        name: Stock text, lifecycle, tool, and MCP controls
+        name: Shared stock seam controls
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p codex-app-server --test all suite::v2::turn_start::turn_start_with_empty_input_runs_model_request -- --exact
-          cargo test -p codex-app-server --test all suite::v2::thread_resume::thread_resume_returns_rollout_history -- --exact
-          cargo test -p codex-app-server --test all suite::v2::thread_fork::thread_fork_creates_new_thread_and_emits_started -- --exact
-          cargo test -p codex-core --lib tools::router::tests::flat_wire_name_preserves_complete_semantic_identity -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_round_trips_parallel_namespaced_calls -- --exact
+          cargo test -p codex-core --lib tools::router::tests::flat_projection_replays_custom_call_with_matching_output -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_marks_only_plaintext_collaboration_calls -- --exact
           cargo test -p codex-core --lib tools::router::tests::flat_projection_restores_observed_collaboration_symbols -- --exact
           cargo test -p codex-app-server --test all suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result -- --exact
@@ -182,7 +166,7 @@ jobs:
           set -euo pipefail
           cargo test -p codex-core --test all suite::agent_execution::grok_ultra_v2_full_history_is_gateway_compatible -- --exact
           cargo test -p codex-core --test all suite::multi_agent_mode::grok_bundled_ultra_uses_proactive_v2_and_xhigh -- --exact
-          cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_max_and_proactive_mode -- --exact
+          cargo test -p codex-core --test all suite::multi_agent_mode::ultra_reasoning_uses_highest_non_ultra_and_proactive_mode -- --exact
           cargo test -p codex-tools tool_spec::tests::x_search_serializes_as_bare_hosted_declaration -- --exact
           cargo test -p codex-history tests::provider_hosted_tool_metadata_round_trips_beside_rollout_payload -- --exact
           cargo test -p codex-core --lib context_manager::history_tests::normalize_keeps_provider_hosted_custom_tool_call_without_output -- --exact

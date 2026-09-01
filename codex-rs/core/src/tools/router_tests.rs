@@ -27,9 +27,12 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ToolMode;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -48,22 +51,6 @@ use super::flat_wire_name;
 use super::tool_log_payload;
 
 struct ExtensionEchoContributor;
-
-#[test]
-fn flat_wire_name_preserves_complete_semantic_identity() {
-    assert_eq!(
-        flat_wire_name("function", &ToolName::namespaced("image_gen", "imagegen")),
-        "local__image_gen__imagegen"
-    );
-
-    assert_eq!(
-        flat_wire_name(
-            "function",
-            &ToolName::namespaced("collaboration", "spawn_agent")
-        ),
-        "local__collaboration__spawn_agent"
-    );
-}
 
 #[test]
 fn flat_wire_name_bounds_oversized_model_context_items() {
@@ -134,9 +121,8 @@ fn flat_projection_disambiguates_retained_indirect_guidance() -> anyhow::Result<
         spec => panic!("expected projected function, got {spec:?}"),
     };
 
-    assert!(description.starts_with(
-        "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
-    ));
+    assert!(description.contains("canonical `image_gen.imagegen` tool"));
+    assert!(description.contains("Call this function itself."));
     assert!(description.ends_with(
         "Generate or edit an image. In code-mode, invoke this tool through the exec wrapper."
     ));
@@ -188,9 +174,9 @@ fn flat_projection_round_trips_parallel_namespaced_calls() -> anyhow::Result<()>
         .collect::<Vec<_>>();
     assert_eq!(wire_names.len(), 4);
     assert_ne!(wire_names[0], wire_names[1]);
-    assert!(descriptions[0].starts_with(
-        "This flat Provider function directly invokes the canonical `mcp__calendar.create_event` tool. Call this function itself. Do not invoke the canonical tool through a shell, code-mode wrapper, or another tool; any such invocation guidance in the retained description does not apply to this flat interface."
-    ));
+    assert!(wire_names[0].starts_with("local__mcp__calendar__create_event__"));
+    assert!(descriptions[0].contains("canonical `mcp__calendar.create_event` tool"));
+    assert!(descriptions[0].contains("Call this function itself."));
     assert!(descriptions[0].ends_with("Call create_event."));
 
     let mut items = wire_names
@@ -283,32 +269,86 @@ fn flat_projection_restores_observed_collaboration_symbols() -> anyhow::Result<(
     )
     .map_err(anyhow::Error::msg)?;
 
-    for namespace in [
+    let mut item = ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: Some("collaboration".to_string()),
+        arguments: r#"{"message":"hello"}"#.to_string(),
+        encrypted_function_args: None,
+        call_id: "call-canonical".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    router.restore_tool_call(&mut item)?;
+    let call = ToolRouter::build_tool_call(item)
+        .expect("restored call should parse")
+        .expect("restored item should be a tool call");
+    assert_eq!(
+        call.tool_name,
+        ToolName::namespaced("collaboration", "spawn_agent")
+    );
+    assert_eq!(call.encrypted_function_args, Some(Vec::new()));
+    assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    Ok(())
+}
+
+#[test]
+fn flat_projection_replays_custom_call_with_matching_output() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "editor".to_string(),
+            description: "Editing tools.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Custom(FreeformTool {
+                name: "apply_patch".to_string(),
+                description: "Apply a patch.".to_string(),
+                defer_loading: None,
+                format: FreeformToolFormat {
+                    r#type: "grammar".to_string(),
+                    syntax: "lark".to_string(),
+                    definition: "start: /.+/".to_string(),
+                },
+            })],
+        })],
+        ToolMode::Direct,
+        BTreeMap::new(),
         None,
-        Some(DEFAULT_FUNCTION_NAMESPACE),
-        Some("collaboration"),
-    ] {
-        let mut item = ResponseItem::FunctionCall {
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let output = FunctionCallOutputPayload::from_text("done".to_string());
+    let projected = router.project_model_input(vec![
+        ResponseItem::CustomToolCall {
             id: None,
-            name: "spawn_agent".to_string(),
-            namespace: namespace.map(str::to_string),
-            arguments: r#"{"message":"hello"}"#.to_string(),
-            encrypted_function_args: None,
-            call_id: "call-short".to_string(),
+            status: None,
+            call_id: "call-custom".to_string(),
+            name: "apply_patch".to_string(),
+            namespace: Some("editor".to_string()),
+            input: "patch".to_string(),
             internal_chat_message_metadata_passthrough: None,
-        };
-        router.restore_tool_call(&mut item)?;
-        let call = ToolRouter::build_tool_call(item)
-            .expect("restored call should parse")
-            .expect("restored item should be a tool call");
-        assert_eq!(
-            call.tool_name,
-            ToolName::namespaced("collaboration", "spawn_agent"),
-            "namespace={namespace:?}"
-        );
-        assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-        assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
-    }
+        },
+        ResponseItem::CustomToolCallOutput {
+            id: None,
+            call_id: "call-custom".to_string(),
+            name: Some("apply_patch".to_string()),
+            output: output.clone(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]);
+
+    assert!(matches!(
+        &projected[0],
+        ResponseItem::FunctionCall { name, call_id, .. }
+            if name.starts_with("local__editor__apply_patch__") && call_id == "call-custom"
+    ));
+    assert!(matches!(
+        &projected[1],
+        ResponseItem::FunctionCallOutput {
+            call_id: Some(call_id),
+            output: projected_output,
+            ..
+        } if call_id == "call-custom" && projected_output == &output
+    ));
     Ok(())
 }
 
