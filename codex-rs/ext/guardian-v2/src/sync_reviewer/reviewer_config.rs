@@ -42,7 +42,7 @@ pub(super) async fn prepare(
         parent_model,
         parent_reasoning_effort,
     )
-    .await;
+    .await?;
     let config = isolated_reviewer_config(parent_config, parent_model, model, live_network_config)?;
     let mut environments = parent_environments.to_vec();
     for environment in &mut environments {
@@ -82,7 +82,7 @@ async fn select_reviewer_model(
     parent_config: &Config,
     parent_model: &str,
     parent_reasoning_effort: Option<ReasoningEffort>,
-) -> ReviewerModel {
+) -> Result<ReviewerModel, ApprovalReviewError> {
     let models_manager = thread_manager.get_models_manager();
     let manager_config = parent_config.to_models_manager_config();
     let parent_model_info = models_manager
@@ -98,7 +98,12 @@ async fn select_reviewer_model(
     let selected_review_model = parent_model_info
         .auto_review_model_override
         .as_deref()
-        .or(preferred_review_model);
+        .or(preferred_review_model)
+        .ok_or_else(|| {
+            ApprovalReviewError::Failed(
+                "guardian reviewer has no model policy for this provider".to_string(),
+            )
+        })?;
     let available_models = models_manager
         .list_models(
             RefreshStrategy::Offline,
@@ -107,10 +112,8 @@ async fn select_reviewer_model(
         .await;
     let review_model = available_models
         .iter()
-        .find(|model| Some(model.model.as_str()) == selected_review_model);
-    let (model, reasoning_effort) = if let (Some(review_model), Some(selected_review_model)) =
-        (review_model, selected_review_model)
-    {
+        .find(|model| model.model == selected_review_model);
+    let (model, reasoning_effort) = if let Some(review_model) = review_model {
         (
             selected_review_model.to_string(),
             preferred_reasoning_effort(
@@ -132,11 +135,11 @@ async fn select_reviewer_model(
         )
     };
 
-    ReviewerModel {
+    Ok(ReviewerModel {
         info: models_manager.get_model_info(&model, &manager_config).await,
         reasoning_effort,
         preserve_client_developer_messages: parent_model_info.node_repl_auto_review_required,
-    }
+    })
 }
 
 fn preferred_reasoning_effort(

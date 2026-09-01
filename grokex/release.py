@@ -436,6 +436,23 @@ def build_assets(
     )
 
 
+def verify_live_identity(
+    evidence: dict[str, object], source_sha: str, run_id: str
+) -> None:
+    required_evidence = {
+        "archive": archive_name("x86_64-unknown-linux-musl"),
+        "catalog": "release-bundled",
+        "model": "grok-4.6",
+        "provider": "grok",
+        "source_sha": source_sha,
+        "status": "completed",
+        "validation_run": run_id,
+        "validator_sha": source_sha,
+    }
+    if any(evidence.get(key) != value for key, value in required_evidence.items()):
+        raise SystemExit("live evidence identity mismatch")
+
+
 def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
     expected = {archive_name(target) for target in TARGETS} | {
         "LIVE_EVIDENCE.json",
@@ -464,15 +481,7 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
 
     evidence = json.loads((dist / "LIVE_EVIDENCE.json").read_text(encoding="utf-8"))
     live_archive = archive_name("x86_64-unknown-linux-musl")
-    required_evidence = {
-        "archive": live_archive,
-        "provider": "grok",
-        "source_sha": source_sha,
-        "status": "completed",
-        "validation_run": run_id,
-    }
-    if any(evidence.get(key) != value for key, value in required_evidence.items()):
-        raise SystemExit("live evidence mismatch")
+    verify_live_identity(evidence, source_sha, run_id)
     runner_turn_submission_count = evidence.get("runner_turn_submission_count")
     if runner_turn_submission_count != 6:
         raise SystemExit("live evidence Turn contract is invalid")

@@ -231,10 +231,11 @@ impl ToolRouter {
     // Answers if the tool plan lets the model invoke the tool directly, through code mode, or deferred tool search.
     fn exposes_tool(&self, name: &ToolName) -> bool {
         let name = name.clone().with_default_namespace();
-        if self
-            .code_mode_tool_names
-            .values()
-            .any(|nested| nested.clone().with_default_namespace() == name)
+        if self.flat_tool_routes.contains_canonical(&name)
+            || self
+                .code_mode_tool_names
+                .values()
+                .any(|nested| nested.clone().with_default_namespace() == name)
             || self.model_visible_specs.iter().any(|spec| match spec {
                 ToolSpec::Function(_) | ToolSpec::Freeform(_) => {
                     name.is_default_namespace() && spec.name() == name.name

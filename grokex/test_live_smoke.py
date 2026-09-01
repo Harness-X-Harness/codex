@@ -30,9 +30,7 @@ class DeadlineAfterMessages(FakeAppServer):
     def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
         del deadline
         if not self.messages:
-            raise SystemExit(
-                f"App Server response deadline expired while waiting for {waiting_for}"
-            )
+            raise live_smoke.LiveDeadlineExpired(waiting_for, {})
         return self.messages.popleft()
 
     def send(self, message: dict[str, object]) -> None:
@@ -254,8 +252,11 @@ class VerifiedTurnTest(unittest.TestCase):
     def test_rejects_completed_turn_with_wrong_agent_reply(self) -> None:
         server = self.completed_turn(f" {live_smoke.EXPECTED_AGENT_REPLY}")
 
-        with self.assertRaisesRegex(SystemExit, "expected semantic reply"):
+        with self.assertRaises(live_smoke.LiveScenarioFailed) as raised:
             live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+
+        self.assertEqual(raised.exception.last_stage["outcome"], "semantic_failure")
+        self.assertEqual(raised.exception.last_stage["last_proven_stage"], "turn_completed")
 
     def test_continuation_scenario_replays_history_in_second_turn(self) -> None:
         first_turn = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
@@ -636,9 +637,7 @@ experimental_bearer_token = "secret"
         class TimeoutScenarioServer(FakeScenarioAppServer):
             def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
                 del deadline
-                raise SystemExit(
-                    f"App Server response deadline expired while waiting for {waiting_for}"
-                )
+                raise live_smoke.LiveDeadlineExpired(waiting_for, {})
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -670,6 +669,47 @@ experimental_bearer_token = "secret"
             self.assertEqual(evidence["last_proven_stage"], "no_events")
             self.assertEqual(evidence["runner_turn_submission_count"], 1)
             self.assertNotIn("thread-1", json.dumps(evidence))
+
+    def test_basic_and_continuation_deadlines_write_safe_stage_evidence(self) -> None:
+        class TimeoutScenarioServer(FakeScenarioAppServer):
+            def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
+                del deadline
+                raise live_smoke.LiveDeadlineExpired(waiting_for, {})
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text(
+                'model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n',
+                encoding="utf-8",
+            )
+            for scenario in (
+                live_smoke.BASIC_SCENARIO,
+                live_smoke.CONTINUATION_SCENARIO,
+            ):
+                with self.subTest(scenario=scenario):
+                    evidence_path = root / f"{scenario}.json"
+                    server = TimeoutScenarioServer([])
+                    with patch.object(
+                        live_smoke, "extract_archive", return_value=root
+                    ), patch.object(live_smoke, "AppServer", return_value=server):
+                        with self.assertRaises(live_smoke.LiveDeadlineExpired):
+                            live_smoke.run_smoke(
+                                archive,
+                                config,
+                                evidence_path,
+                                "source",
+                                "validator",
+                                "run",
+                                scenario,
+                            )
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    self.assertEqual(evidence["outcome"], "deadline_expired")
+                    self.assertEqual(evidence["does_not_prove"], "product_root_cause")
+                    self.assertEqual(evidence["last_proven_stage"], "no_events")
+                    self.assertNotIn("secret", json.dumps(evidence))
 
 if __name__ == "__main__":
     unittest.main()

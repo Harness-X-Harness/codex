@@ -324,6 +324,10 @@ fn flat_projection_replays_custom_call_with_matching_output() -> anyhow::Result<
 
 #[test]
 fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<()> {
+    let child_management_tools = [
+        ToolName::namespaced("collaboration", "spawn_agent"),
+        ToolName::namespaced("collaboration", "wait_agent"),
+    ];
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
         vec![ToolSpec::Namespace(ResponsesApiNamespace {
@@ -334,10 +338,11 @@ fn flat_projection_marks_only_plaintext_collaboration_calls() -> anyhow::Result<
         ToolMode::Direct,
         BTreeMap::new(),
         None,
-        &[],
+        &child_management_tools,
         true,
     )
     .map_err(anyhow::Error::msg)?;
+    assert!(router.can_manage_children());
     let wire_names = router
         .model_visible_specs()
         .iter()

@@ -29,6 +29,7 @@ use codex_login::ExternalAuth;
 use codex_login::ExternalAuthFuture;
 use codex_login::ExternalAuthRefreshContext;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
@@ -153,6 +154,41 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
         .expect("Guardian v2 should initialize")
         .wait_for_prewarm(PREWARM_TIMEOUT)
         .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn installed_extension_skips_provider_without_reviewer_model_policy() -> Result<()> {
+    let thread_server = responses::start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&thread_server).await?;
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test-api-key"));
+    let mut config = test.config.clone();
+    config.model_provider.wire_api = WireApi::GrokResponses;
+    config.features.enable(Feature::GuardianV2)?;
+    let mut builder = ExtensionRegistryBuilder::new();
+    super::install(
+        &mut builder,
+        auth_manager,
+        Arc::downgrade(&test.thread_manager),
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session-1");
+    let thread_store = test.codex.thread_extension_data();
+
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &SessionSource::Exec,
+            persistent_thread_state_available: false,
+            environments: &[],
+            mcp_resource_client: None,
+            extension_metrics: None,
+            session_store: &session_store,
+            thread_store,
+        })
+        .await;
+
+    assert!(thread_store.get::<LunaSampler>().is_none());
     Ok(())
 }
 

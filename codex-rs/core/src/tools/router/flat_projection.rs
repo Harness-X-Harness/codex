@@ -49,6 +49,13 @@ impl FlatToolRoutes {
     pub(super) fn resolve(&self, name: &str) -> Option<&WireToolRoute> {
         self.by_wire_name.get(name)
     }
+
+    pub(super) fn contains_canonical(&self, tool_name: &ToolName) -> bool {
+        let tool_name = tool_name.clone().with_default_namespace();
+        self.by_wire_name
+            .values()
+            .any(|route| route.tool_name().clone().with_default_namespace() == tool_name)
+    }
 }
 
 pub(super) fn project_flat_function_tools(

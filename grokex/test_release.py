@@ -7,6 +7,25 @@ from grokex import release
 
 
 class LiveEvidenceTest(unittest.TestCase):
+    def test_release_identity_rejects_rebound_live_evidence(self) -> None:
+        evidence = {
+            "archive": release.archive_name("x86_64-unknown-linux-musl"),
+            "catalog": "release-bundled",
+            "model": "grok-4.6",
+            "provider": "grok",
+            "source_sha": "source-sha",
+            "status": "completed",
+            "validation_run": "run-id",
+            "validator_sha": "source-sha",
+        }
+        release.verify_live_identity(evidence, "source-sha", "run-id")
+
+        for key in ("validator_sha", "catalog", "model"):
+            with self.subTest(key=key):
+                tampered = {**evidence, key: "different"}
+                with self.assertRaises(SystemExit):
+                    release.verify_live_identity(tampered, "source-sha", "run-id")
+
     def test_builds_manifest_from_every_required_scenario(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

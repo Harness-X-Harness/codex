@@ -48,12 +48,26 @@ COLLABORATION_TURN_SECONDS = 360
 IMAGE_TURN_SECONDS = 180
 
 
-class LiveDeadlineExpired(SystemExit):
+class LiveScenarioFailed(SystemExit):
+    def __init__(
+        self,
+        waiting_for: str,
+        last_stage: dict[str, object],
+        failure_category: str,
+        outcome: str,
+    ) -> None:
+        super().__init__(f"Live scenario failed while waiting for {waiting_for}")
+        self.last_stage = {
+            **last_stage,
+            "does_not_prove": "product_root_cause",
+            "failure_category": failure_category,
+            "outcome": outcome,
+        }
+
+
+class LiveDeadlineExpired(LiveScenarioFailed):
     def __init__(self, waiting_for: str, last_stage: dict[str, object]) -> None:
-        super().__init__(
-            f"App Server response deadline expired while waiting for {waiting_for}"
-        )
-        self.last_stage = last_stage
+        super().__init__(waiting_for, last_stage, "deadline", "deadline_expired")
 
 
 def sha256(path: Path) -> str:
@@ -162,9 +176,7 @@ class AppServer:
                     f"App Server exited with status {status} while waiting for {waiting_for}"
                     f"{details}"
                 ) from error
-            raise SystemExit(
-                f"App Server response deadline expired while waiting for {waiting_for}"
-            ) from error
+            raise LiveDeadlineExpired(waiting_for, {}) from error
 
     def close(self) -> None:
         if self.process.poll() is None:
@@ -186,7 +198,13 @@ def wait_for_exact_reply(
     status = None
 
     while time.monotonic() < deadline:
-        message = server.next_message(deadline, turn_name)
+        try:
+            message = server.next_message(deadline, turn_name)
+        except LiveDeadlineExpired as error:
+            raise LiveDeadlineExpired(
+                turn_name,
+                exact_reply_last_stage(status, agent_replies, expected_reply),
+            ) from error
         method = message.get("method")
         params = message.get("params")
         if not isinstance(params, dict):
@@ -201,17 +219,42 @@ def wait_for_exact_reply(
             break
 
     if status != "completed":
-        safe_status = status if isinstance(status, str) else "missing"
-        raise SystemExit(
-            f"{turn_name} did not complete "
-            f"(status={safe_status}, "
-            f"agent_reply_count={len(agent_replies)})"
+        raise LiveScenarioFailed(
+            turn_name,
+            exact_reply_last_stage(status, agent_replies, expected_reply),
+            "semantic_contract",
+            "semantic_failure",
         )
     if not agent_replies or agent_replies[-1] != expected_reply:
-        raise SystemExit(f"{turn_name} did not return the expected semantic reply")
+        raise LiveScenarioFailed(
+            turn_name,
+            exact_reply_last_stage(status, agent_replies, expected_reply),
+            "semantic_contract",
+            "semantic_failure",
+        )
     return {
         "response_assertion": "exact_match",
         "status": status,
+    }
+
+
+def exact_reply_last_stage(
+    status: object, agent_replies: list[object], expected_reply: str
+) -> dict[str, object]:
+    reply_matches = bool(agent_replies) and agent_replies[-1] == expected_reply
+    if status == "completed" and reply_matches:
+        last_proven_stage = "completed"
+    elif status == "completed":
+        last_proven_stage = "turn_completed"
+    elif agent_replies:
+        last_proven_stage = "agent_reply_seen"
+    else:
+        last_proven_stage = "no_events"
+    return {
+        "agent_reply_count": len(agent_replies),
+        "agent_reply_matches": reply_matches,
+        "last_proven_stage": last_proven_stage,
+        "turn_status": status if isinstance(status, str) else "missing",
     }
 
 
@@ -233,7 +276,20 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
     status = None
 
     while time.monotonic() < deadline:
-        message = server.next_message(deadline, "the single Grok Turn")
+        try:
+            message = server.next_message(deadline, "the single Grok Turn")
+        except LiveDeadlineExpired as error:
+            raise LiveDeadlineExpired(
+                "the single Grok Turn",
+                verified_turn_last_stage(
+                    status=status,
+                    reasoning_completed=reasoning_completed,
+                    encrypted_reasoning_seen=encrypted_reasoning_seen,
+                    tool_request_count=tool_request_count,
+                    tool_completed=tool_completed,
+                    agent_replies=agent_replies,
+                ),
+            ) from error
         method = message.get("method")
         params = message.get("params")
         if method == "rawResponseItem/completed" and isinstance(params, dict):
@@ -295,29 +351,79 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
             break
 
     if status != "completed":
-        safe_status = status if isinstance(status, str) else "missing"
-        raise SystemExit(
-            "the single Grok Turn did not complete "
-            f"(status={safe_status}, "
-            f"reasoning_completed={str(reasoning_completed).lower()}, "
-            f"tool_requests={tool_request_count}, "
-            f"tool_completed={str(tool_completed).lower()}, "
-            f"agent_reply_count={len(agent_replies)})"
+        failed = True
+    else:
+        failed = not (
+            reasoning_completed
+            and encrypted_reasoning_seen
+            and tool_request_count >= 1
+            and tool_completed
+            and agent_replies
+            and agent_replies[-1] == EXPECTED_AGENT_REPLY
         )
-    if not reasoning_completed:
-        raise SystemExit("the Grok Turn did not expose a completed reasoning item")
-    if not encrypted_reasoning_seen:
-        raise SystemExit("the Grok Turn did not expose encrypted reasoning")
-    if tool_request_count < 1 or not tool_completed:
-        raise SystemExit("the Grok Turn did not complete the semantic tool continuation")
-    if not agent_replies or agent_replies[-1] != EXPECTED_AGENT_REPLY:
-        raise SystemExit("the Grok Turn did not return the expected semantic reply")
+    if failed:
+        raise LiveScenarioFailed(
+            "the single Grok Turn",
+            verified_turn_last_stage(
+                status=status,
+                reasoning_completed=reasoning_completed,
+                encrypted_reasoning_seen=encrypted_reasoning_seen,
+                tool_request_count=tool_request_count,
+                tool_completed=tool_completed,
+                agent_replies=agent_replies,
+            ),
+            "semantic_contract",
+            "semantic_failure",
+        )
     return {
         "encrypted_reasoning_observed": True,
         "response_assertion": "exact_match",
         "status": status,
         "tool_continuation": "completed",
         "tool_request_count": tool_request_count,
+    }
+
+
+def verified_turn_last_stage(
+    *,
+    status: object,
+    reasoning_completed: bool,
+    encrypted_reasoning_seen: bool,
+    tool_request_count: int,
+    tool_completed: bool,
+    agent_replies: list[object],
+) -> dict[str, object]:
+    response_matches = bool(agent_replies) and agent_replies[-1] == EXPECTED_AGENT_REPLY
+    if (
+        status == "completed"
+        and reasoning_completed
+        and encrypted_reasoning_seen
+        and tool_request_count
+        and tool_completed
+        and response_matches
+    ):
+        last_proven_stage = "completed"
+    elif status == "completed":
+        last_proven_stage = "turn_completed"
+    elif agent_replies:
+        last_proven_stage = "agent_reply_seen"
+    elif tool_completed:
+        last_proven_stage = "tool_completed"
+    elif tool_request_count:
+        last_proven_stage = "tool_requested"
+    elif reasoning_completed or encrypted_reasoning_seen:
+        last_proven_stage = "reasoning_seen"
+    else:
+        last_proven_stage = "no_events"
+    return {
+        "agent_reply_count": len(agent_replies),
+        "encrypted_reasoning_seen": encrypted_reasoning_seen,
+        "last_proven_stage": last_proven_stage,
+        "reasoning_completed": reasoning_completed,
+        "response_matches": response_matches,
+        "tool_completed": tool_completed,
+        "tool_request_count": tool_request_count,
+        "turn_status": status if isinstance(status, str) else "missing",
     }
 
 
@@ -413,7 +519,6 @@ def collaboration_last_stage(
         "completed_default_child_count": completed_default_child_count,
         "default_child_count": len(default_child_thread_ids),
         "default_spawn_count": len(default_spawn_call_ids),
-        "does_not_prove": "product_root_cause",
         "explicit_fork_spawn_count": explicit_fork_spawn_count,
         "failed_collaboration_tool_count": failed_tool_count,
         "last_proven_stage": classify_collaboration_stage(
@@ -426,7 +531,6 @@ def collaboration_last_stage(
             provider_response_count=sum(response_counts.values()),
         ),
         "missing_spawn_identity_count": missing_spawn_identity_count,
-        "outcome": "deadline_expired",
         "parent_reply_seen": parent_reply_seen,
         "provider_response_count": sum(response_counts.values()),
         "root_status": root_status,
@@ -488,9 +592,7 @@ def wait_for_collaboration_turn(
             break
         try:
             message = server.next_message(deadline, "the Grok Ultra collaboration Turn")
-        except SystemExit as error:
-            if "deadline expired" not in str(error):
-                raise
+        except LiveDeadlineExpired as error:
             raise LiveDeadlineExpired(
                 "the Grok Ultra collaboration Turn",
                 collaboration_last_stage(
@@ -649,7 +751,12 @@ def wait_for_collaboration_turn(
     if last_stage["last_proven_stage"] != "completed":
         raise LiveDeadlineExpired("the Grok Ultra collaboration Turn", last_stage)
     if root_status != "completed":
-        raise SystemExit("the Grok Ultra parent Turn did not complete")
+        raise LiveScenarioFailed(
+            "the Grok Ultra collaboration Turn",
+            last_stage,
+            "semantic_contract",
+            "semantic_failure",
+        )
     completed_children = (
         default_child_thread_ids
         & child_completed_thread_ids
@@ -665,11 +772,26 @@ def wait_for_collaboration_turn(
         == final_agent_reply(agent_replies.get(root_thread_id))
     }
     if not completed_children:
-        raise SystemExit("the Grok Ultra child did not complete the bounded task")
+        raise LiveScenarioFailed(
+            "the Grok Ultra collaboration Turn",
+            last_stage,
+            "semantic_contract",
+            "semantic_failure",
+        )
     if not parent_reply_seen:
-        raise SystemExit("the Grok Ultra parent did not return the expected semantic reply")
+        raise LiveScenarioFailed(
+            "the Grok Ultra collaboration Turn",
+            last_stage,
+            "semantic_contract",
+            "semantic_failure",
+        )
     if not default_spawn_call_ids or not default_child_thread_ids:
-        raise SystemExit("the Grok Ultra Turn did not prove a default-history spawn")
+        raise LiveScenarioFailed(
+            "the Grok Ultra collaboration Turn",
+            last_stage,
+            "semantic_contract",
+            "semantic_failure",
+        )
     provider_response_count = sum(response_counts.values())
     return ({
         "child_completion": "completed",
@@ -722,7 +844,6 @@ def image_last_stage(
 ) -> dict[str, object]:
     return {
         "agent_reply_seen": agent_reply_seen,
-        "does_not_prove": "product_root_cause",
         "history_arguments_seen": history_args_seen,
         "image_function_call_count": image_function_call_count,
         "image_items_completed": completed,
@@ -734,7 +855,6 @@ def image_last_stage(
             history_args_seen=history_args_seen,
             require_history=require_history,
         ),
-        "outcome": "deadline_expired",
         "require_history": require_history,
     }
 
@@ -775,9 +895,7 @@ def wait_for_image_turn(
     while time.monotonic() < deadline:
         try:
             message = server.next_message(deadline, "the Grok image Turn")
-        except SystemExit as error:
-            if "deadline expired" not in str(error):
-                raise
+        except LiveDeadlineExpired as error:
             raise LiveDeadlineExpired(
                 "the Grok image Turn",
                 image_last_stage(
@@ -873,7 +991,19 @@ def wait_for_image_turn(
                 or not agent_reply_seen
                 or not history_args_seen
             ):
-                raise SystemExit("Grok image Turn did not complete an image")
+                raise LiveScenarioFailed(
+                    "the Grok image Turn",
+                    image_last_stage(
+                        completed=completed,
+                        failed=failed,
+                        agent_reply_seen=agent_reply_seen,
+                        history_args_seen=history_args_seen,
+                        require_history=require_history,
+                        image_function_call_count=image_function_call_count,
+                    ),
+                    "semantic_contract",
+                    "semantic_failure",
+                )
             return ({
                 "agent_reply_seen": True,
                 "artifact_match": True,
@@ -931,6 +1061,7 @@ def run_smoke(
         )
         runner_turn_submission_count = 0
         thread_model: str | None = None
+        lifecycle_stage = "app_server_started"
         try:
             server.request(
                 1,
@@ -941,6 +1072,7 @@ def run_smoke(
                 },
             )
             server.send({"method": "initialized"})
+            lifecycle_stage = "initialized"
 
             models_response = server.request(
                 2,
@@ -962,6 +1094,7 @@ def run_smoke(
                 }
                 if model.get("multiAgentVersion") != "v2" or "ultra" not in efforts:
                     raise SystemExit("grok-4.6 collaboration metadata is incomplete")
+            lifecycle_stage = "catalog_verified"
 
             thread_params: dict[str, object] = {
                 "cwd": str(workspace),
@@ -998,6 +1131,7 @@ def run_smoke(
             thread_id = thread.get("id")
             if not isinstance(thread_id, str) or not thread_id:
                 raise SystemExit("thread/start returned no thread identity")
+            lifecycle_stage = "thread_started"
 
             if scenario == BASIC_SCENARIO:
                 prompt = (
@@ -1018,6 +1152,7 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
+                lifecycle_stage = "turn_submitted"
                 turn_evidence = wait_for_basic_turn(server, time.monotonic() + BASIC_TURN_SECONDS)
             elif scenario == CONTINUATION_SCENARIO:
                 prompt = (
@@ -1039,9 +1174,11 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
+                lifecycle_stage = "turn_submitted"
                 turn_evidence = wait_for_verified_turn(
                     server, time.monotonic() + CONTINUATION_TURN_SECONDS
                 )
+                lifecycle_stage = "first_turn_completed"
 
                 history_prompt = (
                     "Reply with exactly the result returned by grokex_live_probe in the "
@@ -1062,6 +1199,7 @@ def run_smoke(
                     },
                 )
                 runner_turn_submission_count = 2
+                lifecycle_stage = "history_turn_submitted"
                 history_evidence = wait_for_exact_reply(
                     server,
                     time.monotonic() + CONTINUATION_TURN_SECONDS,
@@ -1099,6 +1237,7 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
+                lifecycle_stage = "turn_submitted"
                 turn_evidence, completed_child_thread_ids = wait_for_collaboration_turn(
                     server,
                     time.monotonic() + COLLABORATION_TURN_SECONDS,
@@ -1153,6 +1292,9 @@ def run_smoke(
                             "threadId": thread_id,
                         },
                     )
+                    lifecycle_stage = (
+                        "history_turn_submitted" if require_history else "turn_submitted"
+                    )
                     image_evidence, prior_artifacts = wait_for_image_turn(
                         server,
                         time.monotonic() + IMAGE_TURN_SECONDS,
@@ -1187,7 +1329,17 @@ def run_smoke(
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
-        except LiveDeadlineExpired as error:
+        except SystemExit as error:
+            if isinstance(error, LiveScenarioFailed):
+                failure_evidence = dict(error.last_stage)
+                failure_evidence.setdefault("last_proven_stage", lifecycle_stage)
+            else:
+                failure_evidence = {
+                    "does_not_prove": "product_root_cause",
+                    "failure_category": "app_server_or_semantic_contract",
+                    "last_proven_stage": lifecycle_stage,
+                    "outcome": "semantic_failure",
+                }
             evidence = {
                 "archive": archive.name,
                 "archive_sha256": sha256(archive),
@@ -1205,7 +1357,7 @@ def run_smoke(
                     if scenario == COLLABORATION_SCENARIO
                     else {}
                 ),
-                **error.last_stage,
+                **failure_evidence,
             }
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"

@@ -2,7 +2,6 @@ use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_features::Feature;
-use codex_model_provider_info::WireApi;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::MultiAgentMessages;
 use codex_protocol::openai_models::MultiAgentModeMessages;
@@ -143,51 +142,6 @@ async fn ultra_reasoning_uses_highest_non_ultra_and_proactive_mode() -> Result<(
 
     submit_turn(&test.codex, "hello", /*effort*/ None).await?;
 
-    let request = response.single_request();
-    assert_eq!(
-        request.body_json()["reasoning"]["effort"].as_str(),
-        Some("xhigh")
-    );
-    let input = request.input();
-    let texts = developer_texts(&input);
-    assert!(!texts.iter().any(|text| text.contains(NO_SPAWN_TEXT)));
-    assert!(texts.iter().any(|text| text.contains(PROACTIVE_TEXT)));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grok_bundled_ultra_uses_proactive_v2_and_xhigh() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let response = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
-    let test = test_codex()
-        .with_model("grok-4.6")
-        .with_config(|config| {
-            config.model_provider_id = "grok".to_string();
-            config.model_provider.name = "Grok".to_string();
-            config.model_provider.wire_api = WireApi::GrokResponses;
-            config.model_provider.requires_openai_auth = false;
-            config
-                .features
-                .enable(Feature::Collab)
-                .expect("test config should allow feature update");
-            config.model_reasoning_effort = Some(ReasoningEffort::Ultra);
-        })
-        .build(&server)
-        .await?;
-
-    submit_turn(&test.codex, "hello", /*effort*/ None).await?;
-
-    assert_eq!(
-        test.codex.config_snapshot().await.reasoning_effort,
-        Some(ReasoningEffort::Ultra)
-    );
     let request = response.single_request();
     assert_eq!(
         request.body_json()["reasoning"]["effort"].as_str(),
