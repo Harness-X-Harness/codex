@@ -118,6 +118,65 @@ class VerifiedTurnTest(unittest.TestCase):
             self.assertNotIn("result", evidence)
             self.assertNotIn(str(artifact), json.dumps(evidence))
 
+    def test_invalid_correlated_image_payload_writes_safe_stage_evidence(self) -> None:
+        raw_generation = {
+            "method": "rawResponseItem/completed",
+            "params": {
+                "item": {
+                    "arguments": json.dumps({"prompt": "generate"}),
+                    "call_id": "generate-1",
+                    "name": "provider-compiled-symbol",
+                    "type": "function_call",
+                }
+            },
+        }
+        invalid_image = {
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "id": "generate-1",
+                    "result": base64.b64encode(b"not-an-image").decode(),
+                    "savedPath": "/private/not-recorded",
+                    "status": "completed",
+                    "type": "imageGeneration",
+                }
+            },
+        }
+        server = FakeScenarioAppServer([raw_generation, invalid_image])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text(
+                'model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n',
+                encoding="utf-8",
+            )
+            evidence_path = root / "evidence.json"
+            with patch.object(
+                live_smoke, "extract_archive", return_value=root
+            ), patch.object(live_smoke, "AppServer", return_value=server):
+                with self.assertRaises(live_smoke.LiveScenarioFailed):
+                    live_smoke.run_smoke(
+                        archive,
+                        config,
+                        evidence_path,
+                        "source",
+                        "validator",
+                        "run",
+                        live_smoke.IMAGE_SCENARIO,
+                    )
+
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["outcome"], "semantic_failure")
+            self.assertEqual(evidence["last_proven_stage"], "image_payload_decoded")
+            self.assertEqual(evidence["image_function_call_count"], 1)
+            dumped = json.dumps(evidence)
+            self.assertNotIn("generate-1", dumped)
+            self.assertNotIn("not-an-image", dumped)
+            self.assertNotIn("not-recorded", dumped)
+
     def test_accepts_basic_exact_reply_without_tool(self) -> None:
         server = FakeAppServer(
             [
@@ -258,6 +317,30 @@ class VerifiedTurnTest(unittest.TestCase):
         self.assertEqual(raised.exception.last_stage["outcome"], "semantic_failure")
         self.assertEqual(raised.exception.last_stage["last_proven_stage"], "turn_completed")
 
+    def test_unexpected_tool_request_reports_safe_last_stage(self) -> None:
+        server = FakeAppServer(
+            [
+                {
+                    "id": "not-recorded",
+                    "method": "item/tool/call",
+                    "params": {
+                        "arguments": {"secret": True},
+                        "tool": "sensitive-tool-name",
+                    },
+                }
+            ]
+        )
+
+        with self.assertRaises(live_smoke.LiveScenarioFailed) as raised:
+            live_smoke.wait_for_verified_turn(server, time.monotonic() + 1)
+
+        stage = raised.exception.last_stage
+        self.assertEqual(stage["last_proven_stage"], "unexpected_tool_request_seen")
+        dumped = json.dumps(stage)
+        self.assertNotIn("not-recorded", dumped)
+        self.assertNotIn("sensitive-tool-name", dumped)
+        self.assertNotIn("secret", dumped)
+
     def test_continuation_scenario_replays_history_in_second_turn(self) -> None:
         first_turn = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
         server = FakeScenarioAppServer(
@@ -323,6 +406,51 @@ experimental_bearer_token = "secret"
             self.assertTrue(evidence["encrypted_reasoning_observed"])
             self.assertEqual(evidence["same_thread_history"], "completed")
             self.assertEqual(evidence["history_response_assertion"], "exact_match")
+
+    def test_continuation_second_turn_request_failure_records_attempt(self) -> None:
+        class SecondTurnRequestDeadline(FakeScenarioAppServer):
+            def request(
+                self, request_id: int, method: str, params: dict[str, object]
+            ) -> dict[str, object]:
+                if method == "turn/start" and request_id == 5:
+                    self.requests.append((request_id, method, params))
+                    raise live_smoke.LiveDeadlineExpired(method, {})
+                return super().request(request_id, method, params)
+
+        first_turn = self.completed_turn(live_smoke.EXPECTED_AGENT_REPLY)
+        server = SecondTurnRequestDeadline(list(first_turn.messages))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text(
+                'model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n',
+                encoding="utf-8",
+            )
+            evidence_path = root / "evidence.json"
+            with patch.object(
+                live_smoke, "extract_archive", return_value=root
+            ), patch.object(live_smoke, "AppServer", return_value=server):
+                with self.assertRaises(live_smoke.LiveDeadlineExpired):
+                    live_smoke.run_smoke(
+                        archive,
+                        config,
+                        evidence_path,
+                        "source",
+                        "validator",
+                        "run",
+                        live_smoke.CONTINUATION_SCENARIO,
+                    )
+
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["outcome"], "deadline_expired")
+            self.assertEqual(evidence["runner_turn_submission_count"], 2)
+            self.assertEqual(
+                evidence["last_proven_stage"],
+                "history_turn_submission_attempted",
+            )
+            self.assertNotIn("secret", json.dumps(evidence))
 
     def collaboration_messages(
         self,

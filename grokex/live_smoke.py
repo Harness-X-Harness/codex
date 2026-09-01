@@ -303,10 +303,27 @@ def wait_for_verified_turn(server: AppServer, deadline: float) -> dict[str, obje
             continue
         if method == "item/tool/call":
             request_id = message.get("id")
-            if not isinstance(request_id, (int, str)) or not isinstance(params, dict):
-                raise SystemExit("the Grok Turn returned an invalid dynamic tool request")
-            if params.get("tool") != TOOL_NAME or params.get("arguments") != {}:
-                raise SystemExit("the Grok Turn requested an unexpected dynamic tool operation")
+            if (
+                not isinstance(request_id, (int, str))
+                or not isinstance(params, dict)
+                or params.get("tool") != TOOL_NAME
+                or params.get("arguments") != {}
+            ):
+                last_stage = verified_turn_last_stage(
+                    status=status,
+                    reasoning_completed=reasoning_completed,
+                    encrypted_reasoning_seen=encrypted_reasoning_seen,
+                    tool_request_count=tool_request_count,
+                    tool_completed=tool_completed,
+                    agent_replies=agent_replies,
+                )
+                last_stage["last_proven_stage"] = "unexpected_tool_request_seen"
+                raise LiveScenarioFailed(
+                    "the single Grok Turn",
+                    last_stage,
+                    "semantic_contract",
+                    "semantic_failure",
+                )
             tool_request_count += 1
             server.send(
                 {
@@ -819,6 +836,7 @@ def classify_image_stage(
     agent_reply_seen: bool,
     history_args_seen: bool,
     require_history: bool,
+    image_function_call_count: int,
 ) -> str:
     if completed and agent_reply_seen and (history_args_seen or not require_history):
         return "completed"
@@ -830,6 +848,8 @@ def classify_image_stage(
         return "history_arguments_seen"
     if failed:
         return "image_failed"
+    if image_function_call_count:
+        return "image_request_seen"
     return "no_events"
 
 
@@ -854,6 +874,7 @@ def image_last_stage(
             agent_reply_seen=agent_reply_seen,
             history_args_seen=history_args_seen,
             require_history=require_history,
+            image_function_call_count=image_function_call_count,
         ),
         "require_history": require_history,
     }
@@ -892,6 +913,24 @@ def wait_for_image_turn(
     image_mime: str | None = None
     artifact_extension: str | None = None
     artifacts: set[Path] = set()
+
+    def invalid_image_item(payload_stage: str) -> LiveScenarioFailed:
+        last_stage = image_last_stage(
+            completed=completed,
+            failed=failed,
+            agent_reply_seen=agent_reply_seen,
+            history_args_seen=history_args_seen,
+            require_history=require_history,
+            image_function_call_count=image_function_call_count,
+        )
+        last_stage["last_proven_stage"] = payload_stage
+        return LiveScenarioFailed(
+            "the Grok image Turn",
+            last_stage,
+            "semantic_contract",
+            "semantic_failure",
+        )
+
     while time.monotonic() < deadline:
         try:
             message = server.next_message(deadline, "the Grok image Turn")
@@ -961,14 +1000,14 @@ def wait_for_image_turn(
                 if require_history and item_id not in history_qualified_call_ids:
                     continue
                 if not isinstance(result, str):
-                    raise SystemExit("completed image generation item had no result")
+                    raise invalid_image_item("image_completed_item_seen")
                 try:
                     decoded = base64.b64decode(result, validate=True)
                 except (ValueError, TypeError) as error:
-                    raise SystemExit("image generation result was not valid base64") from error
+                    raise invalid_image_item("image_completed_item_seen") from error
                 codec = supported_image_codec(decoded)
                 if codec is None:
-                    raise SystemExit("image generation result had an unsupported image codec")
+                    raise invalid_image_item("image_payload_decoded")
                 image_mime, artifact_extension = codec
                 artifact = Path(saved_path) if isinstance(saved_path, str) else None
                 if (
@@ -976,9 +1015,9 @@ def wait_for_image_turn(
                     or artifact.suffix.lower() != artifact_extension
                     or not artifact.is_file()
                 ):
-                    raise SystemExit("image generation artifact codec did not match result")
+                    raise invalid_image_item("image_codec_verified")
                 if artifact.stat().st_size > 32 * 1024 * 1024 or artifact.read_bytes() != decoded:
-                    raise SystemExit("image generation artifact did not match result")
+                    raise invalid_image_item("image_artifact_located")
                 artifacts.add(artifact.resolve())
                 completed += 1
                 history_args_seen = True
@@ -1138,6 +1177,7 @@ def run_smoke(
                     f"Reply with exactly {BASIC_EXPECTED_AGENT_REPLY} and no other text."
                 )
                 runner_turn_submission_count = 1
+                lifecycle_stage = "turn_submission_attempted"
                 server.request(
                     4,
                     "turn/start",
@@ -1160,6 +1200,7 @@ def run_smoke(
                     f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
                 )
                 runner_turn_submission_count = 1
+                lifecycle_stage = "turn_submission_attempted"
                 server.request(
                     4,
                     "turn/start",
@@ -1184,6 +1225,8 @@ def run_smoke(
                     "Reply with exactly the result returned by grokex_live_probe in the "
                     "previous Turn and no other text. Do not call any tool."
                 )
+                runner_turn_submission_count = 2
+                lifecycle_stage = "history_turn_submission_attempted"
                 server.request(
                     5,
                     "turn/start",
@@ -1198,7 +1241,6 @@ def run_smoke(
                         "threadId": thread_id,
                     },
                 )
-                runner_turn_submission_count = 2
                 lifecycle_stage = "history_turn_submitted"
                 history_evidence = wait_for_exact_reply(
                     server,
@@ -1222,6 +1264,7 @@ def run_smoke(
                     "other text."
                 )
                 runner_turn_submission_count = 1
+                lifecycle_stage = "turn_submission_attempted"
                 server.request(
                     4,
                     "turn/start",
@@ -1243,9 +1286,11 @@ def run_smoke(
                     time.monotonic() + COLLABORATION_TURN_SECONDS,
                     thread_id,
                 )
+                lifecycle_stage = "collaboration_completed"
                 for offset, child_thread_id in enumerate(
                     sorted(completed_child_thread_ids), start=10
                 ):
+                    lifecycle_stage = "child_binding_verification_attempted"
                     child_response = server.request(
                         offset,
                         "thread/resume",
@@ -1258,9 +1303,17 @@ def run_smoke(
                         or child_response.get("modelProvider") != "grok"
                         or child_response.get("model") != "grok-4.6"
                     ):
-                        raise SystemExit(
-                            "the completed child did not bind grok/grok-4.6"
+                        raise LiveScenarioFailed(
+                            "the completed child provider binding",
+                            {
+                                **turn_evidence,
+                                "child_provider_binding_verified": False,
+                                "last_proven_stage": "child_binding_response_received",
+                            },
+                            "semantic_contract",
+                            "semantic_failure",
                         )
+                lifecycle_stage = "child_binding_verified"
                 turn_evidence["child_provider_binding"] = "grok/grok-4.6"
             else:
                 prior_artifacts: frozenset[Path] = frozenset()
@@ -1278,6 +1331,11 @@ def run_smoke(
                     ),
                 ]:
                     runner_turn_submission_count += 1
+                    lifecycle_stage = (
+                        "history_turn_submission_attempted"
+                        if require_history
+                        else "turn_submission_attempted"
+                    )
                     server.request(
                         request_id,
                         "turn/start",
