@@ -137,16 +137,16 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         .collect::<Result<Vec<_>, _>>()?;
     assert!(bodies.iter().any(|body| body == &json!({"model":"grok-imagine-image-2.0","prompt":"paint a blue whale","response_format":"b64_json"})));
     assert!(bodies.iter().any(|body| body == &json!({"model":"grok-imagine-image-2.0","prompt":"add a red hat","response_format":"b64_json","image":{"type":"image_url","url":format!("data:image/jpeg;base64,{encoded}")}})));
-    let response_requests = requests
+    let response_bodies = requests
         .iter()
         .filter(|request| request.url.path().ends_with("/responses"))
-        .collect::<Vec<_>>();
-    let generation_request = response_requests
+        .map(wiremock::Request::body_json::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let generation_body = response_bodies
         .iter()
-        .find(|request| request.body_contains_text("Generate an image"))
+        .find(|body| body.to_string().contains("Generate an image"))
         .context("generation request should reach Grok")?;
-    let generation_tools = generation_request
-        .body_json()
+    let generation_tools = generation_body
         .get("tools")
         .and_then(serde_json::Value::as_array)
         .context("generation request should declare tools")?
@@ -173,9 +173,9 @@ async fn grok_image_generation_then_history_edit_uses_stock_lifecycle() -> Resul
         "The `image_gen.imagegen` tool enables image generation from descriptions and editing of existing images"
     ));
     assert!(description.contains("The current tool configuration accepts at most 3 edit images."));
-    response_requests
+    response_bodies
         .iter()
-        .find(|request| request.body_contains_text("Edit the prior image"))
+        .find(|body| body.to_string().contains("Edit the prior image"))
         .context("history-edit request should reach Grok")?;
     Ok(())
 }
