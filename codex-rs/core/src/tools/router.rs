@@ -21,6 +21,7 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::DiscoverableTool;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
