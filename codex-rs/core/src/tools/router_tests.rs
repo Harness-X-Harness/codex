@@ -282,7 +282,8 @@ fn flat_projection_replays_custom_call_with_matching_output() -> anyhow::Result<
         true,
     )
     .map_err(anyhow::Error::msg)?;
-    let declared_name = match &router.model_visible_specs()[0] {
+    let model_visible_specs = router.model_visible_specs();
+    let declared_name = match &model_visible_specs[0] {
         ToolSpec::Function(tool) => tool.name.as_str(),
         spec => panic!("expected projected function, got {spec:?}"),
     };
