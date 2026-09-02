@@ -1,46 +1,76 @@
 name: grokex-release
 
+# Stage 3 of the Grokex release pipeline: compose one publication from an
+# existing grokex-candidate run (source SHA + Linux archive) and one or more
+# grokex-live runs whose evidence binds that exact archive, build the remaining
+# five targets, and publish the immutable tag once.
+
 on:
   workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: grokex-candidate run id that built the Linux archive for the release-branch head
+        required: true
+        type: string
+      live_run_ids:
+        description: Comma-separated grokex-live run ids (release mode) whose evidence binds that archive; later ids take precedence per scenario
+        required: true
+        type: string
+      inherit_from:
+        description: Published tag whose LIVE_EVIDENCE may cover scenarios whose seams did not change ("none" requires every scenario; empty picks the newest published release)
+        required: false
+        default: ''
+        type: string
 
 concurrency:
-  group: grokex-v0.151.0-release
+  group: grokex-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
   actions: read
   contents: read
 
-env:
-  SOURCE_BRANCH: release/rust-v0.151.0
-  RELEASE_TAG: grokex-v0.151.0
-  UPSTREAM_COMMIT: 78c290807ce710180111df227df3b7a4fe845452
-
 jobs:
   preflight:
-    name: Freeze unpublished source and destination
+    name: Freeze source, candidate, and evidence identities
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
     outputs:
+      base_sha: ${{ steps.required.outputs.base_sha }}
+      base_tag: ${{ steps.required.outputs.base_tag }}
+      live_run_ids: ${{ steps.evidence.outputs.live_run_ids }}
+      release_tag: ${{ steps.identity.outputs.release_tag }}
+      required: ${{ steps.required.outputs.required }}
       source_sha: ${{ steps.source.outputs.sha }}
+      validator_sha: ${{ steps.evidence.outputs.validator_sha }}
+      version: ${{ steps.identity.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
+      - id: identity
+        name: Read release identity
+        run: python3 grokex/release.py identity --github-output >> "${GITHUB_OUTPUT}"
       - id: source
         name: Verify exact unpublished release source
         env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.identity.outputs.release_tag }}
+          UPSTREAM_COMMIT: ${{ steps.identity.outputs.upstream_commit }}
+          UPSTREAM_TAG: ${{ steps.identity.outputs.upstream_tag }}
         shell: bash
         run: |
           set -euo pipefail
+          source_branch="release/${UPSTREAM_TAG}"
+          [[ "${GITHUB_REF}" == "refs/heads/${source_branch}" ]]
           git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${GITHUB_SHA}"
-          [[ "$(<grokex/codex-release-tag)" == "rust-v0.151.0" ]]
-          [[ "${GITHUB_REF}" == "refs/heads/${SOURCE_BRANCH}" ]]
-          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${source_branch}" --jq .object.sha)"
           [[ "${GITHUB_SHA}" == "${branch_sha}" ]]
+          run_json="$(gh run view "${CANDIDATE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json conclusion,headSha,workflowName)"
+          [[ "$(jq -r .workflowName <<<"${run_json}")" == "grokex-candidate" ]]
+          [[ "$(jq -r .conclusion <<<"${run_json}")" == "success" ]]
+          [[ "$(jq -r .headSha <<<"${run_json}")" == "${GITHUB_SHA}" ]]
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag already exists" >&2
             exit 1
@@ -52,80 +82,82 @@ jobs:
           echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
       - name: Verify public Grok profile
         run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
-
-  checks:
-    name: Deterministic release gates
-    needs: preflight
-    uses: ./.github/workflows/grokex-checks.yml
-    with:
-      source_sha: ${{ needs.preflight.outputs.source_sha }}
-
-  build_candidate:
-    name: Build x86_64-unknown-linux-musl candidate
-    needs: [preflight, checks]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/build-grokex
-        with:
-          target: x86_64-unknown-linux-musl
-
-  package_candidate:
-    name: Package final Linux x86_64 candidate
-    needs: [preflight, build_candidate]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: raw-x86_64-unknown-linux-musl
-          path: raw
-      - name: Normalize candidate artifact layout
+      - id: evidence
+        name: Verify every Live run validated this source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIVE_RUN_IDS: ${{ inputs.live_run_ids }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p raw/x86_64-unknown-linux-musl
-          find raw -maxdepth 1 -type f -exec mv {} raw/x86_64-unknown-linux-musl/ \;
-      - name: Build and verify candidate archive
+          validator_sha=""
+          normalized=()
+          IFS=',' read -ra run_ids <<<"${LIVE_RUN_IDS}"
+          for raw_id in "${run_ids[@]}"; do
+            run_id="$(tr -d '[:space:]' <<<"${raw_id}")"
+            [[ -n "${run_id}" ]] || continue
+            run_json="$(gh run view "${run_id}" --repo "${GITHUB_REPOSITORY}" --json headSha,workflowName)"
+            [[ "$(jq -r .workflowName <<<"${run_json}")" == "grokex-live" ]]
+            head_sha="$(jq -r .headSha <<<"${run_json}")"
+            if [[ -z "${validator_sha}" ]]; then
+              validator_sha="${head_sha}"
+            fi
+            [[ "${head_sha}" == "${validator_sha}" ]]
+            normalized+=("${run_id}")
+          done
+          (( ${#normalized[@]} > 0 ))
+          if [[ "${validator_sha}" != "${SOURCE_SHA}" ]]; then
+            git merge-base --is-ancestor "${SOURCE_SHA}" "${validator_sha}"
+            git diff --name-only "${SOURCE_SHA}" "${validator_sha}" > carrier-paths.txt
+            python3 grokex/release.py verify-carrier --changed-paths carrier-paths.txt
+          fi
+          {
+            echo "live_run_ids=$(IFS=','; echo "${normalized[*]}")"
+            echo "validator_sha=${validator_sha}"
+          } >> "${GITHUB_OUTPUT}"
+      - id: required
+        name: Derive the Live scenarios this publication must execute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INHERIT_FROM: ${{ inputs.inherit_from }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
         run: |
-          python3 grokex/release.py package \
-            --raw-root raw \
-            --output archives \
-            --repository . \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
-            --target x86_64-unknown-linux-musl
-          python3 grokex/release.py verify-archives \
-            --dist archives \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
-            --target x86_64-unknown-linux-musl
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: grokex-linux-candidate
-          path: archives
-          if-no-files-found: error
-          retention-days: 1
-
-  live:
-    name: Required Grok Live scenarios
-    needs: [preflight, package_candidate]
-    uses: ./.github/workflows/grokex-live.yml
-    with:
-      archive_artifact: grokex-linux-candidate
-      source_sha: ${{ needs.preflight.outputs.source_sha }}
-      validator_sha: ${{ needs.preflight.outputs.source_sha }}
-    secrets:
-      GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
+          set -euo pipefail
+          base_tag="${INHERIT_FROM}"
+          if [[ "${base_tag}" == "none" ]]; then
+            base_tag=""
+          elif [[ -z "${base_tag}" ]]; then
+            base_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --exclude-drafts --exclude-pre-releases --limit 50 --json tagName \
+              --jq '[.[] | select(.tagName | startswith("grokex-v"))][0].tagName // empty')"
+          fi
+          base_sha=""
+          if [[ -n "${base_tag}" ]]; then
+            base_sha="$(gh release download "${base_tag}" --repo "${GITHUB_REPOSITORY}" --pattern RELEASE.json --output - \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["source_sha"])')"
+            if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+              echo "Published base ${base_sha} is unreachable; requiring every scenario" >&2
+              base_tag=""
+              base_sha=""
+            fi
+          fi
+          if [[ -n "${base_sha}" ]]; then
+            git diff --name-only "${base_sha}" "${SOURCE_SHA}" > changed-paths.txt
+            required="$(python3 grokex/release.py required-scenarios --changed-paths changed-paths.txt | paste -sd ',' -)"
+          else
+            required="$(python3 grokex/release.py required-scenarios --all | paste -sd ',' -)"
+          fi
+          echo "Required Live scenarios: ${required}"
+          {
+            echo "base_sha=${base_sha}"
+            echo "base_tag=${base_tag}"
+            echo "required=${required}"
+          } >> "${GITHUB_OUTPUT}"
 
   build_remaining:
     name: Build ${{ matrix.target }}
-    needs: [preflight, live]
+    needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     strategy:
@@ -153,7 +185,7 @@ jobs:
 
   package:
     name: Assemble and verify exact six archives
-    needs: [preflight, live, build_remaining]
+    needs: [preflight, build_remaining]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -164,6 +196,8 @@ jobs:
         with:
           name: grokex-linux-candidate
           path: archives
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: raw-*
@@ -172,17 +206,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f archives/CANDIDATE.json
           for directory in raw/raw-*; do
             target="${directory#raw/raw-}"
             mv "${directory}" "raw/${target}"
           done
       - name: Build remaining archives and verify exact six
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
         run: |
           python3 grokex/release.py package \
             --raw-root raw \
             --output archives \
             --repository . \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
+            --source-sha "${SOURCE_SHA}" \
             --target aarch64-apple-darwin \
             --target x86_64-apple-darwin \
             --target aarch64-unknown-linux-musl \
@@ -190,7 +227,7 @@ jobs:
             --target x86_64-pc-windows-msvc
           python3 grokex/release.py verify-archives \
             --dist archives \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}"
+            --source-sha "${SOURCE_SHA}"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: grokex-archives
@@ -199,11 +236,23 @@ jobs:
           retention-days: 1
 
   publish:
-    name: Publish and independently verify
-    needs: [preflight, package, live]
+    name: Compose evidence, publish once, and independently verify
+    needs: [preflight, package]
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
+    env:
+      BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+      BASE_TAG: ${{ needs.preflight.outputs.base_tag }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      LIVE_RUN_IDS: ${{ needs.preflight.outputs.live_run_ids }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+      REQUIRED: ${{ needs.preflight.outputs.required }}
+      SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+      VALIDATION_RUN: candidate:${{ inputs.candidate_run_id }};live:${{ needs.preflight.outputs.live_run_ids }};release:${{ github.run_id }}
+      VALIDATOR_SHA: ${{ needs.preflight.outputs.validator_sha }}
+      VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -214,31 +263,86 @@ jobs:
         with:
           name: grokex-archives
           path: archives
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: grokex-live-evidence
-          path: evidence
-      - name: Assemble and verify release assets
-        run: |
-          python3 grokex/release.py build-assets \
-            --archives archives \
-            --evidence evidence/LIVE_EVIDENCE.json \
-            --output release-assets \
-            --repository . \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
-            --run-id "${GITHUB_RUN_ID}"
-          python3 grokex/release.py verify-assets \
-            --dist release-assets \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
-            --run-id "${GITHUB_RUN_ID}"
-      - name: Recheck immutable source and empty destination
+      - name: Collect completed scenario evidence from every Live run
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${SOURCE_BRANCH}" --jq .object.sha)"
-          [[ "${branch_sha}" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          mkdir -p evidence
+          IFS=',' read -ra run_ids <<<"${LIVE_RUN_IDS}"
+          for run_id in "${run_ids[@]}"; do
+            download="downloads/${run_id}"
+            mkdir -p "${download}"
+            gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" --pattern 'grokex-live-evidence-*' --dir "${download}"
+            while IFS= read -r file; do
+              scenario="$(jq -r .scenario "${file}")"
+              if [[ "$(jq -r '.status // empty' "${file}")" == "completed" && "$(jq -r .mode "${file}")" == "release" ]]; then
+                cp "${file}" "evidence/${scenario}.json"
+                echo "using ${scenario} from run ${run_id}"
+              else
+                echo "skipping ${scenario} from run ${run_id}: $(jq -r '.outcome // "incomplete"' "${file}")"
+              fi
+            done < <(find "${download}" -name 'LIVE_EVIDENCE-*.json' -type f | sort)
+          done
+          ls -1 evidence
+      - name: Compose LIVE_EVIDENCE.json for the exact archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_args=()
+          IFS=',' read -ra required <<<"${REQUIRED}"
+          for scenario in "${required[@]}"; do
+            required_args+=(--required "${scenario}")
+          done
+          inherit_args=()
+          if [[ -n "${BASE_TAG}" ]]; then
+            mkdir -p prior
+            gh release download "${BASE_TAG}" --repo "${GITHUB_REPOSITORY}" --pattern LIVE_EVIDENCE.json --dir prior
+            inherit_args=(--inherit-from prior/LIVE_EVIDENCE.json --base-sha "${BASE_SHA}")
+          fi
+          python3 grokex/release.py build-live-evidence \
+            --evidence-dir evidence \
+            --archive "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" \
+            --output LIVE_EVIDENCE.json \
+            --source-sha "${SOURCE_SHA}" \
+            --validator-sha "${VALIDATOR_SHA}" \
+            "${required_args[@]}" \
+            "${inherit_args[@]}"
+          cat LIVE_EVIDENCE.json
+      - name: Assemble and verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_args=()
+          IFS=',' read -ra run_ids <<<"${LIVE_RUN_IDS}"
+          for run_id in "${run_ids[@]}"; do
+            live_args+=(--live-run "${run_id}")
+          done
+          python3 grokex/release.py build-assets \
+            --archives archives \
+            --evidence LIVE_EVIDENCE.json \
+            --output release-assets \
+            --repository . \
+            --source-sha "${SOURCE_SHA}" \
+            --validation-run "${VALIDATION_RUN}"
+          python3 grokex/release.py verify-assets \
+            --dist release-assets \
+            --source-sha "${SOURCE_SHA}" \
+            --validator-sha "${VALIDATOR_SHA}" \
+            --validation-run "${VALIDATION_RUN}" \
+            "${live_args[@]}"
+      - name: Recheck immutable source and empty destination
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: rust-v${{ needs.preflight.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/release/${UPSTREAM_TAG}" --jq .object.sha)"
+          [[ "${branch_sha}" == "${SOURCE_SHA}" ]]
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag appeared during validation" >&2
             exit 1
@@ -255,9 +359,9 @@ jobs:
           set -euo pipefail
           gh release create "${RELEASE_TAG}" release-assets/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --target "${{ needs.preflight.outputs.source_sha }}" \
-            --title "Grokex 0.151.0" \
-            --notes "Stock Codex 0.151.0 harness with the release-bundled grok-4.6 Provider catalog."
+            --target "${SOURCE_SHA}" \
+            --title "Grokex ${VERSION}" \
+            --notes "Stock Codex ${VERSION} harness with the release-bundled grok-4.6 Provider catalog."
       - name: Download and verify published destination
         env:
           GH_TOKEN: ${{ github.token }}
@@ -265,10 +369,17 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-          [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${{ needs.preflight.outputs.source_sha }}" ]]
+          [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${SOURCE_SHA}" ]]
+          live_args=()
+          IFS=',' read -ra run_ids <<<"${LIVE_RUN_IDS}"
+          for run_id in "${run_ids[@]}"; do
+            live_args+=(--live-run "${run_id}")
+          done
           mkdir published
           gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --dir published
           python3 grokex/release.py verify-assets \
             --dist published \
-            --source-sha "${{ needs.preflight.outputs.source_sha }}" \
-            --run-id "${GITHUB_RUN_ID}"
+            --source-sha "${SOURCE_SHA}" \
+            --validator-sha "${VALIDATOR_SHA}" \
+            --validation-run "${VALIDATION_RUN}" \
+            "${live_args[@]}"

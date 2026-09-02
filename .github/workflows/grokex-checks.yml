@@ -2,7 +2,7 @@ name: grokex-checks
 
 on:
   pull_request:
-    branches: [release/rust-v0.151.0]
+    branches: ['release/**']
   workflow_call:
     inputs:
       source_sha:
@@ -49,6 +49,8 @@ jobs:
           bash -n grokex/grokex grokex/install-grokex.sh
           pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
           python3 grokex/release.py verify-profile --path grokex/config.toml.example
+          release_tag="$(python3 grokex/release.py identity --github-output | sed -n 's/^release_tag=//p')"
+          [[ -n "${release_tag}" ]]
           fixture="${RUNNER_TEMP}/grokex-fixture"
           mkdir -p "${fixture}/raw"
           for target in \
@@ -75,12 +77,12 @@ jobs:
             --dist "${fixture}/dist" \
             --source-sha "${CHECKOUT_SHA}" \
             --target x86_64-unknown-linux-musl
-          candidate="${fixture}/dist/grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz"
+          candidate="${fixture}/dist/${release_tag}-x86_64-unknown-linux-musl.tar.gz"
           mkdir -p "${fixture}/extracted" "${fixture}/installed"
           tar -xzf "${candidate}" -C "${fixture}/extracted"
           GROKEX_BIN_DIR="${fixture}/installed/bin" \
             GROKEX_HOME="${fixture}/installed/home" \
-            sh "${fixture}/extracted/grokex-v0.151.0/install-grokex.sh"
+            sh "${fixture}/extracted/${release_tag}/install-grokex.sh"
           test -x "${fixture}/installed/bin/bwrap"
           candidate_sha="$(sha256sum "${candidate}" | awk '{print $1}')"
           python3 grokex/release.py package \

@@ -1,0 +1,184 @@
+name: grokex-candidate
+
+# Stage 1 of the Grokex release pipeline: freeze one release-branch SHA, run
+# the deterministic gates once, and publish a SHA-addressed Linux candidate
+# archive that grokex-live and grokex-release consume across runs.
+
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-candidate-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+
+jobs:
+  preflight:
+    name: Freeze release source
+    runs-on: ubuntu-24.04
+    outputs:
+      checks_verified: ${{ steps.checks.outputs.verified }}
+      release_tag: ${{ steps.identity.outputs.release_tag }}
+      source_sha: ${{ steps.source.outputs.sha }}
+      upstream_commit: ${{ steps.identity.outputs.upstream_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: identity
+        name: Read release identity
+        run: python3 grokex/release.py identity --github-output >> "${GITHUB_OUTPUT}"
+      - id: source
+        name: Verify exact release source
+        env:
+          UPSTREAM_COMMIT: ${{ steps.identity.outputs.upstream_commit }}
+          UPSTREAM_TAG: ${{ steps.identity.outputs.upstream_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF}" == "refs/heads/release/${UPSTREAM_TAG}" ]]
+          git merge-base --is-ancestor "${UPSTREAM_COMMIT}" "${GITHUB_SHA}"
+          echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+      - name: Verify public Grok profile
+        run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
+      - id: checks
+        name: Reuse deterministic gates already GREEN for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          verified_url="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=Require%20every%20deterministic%20gate&per_page=100" \
+            --jq '[.check_runs[] | select(.app.slug == "github-actions" and .status == "completed" and .conclusion == "success")][0].html_url // empty')"
+          if [[ -n "${verified_url}" ]]; then
+            echo "Deterministic gates already GREEN for ${GITHUB_SHA}: ${verified_url}"
+            echo "verified=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "verified=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  checks:
+    name: Deterministic release gates
+    needs: preflight
+    if: needs.preflight.outputs.checks_verified != 'true'
+    uses: ./.github/workflows/grokex-checks.yml
+    with:
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+
+  build:
+    name: Build x86_64-unknown-linux-musl candidate
+    needs: [preflight, checks]
+    if: >-
+      always()
+      && needs.preflight.result == 'success'
+      && (needs.checks.result == 'success'
+          || (needs.checks.result == 'skipped' && needs.preflight.outputs.checks_verified == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/build-grokex
+        with:
+          target: x86_64-unknown-linux-musl
+
+  package:
+    name: Package SHA-addressed Linux candidate
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: raw-x86_64-unknown-linux-musl
+          path: raw
+      - name: Normalize candidate artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p raw/x86_64-unknown-linux-musl
+          find raw -maxdepth 1 -type f -exec mv {} raw/x86_64-unknown-linux-musl/ \;
+      - name: Build, verify, and describe candidate archive
+        env:
+          CHECKS_VERIFIED: ${{ needs.preflight.outputs.checks_verified }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          UPSTREAM_COMMIT: ${{ needs.preflight.outputs.upstream_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 grokex/release.py package \
+            --raw-root raw \
+            --output archives \
+            --repository . \
+            --source-sha "${SOURCE_SHA}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --source-sha "${SOURCE_SHA}" \
+            --target x86_64-unknown-linux-musl
+          archive="archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz"
+          python3 - "${archive}" <<'PY' > archives/CANDIDATE.json
+          import hashlib, json, os, sys
+          from pathlib import Path
+          archive = Path(sys.argv[1])
+          print(json.dumps({
+              "archive": archive.name,
+              "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+              "candidate_run_id": os.environ["GITHUB_RUN_ID"],
+              "checks": "reused" if os.environ["CHECKS_VERIFIED"] == "true" else "executed",
+              "release_tag": os.environ["RELEASE_TAG"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "upstream_commit": os.environ["UPSTREAM_COMMIT"],
+          }, indent=2, sort_keys=True))
+          PY
+          cat archives/CANDIDATE.json
+      - name: Report Live scenarios this candidate must re-prove
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --exclude-drafts --exclude-pre-releases --limit 50 --json tagName \
+            --jq '[.[] | select(.tagName | startswith("grokex-v"))][0].tagName // empty')"
+          {
+            echo "## Grokex candidate ${SOURCE_SHA}"
+            echo
+            cat archives/CANDIDATE.json | sed 's/^/    /'
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+          if [[ -z "${base_tag}" ]]; then
+            echo "No published Grokex release; every Live scenario is required." | tee -a "${GITHUB_STEP_SUMMARY}"
+            python3 grokex/release.py required-scenarios --all | sed 's/^/- /' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          base_sha="$(gh release download "${base_tag}" --repo "${GITHUB_REPOSITORY}" --pattern RELEASE.json --output - | python3 -c 'import json,sys; print(json.load(sys.stdin)["source_sha"])')"
+          if git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            git diff --name-only "${base_sha}" "${SOURCE_SHA}" > changed-paths.txt
+            echo "Live scenarios required relative to ${base_tag} (${base_sha}):" | tee -a "${GITHUB_STEP_SUMMARY}"
+            python3 grokex/release.py required-scenarios --changed-paths changed-paths.txt | sed 's/^/- /' | tee -a "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Published base ${base_sha} is unreachable; every Live scenario is required." | tee -a "${GITHUB_STEP_SUMMARY}"
+            python3 grokex/release.py required-scenarios --all | sed 's/^/- /' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grokex-linux-candidate
+          path: archives
+          if-no-files-found: error
+          retention-days: 14

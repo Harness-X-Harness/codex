@@ -382,6 +382,35 @@ def verify_profile(path: Path, secret: bool) -> None:
         raise SystemExit("public profile must not contain a bearer token")
 
 
+VALIDATION_ONLY_PATHS = (
+    ".github/workflows/grokex-",
+    "grokex/RELEASE_PIPELINE.md",
+    "grokex/live_contracts.json",
+    "grokex/live_smoke.py",
+    "grokex/release.py",
+    "grokex/test_live_smoke.py",
+    "grokex/test_release.py",
+)
+
+
+def verify_carrier(changed_paths: list[str]) -> None:
+    """Require a product-to-carrier diff to touch validation-only paths.
+
+    A carrier commit may fix the validator or a workflow while the product SHA
+    it validates stays the ancestor that owns every shipped binary.
+    """
+    product_paths = [
+        path
+        for path in changed_paths
+        if not any(
+            path == allowed or (allowed.endswith("-") and path.startswith(allowed))
+            for allowed in VALIDATION_ONLY_PATHS
+        )
+    ]
+    if product_paths:
+        raise SystemExit(f"carrier changes product paths: {product_paths}")
+
+
 def seam_path_matches(seam_path: str, changed_path: str) -> bool:
     if seam_path.endswith("/"):
         return changed_path.startswith(seam_path)
@@ -767,6 +796,9 @@ def main() -> None:
     required_parser.add_argument("--changed-paths", type=Path)
     required_parser.add_argument("--all", action="store_true")
 
+    carrier_parser = subparsers.add_parser("verify-carrier")
+    carrier_parser.add_argument("--changed-paths", type=Path, required=True)
+
     package_parser = subparsers.add_parser("package")
     package_parser.add_argument("--raw-root", type=Path, required=True)
     package_parser.add_argument("--output", type=Path, required=True)
@@ -836,6 +868,14 @@ def main() -> None:
             ]
         )
         print("\n".join(required_scenarios(changed)))
+    elif args.command == "verify-carrier":
+        verify_carrier(
+            [
+                line.strip()
+                for line in args.changed_paths.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        )
     elif args.command == "package":
         package(
             args.raw_root,

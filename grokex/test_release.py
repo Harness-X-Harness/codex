@@ -165,6 +165,20 @@ class ReleaseIdentityTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(release.required_scenarios(changed), expected)
 
+    def test_carrier_may_only_change_validation_paths(self) -> None:
+        release.verify_carrier(
+            [".github/workflows/grokex-live.yml", "grokex/live_smoke.py", "grokex/test_release.py"]
+        )
+        for product_path in (
+            "grokex/config.toml.example",
+            "grokex/install-grokex.sh",
+            "codex-rs/model-provider/src/grok_provider.rs",
+            ".github/actions/build-grokex/action.yml",
+        ):
+            with self.subTest(product_path):
+                with self.assertRaisesRegex(SystemExit, "carrier changes product paths"):
+                    release.verify_carrier(["grokex/live_smoke.py", product_path])
+
 
 class LiveEvidenceTest(unittest.TestCase):
     def test_live_profile_rejects_catalog_and_child_model_overrides(self) -> None:

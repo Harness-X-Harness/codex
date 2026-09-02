@@ -1,30 +1,60 @@
 name: grokex-live
 
+# Stage 2 of the Grokex release pipeline: execute bounded, secret-safe Live
+# scenarios against one immutable Linux archive. The archive comes from a
+# grokex-candidate run (pre-publication) or from a published release tag.
+# Every scenario writes evidence bound to the archive digest, the source SHA,
+# the validator SHA, and the Live contract digest; grokex-release composes
+# LIVE_EVIDENCE.json from one or more of these runs.
+
 on:
   workflow_call:
     inputs:
-      archive_artifact:
-        required: true
+      candidate_run_id:
+        required: false
         type: string
-      source_sha:
-        required: true
+        default: ''
+      release_tag:
+        required: false
         type: string
-      validator_sha:
-        required: true
+        default: ''
+      scenarios:
+        required: false
         type: string
+        default: all
+      mode:
+        required: false
+        type: string
+        default: release
     secrets:
       GROK_CONFIG_TOML:
         required: true
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: Immutable published Grokex tag to validate
-        required: true
-        default: grokex-v0.151.0
+      candidate_run_id:
+        description: grokex-candidate run id whose Linux archive to validate (leave empty to use a published tag)
+        required: false
+        default: ''
         type: string
+      release_tag:
+        description: Published Grokex tag to validate (leave empty for the newest published release)
+        required: false
+        default: ''
+        type: string
+      scenarios:
+        description: Comma-separated scenario ids, or "all"
+        required: false
+        default: all
+        type: string
+      mode:
+        description: release evidence or non-gating observation
+        required: false
+        default: release
+        type: choice
+        options: [release, observation]
 
 concurrency:
-  group: grokex-live-${{ inputs.source_sha || inputs.release_tag || github.sha }}
+  group: grokex-live-${{ inputs.candidate_run_id || inputs.release_tag || github.sha }}-${{ inputs.mode }}
   cancel-in-progress: false
 
 permissions:
@@ -33,71 +63,115 @@ permissions:
 
 jobs:
   prepare:
-    name: Resolve one immutable Linux candidate
+    name: Resolve one immutable Linux archive
     runs-on: ubuntu-24.04
     outputs:
+      archive: ${{ steps.resolve.outputs.archive }}
       artifact_name: ${{ steps.resolve.outputs.artifact_name }}
+      mode: ${{ steps.resolve.outputs.mode }}
+      scenarios: ${{ steps.resolve.outputs.scenarios }}
       source_sha: ${{ steps.resolve.outputs.source_sha }}
       validator_sha: ${{ steps.resolve.outputs.validator_sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.validator_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: inputs.archive_artifact != ''
+        if: inputs.candidate_run_id != ''
         with:
-          name: ${{ inputs.archive_artifact }}
+          name: grokex-linux-candidate
           path: archives
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
       - id: resolve
-        name: Verify artifact identity and provenance
+        name: Verify archive identity and provenance
         env:
-          ARCHIVE_ARTIFACT: ${{ inputs.archive_artifact }}
-          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
-          REQUESTED_TAG: ${{ inputs.release_tag || 'grokex-v0.151.0' }}
-          REQUESTED_VALIDATOR_SHA: ${{ inputs.validator_sha || github.sha }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          SCENARIOS: ${{ inputs.scenarios }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ "${MODE}" == "release" || "${MODE}" == "observation" ]]
+          validator_sha="${GITHUB_SHA}"
           mkdir -p archives
-          if [[ -n "${ARCHIVE_ARTIFACT}" ]]; then
-            [[ -n "${REQUESTED_SOURCE_SHA}" ]]
-            source_sha="${REQUESTED_SOURCE_SHA}"
-            artifact_name="${ARCHIVE_ARTIFACT}"
+          if [[ -n "${CANDIDATE_RUN_ID}" && -n "${REQUESTED_TAG}" ]]; then
+            echo "Provide either candidate_run_id or release_tag, not both" >&2
+            exit 1
+          fi
+          if [[ -n "${CANDIDATE_RUN_ID}" ]]; then
+            run_json="$(gh run view "${CANDIDATE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json conclusion,headSha,workflowName)"
+            [[ "$(jq -r .workflowName <<<"${run_json}")" == "grokex-candidate" ]]
+            [[ "$(jq -r .conclusion <<<"${run_json}")" == "success" ]]
+            source_sha="$(jq -r .headSha <<<"${run_json}")"
+            [[ "$(jq -r .source_sha archives/CANDIDATE.json)" == "${source_sha}" ]]
+            archive="$(jq -r .archive archives/CANDIDATE.json)"
+            [[ "$(sha256sum "archives/${archive}" | awk '{print $1}')" == "$(jq -r .archive_sha256 archives/CANDIDATE.json)" ]]
+            rm archives/CANDIDATE.json
+            artifact_name="grokex-linux-candidate-${CANDIDATE_RUN_ID}"
+            if [[ "${source_sha}" != "${validator_sha}" ]]; then
+              git merge-base --is-ancestor "${source_sha}" "${validator_sha}"
+              git diff --name-only "${source_sha}" "${validator_sha}" > carrier-paths.txt
+              python3 grokex/release.py verify-carrier --changed-paths carrier-paths.txt
+            fi
           else
+            if [[ -z "${REQUESTED_TAG}" ]]; then
+              REQUESTED_TAG="$(gh release list --repo "${GITHUB_REPOSITORY}" --exclude-drafts --exclude-pre-releases --limit 50 --json tagName \
+                --jq '[.[] | select(.tagName | startswith("grokex-v"))][0].tagName')"
+              [[ -n "${REQUESTED_TAG}" && "${REQUESTED_TAG}" != "null" ]]
+            fi
             tag_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${REQUESTED_TAG}" --jq .object.type)"
             [[ "${tag_type}" == "commit" ]]
             source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${REQUESTED_TAG}" --jq .object.sha)"
             release_target="$(gh release view "${REQUESTED_TAG}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish)"
             [[ "${release_target}" == "${source_sha}" ]]
-            git merge-base --is-ancestor "${source_sha}" "${REQUESTED_VALIDATOR_SHA}"
+            git merge-base --is-ancestor "${source_sha}" "${validator_sha}"
+            archive="${REQUESTED_TAG}-x86_64-unknown-linux-musl.tar.gz"
             gh release download "${REQUESTED_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz' \
+              --pattern "${archive}" \
               --dir archives
-            artifact_name="grokex-published-linux-candidate"
+            artifact_name="grokex-published-linux-${REQUESTED_TAG}"
           fi
-          python3 grokex/release.py verify-archives \
-            --dist archives \
-            --source-sha "${source_sha}" \
-            --target x86_64-unknown-linux-musl
+          if [[ "${MODE}" == "release" ]]; then
+            python3 grokex/release.py verify-archives \
+              --dist archives \
+              --source-sha "${source_sha}" \
+              --target x86_64-unknown-linux-musl
+          fi
+          scenarios_json="$(python3 - "${SCENARIOS}" <<'PY'
+          import json, sys
+          from pathlib import Path
+          contracts = json.loads(Path("grokex/live_contracts.json").read_text(encoding="utf-8"))
+          known = list(contracts["scenarios"])
+          requested = sys.argv[1].strip()
+          selected = known if requested in ("", "all") else [item.strip() for item in requested.split(",") if item.strip()]
+          unknown = [item for item in selected if item not in known]
+          if unknown or not selected:
+              raise SystemExit(f"unknown live scenarios: {unknown or requested}")
+          print(json.dumps([item for item in known if item in selected]))
+          PY
+          )"
           {
+            echo "archive=${archive}"
             echo "artifact_name=${artifact_name}"
+            echo "mode=${MODE}"
+            echo "scenarios=${scenarios_json}"
             echo "source_sha=${source_sha}"
-            echo "validator_sha=${REQUESTED_VALIDATOR_SHA}"
+            echo "validator_sha=${validator_sha}"
           } >> "${GITHUB_OUTPUT}"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: inputs.archive_artifact == ''
         with:
-          name: grokex-published-linux-candidate
+          name: ${{ steps.resolve.outputs.artifact_name }}
           path: archives
           if-no-files-found: error
           retention-days: 1
 
   scenarios:
-    name: Live ${{ matrix.scenario }}
+    name: Live ${{ matrix.scenario }} (${{ needs.prepare.outputs.mode }})
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -105,11 +179,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        scenario:
-          - basic-exact-reply
-          - encrypted-reasoning-tool-continuation
-          - ultra-full-history-collaboration
-          - image-generation-history-edit
+        scenario: ${{ fromJSON(needs.prepare.outputs.scenarios) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -136,65 +206,53 @@ jobs:
           sudo apt-get install --yes --no-install-recommends ffmpeg imagemagick
       - name: Execute bounded semantic scenario
         env:
+          ARCHIVE: ${{ needs.prepare.outputs.archive }}
+          MODE: ${{ needs.prepare.outputs.mode }}
           SCENARIO: ${{ matrix.scenario }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          VALIDATOR_SHA: ${{ needs.prepare.outputs.validator_sha }}
         shell: bash
         run: |
           set -euo pipefail
           python3 grokex/live_smoke.py \
-            --archive archives/grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz \
+            --archive "archives/${ARCHIVE}" \
             --config "${RUNNER_TEMP}/config.toml" \
             --evidence "${RUNNER_TEMP}/LIVE_EVIDENCE-${SCENARIO}.json" \
-            --source-sha "${{ needs.prepare.outputs.source_sha }}" \
-            --validator-sha "${{ needs.prepare.outputs.validator_sha }}" \
+            --source-sha "${SOURCE_SHA}" \
+            --validator-sha "${VALIDATOR_SHA}" \
             --run-id "${GITHUB_RUN_ID}" \
-            --scenario "${SCENARIO}"
+            --scenario "${SCENARIO}" \
+            --mode "${MODE}"
+      - name: Summarize secret-safe evidence
+        if: always()
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/LIVE_EVIDENCE-${SCENARIO}.json"
+          [[ -f "${evidence}" ]] || exit 0
+          {
+            echo "### ${SCENARIO}"
+            echo
+            jq -r '"- mode: \(.mode)\n- outcome: \(.outcome // .status)\n- last proven stage: \(.last_proven_stage // .stage_timings[-1].stage)\n- turn durations (s): \(.turn_durations_seconds | map(tostring) | join(", "))"' "${evidence}"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: grokex-live-evidence-${{ matrix.scenario }}
           path: ${{ runner.temp }}/LIVE_EVIDENCE-${{ matrix.scenario }}.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
-  aggregate:
-    name: Require and bind every Live scenario
+  require:
+    name: Require every selected Live scenario
     needs: [prepare, scenarios]
     if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.prepare.outputs.validator_sha }}
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: needs.scenarios.result == 'success'
-        with:
-          pattern: grokex-live-evidence-*
-          path: evidence
-          merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: needs.scenarios.result == 'success'
-        with:
-          name: ${{ needs.prepare.outputs.artifact_name }}
-          path: archives
-      - name: Build authoritative Live evidence manifest
-        if: needs.scenarios.result == 'success'
-        run: |
-          python3 grokex/release.py build-live-evidence \
-            --evidence-dir evidence \
-            --archive archives/grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz \
-            --output LIVE_EVIDENCE.json \
-            --source-sha "${{ needs.prepare.outputs.source_sha }}" \
-            --validator-sha "${{ needs.prepare.outputs.validator_sha }}" \
-            --run-id "${GITHUB_RUN_ID}"
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: needs.scenarios.result == 'success'
-        with:
-          name: grokex-live-evidence
-          path: LIVE_EVIDENCE.json
-          if-no-files-found: error
-          retention-days: 1
-      - name: Require every Live scenario
+      - name: Require success
         env:
           SCENARIOS: ${{ needs.scenarios.result }}
         run: test "${SCENARIOS}" = success
