@@ -22,6 +22,8 @@ const Model = "grok-4.6"
 // Provider is the Grok model provider id in the release-bundled catalog.
 const Provider = "grok"
 
+const notificationQueueCapacity = 1 << 16
+
 // TurnRun is the externally observable result of one Turn: what the
 // app-server delivered to the client, independent of what it persisted.
 type TurnRun struct {
@@ -68,6 +70,11 @@ func Start(binary, home, workspace, clientVersion string) (*Driver, error) {
 	client, err := codexsdk.New(codexsdk.ClientOptions{
 		CWD:     workspace,
 		Command: []string{binary, "app-server", "--strict-config", "--listen", "stdio://"},
+		// The default 64-slot queue overflowed on the image edit Turn (streamed
+		// reasoning/message deltas plus base64 image items) and failed the
+		// client with ErrNotificationBackpressure; this validator observes one
+		// Turn at a time and can afford a deep queue.
+		NotificationQueueCapacity: notificationQueueCapacity,
 		Initialize: protocolv2.InitializeParams{
 			ClientInfo: protocolv2.ClientInfo{Name: "grokex-live-validator", Version: clientVersion},
 			Capabilities: protocolv2.Value(protocolv2.InitializeCapabilities{
