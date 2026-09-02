@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: grokex-candidate run id that built the Linux archive for the release-branch head
+        description: grokex-candidate run id that built the Linux archive; its source is the release-branch head or a product ancestor whose diff to the head is validation-only
         required: true
         type: string
       live_run_ids:
@@ -71,7 +71,15 @@ jobs:
           run_json="$(gh run view "${CANDIDATE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json conclusion,headSha,workflowName)"
           [[ "$(jq -r .workflowName <<<"${run_json}")" == "grokex-candidate" ]]
           [[ "$(jq -r .conclusion <<<"${run_json}")" == "success" ]]
-          [[ "$(jq -r .headSha <<<"${run_json}")" == "${GITHUB_SHA}" ]]
+          product_sha="$(jq -r .headSha <<<"${run_json}")"
+          if [[ "${product_sha}" != "${GITHUB_SHA}" ]]; then
+            # A validation-only carrier may sit between the product the
+            # candidate built and the head that runs this publication; the
+            # product SHA stays the one every shipped binary was built from.
+            git merge-base --is-ancestor "${product_sha}" "${GITHUB_SHA}"
+            git diff --name-only "${product_sha}" "${GITHUB_SHA}" > product-carrier-paths.txt
+            python3 grokex/release.py verify-carrier --changed-paths product-carrier-paths.txt
+          fi
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag already exists" >&2
             exit 1
@@ -80,7 +88,7 @@ jobs:
             echo "Destination release already exists" >&2
             exit 1
           fi
-          echo "sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "sha=${product_sha}" >> "${GITHUB_OUTPUT}"
       - name: Verify public Grok profile
         run: python3 grokex/release.py verify-profile --path grokex/config.toml.example
       - id: evidence
@@ -108,10 +116,18 @@ jobs:
             normalized+=("${run_id}")
           done
           (( ${#normalized[@]} > 0 ))
+          # The Live validator must sit on the validation-only carrier chain
+          # product -> Live validator -> this head; the composer below runs
+          # from this head and fails closed if the contract moved in between.
           if [[ "${validator_sha}" != "${SOURCE_SHA}" ]]; then
             git merge-base --is-ancestor "${SOURCE_SHA}" "${validator_sha}"
             git diff --name-only "${SOURCE_SHA}" "${validator_sha}" > carrier-paths.txt
             python3 grokex/release.py verify-carrier --changed-paths carrier-paths.txt
+          fi
+          if [[ "${validator_sha}" != "${GITHUB_SHA}" ]]; then
+            git merge-base --is-ancestor "${validator_sha}" "${GITHUB_SHA}"
+            git diff --name-only "${validator_sha}" "${GITHUB_SHA}" > validator-carrier-paths.txt
+            python3 grokex/release.py verify-carrier --changed-paths validator-carrier-paths.txt
           fi
           {
             echo "live_run_ids=$(IFS=','; echo "${normalized[*]}")"
@@ -189,9 +205,15 @@ jobs:
     needs: [preflight, build_remaining]
     runs-on: ubuntu-24.04
     steps:
+      # release.py runs from the validator head; the files that ship inside the
+      # archives come from the product checkout.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
+          path: product
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -219,7 +241,7 @@ jobs:
           python3 grokex/release.py package \
             --raw-root raw \
             --output archives \
-            --repository . \
+            --repository product \
             --source-sha "${SOURCE_SHA}" \
             --target aarch64-apple-darwin \
             --target x86_64-apple-darwin \
@@ -257,8 +279,12 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
           fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          path: product
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -326,7 +352,7 @@ jobs:
             --archives archives \
             --evidence LIVE_EVIDENCE.json \
             --output release-assets \
-            --repository . \
+            --repository product \
             --source-sha "${SOURCE_SHA}" \
             --validation-run "${VALIDATION_RUN}"
           python3 grokex/release.py verify-assets \
@@ -343,7 +369,8 @@ jobs:
         run: |
           set -euo pipefail
           branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/release/${UPSTREAM_TAG}" --jq .object.sha)"
-          [[ "${branch_sha}" == "${SOURCE_SHA}" ]]
+          [[ "${branch_sha}" == "${GITHUB_SHA}" ]]
+          git merge-base --is-ancestor "${SOURCE_SHA}" "${GITHUB_SHA}"
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag appeared during validation" >&2
             exit 1

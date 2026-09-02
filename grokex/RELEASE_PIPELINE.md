@@ -110,6 +110,14 @@ contract and seam map files, this document, and
 `release.py verify-carrier` enforces the allowlist; the archive under test
 still comes from the product SHA.
 
+`grokex-release` honors the same chain: the candidate's source may be an
+ancestor of the release-branch head, and the Live validator may sit between
+them, as long as every step is validation-only. The product SHA (the
+candidate's source) is what the remaining five targets are built from, what
+the archives and `RELEASE.json` name, and what the tag points at; `release.py`
+and the evidence composer run from the head, and the shipped `grokex/` files
+are packaged from a separate checkout of the product SHA.
+
 ## Seam series for upstream bumps
 
 `grokex/seam_series.json` maps every path the graft touches to one of ten
