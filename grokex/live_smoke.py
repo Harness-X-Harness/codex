@@ -43,6 +43,9 @@ STORY_BY_SCENARIO = {
 RELEASE_MODE = "release"
 OBSERVATION_MODE = "observation"
 MODES = (RELEASE_MODE, OBSERVATION_MODE)
+# This module is the stream-based oracle; scenarios whose contract names
+# another oracle are executed by grokex/validator (Go) instead.
+STREAM_ORACLE = "app_server_stream"
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
@@ -2236,6 +2239,11 @@ def main() -> None:
     parser.add_argument("--scenario", choices=SCENARIOS, required=True)
     parser.add_argument("--mode", choices=MODES, default=RELEASE_MODE)
     args = parser.parse_args()
+    oracle = LIVE_CONTRACTS["scenarios"][args.scenario].get("oracle", STREAM_ORACLE)
+    if oracle != STREAM_ORACLE:
+        raise SystemExit(
+            f"scenario {args.scenario} is owned by oracle {oracle} (grokex/validator), not {STREAM_ORACLE}"
+        )
     run_smoke(
         args.archive,
         args.config,

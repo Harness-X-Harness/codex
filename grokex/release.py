@@ -92,16 +92,16 @@ LIVE_SCENARIO_ASSERTIONS = {
         "status": "completed",
         "tool_continuation": "completed",
     },
+    # Proven by grokex/validator from the persisted session graph and the
+    # delivered reply (oracle "canonical_session").
     "ultra-full-history-collaboration": {
         "child_completion": "completed",
-        "child_model_evidence": "parent_model_default_spawn_and_stock_inheritance",
-        "child_model_verified": True,
         "child_parent_link_verified": True,
         "child_provider_binding": "grok/grok-4.6",
         "child_provider_verified": True,
         "child_response_assertion": "canonical_uuid_v4",
         "default_full_history": "completed",
-        "evidence_source": "public_snapshot_and_stream",
+        "evidence_source": "canonical_session",
         "multi_agent_version": "v2",
         "parent_completion": "completed",
         "reasoning_effort": "ultra",
@@ -113,9 +113,11 @@ LIVE_SCENARIO_ASSERTIONS = {
     },
     "image-generation-history-edit": {
         "edit_agent_reply_seen": True,
+        "edit_artifact_distinct": True,
         "edit_artifact_match": True,
         "edit_completion": "completed",
         "edit_image_decodable": True,
+        "evidence_source": "canonical_session",
         "generation_agent_reply_seen": True,
         "generation_artifact_match": True,
         "generation_completion": "completed",
@@ -152,17 +154,13 @@ LIVE_SCENARIO_DIAGNOSTICS = {
     ),
     "ultra-full-history-collaboration": (
         "child_count",
-        "explicit_fork_spawn_count",
-        "failed_collaboration_tool_count",
-        "missing_spawn_identity_count",
-        "provider_response_count",
-        "spawn_count",
-        "unexpected_collaboration_tool_count",
-        "wait_count",
+        "root_sub_agent_completions",
+        "session_file_count",
     ),
     "image-generation-history-edit": (
         "image_items_completed",
         "image_items_failed",
+        "session_file_count",
     ),
 }
 if set(LIVE_SCENARIO_ASSERTIONS) != set(STORY_BY_SCENARIO):
@@ -393,6 +391,7 @@ VALIDATION_ONLY_PATHS = (
     "grokex/test_live_smoke.py",
     "grokex/test_release.py",
     "grokex/test_seam_series.py",
+    "grokex/validator/",
 )
 
 
@@ -406,7 +405,7 @@ def verify_carrier(changed_paths: list[str]) -> None:
         path
         for path in changed_paths
         if not any(
-            path == allowed or (allowed.endswith("-") and path.startswith(allowed))
+            path == allowed or (allowed.endswith(("-", "/")) and path.startswith(allowed))
             for allowed in VALIDATION_ONLY_PATHS
         )
     ]

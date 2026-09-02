@@ -13,12 +13,14 @@
     "grokex/live_contracts.json",
     "grokex/live_smoke.py",
     "grokex/release-source.json",
-    "grokex/release.py"
+    "grokex/release.py",
+    "grokex/validator/"
   ],
   "scenarios": {
     "basic-exact-reply": {
       "story": "grokex-provider-profile-startup",
       "required": "always",
+      "oracle": "app_server_stream",
       "turn_deadline_seconds": 120,
       "seam_paths": [
         "codex-rs/codex-api/src/endpoint/models.rs",
@@ -38,6 +40,7 @@
     "encrypted-reasoning-tool-continuation": {
       "story": "grokex-encrypted-reasoning-history-continuation",
       "required": "seam",
+      "oracle": "app_server_stream",
       "turn_deadline_seconds": 120,
       "seam_paths": [
         "codex-rs/codex-api/src/endpoint/responses.rs",
@@ -59,6 +62,7 @@
     "ultra-full-history-collaboration": {
       "story": "grokex-provider-binding-lifecycle",
       "required": "seam",
+      "oracle": "canonical_session",
       "turn_deadline_seconds": 360,
       "seam_paths": [
         "codex-rs/codex-api/src/provider.rs",
@@ -73,15 +77,18 @@
         "codex-rs/core/src/tools/router/",
         "codex-rs/core/src/tools/spec_plan.rs",
         "codex-rs/core/src/tools/tool_namespaces_info.rs",
+        "codex-rs/history/",
         "codex-rs/model-provider/src/grok_catalog.rs",
         "codex-rs/model-provider/src/grok_provider.rs",
         "codex-rs/model-provider/src/provider.rs",
+        "codex-rs/rollout/",
         "codex-rs/tools/"
       ]
     },
     "image-generation-history-edit": {
       "story": "grokex-image-generation-history-edit",
       "required": "seam",
+      "oracle": "canonical_session",
       "turn_deadline_seconds": 180,
       "seam_paths": [
         "codex-rs/codex-api/src/endpoint/images.rs",
@@ -89,8 +96,10 @@
         "codex-rs/core/src/compact_remote_v2.rs",
         "codex-rs/core/src/tools/handlers/extension_tools.rs",
         "codex-rs/ext/image-generation/",
+        "codex-rs/history/",
         "codex-rs/model-provider/src/grok_provider.rs",
-        "codex-rs/model-provider/src/provider.rs"
+        "codex-rs/model-provider/src/provider.rs",
+        "codex-rs/rollout/"
       ]
     }
   }
