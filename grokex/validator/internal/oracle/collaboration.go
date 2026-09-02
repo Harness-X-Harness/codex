@@ -43,6 +43,7 @@ func Collaboration(graph *rollout.Graph, run driver.TurnRun, catalog driver.Cata
 	}
 	verdict.Diagnostics["root_history_mode"] = root.HistoryMode
 	verdict.Diagnostics["delivered_turn_status"] = run.Status
+	verdict.Diagnostics["final_response_source"] = run.FinalResponseSource
 	rootTurn, ok := root.Turn(run.TurnID)
 	if ok {
 		verdict.Diagnostics["root_turn_state"] = rootTurn.State()

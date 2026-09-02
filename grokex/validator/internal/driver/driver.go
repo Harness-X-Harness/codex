@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ronhuafeng/llm-go/codexsdk"
@@ -30,6 +31,12 @@ type TurnRun struct {
 	FinalResponse   string
 	Duration        time.Duration
 	DeadlineExpired bool
+	// FinalResponseSource says where FinalResponse came from:
+	// "final_answer_phase" when codexsdk derived it from an agentMessage whose
+	// phase is final_answer, "last_agent_message" when the delivered Turn
+	// carried agentMessage items without a phase (Grok replies do not carry
+	// the stock phase marker).
+	FinalResponseSource string
 	// NotificationKinds and ItemKinds are hints for post-mortems.
 	NotificationKinds map[string]int
 	ItemKinds         map[string]int
@@ -148,7 +155,7 @@ func (d *Driver) StartThread(ctx context.Context, request TurnRequest) (TurnRun,
 	}
 	result, waitErr := stream.Wait(runCtx)
 	run := d.finish(ctx, result.Start.Thread.ID, result.Run, started, waitErr)
-	return run, classify(waitErr)
+	return run, classify(run, waitErr)
 }
 
 // ContinueThread runs one more Turn on an existing Thread.
@@ -165,7 +172,7 @@ func (d *Driver) ContinueThread(ctx context.Context, threadID string, request Tu
 	}
 	result, waitErr := stream.Wait(runCtx)
 	run := d.finish(ctx, threadID, result.Run, started, waitErr)
-	return run, classify(waitErr)
+	return run, classify(run, waitErr)
 }
 
 func (d *Driver) finish(ctx context.Context, threadID string, result codexsdk.ThreadRunResult, started time.Time, waitErr error) TurnRun {
@@ -185,6 +192,15 @@ func (d *Driver) finish(ctx context.Context, threadID string, result codexsdk.Th
 	for _, item := range result.Turn.Items {
 		run.ItemKinds[string(item.Kind())]++
 	}
+	switch {
+	case run.FinalResponse != "":
+		run.FinalResponseSource = "final_answer_phase"
+	case run.Status == string(protocolv2.TurnStatusCompleted):
+		run.FinalResponse = lastAgentMessage(result.Turn.Items)
+		if run.FinalResponse != "" {
+			run.FinalResponseSource = "last_agent_message"
+		}
+	}
 	if run.DeadlineExpired && threadID != "" && run.TurnID != "" {
 		// Stop paid work and let the app-server persist the aborted Turn; the
 		// rollout then shows what the model was doing when the deadline hit.
@@ -201,12 +217,31 @@ func (d *Driver) finish(ctx context.Context, threadID string, result codexsdk.Th
 // ErrDeadline marks a Turn that did not reach a terminal state in time.
 var ErrDeadline = errors.New("turn deadline expired")
 
-func classify(waitErr error) error {
+// lastAgentMessage returns the text of the last non-empty agentMessage item.
+// codexsdk only recognizes replies whose phase is final_answer; the Grok
+// graft delivers agentMessage items without a phase, so the delivered reply is
+// the last message the app-server reported for the completed Turn.
+func lastAgentMessage(items []protocolv2.ThreadItem) string {
+	for index := len(items) - 1; index >= 0; index-- {
+		if message, ok := items[index].AsAgentMessage(); ok && message.Text != "" {
+			return message.Text
+		}
+	}
+	return ""
+}
+
+// classify maps the exact client's wait error onto the validator's classes. A
+// completed Turn that codexsdk rejected only for lacking a final_answer phase
+// is a completed Turn: the delivered reply is read from the Turn items.
+func classify(run TurnRun, waitErr error) error {
 	switch {
 	case waitErr == nil:
 		return nil
 	case errors.Is(waitErr, context.DeadlineExceeded):
 		return ErrDeadline
+	case run.Status == string(protocolv2.TurnStatusCompleted) &&
+		strings.Contains(waitErr.Error(), "without final_answer agent message"):
+		return nil
 	default:
 		return waitErr
 	}

@@ -53,6 +53,7 @@ func Image(graph *rollout.Graph, generation, edit driver.TurnRun) Verdict {
 		}
 		turn, ok := root.Turn(phase.run.TurnID)
 		verdict.Diagnostics[phase.name+"_delivered_turn_status"] = phase.run.Status
+		verdict.Diagnostics[phase.name+"_final_response_source"] = phase.run.FinalResponseSource
 		if ok {
 			verdict.Diagnostics[phase.name+"_turn_state"] = turn.State()
 			verdict.Diagnostics[phase.name+"_function_calls"] = turn.FunctionCallCounts()
