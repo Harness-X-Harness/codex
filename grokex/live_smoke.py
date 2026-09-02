@@ -19,7 +19,14 @@ from collections import deque
 from pathlib import Path
 
 
-TAG = "grokex-v0.151.0"
+SOURCE_ROOT = Path(__file__).resolve().parent
+RELEASE_SOURCE = json.loads(
+    (SOURCE_ROOT / "release-source.json").read_text(encoding="utf-8")
+)
+LIVE_CONTRACTS_PATH = SOURCE_ROOT / "live_contracts.json"
+LIVE_CONTRACTS = json.loads(LIVE_CONTRACTS_PATH.read_text(encoding="utf-8"))
+VERSION = RELEASE_SOURCE["version"]
+TAG = f"grokex-v{VERSION}"
 BASIC_SCENARIO = "basic-exact-reply"
 CONTINUATION_SCENARIO = "encrypted-reasoning-tool-continuation"
 COLLABORATION_SCENARIO = "ultra-full-history-collaboration"
@@ -31,21 +38,59 @@ SCENARIOS = (
     IMAGE_SCENARIO,
 )
 STORY_BY_SCENARIO = {
-    BASIC_SCENARIO: "grokex-provider-profile-startup",
-    CONTINUATION_SCENARIO: "grokex-encrypted-reasoning-history-continuation",
-    COLLABORATION_SCENARIO: "grokex-provider-binding-lifecycle",
-    IMAGE_SCENARIO: "grokex-image-generation-history-edit",
+    scenario: LIVE_CONTRACTS["scenarios"][scenario]["story"] for scenario in SCENARIOS
 }
+RELEASE_MODE = "release"
+OBSERVATION_MODE = "observation"
+MODES = (RELEASE_MODE, OBSERVATION_MODE)
 BASIC_EXPECTED_AGENT_REPLY = "GROKEX_BASIC_RESPONSE_OK"
 TOOL_NAME = "grokex_live_probe"
 TOOL_OUTPUT_MARKER = "GROKEX_LIVE_TOOL_OK"
 EXPECTED_AGENT_REPLY = "GROKEX_LIVE_RESPONSE_OK"
 HISTORY_EXPECTED_AGENT_REPLY = TOOL_OUTPUT_MARKER
-BASIC_TURN_SECONDS = 120
-CONTINUATION_TURN_SECONDS = 120
-COLLABORATION_TURN_SECONDS = 360
-IMAGE_TURN_SECONDS = 180
+BASIC_TURN_SECONDS = LIVE_CONTRACTS["scenarios"][BASIC_SCENARIO]["turn_deadline_seconds"]
+CONTINUATION_TURN_SECONDS = LIVE_CONTRACTS["scenarios"][CONTINUATION_SCENARIO][
+    "turn_deadline_seconds"
+]
+COLLABORATION_TURN_SECONDS = LIVE_CONTRACTS["scenarios"][COLLABORATION_SCENARIO][
+    "turn_deadline_seconds"
+]
+IMAGE_TURN_SECONDS = LIVE_CONTRACTS["scenarios"][IMAGE_SCENARIO]["turn_deadline_seconds"]
 TERMINAL_RECONCILIATION_SECONDS = 5
+
+
+class StageClock:
+    """Record the lifecycle stages a scenario reaches and when it reached them."""
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.current = "app_server_started"
+        self.timings: list[dict[str, object]] = [{"elapsed_seconds": 0.0, "stage": self.current}]
+        self.turn_started: float | None = None
+        self.turn_durations_seconds: list[float] = []
+
+    def mark(self, stage: str) -> None:
+        self.current = stage
+        self.timings.append(
+            {"elapsed_seconds": round(time.monotonic() - self.started, 3), "stage": stage}
+        )
+
+    def start_turn(self) -> None:
+        self.turn_started = time.monotonic()
+
+    def finish_turn(self) -> None:
+        if self.turn_started is not None:
+            self.turn_durations_seconds.append(round(time.monotonic() - self.turn_started, 3))
+            self.turn_started = None
+
+    def evidence(self) -> dict[str, object]:
+        durations = list(self.turn_durations_seconds)
+        if self.turn_started is not None:
+            durations.append(round(time.monotonic() - self.turn_started, 3))
+        return {
+            "stage_timings": self.timings,
+            "turn_durations_seconds": durations,
+        }
 
 
 class LiveScenarioFailed(SystemExit):
@@ -115,8 +160,11 @@ def extract_archive(path: Path, destination: Path) -> Path:
             if candidate.is_absolute() or ".." in candidate.parts or member.issym() or member.islnk():
                 raise SystemExit("release archive contains an unsafe member")
         archive.extractall(destination, members=members, filter="data")
-    root = destination / TAG
-    if not root.is_dir():
+    roots = {Path(member.name).parts[0] for member in members if member.name}
+    if len(roots) != 1:
+        raise SystemExit("release archive does not have a single root")
+    root = destination / roots.pop()
+    if not root.name.startswith("grokex-v") or not root.is_dir():
         raise SystemExit("release archive root is missing")
     return root
 
@@ -1796,6 +1844,10 @@ def wait_for_image_turn(
     raise_terminal_outcome()
 
 
+def turn_input(prompt: str) -> list[dict[str, object]]:
+    return [{"text": prompt, "textElements": [], "type": "text"}]
+
+
 def run_smoke(
     archive: Path,
     config: Path,
@@ -1804,7 +1856,17 @@ def run_smoke(
     validator_sha: str,
     run_id: str,
     scenario: str,
+    mode: str = RELEASE_MODE,
 ) -> None:
+    """Run one scenario and write secret-safe evidence.
+
+    In release mode a failed scenario writes last-stage evidence and re-raises
+    so the calling gate fails. In observation mode the same evidence is written
+    with ``mode: observation`` and the failure is swallowed; observation
+    evidence never satisfies a release contract.
+    """
+    if mode not in MODES:
+        raise SystemExit(f"unknown live mode: {mode}")
     with tempfile.TemporaryDirectory() as temporary:
         temporary_path = Path(temporary)
         root = extract_archive(archive, temporary_path / "artifact")
@@ -1830,18 +1892,36 @@ def run_smoke(
         )
         runner_turn_submission_count = 0
         thread_model: str | None = None
-        lifecycle_stage = "app_server_started"
+        stages = StageClock()
+        identity = {
+            "archive": archive.name,
+            "archive_sha256": sha256(archive),
+            "catalog": "release-bundled",
+            "contract_sha256": sha256(LIVE_CONTRACTS_PATH),
+            "mode": mode,
+            "provider": "grok",
+            "scenario": scenario,
+            "source_sha": source_sha,
+            "story": STORY_BY_SCENARIO[scenario],
+            "validation_run": run_id,
+            "validator_sha": validator_sha,
+            **(
+                {"multi_agent_version": "v2", "reasoning_effort": "ultra"}
+                if scenario == COLLABORATION_SCENARIO
+                else {}
+            ),
+        }
         try:
             server.request(
                 1,
                 "initialize",
                 {
-                    "clientInfo": {"name": "grokex-release", "version": "0.151.0"},
+                    "clientInfo": {"name": "grokex-release", "version": VERSION},
                     "capabilities": {"experimentalApi": True},
                 },
             )
             server.send({"method": "initialized"})
-            lifecycle_stage = "initialized"
+            stages.mark("initialized")
 
             models_response = server.request(
                 2,
@@ -1863,7 +1943,7 @@ def run_smoke(
                 }
                 if model.get("multiAgentVersion") != "v2" or "ultra" not in efforts:
                     raise SystemExit("grok-4.6 collaboration metadata is incomplete")
-            lifecycle_stage = "catalog_verified"
+            stages.mark("catalog_verified")
 
             thread_params: dict[str, object] = {
                 "cwd": str(workspace),
@@ -1899,100 +1979,78 @@ def run_smoke(
             thread_id = thread.get("id")
             if not isinstance(thread_id, str) or not thread_id:
                 raise SystemExit("thread/start returned no thread identity")
-            lifecycle_stage = "thread_started"
+            stages.mark("thread_started")
 
             if scenario == BASIC_SCENARIO:
                 prompt = (
                     f"Reply with exactly {BASIC_EXPECTED_AGENT_REPLY} and no other text."
                 )
                 runner_turn_submission_count = 1
-                lifecycle_stage = "turn_submission_attempted"
+                stages.mark("turn_submission_attempted")
+                stages.start_turn()
                 turn_response = server.request(
                     4,
                     "turn/start",
-                    {
-                        "input": [
-                            {
-                                "text": prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
+                    {"input": turn_input(prompt), "threadId": thread_id},
                 )
-                lifecycle_stage = "turn_start_response_received"
+                stages.mark("turn_start_response_received")
                 turn_id = require_turn_start_identity(
                     turn_response, "the single basic Grok Turn"
                 )
-                lifecycle_stage = "turn_submitted"
+                stages.mark("turn_submitted")
                 turn_evidence = wait_for_basic_turn(
                     server,
                     time.monotonic() + BASIC_TURN_SECONDS,
                     thread_id,
                     turn_id,
                 )
+                stages.finish_turn()
             elif scenario == CONTINUATION_SCENARIO:
                 prompt = (
                     f"Use the {TOOL_NAME} result, then reply "
                     f"with exactly {EXPECTED_AGENT_REPLY} and no other text."
                 )
                 runner_turn_submission_count = 1
-                lifecycle_stage = "turn_submission_attempted"
+                stages.mark("turn_submission_attempted")
+                stages.start_turn()
                 turn_response = server.request(
                     4,
                     "turn/start",
-                    {
-                        "input": [
-                            {
-                                "text": prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
+                    {"input": turn_input(prompt), "threadId": thread_id},
                 )
-                lifecycle_stage = "turn_start_response_received"
+                stages.mark("turn_start_response_received")
                 turn_id = require_turn_start_identity(
                     turn_response, "the Grok tool-continuation Turn"
                 )
-                lifecycle_stage = "turn_submitted"
+                stages.mark("turn_submitted")
                 turn_evidence = wait_for_verified_turn(
                     server,
                     time.monotonic() + CONTINUATION_TURN_SECONDS,
                     thread_id,
                     turn_id,
                 )
-                lifecycle_stage = "first_turn_completed"
+                stages.finish_turn()
+                stages.mark("first_turn_completed")
 
                 history_prompt = (
                     "Reply with exactly the result returned by grokex_live_probe in the "
                     "previous Turn and no other text. Do not call any tool."
                 )
                 runner_turn_submission_count = 2
-                lifecycle_stage = "history_turn_submission_attempted"
+                stages.mark("history_turn_submission_attempted")
+                stages.start_turn()
                 history_turn_response = server.request(
                     5,
                     "turn/start",
-                    {
-                        "input": [
-                            {
-                                "text": history_prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
-                        "threadId": thread_id,
-                    },
+                    {"input": turn_input(history_prompt), "threadId": thread_id},
                 )
-                lifecycle_stage = "history_turn_start_response_received"
+                stages.mark("history_turn_start_response_received")
                 history_turn_id = require_turn_start_identity(
                     history_turn_response,
                     "the Grok history-replay Turn",
                     frozenset({turn_id}),
                 )
-                lifecycle_stage = "history_turn_submitted"
+                stages.mark("history_turn_submitted")
                 history_evidence = wait_for_terminal_reply(
                     server,
                     time.monotonic() + CONTINUATION_TURN_SECONDS,
@@ -2001,6 +2059,7 @@ def run_smoke(
                     HISTORY_EXPECTED_AGENT_REPLY,
                     "the Grok history-replay Turn",
                 )
+                stages.finish_turn()
                 turn_evidence = {
                     **turn_evidence,
                     "history_response_assertion": history_evidence[
@@ -2017,35 +2076,31 @@ def run_smoke(
                     "other text."
                 )
                 runner_turn_submission_count = 1
-                lifecycle_stage = "turn_submission_attempted"
+                stages.mark("turn_submission_attempted")
+                stages.start_turn()
                 turn_response = server.request(
                     4,
                     "turn/start",
                     {
                         "effort": "ultra",
-                        "input": [
-                            {
-                                "text": prompt,
-                                "textElements": [],
-                                "type": "text",
-                            }
-                        ],
+                        "input": turn_input(prompt),
                         "threadId": thread_id,
                     },
                 )
-                lifecycle_stage = "turn_start_response_received"
+                stages.mark("turn_start_response_received")
                 turn_id = require_turn_start_identity(
                     turn_response, "the Grok Ultra collaboration Turn"
                 )
-                lifecycle_stage = "turn_submitted"
+                stages.mark("turn_submitted")
                 turn_evidence, _ = wait_for_collaboration_turn(
                     server,
                     time.monotonic() + COLLABORATION_TURN_SECONDS,
                     thread_id,
                     turn_id,
                 )
-                lifecycle_stage = "collaboration_completed"
-                lifecycle_stage = "child_binding_verified"
+                stages.finish_turn()
+                stages.mark("collaboration_completed")
+                stages.mark("child_binding_verified")
             else:
                 generation_artifacts: frozenset[Path] = frozenset()
                 image_turn_ids: set[str] = set()
@@ -2066,39 +2121,22 @@ def run_smoke(
                     ),
                 ]:
                     runner_turn_submission_count += 1
-                    lifecycle_stage = (
-                        "history_turn_submission_attempted"
-                        if require_history
-                        else "turn_submission_attempted"
-                    )
+                    stage_prefix = "history_turn" if require_history else "turn"
+                    stages.mark(f"{stage_prefix}_submission_attempted")
+                    stages.start_turn()
                     turn_response = server.request(
                         request_id,
                         "turn/start",
-                        {
-                            "input": [
-                                {
-                                    "text": prompt,
-                                    "textElements": [],
-                                    "type": "text",
-                                }
-                            ],
-                            "threadId": thread_id,
-                        },
+                        {"input": turn_input(prompt), "threadId": thread_id},
                     )
-                    lifecycle_stage = (
-                        "history_turn_start_response_received"
-                        if require_history
-                        else "turn_start_response_received"
-                    )
+                    stages.mark(f"{stage_prefix}_start_response_received")
                     turn_id = require_turn_start_identity(
                         turn_response,
                         "the Grok image Turn",
                         frozenset(image_turn_ids),
                     )
                     image_turn_ids.add(turn_id)
-                    lifecycle_stage = (
-                        "history_turn_submitted" if require_history else "turn_submitted"
-                    )
+                    stages.mark(f"{stage_prefix}_submitted")
                     image_evidence, artifacts = wait_for_image_turn(
                         server,
                         time.monotonic() + IMAGE_TURN_SECONDS,
@@ -2107,6 +2145,7 @@ def run_smoke(
                         require_history,
                         generation_artifacts,
                     )
+                    stages.finish_turn()
                     image_evidence_by_phase[phase] = image_evidence
                     if phase == "generation":
                         generation_artifacts = artifacts
@@ -2149,23 +2188,11 @@ def run_smoke(
                 }
 
             evidence = {
-                "archive": archive.name,
-                "archive_sha256": sha256(archive),
-                "catalog": "release-bundled",
+                **identity,
                 "model": thread_model,
                 "runner_turn_submission_count": runner_turn_submission_count,
-                "provider": "grok",
-                "scenario": scenario,
-                "source_sha": source_sha,
-                **(
-                    {"multi_agent_version": "v2", "reasoning_effort": "ultra"}
-                    if scenario == COLLABORATION_SCENARIO
-                    else {}
-                ),
                 **turn_evidence,
-                "story": STORY_BY_SCENARIO[scenario],
-                "validation_run": run_id,
-                "validator_sha": validator_sha,
+                **stages.evidence(),
             }
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -2173,36 +2200,26 @@ def run_smoke(
         except SystemExit as error:
             if isinstance(error, LiveScenarioFailed):
                 failure_evidence = dict(error.last_stage)
-                failure_evidence.setdefault("last_proven_stage", lifecycle_stage)
+                failure_evidence.setdefault("last_proven_stage", stages.current)
             else:
                 failure_evidence = {
                     "does_not_prove": "product_root_cause",
                     "failure_category": "app_server_or_semantic_contract",
-                    "last_proven_stage": lifecycle_stage,
+                    "last_proven_stage": stages.current,
                     "outcome": "semantic_failure",
                 }
             evidence = {
-                "archive": archive.name,
-                "archive_sha256": sha256(archive),
-                "catalog": "release-bundled",
+                **identity,
                 "model": thread_model,
-                "provider": "grok",
                 "runner_turn_submission_count": runner_turn_submission_count,
-                "scenario": scenario,
-                "source_sha": source_sha,
-                "story": STORY_BY_SCENARIO[scenario],
-                "validation_run": run_id,
-                "validator_sha": validator_sha,
-                **(
-                    {"multi_agent_version": "v2", "reasoning_effort": "ultra"}
-                    if scenario == COLLABORATION_SCENARIO
-                    else {}
-                ),
                 **failure_evidence,
+                **stages.evidence(),
             }
             evidence_path.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+            if mode == OBSERVATION_MODE and isinstance(error, LiveScenarioFailed):
+                return
             raise
         finally:
             server.close()
@@ -2217,6 +2234,7 @@ def main() -> None:
     parser.add_argument("--validator-sha", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--scenario", choices=SCENARIOS, required=True)
+    parser.add_argument("--mode", choices=MODES, default=RELEASE_MODE)
     args = parser.parse_args()
     run_smoke(
         args.archive,
@@ -2226,6 +2244,7 @@ def main() -> None:
         args.validator_sha,
         args.run_id,
         args.scenario,
+        args.mode,
     )
 
 

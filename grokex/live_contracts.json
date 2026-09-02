@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "all_scenarios_seam_paths": [
+    ".github/actions/build-grokex/",
+    "codex-rs/Cargo.lock",
+    "codex-rs/Cargo.toml",
+    "codex-rs/core/Cargo.toml",
+    "codex-rs/vendor/",
+    "grokex/live_contracts.json",
+    "grokex/live_smoke.py",
+    "grokex/release-source.json",
+    "grokex/release.py"
+  ],
+  "scenarios": {
+    "basic-exact-reply": {
+      "story": "grokex-provider-profile-startup",
+      "required": "always",
+      "turn_deadline_seconds": 120,
+      "seam_paths": [
+        "codex-rs/codex-api/src/endpoint/models.rs",
+        "codex-rs/codex-api/src/endpoint/responses.rs",
+        "codex-rs/codex-api/src/provider.rs",
+        "codex-rs/core/src/client.rs",
+        "codex-rs/core/src/config/",
+        "codex-rs/model-provider-info/",
+        "codex-rs/model-provider/",
+        "grokex/config.toml.example",
+        "grokex/grokex",
+        "grokex/grokex.ps1",
+        "grokex/install-grokex.ps1",
+        "grokex/install-grokex.sh"
+      ]
+    },
+    "encrypted-reasoning-tool-continuation": {
+      "story": "grokex-encrypted-reasoning-history-continuation",
+      "required": "seam",
+      "turn_deadline_seconds": 120,
+      "seam_paths": [
+        "codex-rs/codex-api/src/endpoint/responses.rs",
+        "codex-rs/codex-api/src/provider.rs",
+        "codex-rs/core/src/client.rs",
+        "codex-rs/core/src/context_manager/",
+        "codex-rs/core/src/session/",
+        "codex-rs/core/src/stream_events_utils.rs",
+        "codex-rs/core/src/tools/registry.rs",
+        "codex-rs/core/src/tools/router.rs",
+        "codex-rs/core/src/tools/router/",
+        "codex-rs/core/src/tools/spec_plan.rs",
+        "codex-rs/history/",
+        "codex-rs/model-provider/src/grok_provider.rs",
+        "codex-rs/model-provider/src/provider.rs",
+        "codex-rs/tools/"
+      ]
+    },
+    "ultra-full-history-collaboration": {
+      "story": "grokex-provider-binding-lifecycle",
+      "required": "seam",
+      "turn_deadline_seconds": 360,
+      "seam_paths": [
+        "codex-rs/codex-api/src/provider.rs",
+        "codex-rs/config/src/thread_config/",
+        "codex-rs/core/src/client.rs",
+        "codex-rs/core/src/session/",
+        "codex-rs/core/src/stream_events_utils.rs",
+        "codex-rs/core/src/tools/handlers/",
+        "codex-rs/core/src/tools/parallel.rs",
+        "codex-rs/core/src/tools/registry.rs",
+        "codex-rs/core/src/tools/router.rs",
+        "codex-rs/core/src/tools/router/",
+        "codex-rs/core/src/tools/spec_plan.rs",
+        "codex-rs/core/src/tools/tool_namespaces_info.rs",
+        "codex-rs/model-provider/src/grok_catalog.rs",
+        "codex-rs/model-provider/src/grok_provider.rs",
+        "codex-rs/model-provider/src/provider.rs",
+        "codex-rs/tools/"
+      ]
+    },
+    "image-generation-history-edit": {
+      "story": "grokex-image-generation-history-edit",
+      "required": "seam",
+      "turn_deadline_seconds": 180,
+      "seam_paths": [
+        "codex-rs/codex-api/src/endpoint/images.rs",
+        "codex-rs/codex-api/src/images.rs",
+        "codex-rs/core/src/compact_remote_v2.rs",
+        "codex-rs/core/src/tools/handlers/extension_tools.rs",
+        "codex-rs/ext/image-generation/",
+        "codex-rs/model-provider/src/grok_provider.rs",
+        "codex-rs/model-provider/src/provider.rs"
+      ]
+    }
+  }
+}

@@ -6,15 +6,58 @@ import gzip
 import hashlib
 import json
 import shutil
+import statistics
 import tarfile
 import tempfile
 import tomllib
 from pathlib import Path
 
 
-VERSION = "0.151.0"
+SOURCE_ROOT = Path(__file__).resolve().parent
+RELEASE_SOURCE_PATH = SOURCE_ROOT / "release-source.json"
+LIVE_CONTRACTS_PATH = SOURCE_ROOT / "live_contracts.json"
+
+
+def load_release_source(path: Path = RELEASE_SOURCE_PATH) -> dict[str, str]:
+    source = json.loads(path.read_text(encoding="utf-8"))
+    version = source["version"]
+    if source["upstream_tag"] != f"rust-v{version}":
+        raise SystemExit("release-source.json upstream_tag does not match version")
+    if len(source["upstream_commit"]) != 40:
+        raise SystemExit("release-source.json upstream_commit is not a full SHA")
+    return source
+
+
+def load_live_contracts(path: Path = LIVE_CONTRACTS_PATH) -> dict[str, object]:
+    contracts = json.loads(path.read_text(encoding="utf-8"))
+    if contracts.get("schema_version") != 1:
+        raise SystemExit("live_contracts.json schema_version is unsupported")
+    scenarios = contracts.get("scenarios")
+    if not isinstance(scenarios, dict) or not scenarios:
+        raise SystemExit("live_contracts.json has no scenarios")
+    for scenario, contract in scenarios.items():
+        if contract.get("required") not in {"always", "seam"}:
+            raise SystemExit(f"live contract {scenario} has an invalid required policy")
+        deadline = contract.get("turn_deadline_seconds")
+        if not isinstance(deadline, int) or isinstance(deadline, bool) or deadline <= 0:
+            raise SystemExit(f"live contract {scenario} has an invalid deadline")
+        if not isinstance(contract.get("story"), str):
+            raise SystemExit(f"live contract {scenario} names no Story")
+        if not isinstance(contract.get("seam_paths"), list):
+            raise SystemExit(f"live contract {scenario} has no seam paths")
+    return contracts
+
+
+RELEASE_SOURCE = load_release_source()
+VERSION = RELEASE_SOURCE["version"]
 TAG = f"grokex-v{VERSION}"
-UPSTREAM_COMMIT = "78c290807ce710180111df227df3b7a4fe845452"
+UPSTREAM_TAG = RELEASE_SOURCE["upstream_tag"]
+UPSTREAM_COMMIT = RELEASE_SOURCE["upstream_commit"]
+LIVE_CONTRACTS = load_live_contracts()
+STORY_BY_SCENARIO = {
+    scenario: contract["story"]
+    for scenario, contract in LIVE_CONTRACTS["scenarios"].items()
+}
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -122,12 +165,8 @@ LIVE_SCENARIO_DIAGNOSTICS = {
         "image_items_failed",
     ),
 }
-STORY_BY_SCENARIO = {
-    "basic-exact-reply": "grokex-provider-profile-startup",
-    "encrypted-reasoning-tool-continuation": "grokex-encrypted-reasoning-history-continuation",
-    "ultra-full-history-collaboration": "grokex-provider-binding-lifecycle",
-    "image-generation-history-edit": "grokex-image-generation-history-edit",
-}
+if set(LIVE_SCENARIO_ASSERTIONS) != set(STORY_BY_SCENARIO):
+    raise SystemExit("live_contracts.json scenarios do not match the validator outcomes")
 
 
 def sha256(path: Path) -> str:
@@ -343,72 +382,175 @@ def verify_profile(path: Path, secret: bool) -> None:
         raise SystemExit("public profile must not contain a bearer token")
 
 
+def seam_path_matches(seam_path: str, changed_path: str) -> bool:
+    if seam_path.endswith("/"):
+        return changed_path.startswith(seam_path)
+    return changed_path == seam_path
+
+
+def required_scenarios(changed_paths: list[str] | None) -> list[str]:
+    """Return the Live scenarios a publication must execute on the exact artifact.
+
+    ``None`` means the diff base is unknown (for example the first publication),
+    which requires every scenario. Otherwise a scenario is required when its
+    policy is ``always`` or when any changed path touches one of its seams or a
+    seam shared by every scenario.
+    """
+    scenarios: dict[str, dict[str, object]] = LIVE_CONTRACTS["scenarios"]
+    if changed_paths is None:
+        return list(scenarios)
+    shared: list[str] = LIVE_CONTRACTS.get("all_scenarios_seam_paths", [])
+    if any(
+        seam_path_matches(seam_path, changed_path)
+        for seam_path in shared
+        for changed_path in changed_paths
+    ):
+        return list(scenarios)
+    required: list[str] = []
+    for scenario, contract in scenarios.items():
+        seam_paths: list[str] = contract["seam_paths"]
+        if contract["required"] == "always" or any(
+            seam_path_matches(seam_path, changed_path)
+            for seam_path in seam_paths
+            for changed_path in changed_paths
+        ):
+            required.append(scenario)
+    return required
+
+
+def validate_scenario_evidence(
+    value: dict[str, object], scenario: str
+) -> dict[str, object]:
+    expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
+    if any(value.get(key) != expected for key, expected in expected_assertions.items()):
+        raise SystemExit(f"live scenario outcome mismatch: {scenario}")
+    codec_evidence = (
+        image_artifact_evidence(value)
+        if scenario == "image-generation-history-edit"
+        else {}
+    )
+    diagnostics: dict[str, int] = {}
+    for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
+        diagnostic = value.get(key)
+        if not isinstance(diagnostic, int) or isinstance(diagnostic, bool) or diagnostic < 0:
+            raise SystemExit(f"live scenario diagnostic is invalid: {scenario}")
+        diagnostics[key] = diagnostic
+    return {
+        **expected_assertions,
+        **codec_evidence,
+        **diagnostics,
+        "story": STORY_BY_SCENARIO[scenario],
+    }
+
+
+def inherited_scenario_evidence(
+    prior: dict[str, object], scenario: str, base_sha: str
+) -> dict[str, object]:
+    prior_scenarios = prior.get("scenarios")
+    if not isinstance(prior_scenarios, dict) or prior.get("source_sha") != base_sha:
+        raise SystemExit("prior live evidence does not bind the diff base")
+    if prior.get("status") != "completed":
+        raise SystemExit("prior live evidence is not a completed proof")
+    prior_scenario = prior_scenarios.get(scenario)
+    if not isinstance(prior_scenario, dict):
+        raise SystemExit(f"prior live evidence has no executed proof for {scenario}")
+    validate_scenario_evidence(prior_scenario, scenario)
+    prior_runs = prior.get("validation_runs", prior.get("validation_run"))
+    return {
+        "archive_sha256": prior["archive_sha256"],
+        "release_tag": prior.get("release_tag", ""),
+        "source_sha": base_sha,
+        "story": STORY_BY_SCENARIO[scenario],
+        "validation_run": prior_scenario.get("validation_run", prior_runs),
+    }
+
+
 def build_live_evidence(
     evidence_dir: Path,
     archive: Path,
     output: Path,
     source_sha: str,
     validator_sha: str,
-    run_id: str,
+    required: list[str] | None = None,
+    inherit_from: Path | None = None,
+    base_sha: str | None = None,
 ) -> None:
+    """Compose LIVE_EVIDENCE.json from per-scenario release evidence.
+
+    Evidence files may come from several authorized Live runs as long as every
+    file binds the same archive digest, source SHA, validator SHA, and contract.
+    Scenarios outside ``required`` are inherited from ``inherit_from`` (the
+    previously published LIVE_EVIDENCE.json whose source is ``base_sha``).
+    """
     archive_digest = sha256(archive)
+    contract_digest = sha256(LIVE_CONTRACTS_PATH)
+    required_set = set(required) if required is not None else set(LIVE_SCENARIO_ASSERTIONS)
+    if not required_set <= set(LIVE_SCENARIO_ASSERTIONS):
+        raise SystemExit("required live scenario set is unknown")
+    if "basic-exact-reply" not in required_set:
+        raise SystemExit("basic-exact-reply is always required")
     common = {
         "archive": archive.name,
         "archive_sha256": archive_digest,
         "catalog": "release-bundled",
+        "contract_sha256": contract_digest,
+        "mode": "release",
         "model": "grok-4.6",
         "provider": "grok",
         "source_sha": source_sha,
-        "validation_run": run_id,
         "validator_sha": validator_sha,
     }
     observed: dict[str, dict[str, object]] = {}
-    for path in evidence_dir.glob("*.json"):
+    validation_runs: set[str] = set()
+    for path in sorted(evidence_dir.glob("*.json")):
         value = json.loads(path.read_text(encoding="utf-8"))
         scenario = value.get("scenario")
         if scenario not in LIVE_SCENARIO_ASSERTIONS or scenario in observed:
             raise SystemExit("live scenario evidence set is invalid")
         if any(value.get(key) != expected for key, expected in common.items()):
             raise SystemExit(f"live scenario evidence mismatch: {scenario}")
-        story = STORY_BY_SCENARIO[scenario]
-        if value.get("story") != story:
+        if value.get("story") != STORY_BY_SCENARIO[scenario]:
             raise SystemExit(f"live scenario Story mismatch: {scenario}")
-        expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
-        if any(value.get(key) != expected for key, expected in expected_assertions.items()):
-            raise SystemExit(f"live scenario outcome mismatch: {scenario}")
-        codec_evidence = (
-            image_artifact_evidence(value)
-            if scenario == "image-generation-history-edit"
-            else {}
-        )
-        diagnostics: dict[str, int] = {}
-        for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
-            diagnostic = value.get(key)
-            if not isinstance(diagnostic, int) or isinstance(diagnostic, bool) or diagnostic < 0:
-                raise SystemExit(f"live scenario diagnostic is invalid: {scenario}")
-            diagnostics[key] = diagnostic
+        run_id = value.get("validation_run")
+        if not isinstance(run_id, str) or not run_id:
+            raise SystemExit(f"live scenario evidence has no validation run: {scenario}")
+        validation_runs.add(run_id)
         observed[scenario] = {
-            **expected_assertions,
-            **codec_evidence,
-            **diagnostics,
-            "story": story,
+            **validate_scenario_evidence(value, scenario),
+            "validation_run": run_id,
         }
-    if set(observed) != set(LIVE_SCENARIO_ASSERTIONS):
-        raise SystemExit("required live scenario evidence is incomplete")
+    missing = required_set - set(observed)
+    if missing:
+        raise SystemExit(f"required live scenario evidence is incomplete: {sorted(missing)}")
+
+    inherited: dict[str, dict[str, object]] = {}
+    not_executed = set(LIVE_SCENARIO_ASSERTIONS) - set(observed)
+    if not_executed:
+        if inherit_from is None or base_sha is None:
+            raise SystemExit(
+                f"live scenario evidence is incomplete without inheritance: {sorted(not_executed)}"
+            )
+        prior = json.loads(inherit_from.read_text(encoding="utf-8"))
+        for scenario in sorted(not_executed):
+            inherited[scenario] = inherited_scenario_evidence(prior, scenario, base_sha)
 
     manifest = {
         "archive": archive.name,
         "archive_sha256": archive_digest,
         "catalog": "release-bundled",
+        "contract_sha256": contract_digest,
+        "inherited_scenarios": inherited,
         "model": "grok-4.6",
+        "provider": "grok",
+        "release_tag": TAG,
+        "required_scenarios": sorted(required_set),
         "runner_turn_submission_count": sum(
             assertions["runner_turn_submission_count"] for assertions in observed.values()
         ),
-        "provider": "grok",
         "scenarios": observed,
         "source_sha": source_sha,
         "status": "completed",
-        "validation_run": run_id,
+        "validation_runs": sorted(validation_runs),
         "validator_sha": validator_sha,
     }
     output.write_text(
@@ -423,7 +565,7 @@ def build_assets(
     output: Path,
     repository: Path,
     source_sha: str,
-    run_id: str,
+    validation_run: str,
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
     verify_archives(archives, source_sha)
@@ -442,7 +584,7 @@ def build_assets(
         "source_sha": source_sha,
         "tag": TAG,
         "upstream_commit": UPSTREAM_COMMIT,
-        "validation_run": run_id,
+        "validation_run": validation_run,
         "version": VERSION,
     }
     (output / "RELEASE.json").write_text(
@@ -456,23 +598,34 @@ def build_assets(
 
 
 def verify_live_identity(
-    evidence: dict[str, object], source_sha: str, run_id: str
+    evidence: dict[str, object],
+    source_sha: str,
+    validator_sha: str,
+    live_runs: list[str],
 ) -> None:
     required_evidence = {
         "archive": archive_name("x86_64-unknown-linux-musl"),
         "catalog": "release-bundled",
+        "contract_sha256": sha256(LIVE_CONTRACTS_PATH),
         "model": "grok-4.6",
         "provider": "grok",
+        "release_tag": TAG,
         "source_sha": source_sha,
         "status": "completed",
-        "validation_run": run_id,
-        "validator_sha": source_sha,
+        "validation_runs": sorted(set(live_runs)),
+        "validator_sha": validator_sha,
     }
     if any(evidence.get(key) != value for key, value in required_evidence.items()):
         raise SystemExit("live evidence identity mismatch")
 
 
-def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
+def verify_assets(
+    dist: Path,
+    source_sha: str,
+    validator_sha: str,
+    validation_run: str,
+    live_runs: list[str],
+) -> None:
     expected = {archive_name(target) for target in TARGETS} | {
         "LIVE_EVIDENCE.json",
         "RELEASE.json",
@@ -492,7 +645,7 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
         "source_sha": source_sha,
         "tag": TAG,
         "upstream_commit": UPSTREAM_COMMIT,
-        "validation_run": run_id,
+        "validation_run": validation_run,
         "version": VERSION,
     }
     if manifest != expected_manifest:
@@ -500,31 +653,40 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
 
     evidence = json.loads((dist / "LIVE_EVIDENCE.json").read_text(encoding="utf-8"))
     live_archive = archive_name("x86_64-unknown-linux-musl")
-    verify_live_identity(evidence, source_sha, run_id)
-    runner_turn_submission_count = evidence.get("runner_turn_submission_count")
-    if runner_turn_submission_count != 6:
-        raise SystemExit("live evidence Turn contract is invalid")
+    verify_live_identity(evidence, source_sha, validator_sha, live_runs)
     scenarios = evidence.get("scenarios")
-    if not isinstance(scenarios, dict) or set(scenarios) != set(LIVE_SCENARIO_ASSERTIONS):
+    inherited = evidence.get("inherited_scenarios")
+    required = evidence.get("required_scenarios")
+    if not isinstance(scenarios, dict) or not isinstance(inherited, dict):
+        raise SystemExit("live evidence scenario sets are invalid")
+    if not isinstance(required, list) or not set(required) <= set(scenarios):
+        raise SystemExit("live evidence required scenarios were not executed")
+    if "basic-exact-reply" not in scenarios:
+        raise SystemExit("live evidence has no executed basic scenario")
+    if set(scenarios) | set(inherited) != set(LIVE_SCENARIO_ASSERTIONS) or set(
+        scenarios
+    ) & set(inherited):
         raise SystemExit("live evidence scenario set mismatch")
-    for scenario, expected in LIVE_SCENARIO_ASSERTIONS.items():
-        actual = scenarios.get(scenario)
-        if not isinstance(actual, dict) or any(
-            actual.get(key) != value for key, value in expected.items()
-        ):
+    expected_turns = sum(
+        LIVE_SCENARIO_ASSERTIONS[scenario]["runner_turn_submission_count"]
+        for scenario in scenarios
+    )
+    if evidence.get("runner_turn_submission_count") != expected_turns:
+        raise SystemExit("live evidence Turn contract is invalid")
+    for scenario, actual in scenarios.items():
+        if not isinstance(actual, dict):
             raise SystemExit(f"live evidence scenario mismatch: {scenario}")
-        if scenario == "image-generation-history-edit":
-            image_artifact_evidence(actual)
-        if actual.get("story") != STORY_BY_SCENARIO[scenario]:
-            raise SystemExit(f"live evidence Story mismatch: {scenario}")
-        for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
-            diagnostic = actual.get(key)
-            if (
-                not isinstance(diagnostic, int)
-                or isinstance(diagnostic, bool)
-                or diagnostic < 0
-            ):
-                raise SystemExit(f"live evidence diagnostic is invalid: {scenario}")
+        validate_scenario_evidence(actual, scenario)
+        if actual.get("validation_run") not in live_runs:
+            raise SystemExit(f"live evidence scenario run is unknown: {scenario}")
+    for scenario, actual in inherited.items():
+        if not isinstance(actual, dict) or actual.get("story") != STORY_BY_SCENARIO[scenario]:
+            raise SystemExit(f"live evidence inherited Story mismatch: {scenario}")
+        if not all(
+            isinstance(actual.get(key), str) and actual.get(key)
+            for key in ("archive_sha256", "source_sha", "validation_run")
+        ):
+            raise SystemExit(f"live evidence inherited identity is incomplete: {scenario}")
     if evidence.get("archive_sha256") != sha256(dist / live_archive):
         raise SystemExit("live evidence archive checksum mismatch")
 
@@ -540,9 +702,70 @@ def verify_assets(dist: Path, source_sha: str, run_id: str) -> None:
             raise SystemExit(f"checksum mismatch: {filename}")
 
 
+def percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, round(fraction * (len(ordered) - 1))))
+    return ordered[index]
+
+
+def summarize_observations(evidence_dir: Path) -> dict[str, object]:
+    """Aggregate observation-mode evidence into per-scenario latency statistics.
+
+    Observation evidence never proves a Story; the summary only informs
+    deadline reviews with p50/p95/max Turn durations against the contract.
+    """
+    by_scenario: dict[str, dict[str, object]] = {}
+    for path in sorted(evidence_dir.rglob("*.json")):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        scenario = value.get("scenario")
+        if scenario not in LIVE_SCENARIO_ASSERTIONS or value.get("mode") != "observation":
+            continue
+        entry = by_scenario.setdefault(
+            scenario,
+            {"outcomes": {}, "runs": 0, "turn_durations_seconds": []},
+        )
+        entry["runs"] += 1
+        outcome = value.get("outcome", "completed" if value.get("status") == "completed" else "unknown")
+        outcomes: dict[str, int] = entry["outcomes"]
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        durations = value.get("turn_durations_seconds")
+        if isinstance(durations, list):
+            entry["turn_durations_seconds"].extend(
+                float(duration) for duration in durations if isinstance(duration, (int, float))
+            )
+    summary: dict[str, object] = {}
+    for scenario, entry in sorted(by_scenario.items()):
+        durations: list[float] = entry["turn_durations_seconds"]
+        deadline = LIVE_CONTRACTS["scenarios"][scenario]["turn_deadline_seconds"]
+        statistics_block: dict[str, object] = {"samples": len(durations)}
+        if durations:
+            statistics_block.update(
+                {
+                    "max": round(max(durations), 3),
+                    "p50": round(statistics.median(durations), 3),
+                    "p95": round(percentile(durations, 0.95), 3),
+                    "over_deadline": sum(1 for duration in durations if duration > deadline),
+                }
+            )
+        summary[scenario] = {
+            "outcomes": entry["outcomes"],
+            "runs": entry["runs"],
+            "turn_deadline_seconds": deadline,
+            "turn_seconds": statistics_block,
+        }
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    identity_parser = subparsers.add_parser("identity")
+    identity_parser.add_argument("--github-output", action="store_true")
+
+    required_parser = subparsers.add_parser("required-scenarios")
+    required_parser.add_argument("--changed-paths", type=Path)
+    required_parser.add_argument("--all", action="store_true")
 
     package_parser = subparsers.add_parser("package")
     package_parser.add_argument("--raw-root", type=Path, required=True)
@@ -566,7 +789,9 @@ def main() -> None:
     evidence_parser.add_argument("--output", type=Path, required=True)
     evidence_parser.add_argument("--source-sha", required=True)
     evidence_parser.add_argument("--validator-sha", required=True)
-    evidence_parser.add_argument("--run-id", required=True)
+    evidence_parser.add_argument("--required", action="append")
+    evidence_parser.add_argument("--inherit-from", type=Path)
+    evidence_parser.add_argument("--base-sha")
 
     assets_parser = subparsers.add_parser("build-assets")
     assets_parser.add_argument("--archives", type=Path, required=True)
@@ -574,15 +799,44 @@ def main() -> None:
     assets_parser.add_argument("--output", type=Path, required=True)
     assets_parser.add_argument("--repository", type=Path, required=True)
     assets_parser.add_argument("--source-sha", required=True)
-    assets_parser.add_argument("--run-id", required=True)
+    assets_parser.add_argument("--validation-run", required=True)
 
     verify_assets_parser = subparsers.add_parser("verify-assets")
     verify_assets_parser.add_argument("--dist", type=Path, required=True)
     verify_assets_parser.add_argument("--source-sha", required=True)
-    verify_assets_parser.add_argument("--run-id", required=True)
+    verify_assets_parser.add_argument("--validator-sha", required=True)
+    verify_assets_parser.add_argument("--validation-run", required=True)
+    verify_assets_parser.add_argument("--live-run", action="append", required=True)
+
+    observations_parser = subparsers.add_parser("summarize-observations")
+    observations_parser.add_argument("--evidence-dir", type=Path, required=True)
 
     args = parser.parse_args()
-    if args.command == "package":
+    if args.command == "identity":
+        identity = {
+            "release_tag": TAG,
+            "upstream_commit": UPSTREAM_COMMIT,
+            "upstream_tag": UPSTREAM_TAG,
+            "version": VERSION,
+        }
+        if args.github_output:
+            print("".join(f"{key}={value}\n" for key, value in identity.items()), end="")
+        else:
+            print(json.dumps(identity, indent=2, sort_keys=True))
+    elif args.command == "required-scenarios":
+        if args.all == (args.changed_paths is not None):
+            raise SystemExit("required-scenarios needs exactly one of --all or --changed-paths")
+        changed = (
+            None
+            if args.all
+            else [
+                line.strip()
+                for line in args.changed_paths.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        )
+        print("\n".join(required_scenarios(changed)))
+    elif args.command == "package":
         package(
             args.raw_root,
             args.output,
@@ -605,7 +859,9 @@ def main() -> None:
             args.output,
             args.source_sha,
             args.validator_sha,
-            args.run_id,
+            args.required,
+            args.inherit_from,
+            args.base_sha,
         )
     elif args.command == "build-assets":
         build_assets(
@@ -614,10 +870,18 @@ def main() -> None:
             args.output,
             args.repository,
             args.source_sha,
-            args.run_id,
+            args.validation_run,
         )
     elif args.command == "verify-assets":
-        verify_assets(args.dist, args.source_sha, args.run_id)
+        verify_assets(
+            args.dist,
+            args.source_sha,
+            args.validator_sha,
+            args.validation_run,
+            args.live_run,
+        )
+    elif args.command == "summarize-observations":
+        print(json.dumps(summarize_observations(args.evidence_dir), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

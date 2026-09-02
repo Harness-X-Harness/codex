@@ -1416,7 +1416,99 @@ experimental_bearer_token = "secret"
                     self.assertEqual(evidence["outcome"], "deadline_expired")
                     self.assertEqual(evidence["does_not_prove"], "product_root_cause")
                     self.assertEqual(evidence["last_proven_stage"], "no_events")
+                    self.assertEqual(evidence["mode"], "release")
                     self.assertNotIn("secret", json.dumps(evidence))
+
+    def test_observation_mode_records_timings_without_failing(self) -> None:
+        class TimeoutScenarioServer(FakeScenarioAppServer):
+            def next_message(self, deadline: float, waiting_for: str) -> dict[str, object]:
+                del deadline
+                raise live_smoke.LiveDeadlineExpired(waiting_for, {})
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "candidate.tar.gz"
+            archive.write_bytes(b"candidate")
+            config = root / "config.toml"
+            config.write_text(
+                'model = "grok-4.6"\nmodel_provider = "grok"\n[model_providers.grok]\nexperimental_bearer_token = "secret"\n',
+                encoding="utf-8",
+            )
+            evidence_path = root / "observation.json"
+            server = TimeoutScenarioServer([])
+            with patch.object(
+                live_smoke, "extract_archive", return_value=root
+            ), patch.object(live_smoke, "AppServer", return_value=server):
+                live_smoke.run_smoke(
+                    archive,
+                    config,
+                    evidence_path,
+                    "source",
+                    "validator",
+                    "run",
+                    live_smoke.BASIC_SCENARIO,
+                    live_smoke.OBSERVATION_MODE,
+                )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["mode"], "observation")
+            self.assertEqual(evidence["outcome"], "deadline_expired")
+            self.assertEqual(
+                evidence["contract_sha256"], live_smoke.sha256(live_smoke.LIVE_CONTRACTS_PATH)
+            )
+            self.assertEqual(
+                [timing["stage"] for timing in evidence["stage_timings"]],
+                [
+                    "app_server_started",
+                    "initialized",
+                    "catalog_verified",
+                    "thread_started",
+                    "turn_submission_attempted",
+                    "turn_start_response_received",
+                    "turn_submitted",
+                ],
+            )
+            self.assertEqual(len(evidence["turn_durations_seconds"]), 1)
+            self.assertNotIn("secret", json.dumps(evidence))
+
+            with self.assertRaises(SystemExit):
+                with patch.object(
+                    live_smoke, "extract_archive", return_value=root
+                ), patch.object(live_smoke, "AppServer", return_value=TimeoutScenarioServer([])):
+                    live_smoke.run_smoke(
+                        archive,
+                        config,
+                        evidence_path,
+                        "source",
+                        "validator",
+                        "run",
+                        live_smoke.BASIC_SCENARIO,
+                        "not-a-mode",
+                    )
+
+    def test_archive_root_is_detected_from_members(self) -> None:
+        import tarfile
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage = root / "grokex-v0.149.0" / "bin"
+            stage.mkdir(parents=True)
+            (stage / "grokex-bin").write_bytes(b"binary")
+            archive = root / "published.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(root / "grokex-v0.149.0", arcname="grokex-v0.149.0")
+
+            extracted = live_smoke.extract_archive(archive, root / "out")
+
+            self.assertEqual(extracted, root / "out" / "grokex-v0.149.0")
+
+            (root / "other").mkdir()
+            mixed = root / "mixed.tar.gz"
+            with tarfile.open(mixed, "w:gz") as handle:
+                handle.add(root / "grokex-v0.149.0", arcname="grokex-v0.149.0")
+                handle.add(root / "other", arcname="other")
+            with self.assertRaisesRegex(SystemExit, "single root"):
+                live_smoke.extract_archive(mixed, root / "out2")
+
 
 if __name__ == "__main__":
     unittest.main()
