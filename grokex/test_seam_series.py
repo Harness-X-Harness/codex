@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import subprocess
 import tempfile
@@ -102,6 +104,19 @@ class SeamSeriesRoundTripTest(unittest.TestCase):
                 ["0001-core.patch", "0002-tooling.patch", "0003-docs.patch"],
             )
             self.assertEqual(tree, git(repo, "rev-parse", f"{head}^{{tree}}"))
+
+            # The CLI takes range options after the subcommand, the way
+            # grokex-checks invokes it.
+            cli_out = Path(scratch) / "cli-series"
+            cli_args = ["--repo", str(repo), "--series", str(series), "--base", base, "--head", head]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(seam_series.main(["plan", *cli_args]), 0)
+                self.assertEqual(seam_series.main(["export", *cli_args, "--out", str(cli_out)]), 0)
+                self.assertEqual(seam_series.main(["verify", *cli_args, "--out", str(cli_out)]), 0)
+            self.assertEqual(
+                sorted(path.name for path in cli_out.glob("*.patch")),
+                [path.name for path in written],
+            )
 
             replay = Path(scratch) / "replay"
             git(repo, "worktree", "add", "-q", "--detach", str(replay), base)

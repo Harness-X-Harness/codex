@@ -182,15 +182,20 @@ def verify(repo: Path, base: str, head: str, out: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--repo", type=Path, default=REPO_ROOT)
-    parser.add_argument("--series", type=Path, default=SERIES_PATH)
-    parser.add_argument("--base", help="upstream commit (default: release-source.json)")
-    parser.add_argument("--head", default="HEAD")
+    # Range options live on every subcommand so `plan --head X` and
+    # `export --head X --out DIR` both parse.
+    range_options = argparse.ArgumentParser(add_help=False)
+    range_options.add_argument("--repo", type=Path, default=REPO_ROOT)
+    range_options.add_argument("--series", type=Path, default=SERIES_PATH)
+    range_options.add_argument(
+        "--base", help="upstream commit (default: release-source.json)"
+    )
+    range_options.add_argument("--head", default="HEAD")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("plan")
-    export_parser = subparsers.add_parser("export")
+    subparsers.add_parser("plan", parents=[range_options])
+    export_parser = subparsers.add_parser("export", parents=[range_options])
     export_parser.add_argument("--out", type=Path, required=True)
-    verify_parser = subparsers.add_parser("verify")
+    verify_parser = subparsers.add_parser("verify", parents=[range_options])
     verify_parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
 
