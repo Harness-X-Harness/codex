@@ -51,9 +51,14 @@ LIVE_SCENARIO_ASSERTIONS = {
     },
     "ultra-full-history-collaboration": {
         "child_completion": "completed",
+        "child_model_evidence": "parent_model_default_spawn_and_stock_inheritance",
+        "child_model_verified": True,
+        "child_parent_link_verified": True,
         "child_provider_binding": "grok/grok-4.6",
+        "child_provider_verified": True,
         "child_response_assertion": "canonical_uuid_v4",
         "default_full_history": "completed",
+        "evidence_source": "public_snapshot_and_stream",
         "multi_agent_version": "v2",
         "parent_completion": "completed",
         "reasoning_effort": "ultra",
@@ -61,14 +66,17 @@ LIVE_SCENARIO_ASSERTIONS = {
         "runner_turn_submission_count": 1,
         "status": "completed",
         "result_delivery": "completed",
+        "result_delivery_verified": True,
     },
     "image-generation-history-edit": {
         "edit_agent_reply_seen": True,
         "edit_artifact_match": True,
         "edit_completion": "completed",
+        "edit_image_decodable": True,
         "generation_agent_reply_seen": True,
         "generation_artifact_match": True,
         "generation_completion": "completed",
+        "generation_image_decodable": True,
         "history_arguments_verified": True,
         "runner_turn_submission_count": 2,
         "same_thread": True,
@@ -310,6 +318,11 @@ def verify_profile(path: Path, secret: bool) -> None:
         raise SystemExit(f"profile contains unsupported authority: {legacy}")
     if config.get("model") != "grok-4.6" or config.get("model_provider") != "grok":
         raise SystemExit("profile must select exact grok-4.6 from Provider grok")
+    if "model_catalog_json" in config:
+        raise SystemExit("profile must use the release-bundled model catalog")
+    agents = config.get("agents")
+    if isinstance(agents, dict) and agents.get("default_subagent_model") is not None:
+        raise SystemExit("profile must not override the default child model")
     providers = config.get("model_providers")
     provider = providers.get("grok") if isinstance(providers, dict) else None
     if not isinstance(provider, dict):

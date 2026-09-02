@@ -129,6 +129,11 @@ jobs:
           umask 077
           printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
           python3 grokex/release.py verify-profile --path "${RUNNER_TEMP}/config.toml" --secret
+      - name: Install image decoder
+        if: matrix.scenario == 'image-generation-history-edit'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg imagemagick
       - name: Execute bounded semantic scenario
         env:
           SCENARIO: ${{ matrix.scenario }}

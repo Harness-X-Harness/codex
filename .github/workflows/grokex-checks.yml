@@ -30,10 +30,16 @@ jobs:
         with:
           ref: ${{ env.CHECKOUT_SHA }}
           persist-credentials: false
+      - name: Install image decoder
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg imagemagick
       - name: Verify helper contracts
         shell: bash
         run: |
           set -euo pipefail
+          command -v ffprobe >/dev/null
+          command -v convert >/dev/null
           python3 -m py_compile \
             grokex/release.py \
             grokex/live_smoke.py \

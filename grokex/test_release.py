@@ -7,6 +7,43 @@ from grokex import release
 
 
 class LiveEvidenceTest(unittest.TestCase):
+    def test_live_profile_rejects_catalog_and_child_model_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "config.toml"
+            profile.write_text(
+                """
+model = "grok-4.6"
+model_provider = "grok"
+
+[agents]
+default_subagent_model = "grok-4.5"
+
+[model_providers.grok]
+base_url = "https://grok.trustedtunnel.app/v1"
+experimental_bearer_token = "secret"
+requires_openai_auth = false
+supports_websockets = false
+wire_api = "grok_responses"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                SystemExit, "must not override the default child model"
+            ):
+                release.verify_profile(profile, secret=True)
+
+            profile.write_text(
+                profile.read_text(encoding="utf-8").replace(
+                    '[agents]\ndefault_subagent_model = "grok-4.5"\n',
+                    'model_catalog_json = "custom-catalog.json"\n',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SystemExit, "release-bundled model catalog"):
+                release.verify_profile(profile, secret=True)
+
     def test_release_identity_rejects_rebound_live_evidence(self) -> None:
         evidence = {
             "archive": release.archive_name("x86_64-unknown-linux-musl"),
@@ -67,9 +104,14 @@ class LiveEvidenceTest(unittest.TestCase):
                 **common,
                 "child_completion": "completed",
                 "child_count": 3,
+                "child_model_evidence": "parent_model_default_spawn_and_stock_inheritance",
+                "child_model_verified": True,
+                "child_parent_link_verified": True,
                 "child_provider_binding": "grok/grok-4.6",
+                "child_provider_verified": True,
                 "child_response_assertion": "canonical_uuid_v4",
                 "default_full_history": "completed",
+                "evidence_source": "public_snapshot_and_stream",
                 "explicit_fork_spawn_count": 1,
                 "failed_collaboration_tool_count": 2,
                 "missing_spawn_identity_count": 0,
@@ -85,6 +127,7 @@ class LiveEvidenceTest(unittest.TestCase):
                 "unexpected_collaboration_tool_count": 1,
                 "wait_count": 3,
                 "result_delivery": "completed",
+                "result_delivery_verified": True,
             }
             image = {
                 **common,
@@ -92,11 +135,13 @@ class LiveEvidenceTest(unittest.TestCase):
                 "edit_artifact_extension": ".webp",
                 "edit_artifact_match": True,
                 "edit_completion": "completed",
+                "edit_image_decodable": True,
                 "edit_image_mime": "image/webp",
                 "generation_agent_reply_seen": True,
                 "generation_artifact_extension": ".png",
                 "generation_artifact_match": True,
                 "generation_completion": "completed",
+                "generation_image_decodable": True,
                 "generation_image_mime": "image/png",
                 "history_arguments_verified": True,
                 "image_items_completed": 2,
@@ -157,9 +202,14 @@ class LiveEvidenceTest(unittest.TestCase):
                         "ultra-full-history-collaboration": {
                             "child_completion": "completed",
                             "child_count": 3,
+                            "child_model_evidence": "parent_model_default_spawn_and_stock_inheritance",
+                            "child_model_verified": True,
+                            "child_parent_link_verified": True,
                             "child_provider_binding": "grok/grok-4.6",
+                            "child_provider_verified": True,
                             "child_response_assertion": "canonical_uuid_v4",
                             "default_full_history": "completed",
+                            "evidence_source": "public_snapshot_and_stream",
                             "explicit_fork_spawn_count": 1,
                             "failed_collaboration_tool_count": 2,
                             "missing_spawn_identity_count": 0,
@@ -174,6 +224,7 @@ class LiveEvidenceTest(unittest.TestCase):
                             "unexpected_collaboration_tool_count": 1,
                             "wait_count": 3,
                             "result_delivery": "completed",
+                            "result_delivery_verified": True,
                             "story": "grokex-provider-binding-lifecycle",
                         },
                         "image-generation-history-edit": {
@@ -181,11 +232,13 @@ class LiveEvidenceTest(unittest.TestCase):
                             "edit_artifact_extension": ".webp",
                             "edit_artifact_match": True,
                             "edit_completion": "completed",
+                            "edit_image_decodable": True,
                             "edit_image_mime": "image/webp",
                             "generation_agent_reply_seen": True,
                             "generation_artifact_extension": ".png",
                             "generation_artifact_match": True,
                             "generation_completion": "completed",
+                            "generation_image_decodable": True,
                             "generation_image_mime": "image/png",
                             "history_arguments_verified": True,
                             "image_items_completed": 2,
