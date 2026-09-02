@@ -235,7 +235,7 @@ jobs:
           {
             echo "### ${SCENARIO}"
             echo
-            jq -r '"- mode: \(.mode)\n- outcome: \(.outcome // .status)\n- last proven stage: \(.last_proven_stage // .stage_timings[-1].stage)\n- turn durations (s): \(.turn_durations_seconds | map(tostring) | join(", "))"' "${evidence}"
+            jq -r '"- mode: \(.mode // "unknown")\n- outcome: \(.outcome // .status // "unknown")\n- last proven stage: \(.last_proven_stage // ((.stage_timings // [])[-1].stage) // "unknown")\n- turn durations (s): \((.turn_durations_seconds // []) | map(tostring) | join(", "))"' "${evidence}"
             echo
           } >> "${GITHUB_STEP_SUMMARY}"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

@@ -41,6 +41,7 @@ jobs:
       release_tag: ${{ steps.identity.outputs.release_tag }}
       required: ${{ steps.required.outputs.required }}
       source_sha: ${{ steps.source.outputs.sha }}
+      upstream_tag: ${{ steps.identity.outputs.upstream_tag }}
       validator_sha: ${{ steps.evidence.outputs.validator_sha }}
       version: ${{ steps.identity.outputs.version }}
     steps:
@@ -337,7 +338,7 @@ jobs:
       - name: Recheck immutable source and empty destination
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_TAG: rust-v${{ needs.preflight.outputs.version }}
+          UPSTREAM_TAG: ${{ needs.preflight.outputs.upstream_tag }}
         shell: bash
         run: |
           set -euo pipefail
