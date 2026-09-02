@@ -124,9 +124,10 @@ type TurnRequest struct {
 	Deadline time.Duration
 }
 
-func (r TurnRequest) params(threadID string) protocolv2.TurnStartParams {
+// params builds the Turn parameters; Turn.ThreadID stays empty because the exact
+// client composes it from the thread/start or thread/resume response.
+func (r TurnRequest) params() protocolv2.TurnStartParams {
 	params := protocolv2.TurnStartParams{
-		ThreadID: threadID,
 		Input: []protocolv2.UserInput{
 			protocolv2.NewUserInputText(protocolv2.UserInputText{Text: r.Prompt}),
 		},
@@ -148,7 +149,7 @@ func (d *Driver) StartThread(ctx context.Context, request TurnRequest) (TurnRun,
 			Model:         protocolv2.Value(Model),
 			ModelProvider: protocolv2.Value(Provider),
 		},
-		Turn: request.params(""),
+		Turn: request.params(),
 	})
 	if err != nil {
 		return TurnRun{}, fmt.Errorf("thread/start: %w", err)
@@ -163,9 +164,11 @@ func (d *Driver) ContinueThread(ctx context.Context, threadID string, request Tu
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, request.Deadline)
 	defer cancel()
+	// codexsdk composes Turn.ThreadID from the resume response and rejects a
+	// caller-supplied one ("composition-owned").
 	stream, err := d.client.ThreadRunner().ResumeStream(ctx, codexsdk.ResumeThreadRunRequest{
 		Thread: protocolv2.ThreadResumeParams{ThreadID: threadID},
-		Turn:   request.params(threadID),
+		Turn:   request.params(),
 	})
 	if err != nil {
 		return TurnRun{}, fmt.Errorf("thread/resume: %w", err)
