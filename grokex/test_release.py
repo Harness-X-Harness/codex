@@ -160,6 +160,24 @@ class ReleaseIdentityTest(unittest.TestCase):
                 ["grokex/live_smoke.py"],
                 every_scenario,
             ),
+            "test-only paths never change the binary": (
+                [
+                    "codex-rs/core/tests/suite/grok_agent_execution.rs",
+                    "codex-rs/core/src/tools/router/seam_pins_tests.rs",
+                    "codex-rs/core/src/tools/router/flat_projection_tests.rs",
+                    "codex-rs/history/src/tests.rs",
+                    "codex-rs/codex-api/tests/clients.rs",
+                ],
+                ["basic-exact-reply"],
+            ),
+            "test declaration in a product module still counts": (
+                ["codex-rs/core/src/tools/router/flat_projection.rs"],
+                [
+                    "basic-exact-reply",
+                    "encrypted-reasoning-tool-continuation",
+                    "ultra-full-history-collaboration",
+                ],
+            ),
         }
         for name, (changed, expected) in cases.items():
             with self.subTest(name):

@@ -417,17 +417,36 @@ def seam_path_matches(seam_path: str, changed_path: str) -> bool:
     return changed_path == seam_path
 
 
+def is_test_only_path(changed_path: str) -> bool:
+    """Return whether a path can never change the shipped binary.
+
+    Rust integration tests live under ``tests/`` directories and unit tests in
+    ``*_tests.rs`` / ``tests.rs`` modules compiled only under ``cfg(test)``.
+    """
+    rules: dict[str, list[str]] = LIVE_CONTRACTS.get("test_only_paths", {})
+    components = changed_path.split("/")
+    if any(
+        component in components[:-1]
+        for component in rules.get("directory_components", [])
+    ):
+        return True
+    return any(
+        changed_path.endswith(suffix) for suffix in rules.get("file_suffixes", [])
+    )
+
+
 def required_scenarios(changed_paths: list[str] | None) -> list[str]:
     """Return the Live scenarios a publication must execute on the exact artifact.
 
     ``None`` means the diff base is unknown (for example the first publication),
     which requires every scenario. Otherwise a scenario is required when its
-    policy is ``always`` or when any changed path touches one of its seams or a
-    seam shared by every scenario.
+    policy is ``always`` or when any changed non-test path touches one of its
+    seams or a seam shared by every scenario.
     """
     scenarios: dict[str, dict[str, object]] = LIVE_CONTRACTS["scenarios"]
     if changed_paths is None:
         return list(scenarios)
+    changed_paths = [path for path in changed_paths if not is_test_only_path(path)]
     shared: list[str] = LIVE_CONTRACTS.get("all_scenarios_seam_paths", [])
     if any(
         seam_path_matches(seam_path, changed_path)

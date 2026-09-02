@@ -1,5 +1,9 @@
 {
   "schema_version": 1,
+  "test_only_paths": {
+    "directory_components": ["tests"],
+    "file_suffixes": ["_tests.rs", "/tests.rs"]
+  },
   "all_scenarios_seam_paths": [
     ".github/actions/build-grokex/",
     "codex-rs/Cargo.lock",
