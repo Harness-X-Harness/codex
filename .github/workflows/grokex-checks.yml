@@ -43,9 +43,16 @@ jobs:
           python3 -m py_compile \
             grokex/release.py \
             grokex/live_smoke.py \
+            grokex/seam_series.py \
             grokex/test_release.py \
-            grokex/test_live_smoke.py
-          python3 -m unittest grokex.test_release grokex.test_live_smoke
+            grokex/test_live_smoke.py \
+            grokex/test_seam_series.py
+          python3 -m unittest grokex.test_release grokex.test_live_smoke grokex.test_seam_series
+          upstream_commit="$(python3 grokex/release.py identity --github-output | sed -n 's/^upstream_commit=//p')"
+          git fetch --quiet --depth=1 origin "${upstream_commit}"
+          python3 grokex/seam_series.py plan --head "${CHECKOUT_SHA}" > "${RUNNER_TEMP}/seam-plan.txt"
+          python3 grokex/seam_series.py export --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series" > /dev/null
+          python3 grokex/seam_series.py verify --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series"
           bash -n grokex/grokex grokex/install-grokex.sh
           pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
           python3 grokex/release.py verify-profile --path grokex/config.toml.example

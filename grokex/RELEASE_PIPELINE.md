@@ -49,13 +49,52 @@ every scenario on the exact artifact.
 Any change to `codex-rs/Cargo.lock`, the build action, `release.py`,
 `live_smoke.py`, or the contract file requires every scenario again.
 
+Test-only paths never require a Live re-proof because they cannot change the
+shipped binary: files under a `tests/` directory, `*_tests.rs`, and `tests.rs`
+(see `test_only_paths` in the contract). A product module that merely declares
+a test module still counts as a seam change.
+
+## Seam pins and Grok test placement
+
+Grok-specific tests never live inside stock test files, so an upstream bump
+rebases them without conflicts:
+
+- `codex-rs/core/src/tools/router/flat_projection_tests.rs` and
+  `seam_pins_tests.rs` (declared from the Grok `flat_projection` module)
+- `codex-rs/core/tests/suite/grok_*.rs`
+- `codex-rs/codex-api/src/provider_grok_tests.rs`
+- `codex-rs/model-provider/src/grok_provider_tests.rs`
+
+`seam_pins_tests.rs` and `provider_grok_tests.rs` are executable assumptions
+about stock shapes the graft depends on: every `ToolSpec` variant is classified
+as local or provider-hosted, every stock `CollabAgentTool` states whether Grok
+restores it as a plaintext call, the `spawn_agent` argument contract stays
+`{message, task_name}`, and the top-level `ResponsesApiRequest` fields forwarded
+to the Grok gateway are an explicit allowlist. When an upstream bump breaks a
+pin, the graft is reviewed instead of failing first in a Live scenario.
+
 ## Validator carrier
 
 A `grokex-live` run may execute from a later commit than the candidate source
 when the product-to-carrier diff touches only validation paths (`release.py`,
-`live_smoke.py`, their tests, the contract file, this document, and
-`.github/workflows/grokex-*.yml`). `release.py verify-carrier` enforces the
-allowlist; the archive under test still comes from the product SHA.
+`live_smoke.py`, `seam_series.py`, their tests, the contract and seam map
+files, this document, and `.github/workflows/grokex-*.yml`).
+`release.py verify-carrier` enforces the allowlist; the archive under test
+still comes from the product SHA.
+
+## Seam series for upstream bumps
+
+`grokex/seam_series.json` maps every path the graft touches to one of ten
+seams. `python3 grokex/seam_series.py plan` fails when a changed path has no
+owner; `export --out DIR` writes the net upstream-to-head difference as ten
+`git am`-compatible patches, one per seam; `verify --out DIR` applies them onto
+the upstream tree and requires the exact release tree hash. `grokex-checks`
+runs all three, so the series is always current.
+
+To port to a new upstream tag: export the series from the current release
+branch, `git am` it onto the new tag one seam at a time, resolve conflicts
+inside that seam only, and let the seam pins and stock controls point at the
+shapes that moved.
 
 ## Observation mode
 

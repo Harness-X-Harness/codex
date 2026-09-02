@@ -388,8 +388,11 @@ VALIDATION_ONLY_PATHS = (
     "grokex/live_contracts.json",
     "grokex/live_smoke.py",
     "grokex/release.py",
+    "grokex/seam_series.json",
+    "grokex/seam_series.py",
     "grokex/test_live_smoke.py",
     "grokex/test_release.py",
+    "grokex/test_seam_series.py",
 )
 
 

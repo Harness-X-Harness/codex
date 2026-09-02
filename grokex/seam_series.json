@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "patches": [
+    {
+      "name": "provider-identity",
+      "summary": "Grok model provider identity, catalog, wire API, and provider trait seams",
+      "paths": [
+        "codex-rs/model-provider/",
+        "codex-rs/model-provider-info/",
+        "codex-rs/core/src/config/",
+        "codex-rs/core/config.schema.json",
+        "codex-rs/core/Cargo.toml",
+        "codex-rs/core/src/client.rs",
+        "codex-rs/config/src/thread_config/",
+        "codex-rs/app-server/tests/common/",
+        "codex-rs/app-server/tests/suite/v2/model_list.rs",
+        "codex-rs/app-server/tests/suite/v2/model_provider_capabilities_read.rs"
+      ]
+    },
+    {
+      "name": "responses-dialect",
+      "summary": "Grok Responses dialect projection in codex-api",
+      "paths": [
+        "codex-rs/codex-api/src/provider.rs",
+        "codex-rs/codex-api/src/provider_grok_tests.rs",
+        "codex-rs/codex-api/src/endpoint/responses.rs",
+        "codex-rs/codex-api/src/endpoint/memories.rs",
+        "codex-rs/codex-api/src/endpoint/models.rs",
+        "codex-rs/codex-api/src/endpoint/realtime_call.rs",
+        "codex-rs/codex-api/src/endpoint/realtime_websocket/",
+        "codex-rs/codex-api/src/endpoint/search.rs",
+        "codex-rs/codex-api/src/lib.rs",
+        "codex-rs/codex-api/tests/"
+      ]
+    },
+    {
+      "name": "flat-tool-projection",
+      "summary": "Flat Provider function projection of namespaced and custom tools",
+      "paths": [
+        "codex-rs/core/src/tools/router.rs",
+        "codex-rs/core/src/tools/router/",
+        "codex-rs/core/src/tools/router_tests.rs",
+        "codex-rs/core/src/tools/spec_plan.rs",
+        "codex-rs/core/src/tools/spec_plan_tests.rs",
+        "codex-rs/core/src/tools/parallel.rs",
+        "codex-rs/core/src/tools/registry.rs",
+        "codex-rs/core/src/tools/tool_namespaces_info.rs",
+        "codex-rs/core/src/session/",
+        "codex-rs/core/src/stream_events_utils.rs",
+        "codex-rs/core/tests/common/",
+        "codex-rs/core/tests/suite/mod.rs",
+        "codex-rs/core/tests/suite/grok_agent_execution.rs",
+        "codex-rs/core/tests/suite/multi_agent_mode.rs",
+        "codex-rs/core/tests/suite/openai_file_mcp.rs"
+      ]
+    },
+    {
+      "name": "hosted-search-tools",
+      "summary": "Provider-hosted Web Search and X Search tool specs and history replay",
+      "paths": [
+        "codex-rs/tools/",
+        "codex-rs/history/",
+        "codex-rs/core/src/context_manager/",
+        "codex-rs/core/tests/suite/x_search.rs",
+        "codex-rs/core/tests/suite/grok_web_search.rs"
+      ]
+    },
+    {
+      "name": "image-generation",
+      "summary": "Grok image generation dialect and extension lifecycle",
+      "paths": [
+        "codex-rs/codex-api/src/endpoint/images.rs",
+        "codex-rs/codex-api/src/images.rs",
+        "codex-rs/ext/image-generation/",
+        "codex-rs/core/src/compact_remote_v2.rs",
+        "codex-rs/core/src/compact_remote_v2_image_budget_tests.rs",
+        "codex-rs/core/src/tools/handlers/extension_tools.rs",
+        "codex-rs/app-server/BUILD.bazel",
+        "codex-rs/app-server/tests/suite/v2/imagegen_extension.rs",
+        "codex-rs/app-server/tests/suite/v2/grok_imagegen_extension.rs"
+      ]
+    },
+    {
+      "name": "internal-model-policy",
+      "summary": "Guardian and memories respect the provider internal model policy",
+      "paths": [
+        "codex-rs/core/src/guardian/",
+        "codex-rs/ext/guardian-v2/",
+        "codex-rs/memories/"
+      ]
+    },
+    {
+      "name": "vendored-dependencies",
+      "summary": "Vendored crates and lockfile entries the Grok graft depends on",
+      "paths": [
+        "codex-rs/vendor/",
+        "codex-rs/Cargo.lock",
+        "codex-rs/Cargo.toml"
+      ]
+    },
+    {
+      "name": "grokex-distribution",
+      "summary": "Grokex launcher, installers, profile, and install guide",
+      "paths": [
+        "grokex/INSTALL.md",
+        "grokex/config.toml.example",
+        "grokex/grokex",
+        "grokex/grokex.ps1",
+        "grokex/install-grokex.ps1",
+        "grokex/install-grokex.sh"
+      ]
+    },
+    {
+      "name": "grokex-validation",
+      "summary": "Release identity, Live contracts, validators, and their tests",
+      "paths": [
+        "grokex/"
+      ]
+    },
+    {
+      "name": "grokex-workflows",
+      "summary": "Grokex GitHub Actions: checks, candidate, live, release, observe",
+      "paths": [
+        ".github/actions/build-grokex/",
+        ".github/workflows/grokex-"
+      ]
+    }
+  ]
+}
