@@ -95,6 +95,13 @@ jobs:
   package:
     name: Package SHA-addressed Linux candidate
     needs: [preflight, build]
+    # The implicit success() condition also looks at the transitive `checks`
+    # job, which is skipped whenever the gates were reused; state the real
+    # requirement so a reused-gate candidate still gets packaged.
+    if: >-
+      !cancelled()
+      && needs.preflight.result == 'success'
+      && needs.build.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
