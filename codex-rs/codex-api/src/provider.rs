@@ -200,97 +200,12 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "provider_grok_tests.rs"]
+mod grok_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::ResponsesApiTools;
-    use codex_protocol::models::AgentMessageInputContent;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseItem;
-    use serde_json::json;
-    use serde_json::value::RawValue;
-    use std::sync::Arc;
-
-    fn responses_request_with_tools(tools: Value) -> ResponsesApiRequest {
-        ResponsesApiRequest {
-            model: "grok-test".to_string(),
-            instructions: "test".to_string(),
-            input: vec![ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "test".to_string(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            }],
-            tools: Some(ResponsesApiTools::from(Arc::<RawValue>::from(
-                RawValue::from_string(tools.to_string()).expect("valid tool declaration"),
-            ))),
-            tool_choice: "auto".to_string(),
-            parallel_tool_calls: false,
-            reasoning: None,
-            store: false,
-            stream: true,
-            stream_options: None,
-            include: Vec::new(),
-            service_tier: None,
-            prompt_cache_key: None,
-            text: None,
-            client_metadata: None,
-            access_programs: None,
-        }
-    }
-
-    #[test]
-    fn grok_projects_verified_live_web_search_to_bare_declaration() {
-        let request = responses_request_with_tools(json!([{
-            "type": "web_search",
-            "external_web_access": true,
-        }]));
-
-        let projected = ResponsesDialect::Grok
-            .project_request(&request)
-            .expect("verified live search should project");
-
-        assert_eq!(projected["tools"], json!([{"type": "web_search"}]));
-    }
-
-    #[test]
-    fn grok_rejects_unverified_web_search_declarations() {
-        for tool in [
-            json!({"type": "web_search", "external_web_access": false}),
-            json!({
-                "type": "web_search",
-                "external_web_access": true,
-                "indexed_web_access": true,
-            }),
-            json!({
-                "type": "web_search",
-                "external_web_access": true,
-                "search_context_size": "high",
-            }),
-        ] {
-            let request = responses_request_with_tools(json!([tool]));
-
-            assert!(ResponsesDialect::Grok.project_request(&request).is_err());
-        }
-    }
-
-    #[test]
-    fn grok_rejects_residual_agent_message_before_transport() {
-        let mut request = responses_request_with_tools(json!([]));
-        request.input = vec![ResponseItem::AgentMessage {
-            id: None,
-            author: "/root".to_string(),
-            recipient: "/root/child".to_string(),
-            content: vec![AgentMessageInputContent::EncryptedContent {
-                encrypted_content: "opaque".to_string(),
-            }],
-            internal_chat_message_metadata_passthrough: None,
-        }];
-
-        assert!(ResponsesDialect::Grok.project_request(&request).is_err());
-    }
 
     #[test]
     fn detects_azure_responses_base_urls() {

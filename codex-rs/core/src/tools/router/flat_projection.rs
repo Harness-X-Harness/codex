@@ -247,3 +247,11 @@ pub(super) fn decode_custom_input(
         })?;
     Ok(input.to_string())
 }
+
+#[cfg(test)]
+#[path = "flat_projection_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "seam_pins_tests.rs"]
+mod seam_pins;
