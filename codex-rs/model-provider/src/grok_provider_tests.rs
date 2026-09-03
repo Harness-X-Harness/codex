@@ -257,3 +257,33 @@ async fn grok_models_manager_uses_bundle_or_exact_config_replacement() {
         configured_catalog.models
     );
 }
+
+/// Seam pin for the History projection contract: the stock OpenAI provider is
+/// the identity path, so Grok's projection is the only place canonical history
+/// is reshaped for a wire. Stock 0.151 also strips passthrough metadata and
+/// encrypted function arguments for other non-OpenAI providers; that is the
+/// upstream default Grok inherits before its own projection applies.
+#[test]
+fn stock_openai_provider_keeps_canonical_history_unchanged() {
+    let metadata = Some(InternalChatMessageMetadataPassthrough {
+        turn_id: Some("turn-1".to_owned()),
+        ..Default::default()
+    });
+    let mut input = canonical_history(metadata, Some(vec!["encrypted".to_owned()]));
+    input.push(ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_owned(),
+        }],
+        content: None,
+        encrypted_content: Some("opaque-encrypted-reasoning".to_owned()),
+        internal_chat_message_metadata_passthrough: None,
+    });
+
+    let stock = create_model_provider(
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        /*auth_manager*/ None,
+    );
+
+    assert_eq!(stock.project_model_input(input.clone()), input);
+}
