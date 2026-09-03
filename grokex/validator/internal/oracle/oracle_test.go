@@ -197,7 +197,7 @@ func TestCollaborationProvesChildLifecycleAndDelivery(t *testing.T) {
 		"child_parent_link_verified":   true,
 		"child_provider_binding":       "grok/grok-4.6",
 		"child_provider_verified":      true,
-		"child_response_assertion":     "canonical_uuid_v4",
+		"child_response_assertion":     "uuid_shaped_nonce",
 		"default_full_history":         "completed",
 		"evidence_source":              "canonical_session",
 		"multi_agent_version":          "v2",
@@ -214,6 +214,80 @@ func TestCollaborationProvesChildLifecycleAndDelivery(t *testing.T) {
 	}
 	if verdict.Diagnostics["child_count"] != 1 || !reflect.DeepEqual(verdict.Diagnostics["root_function_calls"], map[string]int{"collaboration.spawn_agent": 1, "collaboration.wait_agent": 1}) {
 		t.Fatalf("diagnostics = %#v", verdict.Diagnostics)
+	}
+	if verdict.Diagnostics["child_reply_shape"] != "canonical_uuid_v4" || verdict.Diagnostics["root_reply_shape"] != "canonical_uuid_v4" {
+		t.Fatalf("reply shapes = %#v", verdict.Diagnostics)
+	}
+}
+
+// collabReplies rewrites what the child said and what the root echoed in the
+// collab fixture, returning the graph and the reply the app-server delivered.
+func collabReplies(t *testing.T, child, root, delivered string) (*rollout.Graph, driver.TurnRun) {
+	t.Helper()
+	graph := fixtures(t, "collab")
+	rootSession, _ := graph.Session(collabRoot)
+	rootTurn, _ := rootSession.Turn(collabRootT)
+	rootTurn.LastAgentMessage = root
+	for _, candidate := range graph.Children(collabRoot) {
+		for _, turn := range candidate.CompletedTurns() {
+			if _, inherited := rootSession.Turn(turn.ID); !inherited {
+				turn.LastAgentMessage = child
+			}
+		}
+	}
+	return graph, completedRun(collabRoot, collabRootT, delivered, 50)
+}
+
+func TestCollaborationAcceptsHandWrittenAndFencedNonces(t *testing.T) {
+	catalog := driver.Catalog{ModelListed: true, MultiAgentVersion: "v2"}
+	cases := map[string]struct {
+		child, root, delivered string
+		childShape             string
+	}{
+		"wrong version and variant nibbles": {
+			child:      "3f2b1c9e-8d4a-1b6f-1a1e-7c5d2e8f0a11",
+			root:       "3f2b1c9e-8d4a-1b6f-1a1e-7c5d2e8f0a11",
+			delivered:  "3f2b1c9e-8d4a-1b6f-1a1e-7c5d2e8f0a11",
+			childShape: "uuid_shaped",
+		},
+		"uppercase": {
+			child:      "3F2B1C9E-8D4A-4B6F-9A1E-7C5D2E8F0A11",
+			root:       "3F2B1C9E-8D4A-4B6F-9A1E-7C5D2E8F0A11",
+			delivered:  "3F2B1C9E-8D4A-4B6F-9A1E-7C5D2E8F0A11",
+			childShape: "uuid_shaped",
+		},
+		"fenced by the child, bare from the root": {
+			child:      "```\n" + nonce + "\n```",
+			root:       "`" + nonce + "`",
+			delivered:  nonce + "\n",
+			childShape: "canonical_uuid_v4",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			graph, run := collabReplies(t, tc.child, tc.root, tc.delivered)
+			verdict := Collaboration(graph, run, catalog)
+			if !verdict.OK() {
+				t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
+			}
+			if verdict.Diagnostics["child_reply_shape"] != tc.childShape {
+				t.Fatalf("child_reply_shape = %#v", verdict.Diagnostics["child_reply_shape"])
+			}
+		})
+	}
+}
+
+func TestCollaborationRejectsProseFromTheChild(t *testing.T) {
+	prose := "I could not run uuidgen, so here is one: 3f2b1c9e-8d4a-4b6f-9a1e-7c5d2e8f0a11"
+	graph, run := collabReplies(t, prose, prose, prose)
+
+	verdict := Collaboration(graph, run, driver.Catalog{})
+
+	if verdict.OK() || verdict.FailureCategory != "semantic_contract" || verdict.LastProvenStage != "child_provider_verified" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	if verdict.Diagnostics["child_reply_shape"] != "prose" {
+		t.Fatalf("child_reply_shape = %#v", verdict.Diagnostics["child_reply_shape"])
 	}
 }
 
