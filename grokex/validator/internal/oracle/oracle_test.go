@@ -242,3 +242,124 @@ func TestCollaborationDeadlineKeepsPostMortemHints(t *testing.T) {
 		t.Fatalf("hints = %#v", verdict.Diagnostics)
 	}
 }
+
+const (
+	probeRoot     = "01a065f9-eae0-7fc0-9b66-0d2b9cafbeda"
+	probeTurnOne  = "01a065f9-eb03-7d33-9375-30a66bd2d535"
+	probeTurnHist = "01a065f9-ece6-7591-82b1-d0583f69c80c"
+)
+
+func TestBasicProvesBindingReplyAndDelivery(t *testing.T) {
+	graph := fixtures(t, "image")
+
+	verdict := Basic(graph, completedRun(imageRoot, imageTurnGen, "Generated the image.", 3))
+
+	if !verdict.OK() {
+		t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
+	}
+	want := map[string]any{
+		"evidence_source":              "canonical_session",
+		"provider_binding":             "grok/grok-4.6",
+		"response_assertion":           "nonempty_agent_message",
+		"result_delivery_verified":     true,
+		"runner_turn_submission_count": 1,
+		"status":                       "completed",
+	}
+	if !reflect.DeepEqual(verdict.Assertions, want) {
+		t.Fatalf("assertions = %#v", verdict.Assertions)
+	}
+	if verdict.Diagnostics["reply_matches_requested_marker"] != false {
+		t.Fatalf("marker hint = %#v", verdict.Diagnostics["reply_matches_requested_marker"])
+	}
+}
+
+func TestBasicRequiresDeliveredReplyToMatch(t *testing.T) {
+	graph := fixtures(t, "image")
+	verdict := Basic(graph, completedRun(imageRoot, imageTurnGen, "something else", 3))
+	if verdict.OK() || verdict.FailureCategory != "delivery" || verdict.LastProvenStage != "reply_persisted" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+}
+
+func TestContinuationProvesToolRoundTripEncryptedReasoningAndHistory(t *testing.T) {
+	graph := fixtures(t, "probe")
+
+	verdict := Continuation(graph,
+		completedRun(probeRoot, probeTurnOne, "GROKEX_LIVE_RESPONSE_OK", 20),
+		completedRun(probeRoot, probeTurnHist, "GROKEX_LIVE_TOOL_OK", 8),
+		1,
+	)
+
+	if !verdict.OK() {
+		t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
+	}
+	want := map[string]any{
+		"encrypted_reasoning_observed": true,
+		"evidence_source":              "canonical_session",
+		"history_response_assertion":   "exact_match",
+		"response_assertion":           "exact_match",
+		"runner_turn_submission_count": 2,
+		"same_thread_history":          "completed",
+		"status":                       "completed",
+		"tool_continuation":            "completed",
+	}
+	if !reflect.DeepEqual(verdict.Assertions, want) {
+		t.Fatalf("assertions = %#v", verdict.Assertions)
+	}
+	if verdict.Diagnostics["tool_request_count"] != 1 || verdict.Diagnostics["first_encrypted_reasoning_items"] != 2 {
+		t.Fatalf("diagnostics = %#v", verdict.Diagnostics)
+	}
+}
+
+func TestContinuationRequiresAnsweredToolRequest(t *testing.T) {
+	graph := fixtures(t, "probe")
+	verdict := Continuation(graph,
+		completedRun(probeRoot, probeTurnOne, "GROKEX_LIVE_RESPONSE_OK", 1),
+		completedRun(probeRoot, probeTurnHist, "GROKEX_LIVE_TOOL_OK", 1),
+		0,
+	)
+	if verdict.OK() || verdict.LastProvenStage != "first_turn_context_verified" || verdict.FailureCategory != "semantic_contract" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+}
+
+func TestContinuationRequiresEncryptedReasoning(t *testing.T) {
+	graph := fixtures(t, "probe")
+	root, _ := graph.Session(probeRoot)
+	first, _ := root.Turn(probeTurnOne)
+	first.EncryptedReasoningCount = 0
+	verdict := Continuation(graph,
+		completedRun(probeRoot, probeTurnOne, "GROKEX_LIVE_RESPONSE_OK", 1),
+		completedRun(probeRoot, probeTurnHist, "GROKEX_LIVE_TOOL_OK", 1),
+		1,
+	)
+	if verdict.OK() || verdict.LastProvenStage != "tool_output_persisted" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	if _, asserted := verdict.Assertions["encrypted_reasoning_observed"]; asserted {
+		t.Fatal("failed contract must not be asserted")
+	}
+}
+
+func TestContinuationHistoryMustReturnToolOutput(t *testing.T) {
+	graph := fixtures(t, "probe")
+	verdict := Continuation(graph,
+		completedRun(probeRoot, probeTurnOne, "GROKEX_LIVE_RESPONSE_OK", 1),
+		completedRun(probeRoot, probeTurnHist, "GROKEX_LIVE_TOOL_OK", 1),
+		1,
+	)
+	if !verdict.OK() {
+		t.Fatalf("baseline should pass: %+v", verdict)
+	}
+	root, _ := graph.Session(probeRoot)
+	history, _ := root.Turn(probeTurnHist)
+	history.LastAgentMessage = "I do not remember"
+	verdict = Continuation(graph,
+		completedRun(probeRoot, probeTurnOne, "GROKEX_LIVE_RESPONSE_OK", 1),
+		completedRun(probeRoot, probeTurnHist, "I do not remember", 1),
+		1,
+	)
+	if verdict.OK() || verdict.LastProvenStage != "history_turn_completed" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+}

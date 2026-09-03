@@ -113,3 +113,53 @@ func TestScanMissingSessionsDirIsEmpty(t *testing.T) {
 		t.Fatalf("graph=%+v err=%v", graph, err)
 	}
 }
+
+const (
+	probeRoot     = "01a065f9-eae0-7fc0-9b66-0d2b9cafbeda"
+	probeTurnOne  = "01a065f9-eb03-7d33-9375-30a66bd2d535"
+	probeTurnHist = "01a065f9-ece6-7591-82b1-d0583f69c80c"
+)
+
+func TestScanDynamicToolContinuation(t *testing.T) {
+	graph, err := Scan(filepath.Join("testdata", "probe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, ok := graph.Session(probeRoot)
+	if !ok || root.ModelProvider != "grok" || root.HistoryMode != "paginated" {
+		t.Fatalf("root = %+v", root)
+	}
+	first, ok := root.Turn(probeTurnOne)
+	if !ok || !first.Completed || first.LastAgentMessage != "GROKEX_LIVE_RESPONSE_OK" {
+		t.Fatalf("first turn = %+v", first)
+	}
+	if got := first.FunctionCallCounts(); !reflect.DeepEqual(got, map[string]int{"grokex_live_probe": 1}) {
+		t.Fatalf("first calls = %v", got)
+	}
+	output, ok := first.FunctionCallOutput("probe-1")
+	if !ok || output.Text != "GROKEX_LIVE_TOOL_OK" {
+		t.Fatalf("probe output = %+v ok=%v", output, ok)
+	}
+	if first.EncryptedReasoningCount != 2 {
+		t.Fatalf("encrypted reasoning items = %d", first.EncryptedReasoningCount)
+	}
+	history, ok := root.Turn(probeTurnHist)
+	if !ok || !history.Completed || history.LastAgentMessage != "GROKEX_LIVE_TOOL_OK" || len(history.FunctionCalls) != 0 {
+		t.Fatalf("history turn = %+v", history)
+	}
+}
+
+func TestOutputTextAcceptsStringAndContentItems(t *testing.T) {
+	cases := map[string]string{
+		`"plain"`: "plain",
+		`[{"type":"input_text","text":"a"},{"type":"input_image","image_url":"x"},{"type":"input_text","text":"b"}]`: "ab",
+		`{"content":[{"type":"output_text","text":"c"}]}`:                                                            "c",
+		`null`: "",
+		``:     "",
+	}
+	for raw, want := range cases {
+		if got := outputText([]byte(raw)); got != want {
+			t.Errorf("outputText(%s) = %q, want %q", raw, got, want)
+		}
+	}
+}

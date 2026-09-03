@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -41,5 +42,54 @@ func TestClassifyTreatsPhaselessCompletedTurnAsCompleted(t *testing.T) {
 	}
 	if err := classify(completed, nil); err != nil {
 		t.Fatalf("nil classified as %v", err)
+	}
+}
+
+func TestServerRequestsAnswerOnlyTheConfiguredTool(t *testing.T) {
+	requests := NewServerRequests(&DynamicTool{Name: "grokex_live_probe", Output: "GROKEX_LIVE_TOOL_OK"})
+	call := protocolv2.NewServerRequestItemToolCall(protocolv2.ServerRequestItemToolCall{
+		Params: protocolv2.DynamicToolCallParams{
+			Tool:      "grokex_live_probe",
+			CallID:    "probe-1",
+			Arguments: protocolv2.JSONObject(map[string]protocolv2.JSONValue{}),
+		},
+	})
+	if _, err := requests.Handler(context.Background(), call); err != nil {
+		t.Fatalf("probe call: %v", err)
+	}
+	other := protocolv2.NewServerRequestItemToolCall(protocolv2.ServerRequestItemToolCall{
+		Params: protocolv2.DynamicToolCallParams{Tool: "something_else", CallID: "x", Arguments: protocolv2.JSONObject(map[string]protocolv2.JSONValue{})},
+	})
+	if _, err := requests.Handler(context.Background(), other); err == nil {
+		t.Fatal("unexpected tool must fail closed")
+	}
+	approval := protocolv2.NewServerRequestItemCommandExecutionRequestApproval(protocolv2.ServerRequestItemCommandExecutionRequestApproval{})
+	if _, err := requests.Handler(context.Background(), approval); err != nil {
+		t.Fatalf("approval must be declined, not failed: %v", err)
+	}
+	if requests.ToolRequestCount() != 1 {
+		t.Fatalf("tool request count = %d", requests.ToolRequestCount())
+	}
+	diagnostics := requests.Diagnostics()
+	if !reflect.DeepEqual(diagnostics["server_requests_by_kind"], map[string]int{"item/tool/call": 2, "item/commandExecution/requestApproval": 1}) {
+		t.Fatalf("by kind = %#v", diagnostics["server_requests_by_kind"])
+	}
+	if !reflect.DeepEqual(diagnostics["unexpected_tool_request_names"], []string{"something_else"}) {
+		t.Fatalf("unexpected names = %#v", diagnostics["unexpected_tool_request_names"])
+	}
+}
+
+func TestDynamicToolSpecIsAnEmptyObjectFunction(t *testing.T) {
+	spec := DynamicTool{Name: "grokex_live_probe", Description: "d"}.Spec()
+	function, ok := spec.AsFunction()
+	if !ok || function.Name != "grokex_live_probe" || function.Description != "d" {
+		t.Fatalf("spec = %+v ok=%v", function, ok)
+	}
+	schema, ok := function.InputSchema.AsObject()
+	if !ok {
+		t.Fatal("schema is not an object")
+	}
+	if kind, _ := schema["type"].AsString(); kind != "object" {
+		t.Fatalf("schema type = %q", kind)
 	}
 }

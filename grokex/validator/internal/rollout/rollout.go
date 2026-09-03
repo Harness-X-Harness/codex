@@ -30,6 +30,13 @@ type FunctionCall struct {
 	Arguments string
 }
 
+// FunctionCallOutput is the persisted output returned to the model for a call.
+type FunctionCallOutput struct {
+	CallID string
+	// Text is the concatenated text content of the output.
+	Text string
+}
+
 // ImageResult is a persisted image generation result.
 type ImageResult struct {
 	CallID    string
@@ -50,8 +57,14 @@ type Turn struct {
 	Failed            bool
 	LastAgentMessage  string
 	FunctionCalls     []FunctionCall
-	AgentMessages     []string
-	ImageResults      []ImageResult
+	// FunctionCallOutputs are the persisted outputs, keyed by call id in
+	// rollout order.
+	FunctionCallOutputs []FunctionCallOutput
+	// EncryptedReasoningCount counts persisted reasoning items that carried a
+	// non-empty encrypted_content.
+	EncryptedReasoningCount int
+	AgentMessages           []string
+	ImageResults            []ImageResult
 	// SubAgentCompletions lists child thread ids whose completion this Turn
 	// observed; a hint that corroborates the child's own rollout.
 	SubAgentCompletions []string
@@ -96,6 +109,16 @@ func (t *Turn) FunctionCall(callID string) (FunctionCall, bool) {
 		}
 	}
 	return FunctionCall{}, false
+}
+
+// FunctionCallOutput finds the persisted output for the given call id.
+func (t *Turn) FunctionCallOutput(callID string) (FunctionCallOutput, bool) {
+	for _, output := range t.FunctionCallOutputs {
+		if output.CallID == callID {
+			return output, true
+		}
+	}
+	return FunctionCallOutput{}, false
 }
 
 // Session is one rollout file.
@@ -255,16 +278,50 @@ type eventMsg struct {
 }
 
 type responseItem struct {
-	Type      string `json:"type"`
-	Role      string `json:"role"`
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	CallID    string `json:"call_id"`
-	Arguments string `json:"arguments"`
-	Content   []struct {
+	Type             string          `json:"type"`
+	Role             string          `json:"role"`
+	Name             string          `json:"name"`
+	Namespace        string          `json:"namespace"`
+	CallID           string          `json:"call_id"`
+	Arguments        string          `json:"arguments"`
+	EncryptedContent string          `json:"encrypted_content"`
+	Output           json.RawMessage `json:"output"`
+	Content          []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+}
+
+// outputText flattens a function_call_output payload, which the recorder
+// writes either as a plain string or as a list of content items.
+func outputText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var items []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &items) == nil {
+		var joined strings.Builder
+		for _, item := range items {
+			if item.Type == "input_text" || item.Type == "output_text" || item.Type == "text" {
+				joined.WriteString(item.Text)
+			}
+		}
+		return joined.String()
+	}
+	var object struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &object) == nil && len(object.Content) > 0 {
+		return outputText(object.Content)
+	}
+	return ""
 }
 
 // ReadSession parses one rollout file.
@@ -398,6 +455,15 @@ func ReadSession(path string) (*Session, error) {
 					Namespace: item.Namespace,
 					Arguments: item.Arguments,
 				})
+			case "function_call_output":
+				turn.FunctionCallOutputs = append(turn.FunctionCallOutputs, FunctionCallOutput{
+					CallID: item.CallID,
+					Text:   outputText(item.Output),
+				})
+			case "reasoning":
+				if item.EncryptedContent != "" {
+					turn.EncryptedReasoningCount++
+				}
 			case "message":
 				if item.Role == "assistant" {
 					for _, content := range item.Content {

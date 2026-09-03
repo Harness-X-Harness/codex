@@ -54,12 +54,15 @@ type Driver struct {
 	client    *codexsdk.Client
 	Home      string
 	Workspace string
+	// Requests answers and counts app-server requests for the whole process.
+	Requests *ServerRequests
 }
 
 // Start launches `<binary> app-server --strict-config --listen stdio://` with
 // CODEX_HOME=home. The environment is set on this process because the exact
-// client inherits it; the validator process exists only for this run.
-func Start(binary, home, workspace, clientVersion string) (*Driver, error) {
+// client inherits it; the validator process exists only for this run. tool, when
+// set, is the one dynamic tool the validator answers.
+func Start(binary, home, workspace, clientVersion string, tool *DynamicTool) (*Driver, error) {
 	if err := os.Setenv("CODEX_HOME", home); err != nil {
 		return nil, err
 	}
@@ -67,9 +70,11 @@ func Start(binary, home, workspace, clientVersion string) (*Driver, error) {
 		return nil, err
 	}
 	experimental := true
+	requests := NewServerRequests(tool)
 	client, err := codexsdk.New(codexsdk.ClientOptions{
-		CWD:     workspace,
-		Command: []string{binary, "app-server", "--strict-config", "--listen", "stdio://"},
+		CWD:                  workspace,
+		Command:              []string{binary, "app-server", "--strict-config", "--listen", "stdio://"},
+		ServerRequestHandler: requests.Handler,
 		// The default 64-slot queue overflowed on the image edit Turn (streamed
 		// reasoning/message deltas plus base64 image items) and failed the
 		// client with ErrNotificationBackpressure; this validator observes one
@@ -85,7 +90,7 @@ func Start(binary, home, workspace, clientVersion string) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start app-server: %w", err)
 	}
-	return &Driver{client: client, Home: home, Workspace: workspace}, nil
+	return &Driver{client: client, Home: home, Workspace: workspace, Requests: requests}, nil
 }
 
 // Close shuts the app-server down normally. Callers wait for the rollout
@@ -146,17 +151,22 @@ func (r TurnRequest) params() protocolv2.TurnStartParams {
 }
 
 // StartThread starts a Grok Thread in the workspace and runs the first Turn.
+// The configured dynamic tool, if any, is offered on the Thread.
 func (d *Driver) StartThread(ctx context.Context, request TurnRequest) (TurnRun, error) {
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, request.Deadline)
 	defer cancel()
+	thread := protocolv2.ThreadStartParams{
+		CWD:           protocolv2.Value(d.Workspace),
+		Model:         protocolv2.Value(Model),
+		ModelProvider: protocolv2.Value(Provider),
+	}
+	if d.Requests.tool != nil {
+		thread.DynamicTools = protocolv2.Value([]protocolv2.DynamicToolSpec{d.Requests.tool.Spec()})
+	}
 	stream, err := d.client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
-		Thread: protocolv2.ThreadStartParams{
-			CWD:           protocolv2.Value(d.Workspace),
-			Model:         protocolv2.Value(Model),
-			ModelProvider: protocolv2.Value(Provider),
-		},
-		Turn: request.params(),
+		Thread: thread,
+		Turn:   request.params(),
 	})
 	if err != nil {
 		return TurnRun{}, fmt.Errorf("thread/start: %w", err)

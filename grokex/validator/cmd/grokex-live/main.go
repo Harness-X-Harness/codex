@@ -27,6 +27,8 @@ import (
 )
 
 const (
+	scenarioBasic         = "basic-exact-reply"
+	scenarioContinuation  = "encrypted-reasoning-tool-continuation"
 	scenarioCollaboration = "ultra-full-history-collaboration"
 	scenarioImage         = "image-generation-history-edit"
 	// rolloutSettle bounds how long to wait for the canonical task_complete
@@ -184,7 +186,12 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 	clock.Mark("fresh_home_prepared")
 
 	ctx := context.Background()
-	app, err := driver.Start(release.Binary(), home, workspace, clientVersion)
+	var tool *driver.DynamicTool
+	if opts.scenario == scenarioContinuation {
+		probe := oracle.ProbeTool
+		tool = &probe
+	}
+	app, err := driver.Start(release.Binary(), home, workspace, clientVersion, tool)
 	if err != nil {
 		return evidence.Document{}, err
 	}
@@ -204,6 +211,36 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 	var verdictFor func(*rollout.Graph) oracle.Verdict
 	var lastRun driver.TurnRun
 	switch opts.scenario {
+	case scenarioBasic:
+		clock.Mark("turn_submitted")
+		run, err := app.StartThread(ctx, driver.TurnRequest{Prompt: oracle.BasicPrompt, Deadline: scenario.TurnDeadline()})
+		if err != nil && !errors.Is(err, driver.ErrDeadline) {
+			return evidence.Document{}, err
+		}
+		clock.Mark(terminalStage("turn", run))
+		lastRun = run
+		verdictFor = func(graph *rollout.Graph) oracle.Verdict { return oracle.Basic(graph, run) }
+	case scenarioContinuation:
+		clock.Mark("turn_submitted")
+		first, err := app.StartThread(ctx, driver.TurnRequest{Prompt: oracle.ContinuationPrompt, Deadline: scenario.TurnDeadline()})
+		if err != nil && !errors.Is(err, driver.ErrDeadline) {
+			return evidence.Document{}, err
+		}
+		clock.Mark(terminalStage("turn", first))
+		lastRun = first
+		history := driver.TurnRun{ThreadID: first.ThreadID}
+		if first.Completed() {
+			clock.Mark("history_turn_submitted")
+			history, err = app.ContinueThread(ctx, first.ThreadID, driver.TurnRequest{Prompt: oracle.HistoryPrompt, Deadline: scenario.TurnDeadline()})
+			if err != nil && !errors.Is(err, driver.ErrDeadline) {
+				return evidence.Document{}, err
+			}
+			clock.Mark(terminalStage("history_turn", history))
+			lastRun = history
+		}
+		verdictFor = func(graph *rollout.Graph) oracle.Verdict {
+			return oracle.Continuation(graph, first, history, app.Requests.ToolRequestCount())
+		}
 	case scenarioCollaboration:
 		if catalog.MultiAgentVersion != "v2" {
 			return evidence.Document{}, fmt.Errorf("catalog lists %s without multi-agent v2", driver.Model)
@@ -254,6 +291,13 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 	}
 	clock.Mark("sessions_scanned")
 	verdict := verdictFor(graph)
+	// Server requests the validator answered (approvals declined, the probe
+	// tool answered) are part of every post-mortem.
+	for key, value := range app.Requests.Diagnostics() {
+		if _, taken := verdict.Diagnostics[key]; !taken {
+			verdict.Diagnostics[key] = value
+		}
+	}
 	clock.Mark("verdict")
 	return evidence.FromVerdict(*identity, clock, verdict), nil
 }
