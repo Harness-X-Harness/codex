@@ -15,13 +15,11 @@ store: false
 stream: true
 tool_choice: "auto"
 
-## Tools (14)
+## Tools (13)
 - function local__exec_command__ec2e1c4adf62 description=sha256:39574af96f2744af/372chars params=sha256:737c530cc1b1ec46 props=[cmd,justification,login,max_output_tokens,prefix_rule,sandbox_permissions,shell,tty,workdir,yield_time_ms] strict=false
   "This flat Provider function directly invokes the canonical `exec_command` tool. Call this functi…"
 - function local__write_stdin__6e4b2f452e08 description=sha256:2c89e92dc1fbf234/369chars params=sha256:acec976d202087f8 props=[chars,max_output_tokens,session_id,yield_time_ms] strict=false
   "This flat Provider function directly invokes the canonical `write_stdin` tool. Call this functio…"
-- function local__update_plan__4b0601ec2bf6 description=sha256:2a99eb3aeabcdf04/446chars params=sha256:7a0d4f64367ba0df props=[explanation,plan] strict=false
-  "This flat Provider function directly invokes the canonical `update_plan` tool. Call this functio…"
 - function local__request_user_input__9863b36c2caf description=sha256:1e84651cd8e2f292/416chars params=sha256:23ee6f1a8cd81c9d props=[questions] strict=false
   "This flat Provider function directly invokes the canonical `request_user_input` tool. Call this …"
 - function local__view_image__7f55e6b07cdd description=sha256:6839300290f74bb8/412chars params=sha256:97c98fc16681143b props=[path] strict=false

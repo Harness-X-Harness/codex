@@ -34,7 +34,6 @@ const (
 	// rolloutSettle bounds how long to wait for the canonical task_complete
 	// record after the app-server reported the terminal Turn.
 	rolloutSettle = 15 * time.Second
-	clientVersion = "0.151.0"
 )
 
 type options struct {
@@ -181,7 +180,7 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 		probe := oracle.ProbeTool
 		tool = &probe
 	}
-	app, err := driver.Start(release.Binary(), home, workspace, clientVersion, tool)
+	app, err := driver.Start(release.Binary(), home, workspace, release.Version(), tool)
 	if err != nil {
 		return evidence.Document{}, err
 	}

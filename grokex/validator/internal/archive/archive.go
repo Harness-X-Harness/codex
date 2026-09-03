@@ -17,7 +17,7 @@ import (
 
 // Release is an extracted archive.
 type Release struct {
-	// Name is the archive file name, e.g. grokex-v0.151.0-x86_64-unknown-linux-musl.tar.gz.
+	// Name is the archive file name, e.g. grokex-v0.153.0-x86_64-unknown-linux-musl.tar.gz.
 	Name string
 	// SHA256 is the hex digest of the archive bytes.
 	SHA256 string
@@ -28,6 +28,13 @@ type Release struct {
 // Binary is the app-server-capable Grokex binary inside the release.
 func (r Release) Binary() string {
 	return filepath.Join(r.Root, "bin", "grokex-bin")
+}
+
+// Version is the Grokex version the archive ships, read from its root
+// directory (`grokex-v<version>`), so the validator reports the version it is
+// actually driving instead of one it was compiled against.
+func (r Release) Version() string {
+	return strings.TrimPrefix(filepath.Base(r.Root), "grokex-v")
 }
 
 // SHA256File returns the hex SHA-256 of the file at path.
