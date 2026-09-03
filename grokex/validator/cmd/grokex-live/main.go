@@ -6,7 +6,7 @@
 // persisted session rollouts, the saved artifacts, and the delivered reply.
 //
 //	grokex-live --archive A.tar.gz --config secret.toml --evidence out.json \
-//	  --source-sha S --validator-sha V --run-id R --scenario image-generation-history-edit
+//	  --source-sha S --run-id R --scenario image-generation-history-edit
 package main
 
 import (
@@ -38,15 +38,14 @@ const (
 )
 
 type options struct {
-	archive      string
-	config       string
-	evidence     string
-	contracts    string
-	sourceSHA    string
-	validatorSHA string
-	runID        string
-	scenario     string
-	mode         string
+	archive   string
+	config    string
+	evidence  string
+	contracts string
+	sourceSHA string
+	runID     string
+	scenario  string
+	mode      string
 }
 
 func main() {
@@ -59,16 +58,14 @@ func run() int {
 	flag.StringVar(&opts.config, "config", "", "secret Grok profile config.toml")
 	flag.StringVar(&opts.evidence, "evidence", "", "evidence JSON output path")
 	flag.StringVar(&opts.contracts, "contracts", filepath.Join("grokex", "live_contracts.json"), "executable Live contract")
-	flag.StringVar(&opts.sourceSHA, "source-sha", "", "product source SHA the archive was built from")
-	flag.StringVar(&opts.validatorSHA, "validator-sha", "", "SHA of the validator checkout")
+	flag.StringVar(&opts.sourceSHA, "source-sha", "", "source SHA of the release run")
 	flag.StringVar(&opts.runID, "run-id", "", "validation run id")
 	flag.StringVar(&opts.scenario, "scenario", "", "scenario id from the Live contract")
 	flag.StringVar(&opts.mode, "mode", evidence.ModeRelease, "release or observation")
 	flag.Parse()
 	for name, value := range map[string]string{
 		"archive": opts.archive, "config": opts.config, "evidence": opts.evidence,
-		"source-sha": opts.sourceSHA, "validator-sha": opts.validatorSHA,
-		"run-id": opts.runID, "scenario": opts.scenario,
+		"source-sha": opts.sourceSHA, "run-id": opts.runID, "scenario": opts.scenario,
 	} {
 		if value == "" {
 			fmt.Fprintf(os.Stderr, "--%s is required\n", name)
@@ -90,20 +87,13 @@ func run() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	if scenario.Oracle != contract.OracleCanonicalSession {
-		fmt.Fprintf(os.Stderr, "scenario %s is owned by oracle %q, not %s\n", opts.scenario, scenario.Oracle, contract.OracleCanonicalSession)
-		return 2
-	}
-
 	clock := evidence.NewClock()
 	identity := evidence.Identity{
-		ContractSHA256: contracts.SHA256,
-		Mode:           opts.mode,
-		Scenario:       opts.scenario,
-		Story:          scenario.Story,
-		SourceSHA:      opts.sourceSHA,
-		ValidationRun:  opts.runID,
-		ValidatorSHA:   opts.validatorSHA,
+		Mode:          opts.mode,
+		Scenario:      opts.scenario,
+		Story:         scenario.Story,
+		SourceSHA:     opts.sourceSHA,
+		ValidationRun: opts.runID,
 	}
 	document, err := execute(opts, scenario, &identity, clock)
 	if err != nil {

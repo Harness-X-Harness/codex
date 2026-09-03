@@ -19,18 +19,17 @@ const (
 	ModeObservation = "observation"
 )
 
-// Identity binds one evidence file to the exact artifact, source, validator,
-// contract, and run that produced it.
+// Identity names the artifact, scenario, source, and run one evidence file
+// describes. The run that produced it is the evidence; these fields make the
+// file readable on its own.
 type Identity struct {
-	Archive        string
-	ArchiveSHA256  string
-	ContractSHA256 string
-	Mode           string
-	Scenario       string
-	Story          string
-	SourceSHA      string
-	ValidationRun  string
-	ValidatorSHA   string
+	Archive       string
+	ArchiveSHA256 string
+	Mode          string
+	Scenario      string
+	Story         string
+	SourceSHA     string
+	ValidationRun string
 }
 
 // Clock records stage timings relative to validator start.
@@ -107,7 +106,6 @@ func (d Document) Fields() map[string]any {
 		"archive":            d.Identity.Archive,
 		"archive_sha256":     d.Identity.ArchiveSHA256,
 		"catalog":            "release-bundled",
-		"contract_sha256":    d.Identity.ContractSHA256,
 		"mode":               d.Identity.Mode,
 		"model":              "grok-4.6",
 		"provider":           "grok",
@@ -115,7 +113,6 @@ func (d Document) Fields() map[string]any {
 		"source_sha":         d.Identity.SourceSHA,
 		"story":              d.Identity.Story,
 		"validation_run":     d.Identity.ValidationRun,
-		"validator_sha":      d.Identity.ValidatorSHA,
 		"validator":          "grokex/validator",
 		"validator_protocol": protocolVersion(),
 		"stage_timings":      d.Stages,

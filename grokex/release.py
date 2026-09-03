@@ -1,51 +1,74 @@
 #!/usr/bin/env python3
-"""Build and verify the small Grokex release envelope around Codex binaries."""
+"""Grokex release helpers: identity, packaging, manifest, and verification.
+
+The release pipeline is one GitHub Actions run (`grokex-release`): it resolves
+the product identity, reuses or builds the six archives, runs every Live
+scenario against the Linux archive, and publishes once. The evidence that a
+release is valid is that run being green; this module only gives the run its
+identities, its archives, its manifest, and an independent check of what was
+published.
+
+Identities:
+
+- ``release_tag``/``version``/``upstream_*`` come from ``release-source.json``.
+- ``product_tree`` is a digest over the git tree objects of every path that
+  feeds a build (``PRODUCT_PATHS``). Two commits with the same product tree
+  produce the same product; builds are cached by it, so a commit that changes
+  only validators, workflows, or documentation never triggers a rebuild.
+"""
+
+from __future__ import annotations
 
 import argparse
 import gzip
 import hashlib
 import json
 import shutil
-import statistics
+import subprocess
 import tarfile
 import tempfile
 import tomllib
 from pathlib import Path
 
-
 SOURCE_ROOT = Path(__file__).resolve().parent
+REPOSITORY_ROOT = SOURCE_ROOT.parent
 RELEASE_SOURCE_PATH = SOURCE_ROOT / "release-source.json"
 LIVE_CONTRACTS_PATH = SOURCE_ROOT / "live_contracts.json"
+DIST_ROOT = "grokex/dist"
+
+# Every path whose content can change a shipped binary or archive. Anything
+# outside these paths is validation, tooling, or documentation by definition.
+PRODUCT_PATHS = (
+    "codex-rs",
+    DIST_ROOT,
+    "grokex/release-source.json",
+    ".github/actions",
+    ".github/scripts",
+)
 
 
 def load_release_source(path: Path = RELEASE_SOURCE_PATH) -> dict[str, str]:
     source = json.loads(path.read_text(encoding="utf-8"))
-    version = source["version"]
-    if source["upstream_tag"] != f"rust-v{version}":
-        raise SystemExit("release-source.json upstream_tag does not match version")
-    if len(source["upstream_commit"]) != 40:
-        raise SystemExit("release-source.json upstream_commit is not a full SHA")
+    for key in ("version", "upstream_tag", "upstream_commit"):
+        if not isinstance(source.get(key), str) or not source[key]:
+            raise SystemExit(f"release-source.json is missing {key}")
+    if source["upstream_tag"] != f"rust-v{source['version']}":
+        raise SystemExit("release-source.json version does not match the upstream tag")
     return source
 
 
-def load_live_contracts(path: Path = LIVE_CONTRACTS_PATH) -> dict[str, object]:
+def load_live_contracts(path: Path = LIVE_CONTRACTS_PATH) -> dict[str, dict[str, object]]:
     contracts = json.loads(path.read_text(encoding="utf-8"))
-    if contracts.get("schema_version") != 1:
-        raise SystemExit("live_contracts.json schema_version is unsupported")
     scenarios = contracts.get("scenarios")
     if not isinstance(scenarios, dict) or not scenarios:
         raise SystemExit("live_contracts.json has no scenarios")
-    for scenario, contract in scenarios.items():
-        if contract.get("required") not in {"always", "seam"}:
-            raise SystemExit(f"live contract {scenario} has an invalid required policy")
+    for name, contract in scenarios.items():
+        if not isinstance(contract, dict) or not isinstance(contract.get("story"), str):
+            raise SystemExit(f"live scenario {name} has no story")
         deadline = contract.get("turn_deadline_seconds")
         if not isinstance(deadline, int) or isinstance(deadline, bool) or deadline <= 0:
-            raise SystemExit(f"live contract {scenario} has an invalid deadline")
-        if not isinstance(contract.get("story"), str):
-            raise SystemExit(f"live contract {scenario} names no Story")
-        if not isinstance(contract.get("seam_paths"), list):
-            raise SystemExit(f"live contract {scenario} has no seam paths")
-    return contracts
+            raise SystemExit(f"live scenario {name} has no Turn deadline")
+    return scenarios
 
 
 RELEASE_SOURCE = load_release_source()
@@ -53,11 +76,7 @@ VERSION = RELEASE_SOURCE["version"]
 TAG = f"grokex-v{VERSION}"
 UPSTREAM_TAG = RELEASE_SOURCE["upstream_tag"]
 UPSTREAM_COMMIT = RELEASE_SOURCE["upstream_commit"]
-LIVE_CONTRACTS = load_live_contracts()
-STORY_BY_SCENARIO = {
-    scenario: contract["story"]
-    for scenario, contract in LIVE_CONTRACTS["scenarios"].items()
-}
+SCENARIOS = load_live_contracts()
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -66,110 +85,20 @@ TARGETS = (
     "aarch64-pc-windows-msvc",
     "x86_64-pc-windows-msvc",
 )
-SUPPORTED_IMAGE_ARTIFACTS = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
+LIVE_TARGET = "x86_64-unknown-linux-musl"
 LEGACY_KEYS = {
     "model_provider_adapter",
     "model_provider_registrations",
     "provider_adapter",
     "provider_catalog",
 }
-LIVE_SCENARIO_ASSERTIONS = {
-    # Every scenario is proven by grokex/validator from the persisted session
-    # graph and the delivered reply (oracle "canonical_session").
-    "basic-exact-reply": {
-        "evidence_source": "canonical_session",
-        "provider_binding": "grok/grok-4.6",
-        "response_assertion": "nonempty_agent_message",
-        "result_delivery_verified": True,
-        "runner_turn_submission_count": 1,
-        "status": "completed",
-    },
-    "encrypted-reasoning-tool-continuation": {
-        "encrypted_reasoning_observed": True,
-        "evidence_source": "canonical_session",
-        "history_response_assertion": "exact_match",
-        "response_assertion": "exact_match",
-        "runner_turn_submission_count": 2,
-        "same_thread_history": "completed",
-        "status": "completed",
-        "tool_continuation": "completed",
-    },
-    "ultra-full-history-collaboration": {
-        "child_completion": "completed",
-        "child_parent_link_verified": True,
-        "child_provider_binding": "grok/grok-4.6",
-        "child_provider_verified": True,
-        "child_response_assertion": "canonical_uuid_v4",
-        "default_full_history": "completed",
-        "evidence_source": "canonical_session",
-        "multi_agent_version": "v2",
-        "parent_completion": "completed",
-        "reasoning_effort": "ultra",
-        "response_assertion": "child_echo_match",
-        "runner_turn_submission_count": 1,
-        "status": "completed",
-        "result_delivery": "completed",
-        "result_delivery_verified": True,
-    },
-    "image-generation-history-edit": {
-        "edit_agent_reply_seen": True,
-        "edit_artifact_distinct": True,
-        "edit_artifact_match": True,
-        "edit_completion": "completed",
-        "edit_image_decodable": True,
-        "evidence_source": "canonical_session",
-        "generation_agent_reply_seen": True,
-        "generation_artifact_match": True,
-        "generation_completion": "completed",
-        "generation_image_decodable": True,
-        "history_arguments_verified": True,
-        "runner_turn_submission_count": 2,
-        "same_thread": True,
-        "status": "completed",
-    },
-}
-
-
-def image_artifact_evidence(value: dict[str, object]) -> dict[str, str]:
-    evidence: dict[str, str] = {}
-    for phase in ("generation", "edit"):
-        mime_key = f"{phase}_image_mime"
-        extension_key = f"{phase}_artifact_extension"
-        image_mime = value.get(mime_key)
-        artifact_extension = value.get(extension_key)
-        if (
-            not isinstance(image_mime, str)
-            or SUPPORTED_IMAGE_ARTIFACTS.get(image_mime) != artifact_extension
-        ):
-            raise SystemExit("live image artifact codec is invalid")
-        evidence[mime_key] = image_mime
-        evidence[extension_key] = artifact_extension
-    return evidence
-
-
-LIVE_SCENARIO_DIAGNOSTICS = {
-    "basic-exact-reply": ("session_file_count",),
-    "encrypted-reasoning-tool-continuation": (
-        "session_file_count",
-        "tool_request_count",
-    ),
-    "ultra-full-history-collaboration": (
-        "child_count",
-        "root_sub_agent_completions",
-        "session_file_count",
-    ),
-    "image-generation-history-edit": (
-        "image_items_completed",
-        "image_items_failed",
-        "session_file_count",
-    ),
-}
-if set(LIVE_SCENARIO_ASSERTIONS) != set(STORY_BY_SCENARIO):
-    raise SystemExit("live_contracts.json scenarios do not match the validator outcomes")
+DIST_FILES = (
+    "config.toml.example",
+    "INSTALL.md",
+    "install-grokex.sh",
+    "install-grokex.ps1",
+)
+RELEASE_ASSET_DIST_FILES = ("config.toml.example", "install-grokex.sh", "install-grokex.ps1")
 
 
 def sha256(path: Path) -> str:
@@ -178,6 +107,34 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def git(repository: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repository, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def product_tree(repository: Path, revision: str = "HEAD") -> str:
+    """Digest of the git tree objects under every product path at revision."""
+    digest = hashlib.sha256()
+    for path in PRODUCT_PATHS:
+        try:
+            oid = git(repository, "rev-parse", "--verify", "--quiet", f"{revision}:{path}")
+        except subprocess.CalledProcessError as error:
+            raise SystemExit(f"product path {path} is missing at {revision}") from error
+        digest.update(f"{path}\0{oid}\n".encode())
+    return digest.hexdigest()
+
+
+def identity(repository: Path, revision: str = "HEAD") -> dict[str, str]:
+    return {
+        "product_tree": product_tree(repository, revision),
+        "release_tag": TAG,
+        "upstream_commit": UPSTREAM_COMMIT,
+        "upstream_tag": UPSTREAM_TAG,
+        "version": VERSION,
+    }
 
 
 def archive_name(target: str) -> str:
@@ -205,30 +162,26 @@ def write_archive(source: Path, destination: Path) -> None:
                 )
 
 
-def copy_release_files(stage: Path, repository: Path) -> None:
-    for relative in (
-        "grokex/config.toml.example",
-        "grokex/INSTALL.md",
-        "grokex/install-grokex.sh",
-        "grokex/install-grokex.ps1",
-        "LICENSE",
-    ):
-        shutil.copy2(repository / relative, stage / Path(relative).name)
-
-
 def package(
     raw_root: Path,
     output: Path,
     repository: Path,
-    source_sha: str,
+    tree: str,
+    built_from_sha: str,
     targets: tuple[str, ...] = TARGETS,
 ) -> None:
+    """Stage raw binaries and shipped files into one normalized archive per target.
+
+    ``PROVENANCE.json`` names the product tree the archive implements and the
+    commit it was built from; verification compares the tree, so an archive
+    built at an earlier commit with the same product tree is the same product.
+    """
     output.mkdir(parents=True, exist_ok=True)
+    dist = repository / DIST_ROOT
     for target in targets:
         raw = raw_root / target
         suffix = ".exe" if "windows" in target else ""
-        required = (f"codex{suffix}", f"codex-code-mode-host{suffix}")
-        for filename in required:
+        for filename in (f"codex{suffix}", f"codex-code-mode-host{suffix}"):
             if not (raw / filename).is_file():
                 raise SystemExit(f"missing raw binary for {target}: {filename}")
 
@@ -236,17 +189,18 @@ def package(
             stage = Path(temporary) / TAG
             bin_dir = stage / "bin"
             bin_dir.mkdir(parents=True)
-            copy_release_files(stage, repository)
-
+            for filename in DIST_FILES:
+                shutil.copy2(dist / filename, stage / filename)
+            shutil.copy2(repository / "LICENSE", stage / "LICENSE")
             shutil.copy2(raw / f"codex{suffix}", bin_dir / f"grokex-bin{suffix}")
             shutil.copy2(
                 raw / f"codex-code-mode-host{suffix}",
                 bin_dir / f"codex-code-mode-host{suffix}",
             )
             if "windows" in target:
-                shutil.copy2(repository / "grokex/grokex.ps1", bin_dir / "grokex.ps1")
+                shutil.copy2(dist / "grokex.ps1", bin_dir / "grokex.ps1")
             else:
-                shutil.copy2(repository / "grokex/grokex", bin_dir / "grokex")
+                shutil.copy2(dist / "grokex", bin_dir / "grokex")
                 for executable in (
                     bin_dir / "grokex",
                     bin_dir / "grokex-bin",
@@ -254,7 +208,6 @@ def package(
                     stage / "install-grokex.sh",
                 ):
                     executable.chmod(0o755)
-
             if "linux" in target:
                 if not (raw / "bwrap").is_file():
                     raise SystemExit(f"missing raw binary for {target}: bwrap")
@@ -263,7 +216,8 @@ def package(
 
             provenance = {
                 "archive": archive_name(target),
-                "source_sha": source_sha,
+                "built_from_sha": built_from_sha,
+                "product_tree": tree,
                 "target": target,
                 "upstream_commit": UPSTREAM_COMMIT,
                 "version": VERSION,
@@ -284,11 +238,8 @@ def safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     return members
 
 
-def verify_archives(
-    dist: Path,
-    source_sha: str,
-    targets: tuple[str, ...] = TARGETS,
-) -> None:
+def verify_archives(dist: Path, tree: str, targets: tuple[str, ...] = TARGETS) -> None:
+    """Require exactly the expected archives, each complete and implementing tree."""
     expected_archives = {archive_name(target) for target in targets}
     actual_archives = {path.name for path in dist.glob("*.tar.gz")}
     if actual_archives != expected_archives:
@@ -296,38 +247,34 @@ def verify_archives(
             f"archive matrix mismatch: expected {sorted(expected_archives)}, "
             f"got {sorted(actual_archives)}"
         )
-
     for target in targets:
         path = dist / archive_name(target)
         suffix = ".exe" if "windows" in target else ""
-        root = TAG
-        required = {
-            f"{root}/INSTALL.md",
-            f"{root}/LICENSE",
-            f"{root}/PROVENANCE.json",
-            f"{root}/config.toml.example",
-            f"{root}/install-grokex.ps1",
-            f"{root}/install-grokex.sh",
-            f"{root}/bin/codex-code-mode-host{suffix}",
-            f"{root}/bin/grokex-bin{suffix}",
-            f"{root}/bin/{'grokex.ps1' if suffix else 'grokex'}",
+        required = {f"{TAG}/{filename}" for filename in DIST_FILES} | {
+            f"{TAG}/LICENSE",
+            f"{TAG}/PROVENANCE.json",
+            f"{TAG}/bin/codex-code-mode-host{suffix}",
+            f"{TAG}/bin/grokex-bin{suffix}",
+            f"{TAG}/bin/{'grokex.ps1' if suffix else 'grokex'}",
         }
         if "linux" in target:
-            required.add(f"{root}/bin/bwrap")
-
+            required.add(f"{TAG}/bin/bwrap")
         with tarfile.open(path, "r:gz") as archive:
             members = safe_members(archive)
             names = {member.name for member in members if member.isfile()}
             missing = required - names
             if missing:
                 raise SystemExit(f"{path.name} is missing {sorted(missing)}")
-            provenance_file = archive.extractfile(f"{root}/PROVENANCE.json")
+            provenance_file = archive.extractfile(f"{TAG}/PROVENANCE.json")
             if provenance_file is None:
                 raise SystemExit(f"{path.name} has no provenance")
             provenance = json.load(provenance_file)
+        built_from = provenance.pop("built_from_sha", None)
+        if not isinstance(built_from, str) or len(built_from) != 40:
+            raise SystemExit(f"{path.name} provenance has no build commit")
         expected = {
             "archive": path.name,
-            "source_sha": source_sha,
+            "product_tree": tree,
             "target": target,
             "upstream_commit": UPSTREAM_COMMIT,
             "version": VERSION,
@@ -385,263 +332,68 @@ def verify_profile(path: Path, secret: bool) -> None:
         raise SystemExit("public profile must not contain a bearer token")
 
 
-VALIDATION_ONLY_PATHS = (
-    ".github/workflows/grokex-",
-    "grokex/RELEASE_PIPELINE.md",
-    "grokex/live_contracts.json",
-    "grokex/release.py",
-    "grokex/seam_series.json",
-    "grokex/seam_series.py",
-    "grokex/test_release.py",
-    "grokex/test_seam_series.py",
-    "grokex/validator/",
-)
+def scenario_summary(evidence_dir: Path) -> dict[str, dict[str, object]]:
+    """Summarize the evidence files the release run's own Live jobs wrote.
 
-
-def verify_carrier(changed_paths: list[str]) -> None:
-    """Require a product-to-carrier diff to touch validation-only paths.
-
-    A carrier commit may fix the validator or a workflow while the product SHA
-    it validates stays the ancestor that owns every shipped binary.
+    Every contract scenario must be present, in release mode, and completed;
+    the Live jobs already gate the run, so this is a consistency check of what
+    the manifest is about to claim, not a second oracle.
     """
-    product_paths = [
-        path
-        for path in changed_paths
-        if not any(
-            path == allowed or (allowed.endswith(("-", "/")) and path.startswith(allowed))
-            for allowed in VALIDATION_ONLY_PATHS
-        )
-    ]
-    if product_paths:
-        raise SystemExit(f"carrier changes product paths: {product_paths}")
-
-
-def seam_path_matches(seam_path: str, changed_path: str) -> bool:
-    if seam_path.endswith("/"):
-        return changed_path.startswith(seam_path)
-    return changed_path == seam_path
-
-
-def is_test_only_path(changed_path: str) -> bool:
-    """Return whether a path can never change the shipped binary.
-
-    Rust integration tests live under ``tests/`` directories and unit tests in
-    ``*_tests.rs`` / ``tests.rs`` modules compiled only under ``cfg(test)``.
-    """
-    rules: dict[str, list[str]] = LIVE_CONTRACTS.get("test_only_paths", {})
-    components = changed_path.split("/")
-    if any(
-        component in components[:-1]
-        for component in rules.get("directory_components", [])
-    ):
-        return True
-    return any(
-        changed_path.endswith(suffix) for suffix in rules.get("file_suffixes", [])
-    )
-
-
-def required_scenarios(changed_paths: list[str] | None) -> list[str]:
-    """Return the Live scenarios a publication must execute on the exact artifact.
-
-    ``None`` means the diff base is unknown (for example the first publication),
-    which requires every scenario. Otherwise a scenario is required when its
-    policy is ``always`` or when any changed non-test path touches one of its
-    seams or a seam shared by every scenario.
-    """
-    scenarios: dict[str, dict[str, object]] = LIVE_CONTRACTS["scenarios"]
-    if changed_paths is None:
-        return list(scenarios)
-    changed_paths = [path for path in changed_paths if not is_test_only_path(path)]
-    shared: list[str] = LIVE_CONTRACTS.get("all_scenarios_seam_paths", [])
-    if any(
-        seam_path_matches(seam_path, changed_path)
-        for seam_path in shared
-        for changed_path in changed_paths
-    ):
-        return list(scenarios)
-    required: list[str] = []
-    for scenario, contract in scenarios.items():
-        seam_paths: list[str] = contract["seam_paths"]
-        if contract["required"] == "always" or any(
-            seam_path_matches(seam_path, changed_path)
-            for seam_path in seam_paths
-            for changed_path in changed_paths
-        ):
-            required.append(scenario)
-    return required
-
-
-def validate_scenario_evidence(
-    value: dict[str, object], scenario: str
-) -> dict[str, object]:
-    expected_assertions = LIVE_SCENARIO_ASSERTIONS[scenario]
-    if any(value.get(key) != expected for key, expected in expected_assertions.items()):
-        raise SystemExit(f"live scenario outcome mismatch: {scenario}")
-    codec_evidence = (
-        image_artifact_evidence(value)
-        if scenario == "image-generation-history-edit"
-        else {}
-    )
-    diagnostics: dict[str, int] = {}
-    for key in LIVE_SCENARIO_DIAGNOSTICS[scenario]:
-        diagnostic = value.get(key)
-        if not isinstance(diagnostic, int) or isinstance(diagnostic, bool) or diagnostic < 0:
-            raise SystemExit(f"live scenario diagnostic is invalid: {scenario}")
-        diagnostics[key] = diagnostic
-    return {
-        **expected_assertions,
-        **codec_evidence,
-        **diagnostics,
-        "story": STORY_BY_SCENARIO[scenario],
-    }
-
-
-def inherited_scenario_evidence(
-    prior: dict[str, object], scenario: str, base_sha: str
-) -> dict[str, object]:
-    prior_scenarios = prior.get("scenarios")
-    if not isinstance(prior_scenarios, dict) or prior.get("source_sha") != base_sha:
-        raise SystemExit("prior live evidence does not bind the diff base")
-    if prior.get("status") != "completed":
-        raise SystemExit("prior live evidence is not a completed proof")
-    prior_scenario = prior_scenarios.get(scenario)
-    if not isinstance(prior_scenario, dict):
-        raise SystemExit(f"prior live evidence has no executed proof for {scenario}")
-    validate_scenario_evidence(prior_scenario, scenario)
-    prior_runs = prior.get("validation_runs", prior.get("validation_run"))
-    return {
-        "archive_sha256": prior["archive_sha256"],
-        "release_tag": prior.get("release_tag", ""),
-        "source_sha": base_sha,
-        "story": STORY_BY_SCENARIO[scenario],
-        "validation_run": prior_scenario.get("validation_run", prior_runs),
-    }
-
-
-def build_live_evidence(
-    evidence_dir: Path,
-    archive: Path,
-    output: Path,
-    source_sha: str,
-    validator_sha: str,
-    required: list[str] | None = None,
-    inherit_from: Path | None = None,
-    base_sha: str | None = None,
-) -> None:
-    """Compose LIVE_EVIDENCE.json from per-scenario release evidence.
-
-    Evidence files may come from several authorized Live runs as long as every
-    file binds the same archive digest, source SHA, validator SHA, and contract.
-    Scenarios outside ``required`` are inherited from ``inherit_from`` (the
-    previously published LIVE_EVIDENCE.json whose source is ``base_sha``).
-    """
-    archive_digest = sha256(archive)
-    contract_digest = sha256(LIVE_CONTRACTS_PATH)
-    required_set = set(required) if required is not None else set(LIVE_SCENARIO_ASSERTIONS)
-    if not required_set <= set(LIVE_SCENARIO_ASSERTIONS):
-        raise SystemExit("required live scenario set is unknown")
-    if "basic-exact-reply" not in required_set:
-        raise SystemExit("basic-exact-reply is always required")
-    common = {
-        "archive": archive.name,
-        "archive_sha256": archive_digest,
-        "catalog": "release-bundled",
-        "contract_sha256": contract_digest,
-        "mode": "release",
-        "model": "grok-4.6",
-        "provider": "grok",
-        "source_sha": source_sha,
-        "validator_sha": validator_sha,
-    }
-    observed: dict[str, dict[str, object]] = {}
-    validation_runs: set[str] = set()
+    summary: dict[str, dict[str, object]] = {}
     for path in sorted(evidence_dir.glob("*.json")):
         value = json.loads(path.read_text(encoding="utf-8"))
         scenario = value.get("scenario")
-        if scenario not in LIVE_SCENARIO_ASSERTIONS or scenario in observed:
-            raise SystemExit("live scenario evidence set is invalid")
-        if any(value.get(key) != expected for key, expected in common.items()):
-            raise SystemExit(f"live scenario evidence mismatch: {scenario}")
-        if value.get("story") != STORY_BY_SCENARIO[scenario]:
+        if scenario not in SCENARIOS or scenario in summary:
+            raise SystemExit(f"unexpected live evidence file: {path.name}")
+        if value.get("mode") != "release" or value.get("status") != "completed":
+            raise SystemExit(f"live scenario is not a completed release proof: {scenario}")
+        if value.get("story") != SCENARIOS[scenario]["story"]:
             raise SystemExit(f"live scenario Story mismatch: {scenario}")
-        run_id = value.get("validation_run")
-        if not isinstance(run_id, str) or not run_id:
-            raise SystemExit(f"live scenario evidence has no validation run: {scenario}")
-        validation_runs.add(run_id)
-        observed[scenario] = {
-            **validate_scenario_evidence(value, scenario),
-            "validation_run": run_id,
+        summary[scenario] = {
+            "status": "completed",
+            "story": value["story"],
+            "turn_durations_seconds": value.get("turn_durations_seconds", []),
         }
-    missing = required_set - set(observed)
+    missing = set(SCENARIOS) - set(summary)
     if missing:
-        raise SystemExit(f"required live scenario evidence is incomplete: {sorted(missing)}")
-
-    inherited: dict[str, dict[str, object]] = {}
-    not_executed = set(LIVE_SCENARIO_ASSERTIONS) - set(observed)
-    if not_executed:
-        if inherit_from is None or base_sha is None:
-            raise SystemExit(
-                f"live scenario evidence is incomplete without inheritance: {sorted(not_executed)}"
-            )
-        prior = json.loads(inherit_from.read_text(encoding="utf-8"))
-        for scenario in sorted(not_executed):
-            inherited[scenario] = inherited_scenario_evidence(prior, scenario, base_sha)
-
-    manifest = {
-        "archive": archive.name,
-        "archive_sha256": archive_digest,
-        "catalog": "release-bundled",
-        "contract_sha256": contract_digest,
-        "inherited_scenarios": inherited,
-        "model": "grok-4.6",
-        "provider": "grok",
-        "release_tag": TAG,
-        "required_scenarios": sorted(required_set),
-        "runner_turn_submission_count": sum(
-            assertions["runner_turn_submission_count"] for assertions in observed.values()
-        ),
-        "scenarios": observed,
-        "source_sha": source_sha,
-        "status": "completed",
-        "validation_runs": sorted(validation_runs),
-        "validator_sha": validator_sha,
-    }
-    output.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+        raise SystemExit(f"live evidence is incomplete: {sorted(missing)}")
+    return summary
 
 
-def build_assets(
-    archives: Path,
-    evidence: Path,
-    output: Path,
-    repository: Path,
-    source_sha: str,
-    validation_run: str,
-) -> None:
-    output.mkdir(parents=True, exist_ok=True)
-    verify_archives(archives, source_sha)
-    for target in TARGETS:
-        shutil.copy2(archives / archive_name(target), output / archive_name(target))
-    for relative in (
-        "grokex/config.toml.example",
-        "grokex/install-grokex.sh",
-        "grokex/install-grokex.ps1",
-    ):
-        shutil.copy2(repository / relative, output / Path(relative).name)
-    shutil.copy2(evidence, output / "LIVE_EVIDENCE.json")
-
-    manifest = {
+def manifest(source_sha: str, tree: str, release_run: str, scenarios: dict[str, dict[str, object]]) -> dict[str, object]:
+    return {
         "archives": [archive_name(target) for target in TARGETS],
+        "live_archive": archive_name(LIVE_TARGET),
+        "product_tree": tree,
+        "release_run": release_run,
+        "scenarios": scenarios,
         "source_sha": source_sha,
         "tag": TAG,
         "upstream_commit": UPSTREAM_COMMIT,
-        "validation_run": validation_run,
         "version": VERSION,
     }
+
+
+def assemble(
+    archives: Path,
+    evidence_dir: Path,
+    output: Path,
+    repository: Path,
+    source_sha: str,
+    tree: str,
+    release_run: str,
+) -> None:
+    """Compose the release asset set: six archives, dist files, RELEASE.json, SHA256SUMS."""
+    output.mkdir(parents=True, exist_ok=True)
+    verify_archives(archives, tree)
+    for target in TARGETS:
+        shutil.copy2(archives / archive_name(target), output / archive_name(target))
+    for filename in RELEASE_ASSET_DIST_FILES:
+        shutil.copy2(repository / DIST_ROOT / filename, output / filename)
+    scenarios = scenario_summary(evidence_dir)
     (output / "RELEASE.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(manifest(source_sha, tree, release_run, scenarios), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     checksummed = sorted(path for path in output.iterdir() if path.name != "SHA256SUMS")
     (output / "SHA256SUMS").write_text(
@@ -650,102 +402,29 @@ def build_assets(
     )
 
 
-def verify_live_identity(
-    evidence: dict[str, object],
-    source_sha: str,
-    validator_sha: str,
-    live_runs: list[str],
-) -> None:
-    required_evidence = {
-        "archive": archive_name("x86_64-unknown-linux-musl"),
-        "catalog": "release-bundled",
-        "contract_sha256": sha256(LIVE_CONTRACTS_PATH),
-        "model": "grok-4.6",
-        "provider": "grok",
-        "release_tag": TAG,
-        "source_sha": source_sha,
-        "status": "completed",
-        "validation_runs": sorted(set(live_runs)),
-        "validator_sha": validator_sha,
-    }
-    if any(evidence.get(key) != value for key, value in required_evidence.items()):
-        raise SystemExit("live evidence identity mismatch")
-
-
-def verify_assets(
-    dist: Path,
-    source_sha: str,
-    validator_sha: str,
-    validation_run: str,
-    live_runs: list[str],
-) -> None:
-    expected = {archive_name(target) for target in TARGETS} | {
-        "LIVE_EVIDENCE.json",
+def verify_assets(dist: Path, source_sha: str, tree: str, release_run: str) -> None:
+    """Check a published (or about-to-publish) asset set against the identities."""
+    expected = {archive_name(target) for target in TARGETS} | set(RELEASE_ASSET_DIST_FILES) | {
         "RELEASE.json",
         "SHA256SUMS",
-        "config.toml.example",
-        "install-grokex.ps1",
-        "install-grokex.sh",
     }
     actual = {path.name for path in dist.iterdir() if path.is_file()}
     if actual != expected:
         raise SystemExit(f"release asset mismatch: expected {sorted(expected)}, got {sorted(actual)}")
-    verify_archives(dist, source_sha)
-
-    manifest = json.loads((dist / "RELEASE.json").read_text(encoding="utf-8"))
-    expected_manifest = {
-        "archives": [archive_name(target) for target in TARGETS],
-        "source_sha": source_sha,
-        "tag": TAG,
-        "upstream_commit": UPSTREAM_COMMIT,
-        "validation_run": validation_run,
-        "version": VERSION,
-    }
-    if manifest != expected_manifest:
+    verify_archives(dist, tree)
+    published = json.loads((dist / "RELEASE.json").read_text(encoding="utf-8"))
+    scenarios = published.get("scenarios")
+    if not isinstance(scenarios, dict) or set(scenarios) != set(SCENARIOS):
+        raise SystemExit("release manifest scenario set mismatch")
+    for scenario, value in scenarios.items():
+        if not isinstance(value, dict) or value.get("status") != "completed":
+            raise SystemExit(f"release manifest scenario is not completed: {scenario}")
+        if value.get("story") != SCENARIOS[scenario]["story"]:
+            raise SystemExit(f"release manifest Story mismatch: {scenario}")
+    if published != manifest(source_sha, tree, release_run, scenarios):
         raise SystemExit("release manifest mismatch")
-
-    evidence = json.loads((dist / "LIVE_EVIDENCE.json").read_text(encoding="utf-8"))
-    live_archive = archive_name("x86_64-unknown-linux-musl")
-    verify_live_identity(evidence, source_sha, validator_sha, live_runs)
-    scenarios = evidence.get("scenarios")
-    inherited = evidence.get("inherited_scenarios")
-    required = evidence.get("required_scenarios")
-    if not isinstance(scenarios, dict) or not isinstance(inherited, dict):
-        raise SystemExit("live evidence scenario sets are invalid")
-    if not isinstance(required, list) or not set(required) <= set(scenarios):
-        raise SystemExit("live evidence required scenarios were not executed")
-    if "basic-exact-reply" not in scenarios:
-        raise SystemExit("live evidence has no executed basic scenario")
-    if set(scenarios) | set(inherited) != set(LIVE_SCENARIO_ASSERTIONS) or set(
-        scenarios
-    ) & set(inherited):
-        raise SystemExit("live evidence scenario set mismatch")
-    expected_turns = sum(
-        LIVE_SCENARIO_ASSERTIONS[scenario]["runner_turn_submission_count"]
-        for scenario in scenarios
-    )
-    if evidence.get("runner_turn_submission_count") != expected_turns:
-        raise SystemExit("live evidence Turn contract is invalid")
-    for scenario, actual in scenarios.items():
-        if not isinstance(actual, dict):
-            raise SystemExit(f"live evidence scenario mismatch: {scenario}")
-        validate_scenario_evidence(actual, scenario)
-        if actual.get("validation_run") not in live_runs:
-            raise SystemExit(f"live evidence scenario run is unknown: {scenario}")
-    for scenario, actual in inherited.items():
-        if not isinstance(actual, dict) or actual.get("story") != STORY_BY_SCENARIO[scenario]:
-            raise SystemExit(f"live evidence inherited Story mismatch: {scenario}")
-        if not all(
-            isinstance(actual.get(key), str) and actual.get(key)
-            for key in ("archive_sha256", "source_sha", "validation_run")
-        ):
-            raise SystemExit(f"live evidence inherited identity is incomplete: {scenario}")
-    if evidence.get("archive_sha256") != sha256(dist / live_archive):
-        raise SystemExit("live evidence archive checksum mismatch")
-
-    checksum_lines = (dist / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
     recorded: dict[str, str] = {}
-    for line in checksum_lines:
+    for line in (dist / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
         digest, filename = line.split("  ", 1)
         recorded[filename] = digest
     if set(recorded) != expected - {"SHA256SUMS"}:
@@ -755,197 +434,80 @@ def verify_assets(
             raise SystemExit(f"checksum mismatch: {filename}")
 
 
-def percentile(values: list[float], fraction: float) -> float:
-    ordered = sorted(values)
-    index = max(0, min(len(ordered) - 1, round(fraction * (len(ordered) - 1))))
-    return ordered[index]
-
-
-def summarize_observations(evidence_dir: Path) -> dict[str, object]:
-    """Aggregate observation-mode evidence into per-scenario latency statistics.
-
-    Observation evidence never proves a Story; the summary only informs
-    deadline reviews with p50/p95/max Turn durations against the contract.
-    """
-    by_scenario: dict[str, dict[str, object]] = {}
-    for path in sorted(evidence_dir.rglob("*.json")):
-        value = json.loads(path.read_text(encoding="utf-8"))
-        scenario = value.get("scenario")
-        if scenario not in LIVE_SCENARIO_ASSERTIONS or value.get("mode") != "observation":
-            continue
-        entry = by_scenario.setdefault(
-            scenario,
-            {"outcomes": {}, "runs": 0, "turn_durations_seconds": []},
-        )
-        entry["runs"] += 1
-        outcome = value.get("outcome", "completed" if value.get("status") == "completed" else "unknown")
-        outcomes: dict[str, int] = entry["outcomes"]
-        outcomes[outcome] = outcomes.get(outcome, 0) + 1
-        durations = value.get("turn_durations_seconds")
-        if isinstance(durations, list):
-            entry["turn_durations_seconds"].extend(
-                float(duration) for duration in durations if isinstance(duration, (int, float))
-            )
-    summary: dict[str, object] = {}
-    for scenario, entry in sorted(by_scenario.items()):
-        durations: list[float] = entry["turn_durations_seconds"]
-        deadline = LIVE_CONTRACTS["scenarios"][scenario]["turn_deadline_seconds"]
-        statistics_block: dict[str, object] = {"samples": len(durations)}
-        if durations:
-            statistics_block.update(
-                {
-                    "max": round(max(durations), 3),
-                    "p50": round(statistics.median(durations), 3),
-                    "p95": round(percentile(durations, 0.95), 3),
-                    "over_deadline": sum(1 for duration in durations if duration > deadline),
-                }
-            )
-        summary[scenario] = {
-            "outcomes": entry["outcomes"],
-            "runs": entry["runs"],
-            "turn_deadline_seconds": deadline,
-            "turn_seconds": statistics_block,
-        }
-    return summary
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    identity_parser = subparsers.add_parser("identity")
+    identity_parser = subparsers.add_parser("identity", help="print release and product identities")
+    identity_parser.add_argument("--repository", type=Path, default=REPOSITORY_ROOT)
+    identity_parser.add_argument("--revision", default="HEAD")
     identity_parser.add_argument("--github-output", action="store_true")
-
-    required_parser = subparsers.add_parser("required-scenarios")
-    required_parser.add_argument("--changed-paths", type=Path)
-    required_parser.add_argument("--all", action="store_true")
-
-    carrier_parser = subparsers.add_parser("verify-carrier")
-    carrier_parser.add_argument("--changed-paths", type=Path, required=True)
 
     package_parser = subparsers.add_parser("package")
     package_parser.add_argument("--raw-root", type=Path, required=True)
     package_parser.add_argument("--output", type=Path, required=True)
     package_parser.add_argument("--repository", type=Path, required=True)
-    package_parser.add_argument("--source-sha", required=True)
+    package_parser.add_argument("--product-tree", required=True)
+    package_parser.add_argument("--built-from-sha", required=True)
     package_parser.add_argument("--target", action="append", choices=TARGETS)
 
     verify_archives_parser = subparsers.add_parser("verify-archives")
     verify_archives_parser.add_argument("--dist", type=Path, required=True)
-    verify_archives_parser.add_argument("--source-sha", required=True)
+    verify_archives_parser.add_argument("--product-tree", required=True)
     verify_archives_parser.add_argument("--target", action="append", choices=TARGETS)
 
-    profile_parser = subparsers.add_parser("verify-profile")
-    profile_parser.add_argument("--path", type=Path, required=True)
-    profile_parser.add_argument("--secret", action="store_true")
+    verify_profile_parser = subparsers.add_parser("verify-profile")
+    verify_profile_parser.add_argument("--path", type=Path, required=True)
+    verify_profile_parser.add_argument("--secret", action="store_true")
 
-    evidence_parser = subparsers.add_parser("build-live-evidence")
-    evidence_parser.add_argument("--evidence-dir", type=Path, required=True)
-    evidence_parser.add_argument("--archive", type=Path, required=True)
-    evidence_parser.add_argument("--output", type=Path, required=True)
-    evidence_parser.add_argument("--source-sha", required=True)
-    evidence_parser.add_argument("--validator-sha", required=True)
-    evidence_parser.add_argument("--required", action="append")
-    evidence_parser.add_argument("--inherit-from", type=Path)
-    evidence_parser.add_argument("--base-sha")
-
-    assets_parser = subparsers.add_parser("build-assets")
-    assets_parser.add_argument("--archives", type=Path, required=True)
-    assets_parser.add_argument("--evidence", type=Path, required=True)
-    assets_parser.add_argument("--output", type=Path, required=True)
-    assets_parser.add_argument("--repository", type=Path, required=True)
-    assets_parser.add_argument("--source-sha", required=True)
-    assets_parser.add_argument("--validation-run", required=True)
+    assemble_parser = subparsers.add_parser("assemble")
+    assemble_parser.add_argument("--archives", type=Path, required=True)
+    assemble_parser.add_argument("--evidence-dir", type=Path, required=True)
+    assemble_parser.add_argument("--output", type=Path, required=True)
+    assemble_parser.add_argument("--repository", type=Path, required=True)
+    assemble_parser.add_argument("--source-sha", required=True)
+    assemble_parser.add_argument("--product-tree", required=True)
+    assemble_parser.add_argument("--release-run", required=True)
 
     verify_assets_parser = subparsers.add_parser("verify-assets")
     verify_assets_parser.add_argument("--dist", type=Path, required=True)
     verify_assets_parser.add_argument("--source-sha", required=True)
-    verify_assets_parser.add_argument("--validator-sha", required=True)
-    verify_assets_parser.add_argument("--validation-run", required=True)
-    verify_assets_parser.add_argument("--live-run", action="append", required=True)
-
-    observations_parser = subparsers.add_parser("summarize-observations")
-    observations_parser.add_argument("--evidence-dir", type=Path, required=True)
+    verify_assets_parser.add_argument("--product-tree", required=True)
+    verify_assets_parser.add_argument("--release-run", required=True)
 
     args = parser.parse_args()
     if args.command == "identity":
-        identity = {
-            "release_tag": TAG,
-            "upstream_commit": UPSTREAM_COMMIT,
-            "upstream_tag": UPSTREAM_TAG,
-            "version": VERSION,
-        }
+        values = identity(args.repository, args.revision)
         if args.github_output:
-            print("".join(f"{key}={value}\n" for key, value in identity.items()), end="")
+            for key, value in sorted(values.items()):
+                print(f"{key}={value}")
         else:
-            print(json.dumps(identity, indent=2, sort_keys=True))
-    elif args.command == "required-scenarios":
-        if args.all == (args.changed_paths is not None):
-            raise SystemExit("required-scenarios needs exactly one of --all or --changed-paths")
-        changed = (
-            None
-            if args.all
-            else [
-                line.strip()
-                for line in args.changed_paths.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-        )
-        print("\n".join(required_scenarios(changed)))
-    elif args.command == "verify-carrier":
-        verify_carrier(
-            [
-                line.strip()
-                for line in args.changed_paths.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-        )
+            print(json.dumps(values, indent=2, sort_keys=True))
     elif args.command == "package":
         package(
             args.raw_root,
             args.output,
             args.repository,
-            args.source_sha,
+            args.product_tree,
+            args.built_from_sha,
             tuple(args.target) if args.target else TARGETS,
         )
     elif args.command == "verify-archives":
-        verify_archives(
-            args.dist,
-            args.source_sha,
-            tuple(args.target) if args.target else TARGETS,
-        )
+        verify_archives(args.dist, args.product_tree, tuple(args.target) if args.target else TARGETS)
     elif args.command == "verify-profile":
         verify_profile(args.path, args.secret)
-    elif args.command == "build-live-evidence":
-        build_live_evidence(
-            args.evidence_dir,
-            args.archive,
-            args.output,
-            args.source_sha,
-            args.validator_sha,
-            args.required,
-            args.inherit_from,
-            args.base_sha,
-        )
-    elif args.command == "build-assets":
-        build_assets(
+    elif args.command == "assemble":
+        assemble(
             args.archives,
-            args.evidence,
+            args.evidence_dir,
             args.output,
             args.repository,
             args.source_sha,
-            args.validation_run,
+            args.product_tree,
+            args.release_run,
         )
     elif args.command == "verify-assets":
-        verify_assets(
-            args.dist,
-            args.source_sha,
-            args.validator_sha,
-            args.validation_run,
-            args.live_run,
-        )
-    elif args.command == "summarize-observations":
-        print(json.dumps(summarize_observations(args.evidence_dir), indent=2, sort_keys=True))
+        verify_assets(args.dist, args.source_sha, args.product_tree, args.release_run)
 
 
 if __name__ == "__main__":
