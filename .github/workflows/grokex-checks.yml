@@ -21,8 +21,38 @@ env:
   CHECKOUT_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  # The path contract (grokex/check_scope.py) decides which gate groups a pull
+  # request needs from the paths it changes. Anything that is not a pull
+  # request, and any path the contract does not name, needs every gate.
+  scope:
+    name: Resolve the path contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      helpers: ${{ steps.scope.outputs.helpers }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            git fetch --quiet --depth=1 origin "${BASE_SHA}"
+            python3 grokex/check_scope.py --base "${BASE_SHA}" --head "${CHECKOUT_SHA}" --github-output | tee -a "${GITHUB_OUTPUT}"
+          else
+            python3 grokex/check_scope.py --all --github-output | tee -a "${GITHUB_OUTPUT}"
+          fi
+
   helpers:
     name: Release helper contracts
+    needs: scope
+    if: needs.scope.outputs.helpers == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -34,6 +64,15 @@ jobs:
         with:
           go-version-file: grokex/validator/go.mod
           cache-dependency-path: grokex/validator/go.sum
+      - name: Lint the Grokex workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grokex-*.yml
       - name: Verify the canonical-session validator
         working-directory: grokex/validator
         shell: bash
@@ -54,11 +93,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile \
+            grokex/check_scope.py \
             grokex/release.py \
             grokex/seam_series.py \
+            grokex/test_check_scope.py \
             grokex/test_release.py \
             grokex/test_seam_series.py
-          python3 -m unittest grokex.test_release grokex.test_seam_series
+          python3 -m unittest grokex.test_check_scope grokex.test_release grokex.test_seam_series
           upstream_commit="$(python3 grokex/release.py identity --github-output | sed -n 's/^upstream_commit=//p')"
           git fetch --quiet --depth=1 origin "${upstream_commit}"
           python3 grokex/seam_series.py plan --head "${CHECKOUT_SHA}" > "${RUNNER_TEMP}/seam-plan.txt"
@@ -145,6 +186,8 @@ jobs:
 
   formatting:
     name: Formatting
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -163,6 +206,8 @@ jobs:
 
   contracts:
     name: Stock and Grok contracts
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     defaults:
@@ -316,6 +361,8 @@ jobs:
 
   lints:
     name: Affected library lints
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     defaults:
@@ -340,12 +387,15 @@ jobs:
 
   require:
     name: Require every deterministic gate
-    needs: [helpers, formatting, contracts, lints]
+    needs: [scope, helpers, formatting, contracts, lints]
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - name: Require success
+      - name: Require success, or a skip the path contract asked for
         env:
+          SCOPE: ${{ needs.scope.result }}
+          WANT_RUST: ${{ needs.scope.outputs.rust }}
+          WANT_HELPERS: ${{ needs.scope.outputs.helpers }}
           CONTRACTS: ${{ needs.contracts.result }}
           FORMATTING: ${{ needs.formatting.result }}
           HELPERS: ${{ needs.helpers.result }}
@@ -354,10 +404,24 @@ jobs:
         run: |
           set -euo pipefail
           failures=()
-          [[ "${HELPERS}" == "success" ]] || failures+=("release helpers")
-          [[ "${FORMATTING}" == "success" ]] || failures+=("formatting")
-          [[ "${CONTRACTS}" == "success" ]] || failures+=("contracts")
-          [[ "${LINTS}" == "success" ]] || failures+=("lints")
+          [[ "${SCOPE}" == "success" ]] || failures+=("path contract")
+          gate() {
+            # A gate passes when it succeeded, or when the contract said the
+            # change does not need it and the job was therefore skipped.
+            local label="$1" result="$2" wanted="$3"
+            if [[ "${result}" == "success" ]]; then
+              return
+            fi
+            if [[ "${wanted}" == "false" && "${result}" == "skipped" ]]; then
+              echo "${label}: not needed by the path contract"
+              return
+            fi
+            failures+=("${label} (${result})")
+          }
+          gate "release helpers" "${HELPERS}" "${WANT_HELPERS}"
+          gate "formatting" "${FORMATTING}" "${WANT_RUST}"
+          gate "contracts" "${CONTRACTS}" "${WANT_RUST}"
+          gate "lints" "${LINTS}" "${WANT_RUST}"
           if (( ${#failures[@]} )); then
             printf 'Failed deterministic gate: %s\n' "${failures[@]}" >&2
             exit 1

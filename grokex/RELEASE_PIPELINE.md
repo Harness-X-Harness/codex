@@ -28,6 +28,20 @@ no allowlist to maintain.
 
 Files that ship inside the archives live in `grokex/dist`.
 
+## Path contract for checks
+
+`grokex/check_scope.py` maps the paths a pull request changes to the gate
+groups `grokex-checks` runs: `rust` (formatting, the cargo contract tests, the
+library lints; about 25 minutes cold) and `helpers` (the Go validator, the
+release helpers, the seam series, the shipped scripts, and an `actionlint` pass
+over the Grokex workflows; about one minute). `codex-rs/` and `.github/actions/`
+need `rust`; `grokex/` (except Markdown), the Grokex workflow files, and
+`LICENSE` need `helpers`; Markdown, `docs/`, and stock workflow files need
+nothing. A path no rule names needs every gate, so an unforeseen file can only
+make the run slower. The checks workflow itself, and every event that is not a
+pull request, need every gate. The `Require every deterministic gate` job
+accepts a skipped gate only when the contract said the change did not need it.
+
 ## Build once per product tree
 
 `grokex-build` builds one archive per target and uploads it as the artifact
