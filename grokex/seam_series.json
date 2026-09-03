@@ -51,7 +51,12 @@
         "codex-rs/core/tests/suite/mod.rs",
         "codex-rs/core/tests/suite/grok_agent_execution.rs",
         "codex-rs/core/tests/suite/multi_agent_mode.rs",
-        "codex-rs/core/tests/suite/openai_file_mcp.rs"
+        "codex-rs/core/tests/suite/openai_file_mcp.rs",
+        "codex-rs/core/tests/suite/grok_model_visible_request.rs",
+        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_basic.snap",
+        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_collaboration_ultra.snap",
+        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_continuation.snap",
+        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_image.snap"
       ]
     },
     {
