@@ -157,6 +157,18 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     return;
                 }
             };
+            let provider = create_model_provider(
+                input.config.model_provider.clone(),
+                Some(Arc::clone(&self.auth_manager)),
+            );
+            if provider.approval_review_preferred_model().is_none() {
+                self.event_sink.emit_warning(ExtensionWarning {
+                    thread_id,
+                    turn_id: None,
+                    message: "Guardian V2 Luna is unavailable for this model provider".to_owned(),
+                });
+                return;
+            }
             let luna_compaction_hash = if let Some(thread_manager) = self.thread_manager.upgrade() {
                 thread_manager
                     .get_models_manager()
@@ -167,10 +179,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 None
             };
             let sampler_config = LunaSamplerConfig {
-                provider: create_model_provider(
-                    input.config.model_provider.clone(),
-                    Some(Arc::clone(&self.auth_manager)),
-                ),
+                provider,
                 http_client_factory: input.config.http_client_factory(),
                 agent_identity_policy: if input.config.features.enabled(Feature::UseAgentIdentity) {
                     AgentIdentityAuthPolicy::ChatGptAuth
@@ -710,24 +719,30 @@ impl GuardianV2Extension {
             let mut classification_finished_at = None;
             let result: Result<ClassificationOutcome, String> = async {
                 let review_model_messages = if config.guardian_policy_config.is_none() {
-                    let review_model_id = review_model_override.as_deref().unwrap_or_else(|| {
-                        create_model_provider(
-                            config.model_provider.clone(),
-                            Some(manager.auth_manager()),
-                        )
-                        .approval_review_preferred_model()
-                    });
-                    let review_model = manager
-                        .get_models_manager()
-                        .get_model_info(review_model_id, &config.to_models_manager_config())
-                        .await;
-                    if review_model.used_fallback_model_metadata && review_model_override.is_none()
-                    {
-                        parent_model
-                            .as_ref()
-                            .and_then(|model| model.model_messages.clone())
-                    } else {
-                        review_model.model_messages
+                    let provider = create_model_provider(
+                        config.model_provider.clone(),
+                        Some(manager.auth_manager()),
+                    );
+                    let review_model_id = review_model_override
+                        .as_deref()
+                        .or_else(|| provider.approval_review_preferred_model());
+                    match review_model_id {
+                        Some(review_model_id) => {
+                            let review_model = manager
+                                .get_models_manager()
+                                .get_model_info(review_model_id, &config.to_models_manager_config())
+                                .await;
+                            if review_model.used_fallback_model_metadata
+                                && review_model_override.is_none()
+                            {
+                                parent_model
+                                    .as_ref()
+                                    .and_then(|model| model.model_messages.clone())
+                            } else {
+                                review_model.model_messages
+                            }
+                        }
+                        None => None,
                     }
                 } else {
                     None

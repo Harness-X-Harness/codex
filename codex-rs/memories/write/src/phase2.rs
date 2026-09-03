@@ -53,6 +53,23 @@ pub async fn run(
 ) {
     let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
 
+    if config.memories.consolidation_model.is_none()
+        && context
+            .provider()
+            .memory_consolidation_preferred_model()
+            .is_none()
+    {
+        tracing::warn!(
+            "memory consolidation skipped: provider has no preferred model and no model override is configured"
+        );
+        context.counter(
+            MEMORY_PHASE_TWO_JOBS,
+            /*inc*/ 1,
+            &[("status", "skipped_no_model_policy")],
+        );
+        return;
+    }
+
     let Some(db) = context.state_db() else {
         // This should not happen.
         return;
@@ -314,6 +331,11 @@ mod agent {
         parent_permission_profile: PermissionProfile,
         provider: &dyn ModelProvider,
     ) -> Option<Config> {
+        let model = config.memories.consolidation_model.clone().or_else(|| {
+            provider
+                .memory_consolidation_preferred_model()
+                .map(str::to_string)
+        })?;
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.clone();
 
@@ -357,13 +379,7 @@ mod agent {
         }
         .ok()?;
 
-        agent_config.model = Some(
-            config
-                .memories
-                .consolidation_model
-                .clone()
-                .unwrap_or_else(|| provider.memory_consolidation_preferred_model().to_string()),
-        );
+        agent_config.model = Some(model);
         agent_config.model_reasoning_effort = Some(crate::stage_two::REASONING_EFFORT);
 
         Some(agent_config)
