@@ -100,6 +100,17 @@ restores it as a plaintext call, the `spawn_agent` argument contract stays
 to the Grok gateway are an explicit allowlist. When an upstream bump breaks a
 pin, the graft is reviewed instead of failing first in a Live scenario.
 
+`codex-rs/core/tests/suite/grok_model_visible_request.rs` snapshots the
+`/responses` request grok-4.6 receives for each Live Story's first Turn against
+a mock gateway: every top-level field, the exact tool inventory with a
+description and parameter digest per tool, and the input item kinds. Per-run
+identifiers are reduced to their key names. The snapshots live under
+`core/tests/suite/snapshots/all__suite__grok_model_visible_request__*.snap`;
+a bump that renames a tool, collapses a shell type, adds an instruction block,
+or changes the projected reasoning effort shows up as a snapshot diff in the
+PR. Review the `.snap.new` and accept with `cargo insta accept -p codex-core`
+only when the visible change is intended.
+
 ## Validator carrier
 
 A `grokex-live` run may execute from a later commit than the candidate source

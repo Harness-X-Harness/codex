@@ -72,6 +72,7 @@ mod external_auth;
 mod fork_thread;
 mod git_enrichment;
 mod grok_agent_execution;
+mod grok_model_visible_request;
 mod grok_web_search;
 mod guardian_mcp_elicitation;
 #[cfg(not(target_os = "windows"))]

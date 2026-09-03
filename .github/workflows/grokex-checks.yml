@@ -261,6 +261,13 @@ jobs:
             }
           }
           run_exact codex-core suite::grok_agent_execution::grok_ultra_v2_full_history_is_gateway_compatible --test all
+          # Model-visible request snapshots: what grok-4.6 sees for each Live
+          # Story's first Turn (tool inventory, digests, reasoning, input kinds).
+          # An upstream bump that changes the visible surface fails here at PR
+          # time instead of in a Live scenario. Review and accept via cargo-insta.
+          for snapshot in basic continuation collaboration_ultra image; do
+            run_exact codex-core "suite::grok_model_visible_request::snapshot_grok_model_visible_request_${snapshot}" --test all
+          done
           run_exact codex-history tests::provider_hosted_tool_metadata_round_trips_beside_rollout_payload --lib
           run_exact codex-core context_manager::history::tests::normalize_keeps_provider_hosted_custom_tool_call_without_output --lib
           run_exact codex-core suite::grok_web_search::grok_web_search_uses_bare_live_declaration_and_replays_stock_history --test all
