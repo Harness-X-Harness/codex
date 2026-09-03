@@ -199,41 +199,25 @@ jobs:
           umask 077
           printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
           python3 grokex/release.py verify-profile --path "${RUNNER_TEMP}/config.toml" --secret
-      - id: oracle
-        name: Resolve the oracle the Live contract names for this scenario
-        env:
-          SCENARIO: ${{ matrix.scenario }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          oracle="$(jq -r --arg scenario "${SCENARIO}" '.scenarios[$scenario].oracle // "app_server_stream"' grokex/live_contracts.json)"
-          echo "oracle=${oracle}" >> "${GITHUB_OUTPUT}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: steps.oracle.outputs.oracle == 'canonical_session'
         with:
           go-version-file: grokex/validator/go.mod
           cache-dependency-path: grokex/validator/go.sum
       - name: Build the canonical-session validator
-        if: steps.oracle.outputs.oracle == 'canonical_session'
         working-directory: grokex/validator
         run: go build -o "${RUNNER_TEMP}/grokex-live" ./cmd/grokex-live
       - name: Execute bounded semantic scenario
         env:
           ARCHIVE: ${{ needs.prepare.outputs.archive }}
           MODE: ${{ needs.prepare.outputs.mode }}
-          ORACLE: ${{ steps.oracle.outputs.oracle }}
           SCENARIO: ${{ matrix.scenario }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           VALIDATOR_SHA: ${{ needs.prepare.outputs.validator_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          case "${ORACLE}" in
-            canonical_session) runner=("${RUNNER_TEMP}/grokex-live" --contracts grokex/live_contracts.json) ;;
-            app_server_stream) runner=(python3 grokex/live_smoke.py) ;;
-            *) echo "unknown oracle ${ORACLE} for ${SCENARIO}" >&2; exit 1 ;;
-          esac
-          "${runner[@]}" \
+          "${RUNNER_TEMP}/grokex-live" \
+            --contracts grokex/live_contracts.json \
             --archive "archives/${ARCHIVE}" \
             --config "${RUNNER_TEMP}/config.toml" \
             --evidence "${RUNNER_TEMP}/LIVE_EVIDENCE-${SCENARIO}.json" \

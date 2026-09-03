@@ -28,32 +28,30 @@ cancels the in-flight candidate for that branch.
 `grokex/live_contracts.json` is the executable contract behind the Live
 Stories: for each scenario it names the Story, the Turn deadline, whether the
 scenario is `always` required or required when its `seam_paths` changed, which
-paths belong to that seam, and which `oracle` proves it. Both oracles read the
-deadline from the contract and bind `contract_sha256` into every evidence
+paths belong to that seam, and which `oracle` proves it. The oracle reads the
+deadline from the contract and binds `contract_sha256` into every evidence
 file; evidence produced under a different contract cannot be composed into a
 release.
 
-Two oracles exist and `grokex-live` routes each scenario by its contract entry:
-
-- `app_server_stream` (`grokex/live_smoke.py`): drives the app-server over
-  stdio and asserts on the notification stream and public thread snapshots.
-  `basic-exact-reply` and `encrypted-reasoning-tool-continuation` use it.
-- `canonical_session` (`grokex/validator`, Go): drives a real task through the
-  exact generated protocol client (`codexsdk` at the same upstream commit as
-  `release-source.json`) in a fresh `CODEX_HOME`, lets the app-server end
-  normally, then proves the Story from the persisted session rollouts under
-  `sessions/`, the saved artifacts, and the reply the app-server delivered.
-  `ultra-full-history-collaboration` and `image-generation-history-edit` use
-  it. Notification kinds, tool-call names, item types, and timings are written
-  as diagnostics only; a deadline expiry records `last_proven_stage` and the
-  persisted Turn state so the post-mortem names what the model was doing.
-  Raw rollout lines never leave the validator; evidence carries labels,
-  booleans, digests, and counts.
+Every scenario names the `canonical_session` oracle, `grokex/validator` (Go):
+it drives a real task through the exact generated protocol client (`codexsdk`
+at the same upstream commit as `release-source.json`) in a fresh `CODEX_HOME`,
+lets the app-server end normally, then proves the Story from the persisted
+session rollouts under `sessions/`, the saved artifacts, and the reply the
+app-server delivered. The validator answers app-server requests fail-closed:
+approvals are declined, the one client-owned dynamic tool of the continuation
+scenario (`grokex_live_probe`) is answered with its fixed marker, anything else
+fails the run as a harness failure. Notification kinds, tool-call names, item
+types, server-request counts, and timings are written as diagnostics only; a
+deadline expiry records `last_proven_stage` and the persisted Turn state so the
+post-mortem names what the model was doing. Raw rollout lines never leave the
+validator; evidence carries labels, booleans, digests, and counts.
 
 `grokex/validator/internal/rollout/testdata` holds real rollouts recorded by
 the stock 0.151 recorder under a Grok profile against a mock provider (one
 paginated app-server image thread, one legacy exec Ultra thread with its
-full-history child). They pin the rollout shapes the oracle depends on: the
+full-history child, one paginated thread with a dynamic-tool round trip,
+encrypted reasoning items, and a history Turn). They pin the rollout shapes the oracle depends on: the
 `task_started`/`task_complete` event names, `item_completed` TurnItems with
 `Extension`/`image_gen.generation` and `AgentMessage`, and the child file that
 starts with its own `session_meta` (`parent_thread_id`, `forked_from_id`)
@@ -74,7 +72,7 @@ and validation run they were proven on. Pass `inherit_from: none` to require
 every scenario on the exact artifact.
 
 Any change to `codex-rs/Cargo.lock`, the build action, `release.py`,
-`live_smoke.py`, or the contract file requires every scenario again.
+`grokex/validator/`, or the contract file requires every scenario again.
 
 Test-only paths never require a Live re-proof because they cannot change the
 shipped binary: files under a `tests/` directory, `*_tests.rs`, and `tests.rs`
@@ -104,9 +102,8 @@ pin, the graft is reviewed instead of failing first in a Live scenario.
 
 A `grokex-live` run may execute from a later commit than the candidate source
 when the product-to-carrier diff touches only validation paths (`release.py`,
-`live_smoke.py`, `seam_series.py`, their tests, `grokex/validator/`, the
-contract and seam map files, this document, and
-`.github/workflows/grokex-*.yml`).
+`seam_series.py`, their tests, `grokex/validator/`, the contract and seam map
+files, this document, and `.github/workflows/grokex-*.yml`).
 `release.py verify-carrier` enforces the allowlist; the archive under test
 still comes from the product SHA.
 

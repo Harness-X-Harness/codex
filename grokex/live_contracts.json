@@ -11,7 +11,6 @@
     "codex-rs/core/Cargo.toml",
     "codex-rs/vendor/",
     "grokex/live_contracts.json",
-    "grokex/live_smoke.py",
     "grokex/release-source.json",
     "grokex/release.py",
     "grokex/validator/"
@@ -20,7 +19,7 @@
     "basic-exact-reply": {
       "story": "grokex-provider-profile-startup",
       "required": "always",
-      "oracle": "app_server_stream",
+      "oracle": "canonical_session",
       "turn_deadline_seconds": 120,
       "seam_paths": [
         "codex-rs/codex-api/src/endpoint/models.rs",
@@ -40,7 +39,7 @@
     "encrypted-reasoning-tool-continuation": {
       "story": "grokex-encrypted-reasoning-history-continuation",
       "required": "seam",
-      "oracle": "app_server_stream",
+      "oracle": "canonical_session",
       "turn_deadline_seconds": 120,
       "seam_paths": [
         "codex-rs/codex-api/src/endpoint/responses.rs",

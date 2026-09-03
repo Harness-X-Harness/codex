@@ -78,13 +78,19 @@ LEGACY_KEYS = {
     "provider_catalog",
 }
 LIVE_SCENARIO_ASSERTIONS = {
+    # Every scenario is proven by grokex/validator from the persisted session
+    # graph and the delivered reply (oracle "canonical_session").
     "basic-exact-reply": {
+        "evidence_source": "canonical_session",
+        "provider_binding": "grok/grok-4.6",
         "response_assertion": "nonempty_agent_message",
+        "result_delivery_verified": True,
         "runner_turn_submission_count": 1,
         "status": "completed",
     },
     "encrypted-reasoning-tool-continuation": {
         "encrypted_reasoning_observed": True,
+        "evidence_source": "canonical_session",
         "history_response_assertion": "exact_match",
         "response_assertion": "exact_match",
         "runner_turn_submission_count": 2,
@@ -92,8 +98,6 @@ LIVE_SCENARIO_ASSERTIONS = {
         "status": "completed",
         "tool_continuation": "completed",
     },
-    # Proven by grokex/validator from the persisted session graph and the
-    # delivered reply (oracle "canonical_session").
     "ultra-full-history-collaboration": {
         "child_completion": "completed",
         "child_parent_link_verified": True,
@@ -148,8 +152,9 @@ def image_artifact_evidence(value: dict[str, object]) -> dict[str, str]:
 
 
 LIVE_SCENARIO_DIAGNOSTICS = {
-    "basic-exact-reply": (),
+    "basic-exact-reply": ("session_file_count",),
     "encrypted-reasoning-tool-continuation": (
+        "session_file_count",
         "tool_request_count",
     ),
     "ultra-full-history-collaboration": (
@@ -384,11 +389,9 @@ VALIDATION_ONLY_PATHS = (
     ".github/workflows/grokex-",
     "grokex/RELEASE_PIPELINE.md",
     "grokex/live_contracts.json",
-    "grokex/live_smoke.py",
     "grokex/release.py",
     "grokex/seam_series.json",
     "grokex/seam_series.py",
-    "grokex/test_live_smoke.py",
     "grokex/test_release.py",
     "grokex/test_seam_series.py",
     "grokex/validator/",

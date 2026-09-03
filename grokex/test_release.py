@@ -28,13 +28,19 @@ def scenario_evidence(archive_name: str, run_id: str) -> dict[str, dict[str, obj
     return {
         "basic-exact-reply": {
             **common,
+            "evidence_source": "canonical_session",
+            "provider_binding": "grok/grok-4.6",
             "response_assertion": "nonempty_agent_message",
+            "result_delivery_verified": True,
             "scenario": "basic-exact-reply",
+            "session_file_count": 1,
             "story": "grokex-provider-profile-startup",
         },
         "encrypted-reasoning-tool-continuation": {
             **common,
             "encrypted_reasoning_observed": True,
+            "evidence_source": "canonical_session",
+            "session_file_count": 1,
             "history_response_assertion": "exact_match",
             "response_assertion": "exact_match",
             "runner_turn_submission_count": 2,
@@ -155,7 +161,7 @@ class ReleaseIdentityTest(unittest.TestCase):
             ),
             "dependency lock requires everything": (["codex-rs/Cargo.lock"], every_scenario),
             "validator change requires everything": (
-                ["grokex/live_smoke.py"],
+                ["grokex/validator/cmd/grokex-live/main.go"],
                 every_scenario,
             ),
             "test-only paths never change the binary": (
@@ -185,7 +191,6 @@ class ReleaseIdentityTest(unittest.TestCase):
         release.verify_carrier(
             [
                 ".github/workflows/grokex-live.yml",
-                "grokex/live_smoke.py",
                 "grokex/test_release.py",
                 "grokex/validator/internal/oracle/image.go",
                 "grokex/validator/go.sum",
@@ -199,7 +204,7 @@ class ReleaseIdentityTest(unittest.TestCase):
         ):
             with self.subTest(product_path):
                 with self.assertRaisesRegex(SystemExit, "carrier changes product paths"):
-                    release.verify_carrier(["grokex/live_smoke.py", product_path])
+                    release.verify_carrier(["grokex/validator/go.sum", product_path])
 
 
 class LiveEvidenceTest(unittest.TestCase):
