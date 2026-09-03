@@ -1,83 +1,91 @@
 # Grokex release pipeline
 
-Three workflows compose one publication. Each stage binds the exact source SHA
-and the exact Linux archive digest, so stages can be re-run independently
-without rebuilding or re-proving what already holds.
+One GitHub Actions run is the evidence that a release is valid. Everything
+else in this directory exists to give that run its identities, its archives,
+its oracle, and an independent check of what it published.
 
-| Stage | Workflow | Trigger | Produces |
-|-------|----------|---------|----------|
-| 1 | `grokex-candidate` | push to `release/**`, or dispatch | `grokex-linux-candidate` artifact (14 days): the Linux archive plus `CANDIDATE.json` (source SHA, archive digest, whether the deterministic gates ran or were reused) |
-| 2 | `grokex-live` | dispatch with `candidate_run_id` (or `release_tag`) and an optional `scenarios` subset | one `grokex-live-evidence-<scenario>` artifact per scenario (30 days) |
-| 3 | `grokex-release` | dispatch with `candidate_run_id` and `live_run_ids` | the immutable `grokex-vX.Y.Z` tag and release assets |
+```
+PR ──► grokex-checks        deterministic gate: Rust contract tests and seam pins,
+                            model-visible request snapshots, validator tests,
+                            seam series, release helper contracts
+push ► grokex-build         Linux archive for the product tree (cached by tree)
+dispatch ► grokex-release   identities → six archives (cached) → four Live
+                            scenarios → assemble → publish once → verify
+schedule ► grokex-release   same build and Live jobs in observation mode
+```
 
 ## Identity
 
-`grokex/release-source.json` is the single place that names the upstream tag,
-upstream commit, and version. Workflows read it through
-`python3 grokex/release.py identity`, so bumping a release changes one file.
+`grokex/release-source.json` is the only place that names the upstream tag,
+the upstream commit, and the Grokex version. `release.py identity` derives the
+release tag from it and computes the **product tree**: a digest over the git
+tree objects of every path that feeds a build (`codex-rs`, `grokex/dist`,
+`grokex/release-source.json`, `.github/actions`, `.github/scripts`). Two
+commits with the same product tree are the same product. Everything outside
+those paths (`grokex/validator`, `release.py`, the contract, the seam tools,
+the workflows, this document) is validation or tooling by definition; there is
+no allowlist to maintain.
 
-## Deterministic gates run once per SHA
+Files that ship inside the archives live in `grokex/dist`.
 
-`grokex-candidate` skips `grokex-checks` when a check run named
-`Require every deterministic gate` is already GREEN for the same SHA (for
-example from the pull request that fast-forwarded the branch). A superseded push
-cancels the in-flight candidate for that branch.
+## Build once per product tree
 
-## Live scenarios and the contract file
+`grokex-build` builds one archive per target and uploads it as the artifact
+`grokex-build-<product_tree>-<target>` (90 days). Before building it looks for
+a non-expired artifact with that name in any earlier run and skips the build
+when one exists. A push to `release/**` builds the Linux target so the release
+run and the nightly observation start from a warm cache; `grokex-release`
+calls the same workflow for all six targets. A commit that changes only
+validators, workflows, or documentation keeps the product tree and rebuilds
+nothing. The macOS x86_64 target takes about two hours; this is paid once per
+product tree.
 
-`grokex/live_contracts.json` is the executable contract behind the Live
-Stories: for each scenario it names the Story, the Turn deadline, whether the
-scenario is `always` required or required when its `seam_paths` changed, which
-paths belong to that seam, and which `oracle` proves it. The oracle reads the
-deadline from the contract and binds `contract_sha256` into every evidence
-file; evidence produced under a different contract cannot be composed into a
-release.
+`PROVENANCE.json` inside each archive names the product tree and the commit
+the archive was built from; verification compares the tree, so an archive
+built at an earlier commit with the same product tree is the same product.
 
-Every scenario names the `canonical_session` oracle, `grokex/validator` (Go):
-it drives a real task through the exact generated protocol client (`codexsdk`
-at the same upstream commit as `release-source.json`) in a fresh `CODEX_HOME`,
-lets the app-server end normally, then proves the Story from the persisted
-session rollouts under `sessions/`, the saved artifacts, and the reply the
-app-server delivered. The validator answers app-server requests fail-closed:
-approvals are declined, the one client-owned dynamic tool of the continuation
-scenario (`grokex_live_probe`) is answered with its fixed marker, anything else
-fails the run as a harness failure. Notification kinds, tool-call names, item
-types, server-request counts, and timings are written as diagnostics only; a
-deadline expiry records `last_proven_stage` and the persisted Turn state so the
-post-mortem names what the model was doing. Raw rollout lines never leave the
-validator; evidence carries labels, booleans, digests, and counts.
+## Live scenarios
+
+`grokex/live_contracts.json` names each scenario's Story and Turn deadline.
+`grokex/validator` (Go, on the exact `codexsdk` app-server client pinned to the
+same upstream commit as `release-source.json`) is the only oracle: it drives a
+real task through the exact protocol in a fresh `CODEX_HOME`, lets the
+app-server end normally, and proves the Story from the persisted session
+rollouts under `sessions/`, the saved artifacts, and the reply the app-server
+delivered. It answers app-server requests fail-closed: approvals are declined,
+the one client-owned dynamic tool of the continuation scenario
+(`grokex_live_probe`) is answered with its fixed marker, anything else fails
+the run as a harness failure. Notification kinds, tool-call names, item types,
+server-request counts, and timings are diagnostics; a deadline expiry records
+`last_proven_stage` and the persisted Turn state. Raw rollout lines never leave
+the validator.
+
+Every release run executes every scenario against the Linux archive of the
+product tree it publishes. There are no scenario subsets, no inheritance from
+earlier releases, and no evidence composition across runs; a failed scenario
+fails the run and the run is re-dispatched (about fifteen minutes with a warm
+build cache). Per-scenario evidence files are uploaded as run artifacts for
+diagnosis and summarized into `RELEASE.json`.
 
 `grokex/validator/internal/rollout/testdata` holds real rollouts recorded by
-the stock 0.151 recorder under a Grok profile against a mock provider (one
-paginated app-server image thread, one legacy exec Ultra thread with its
-full-history child, one paginated thread with a dynamic-tool round trip,
-encrypted reasoning items, and a history Turn). They pin the rollout shapes the oracle depends on: the
-`task_started`/`task_complete` event names, `item_completed` TurnItems with
-`Extension`/`image_gen.generation` and `AgentMessage`, and the child file that
-starts with its own `session_meta` (`parent_thread_id`, `forked_from_id`)
-followed by the parent's inherited head.
+the stock 0.151 recorder under a Grok profile against a mock provider (a
+paginated app-server image thread, a legacy exec Ultra thread with its
+full-history child, a paginated thread with a dynamic-tool round trip and
+encrypted reasoning). They pin the rollout shapes the oracle depends on.
 
-Re-run only what failed: dispatch `grokex-live` with the same
-`candidate_run_id` and `scenarios: image-generation-history-edit`. Every run
-writes evidence for the scenarios it executed; `grokex-release` composes the
-completed evidence from all listed `live_run_ids` (later ids take precedence
-per scenario) into one `LIVE_EVIDENCE.json` and records `validation_runs`.
+## Publication
 
-Required set: `grokex-release` diffs the candidate source against the source
-of the newest published release (or `inherit_from`) and requires every scenario
-whose seam changed, plus `basic-exact-reply`. Scenarios whose seams did not
-change may be inherited from that published release; the manifest lists them
-under `inherited_scenarios` with the release tag, source SHA, archive digest,
-and validation run they were proven on. Pass `inherit_from: none` to require
-every scenario on the exact artifact.
+`grokex-release` refuses to start when the tag or Release already exists,
+rechecks that the branch head is still the run's commit right before
+publishing, creates the tag on that commit with the six archives, the dist
+files, `RELEASE.json`, and `SHA256SUMS`, then downloads the published Release
+and verifies it against the same identities (`release.py verify-assets`).
+`dry_run: true` does everything except create the tag and Release; use it to
+rehearse after pipeline changes.
 
-Any change to `codex-rs/Cargo.lock`, the build action, `release.py`,
-`grokex/validator/`, or the contract file requires every scenario again.
-
-Test-only paths never require a Live re-proof because they cannot change the
-shipped binary: files under a `tests/` directory, `*_tests.rs`, and `tests.rs`
-(see `test_only_paths` in the contract). A product module that merely declares
-a test module still counts as a seam change.
+`RELEASE.json` records the tag, version, upstream commit, source commit,
+product tree, release run id, and the status and Turn durations of every
+scenario as proven in that run.
 
 ## Seam pins and Grok test placement
 
@@ -94,57 +102,29 @@ rebases them without conflicts:
 about stock shapes the graft depends on: every `ToolSpec` variant is classified
 as local or provider-hosted, every stock `CollabAgentTool` states whether Grok
 restores it as a plaintext call, the `spawn_agent` argument contract stays
-`{message, task_name}`, and the top-level `ResponsesApiRequest` fields forwarded
-to the Grok gateway are an explicit allowlist. When an upstream bump breaks a
-pin, the graft is reviewed instead of failing first in a Live scenario.
+`{message, task_name}`, the top-level `ResponsesApiRequest` fields forwarded
+to the Grok gateway are an explicit allowlist, and the stock OpenAI provider
+keeps canonical history unchanged. When an upstream bump breaks a pin, the
+graft is reviewed instead of failing first in a Live scenario.
 
 `codex-rs/core/tests/suite/grok_model_visible_request.rs` snapshots the
 `/responses` request grok-4.6 receives for each Live Story's first Turn against
 a mock gateway: every top-level field, the exact tool inventory with a
 description and parameter digest per tool, and the input item kinds. Per-run
-identifiers are reduced to their key names. The snapshots live under
-`core/tests/suite/snapshots/all__suite__grok_model_visible_request__*.snap`;
-a bump that renames a tool, collapses a shell type, adds an instruction block,
-or changes the projected reasoning effort shows up as a snapshot diff in the
-PR. Review the `.snap.new` and accept with `cargo insta accept -p codex-core`
-only when the visible change is intended.
-
-## Validator carrier
-
-A `grokex-live` run may execute from a later commit than the candidate source
-when the product-to-carrier diff touches only validation paths (`release.py`,
-`seam_series.py`, their tests, `grokex/validator/`, the contract and seam map
-files, this document, and `.github/workflows/grokex-*.yml`).
-`release.py verify-carrier` enforces the allowlist; the archive under test
-still comes from the product SHA.
-
-`grokex-release` honors the same chain: the candidate's source may be an
-ancestor of the release-branch head, and the Live validator may sit between
-them, as long as every step is validation-only. The product SHA (the
-candidate's source) is what the remaining five targets are built from, what
-the archives and `RELEASE.json` name, and what the tag points at; `release.py`
-and the evidence composer run from the head, and the shipped `grokex/` files
-are packaged from a separate checkout of the product SHA.
+identifiers are reduced to their key names. A bump that renames a tool,
+collapses a shell type, adds an instruction block, or changes the projected
+reasoning effort shows up as a snapshot diff in the PR. Review the `.snap.new`
+and accept with `cargo insta accept -p codex-core` only when the visible
+change is intended.
 
 ## Seam series for upstream bumps
 
-`grokex/seam_series.json` maps every path the graft touches to one of ten
-seams. `python3 grokex/seam_series.py plan` fails when a changed path has no
-owner; `export --out DIR` writes the net upstream-to-head difference as ten
-`git am`-compatible patches, one per seam; `verify --out DIR` applies them onto
-the upstream tree and requires the exact release tree hash. `grokex-checks`
-runs all three, so the series is always current.
-
-To port to a new upstream tag: export the series from the current release
-branch, `git am` it onto the new tag one seam at a time, resolve conflicts
-inside that seam only, and let the seam pins and stock controls point at the
-shapes that moved.
-
-## Observation mode
-
-`grokex-observe` (dispatch, or nightly schedule when present on the default
-branch) runs every scenario against the newest published release with
-`--mode observation`. Deadlines and semantic failures are recorded, never
-gating, and `release.py summarize-observations` aggregates `turn_durations_seconds`
-into p50/p95/max per scenario against the contract deadline. Observation
-evidence is rejected by `build-live-evidence`.
+`grokex/seam_series.json` maps every path the graft touches to one seam;
+`grokex/seam_series.py` regroups the net difference between the upstream
+commit and the release head into one `git am`-compatible patch per seam.
+`python3 grokex/seam_series.py plan` fails when a changed path has no owning
+seam, `export --out DIR` writes the series, and `verify --out DIR` applies the
+patches onto the upstream tree in a scratch index and requires the exact
+release tree hash. `grokex-checks` runs all three so the series stays a
+faithful, reviewable decomposition of the graft; a new upstream tag is adopted
+by applying the series on top of it and updating `release-source.json`.
