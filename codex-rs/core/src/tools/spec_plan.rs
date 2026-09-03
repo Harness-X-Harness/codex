@@ -435,7 +435,7 @@ pub(crate) fn finalize_tool_router(
                     ToolSpec::Namespace(namespace) => namespace.name.as_str(),
                     ToolSpec::Function(_) | ToolSpec::Freeform(_) => DEFAULT_FUNCTION_NAMESPACE,
                     ToolSpec::ToolSearch { .. } => TOOL_SEARCH_TOOL_NAME,
-                    ToolSpec::WebSearch { .. } => continue,
+                    ToolSpec::WebSearch { .. } | ToolSpec::XSearch => continue,
                 };
                 let owner = tool.runtime.mcp_server_name();
                 match namespace_owners.get(namespace_name) {
@@ -483,14 +483,16 @@ pub(crate) fn finalize_tool_router(
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    Ok(ToolRouter::from_parts(
+    ToolRouter::from_parts_with_projection(
         registry,
         model_visible_specs,
         tool_mode,
         code_mode_tool_names,
         tool_namespaces_info,
         &child_management_tools,
-    ))
+        turn_context.provider.projects_tools_as_flat_functions(),
+    )
+    .map_err(|wire_name| CodexErrorDetails::ToolCollision(wire_name).into())
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -561,7 +563,9 @@ fn build_model_visible_specs(
     merge_into_namespaces(specs)
         .into_iter()
         .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
+            namespace_tools_enabled(turn_context)
+                || turn_context.provider.projects_tools_as_flat_functions()
+                || !matches!(spec, ToolSpec::Namespace(_))
         })
         .collect()
 }
@@ -621,6 +625,9 @@ fn hosted_model_tool_specs(
         web_search_tool_type: model_info.web_search_tool_type,
     }) {
         specs.push(hosted_web_search_tool);
+    }
+    if turn_context.provider.capabilities().x_search {
+        specs.push(ToolSpec::XSearch);
     }
     specs
 }
@@ -724,13 +731,7 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
         return false;
     }
 
-    let provider = turn_context.provider.info();
-    provider.uses_openai_actor_authorization()
-        || (provider.requires_openai_auth
-            && turn_context
-                .auth_manager
-                .as_deref()
-                .is_some_and(AuthManager::current_auth_uses_codex_backend))
+    true
 }
 
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
@@ -827,7 +828,10 @@ fn register_code_mode_executors(
             ToolSpec::Namespace(namespace) if !namespace.tools.is_empty() => {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
-            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::Namespace(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::XSearch => {
                 continue;
             }
         };

@@ -73,6 +73,9 @@ mod fork_thread;
 mod git_enrichment;
 mod guardian_authorization;
 mod guardian_history;
+mod grok_agent_execution;
+mod grok_model_visible_request;
+mod grok_web_search;
 mod guardian_mcp_elicitation;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
@@ -192,3 +195,4 @@ mod window_headers;
 mod windows_sandbox;
 mod workspace_roots;
 mod worktree_trust;
+mod x_search;

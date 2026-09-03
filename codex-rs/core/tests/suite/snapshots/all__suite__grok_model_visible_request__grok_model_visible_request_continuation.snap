@@ -1,0 +1,53 @@
+---
+source: core/tests/suite/grok_model_visible_request.rs
+expression: "render_model_visible_request(\"encrypted-reasoning-tool-continuation first Turn (dynamic tool declared at thread/start is not part of this fixture)\",\n&request)"
+---
+Scenario: encrypted-reasoning-tool-continuation first Turn (dynamic tool declared at thread/start is not part of this fixture)
+
+## Request
+client_metadata: keys=[root_turn_id,session_id,thread_id,turn_id,x-codex-installation-id,x-codex-turn-metadata,x-codex-window-id]
+include: ["reasoning.encrypted_content"]
+model: "grok-4.6"
+parallel_tool_calls: true
+prompt_cache_key: <thread id>
+reasoning: {"effort":"high"}
+store: false
+stream: true
+tool_choice: "auto"
+
+## Tools (14)
+- function local__exec_command__ec2e1c4adf62 description=sha256:39574af96f2744af/372chars params=sha256:737c530cc1b1ec46 props=[cmd,justification,login,max_output_tokens,prefix_rule,sandbox_permissions,shell,tty,workdir,yield_time_ms] strict=false
+  "This flat Provider function directly invokes the canonical `exec_command` tool. Call this functi…"
+- function local__write_stdin__6e4b2f452e08 description=sha256:2c89e92dc1fbf234/369chars params=sha256:acec976d202087f8 props=[chars,max_output_tokens,session_id,yield_time_ms] strict=false
+  "This flat Provider function directly invokes the canonical `write_stdin` tool. Call this functio…"
+- function local__update_plan__4b0601ec2bf6 description=sha256:2a99eb3aeabcdf04/446chars params=sha256:7a0d4f64367ba0df props=[explanation,plan] strict=false
+  "This flat Provider function directly invokes the canonical `update_plan` tool. Call this functio…"
+- function local__request_user_input__9863b36c2caf description=sha256:1e84651cd8e2f292/416chars params=sha256:23ee6f1a8cd81c9d props=[questions] strict=false
+  "This flat Provider function directly invokes the canonical `request_user_input` tool. Call this …"
+- function local__view_image__7f55e6b07cdd description=sha256:6839300290f74bb8/412chars params=sha256:97c98fc16681143b props=[path] strict=false
+  "This flat Provider function directly invokes the canonical `view_image` tool. Call this function…"
+- function local__collaboration__followup_task__df00c5efb1e3 description=sha256:d3e3d729fe85c050/537chars params=sha256:fbcba3d23a283655 props=[message,target] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.followup_task` tool. C…"
+- function local__collaboration__interrupt_agent__e8d24291aca1 description=sha256:b0910b946425766b/443chars params=sha256:82903eab0a1920ff props=[target] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.interrupt_agent` tool.…"
+- function local__collaboration__list_agents__9fc7de1c0609 description=sha256:b8aa5f04b6d4ff46/391chars params=sha256:c6d58559188e5c94 props=[path_prefix] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.list_agents` tool. Cal…"
+- function local__collaboration__send_message__9f69b38544da description=sha256:0b326f278a4e8e2c/409chars params=sha256:806c0094585e40f1 props=[message,target] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.send_message` tool. Ca…"
+- function local__collaboration__spawn_agent__5ca652933835 description=sha256:e81c7765515e686d/1605chars params=sha256:9afaa5aa3f75acc2 props=[fork_turns,message,model,reasoning_effort,task_name] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.spawn_agent` tool. Cal…"
+- function local__collaboration__wait_agent__d7c9901ea9d5 description=sha256:126acf17989ebf5e/685chars params=sha256:3e9f34360d221ec0 props=[timeout_ms] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.wait_agent` tool. Call…"
+- function local__image_gen__imagegen__6094bed1fa96 description=sha256:c451bda6ff1fe55d/2086chars params=sha256:b4fea7c38ae74635 props=[num_last_images_to_include,prompt,referenced_image_paths] strict=false
+  "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this …"
+- web_search - description=sha256:e3b0c44298fc1c14/0chars params=sha256:e3b0c44298fc1c14 props=[]
+  ""
+- x_search - description=sha256:e3b0c44298fc1c14/0chars params=sha256:e3b0c44298fc1c14 props=[]
+  ""
+
+## Input
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/developer:You are `/root`, the primary agent in a team of agents collaborating to ...
+02:message/developer:<multi_agent_mode>Any earlier instruction enabling proactive multi-agent...
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:Use the grokex_live_probe result, then reply with exactly GROKEX_LIVE_RE...

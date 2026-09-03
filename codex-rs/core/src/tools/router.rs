@@ -26,12 +26,21 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
+
+mod flat_projection;
+use flat_projection::FlatToolRoutes;
+use flat_projection::WireToolRoute;
+use flat_projection::custom_input_key;
+use flat_projection::decode_custom_input;
+use flat_projection::flat_wire_name;
+use flat_projection::project_flat_function_tools;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
@@ -43,11 +52,7 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
-            && matches!(
-                self.tool_name.name.as_str(),
-                "spawn_agent" | "send_message" | "followup_task"
-            )
+        if is_plaintext_collaboration_tool(&self.tool_name)
             && self
                 .encrypted_function_args
                 .as_ref()
@@ -58,6 +63,14 @@ impl ToolCall {
             ToolCallSource::Direct
         }
     }
+}
+
+fn is_plaintext_collaboration_tool(tool_name: &ToolName) -> bool {
+    tool_name.namespace.as_deref() == Some("collaboration")
+        && matches!(
+            tool_name.name.as_str(),
+            "spawn_agent" | "send_message" | "followup_task"
+        )
 }
 
 pub(crate) fn tool_log_payload<'a>(
@@ -78,6 +91,8 @@ pub struct ToolRouter {
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     can_manage_children: bool,
+    projects_tools_as_flat_functions: bool,
+    flat_tool_routes: FlatToolRoutes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,12 +141,52 @@ impl ToolRouter {
             code_mode_tool_names,
             tool_namespaces_info,
             can_manage_children: false,
+            projects_tools_as_flat_functions: false,
+            flat_tool_routes: FlatToolRoutes::default(),
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
                 .iter()
                 .all(|name| router.exposes_tool(name));
         router
+    }
+
+    pub(crate) fn from_parts_with_projection(
+        registry: ToolRegistry,
+        model_visible_specs: Vec<ToolSpec>,
+        tool_mode: ToolMode,
+        code_mode_tool_names: BTreeMap<String, ToolName>,
+        tool_namespaces_info: Option<TurnToolNamespacesInfo>,
+        child_management_tools: &[ToolName],
+        project_as_flat_functions: bool,
+    ) -> Result<Self, String> {
+        if !project_as_flat_functions {
+            return Ok(Self::from_parts(
+                registry,
+                model_visible_specs,
+                tool_mode,
+                code_mode_tool_names,
+                tool_namespaces_info,
+                child_management_tools,
+            ));
+        }
+        let (model_visible_specs, flat_tool_routes) =
+            project_flat_function_tools(model_visible_specs)?;
+        let mut router = Self {
+            registry,
+            model_visible_specs: model_visible_specs.into(),
+            tool_mode,
+            code_mode_tool_names,
+            tool_namespaces_info,
+            can_manage_children: false,
+            projects_tools_as_flat_functions: true,
+            flat_tool_routes,
+        };
+        router.can_manage_children = !child_management_tools.is_empty()
+            && child_management_tools
+                .iter()
+                .all(|name| router.exposes_tool(name));
+        Ok(router)
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
@@ -177,10 +232,11 @@ impl ToolRouter {
     // Answers if the tool plan lets the model invoke the tool directly, through code mode, or deferred tool search.
     fn exposes_tool(&self, name: &ToolName) -> bool {
         let name = name.clone().with_default_namespace();
-        if self
-            .code_mode_tool_names
-            .values()
-            .any(|nested| nested.clone().with_default_namespace() == name)
+        if self.flat_tool_routes.contains_canonical(&name)
+            || self
+                .code_mode_tool_names
+                .values()
+                .any(|nested| nested.clone().with_default_namespace() == name)
             || self.model_visible_specs.iter().any(|spec| match spec {
                 ToolSpec::Function(_) | ToolSpec::Freeform(_) => {
                     name.is_default_namespace() && spec.name() == name.name
@@ -192,7 +248,9 @@ impl ToolRouter {
                             ResponsesApiNamespaceTool::Custom(tool) => tool.name == name.name,
                         })
                 }
-                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
+                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } | ToolSpec::XSearch => {
+                    false
+                }
             })
         {
             return true;
@@ -206,6 +264,93 @@ impl ToolRouter {
                     && (tool.runtime.immutable_spec().is_some()
                         || tool.runtime.search_info().is_some())
             })
+    }
+
+    pub(crate) fn project_model_input(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        if !self.projects_tools_as_flat_functions {
+            return input;
+        }
+        let mut projected_custom_call_ids = BTreeSet::new();
+        for item in &mut input {
+            match item {
+                ResponseItem::FunctionCall {
+                    name,
+                    namespace,
+                    encrypted_function_args,
+                    ..
+                } => {
+                    let tool_name = ToolName::new(namespace.take(), name.clone());
+                    *name = flat_wire_name("function", &tool_name);
+                    *encrypted_function_args = None;
+                }
+                ResponseItem::FunctionCallOutput {
+                    call_id: None,
+                    name: Some(name),
+                    namespace,
+                    ..
+                } => {
+                    let tool_name = ToolName::new(namespace.take(), name.clone());
+                    *name = flat_wire_name("function", &tool_name);
+                }
+                ResponseItem::CustomToolCall {
+                    id,
+                    status,
+                    call_id,
+                    name,
+                    namespace,
+                    input,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } if status.is_none() => {
+                    let tool_name = ToolName::new(namespace.clone(), name.clone());
+                    projected_custom_call_ids.insert(call_id.clone());
+                    *item = ResponseItem::FunctionCall {
+                        id: id.clone(),
+                        name: flat_wire_name("custom", &tool_name),
+                        namespace: None,
+                        arguments: serde_json::json!({
+                            (custom_input_key(&tool_name.name)): input,
+                        })
+                        .to_string(),
+                        encrypted_function_args: None,
+                        call_id: call_id.clone(),
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
+                    };
+                }
+                _ => {}
+            }
+        }
+        for item in &mut input {
+            let ResponseItem::CustomToolCallOutput {
+                id,
+                call_id,
+                output,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            if projected_custom_call_ids.contains(call_id) {
+                *item = ResponseItem::FunctionCallOutput {
+                    id: id.clone(),
+                    call_id: Some(call_id.clone()),
+                    name: None,
+                    namespace: None,
+                    output: output.clone(),
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                };
+            }
+        }
+        input
+    }
+
+    pub(crate) fn exposes_x_search(&self) -> bool {
+        self.model_visible_specs
+            .iter()
+            .any(|spec| matches!(spec, ToolSpec::XSearch))
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
@@ -295,6 +440,58 @@ impl ToolRouter {
             })),
             _ => Ok(None),
         }
+    }
+
+    fn resolve_wire_route(&self, name: &str) -> Option<&WireToolRoute> {
+        self.flat_tool_routes.resolve(name)
+    }
+
+    pub(crate) fn restore_tool_call(
+        &self,
+        item: &mut ResponseItem,
+    ) -> Result<(), FunctionCallError> {
+        let ResponseItem::FunctionCall {
+            id,
+            name,
+            namespace,
+            arguments,
+            encrypted_function_args,
+            call_id,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = item
+        else {
+            return Ok(());
+        };
+        let Some(route) = self.resolve_wire_route(name) else {
+            return Ok(());
+        };
+        match route {
+            WireToolRoute::Function(tool_name) => {
+                *name = tool_name.name.clone();
+                *namespace = tool_name.namespace.clone();
+                if is_plaintext_collaboration_tool(tool_name) {
+                    *encrypted_function_args = Some(Vec::new());
+                }
+            }
+            WireToolRoute::Custom {
+                tool_name,
+                input_key,
+            } => {
+                let restored = ResponseItem::CustomToolCall {
+                    id: id.clone(),
+                    status: None,
+                    call_id: call_id.clone(),
+                    name: tool_name.name.clone(),
+                    namespace: tool_name.namespace.clone(),
+                    input: decode_custom_input(name, arguments, input_key)?,
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                };
+                *item = restored;
+            }
+        }
+        Ok(())
     }
 
     #[allow(dead_code)]
