@@ -71,11 +71,11 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
-mod guardian_authorization;
-mod guardian_history;
 mod grok_agent_execution;
 mod grok_model_visible_request;
 mod grok_web_search;
+mod guardian_authorization;
+mod guardian_history;
 mod guardian_mcp_elicitation;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
