@@ -184,6 +184,7 @@ jobs:
             grok_provider::tests::grok_provider_projects_text_and_tool_continuation \
             grok_provider::tests::grok_provider_replays_encrypted_reasoning_without_null_content \
             grok_provider::tests::grok_recognizes_only_completed_provider_hosted_x_calls \
+            grok_provider::tests::stock_openai_provider_keeps_canonical_history_unchanged \
             grok_provider::tests::resolved_provider_derives_internal_responses_dialect \
             grok_provider::tests::grok_models_manager_uses_bundle_or_exact_config_replacement; do
             run_exact codex-model-provider "${test_name}" --lib
