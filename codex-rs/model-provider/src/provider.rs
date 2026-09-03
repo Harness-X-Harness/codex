@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_api::ApiError;
+use codex_api::ImagesDialect;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
@@ -15,12 +16,14 @@ use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderValue;
 
@@ -30,6 +33,7 @@ use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
+use crate::grok_provider::GrokModelProvider;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
 pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
@@ -60,7 +64,10 @@ pub struct ProviderCapabilities {
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
+    pub x_search: bool,
+    pub cached_web_search: bool,
     pub external_web_access: bool,
+    pub indexed_web_search: bool,
     pub remote_compaction: RemoteCompactionSupport,
 }
 
@@ -70,7 +77,10 @@ impl Default for ProviderCapabilities {
             namespace_tools: true,
             image_generation: true,
             web_search: true,
+            x_search: false,
+            cached_web_search: true,
             external_web_access: true,
+            indexed_web_search: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     }
@@ -140,6 +150,9 @@ pub const DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL: &str = "gpt-5.6-luna";
 /// a backend-specific model ID.
 pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 
+/// Default image model used when a provider does not override image policy.
+pub const DEFAULT_IMAGE_GENERATION_MODEL: &str = "gpt-image-2";
+
 /// Runtime provider abstraction used by model execution.
 ///
 /// Implementations own provider-specific behavior for a model backend. The
@@ -154,25 +167,62 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         ProviderCapabilities::default()
     }
 
+    /// Projects canonical model input onto this provider's request wire.
+    ///
+    /// The default keeps stock input unchanged. Implementations may remove or transform only
+    /// provider-incompatible wire fields; durable Session history remains canonical.
+    fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        input
+    }
+
+    /// Returns whether a completed response item was executed by the Provider.
+    ///
+    /// The default keeps every tool call under Codex dispatch ownership. A Provider override must
+    /// recognize only its verified response shape; the caller separately requires that the
+    /// matching hosted declaration was present in the request.
+    fn is_provider_hosted_tool_call(&self, _item: &ResponseItem) -> bool {
+        false
+    }
+
+    /// Returns how canonical Codex tool declarations cross this provider's wire.
+    ///
+    /// This is internal runtime state. It is not a serialized provider selector or capability.
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        false
+    }
+
+    /// Returns the provider-owned model used for image generation and editing.
+    fn image_generation_model(&self) -> &'static str {
+        DEFAULT_IMAGE_GENERATION_MODEL
+    }
+
+    /// Returns the request and response dialect for this provider's Images API.
+    fn images_dialect(&self) -> ImagesDialect {
+        ImagesDialect::OpenAi
+    }
+
     /// Returns the preferred model used for automatic approval review.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn approval_review_preferred_model(&self) -> &'static str {
-        DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; review must then require
+    /// an explicit override instead of sending another provider's model ID.
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        None
     }
 
     /// Returns the preferred model used for memory extraction.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn memory_extraction_preferred_model(&self) -> &'static str {
-        DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; callers must require an
+    /// explicit model instead of sending another provider's model ID.
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        None
     }
 
     /// Returns the preferred model used for memory consolidation.
     ///
-    /// Providers that require backend-specific model IDs should override this.
-    fn memory_consolidation_preferred_model(&self) -> &'static str {
-        DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL
+    /// Providers without a verified backend-specific model return `None`; callers must require an
+    /// explicit model instead of sending another provider's model ID.
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        None
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -321,22 +371,27 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
-    } else {
-        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+    match provider_info.wire_api {
+        WireApi::GrokResponses => Arc::new(GrokModelProvider::new(provider_info, auth_manager)),
+        WireApi::Responses if provider_info.is_amazon_bedrock() => {
+            Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
+        }
+        WireApi::Responses => Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager)),
     }
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
 #[derive(Clone, Debug)]
-struct ConfiguredModelProvider {
+pub(crate) struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl ConfiguredModelProvider {
-    fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
+    pub(crate) fn new(
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
         let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
             info: provider_info,
@@ -358,24 +413,58 @@ impl ModelProvider for ConfiguredModelProvider {
         } else {
             RemoteCompactionSupport::Unsupported
         };
+        let image_generation = self.info.uses_openai_actor_authorization()
+            || (self.info.requires_openai_auth
+                && self
+                    .auth_manager
+                    .as_deref()
+                    .is_some_and(AuthManager::current_auth_uses_codex_backend));
 
         ProviderCapabilities {
+            image_generation,
             remote_compaction,
             ..ProviderCapabilities::default()
         }
     }
 
-    fn approval_review_preferred_model(&self) -> &'static str {
-        if self
-            .auth_manager
-            .as_ref()
-            .and_then(|auth_manager| auth_manager.auth_cached())
-            .is_some_and(|auth| auth.is_api_key_auth())
-        {
-            API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
-        } else {
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+    fn project_model_input(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        if self.info.is_openai() {
+            return input;
         }
+        for item in &mut input {
+            item.clear_internal_chat_message_metadata_passthrough();
+            if let ResponseItem::FunctionCall {
+                encrypted_function_args,
+                ..
+            } = item
+            {
+                *encrypted_function_args = None;
+            }
+        }
+        input
+    }
+
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(
+            if self
+                .auth_manager
+                .as_ref()
+                .and_then(|auth_manager| auth_manager.auth_cached())
+                .is_some_and(|auth| auth.is_api_key_auth())
+            {
+                API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
+            } else {
+                DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            },
+        )
+    }
+
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+    }
+
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -691,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_uses_default_approval_review_preferred_model() {
+    fn configured_provider_uses_stock_background_models() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
@@ -699,7 +788,32 @@ mod tests {
 
         assert_eq!(
             provider.approval_review_preferred_model(),
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            provider.memory_extraction_preferred_model(),
+            Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            provider.memory_consolidation_preferred_model(),
+            Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
+        );
+
+        let custom_provider = create_model_provider(
+            provider_for("https://example.test/v1".to_string()),
+            /*auth_manager*/ None,
+        );
+        assert_eq!(
+            custom_provider.approval_review_preferred_model(),
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            custom_provider.memory_extraction_preferred_model(),
+            Some(DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL)
+        );
+        assert_eq!(
+            custom_provider.memory_consolidation_preferred_model(),
+            Some(DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL)
         );
     }
 
@@ -712,7 +826,10 @@ mod tests {
             ))),
         );
 
-        assert_eq!(provider.approval_review_preferred_model(), "gpt-5.6-luna");
+        assert_eq!(
+            provider.approval_review_preferred_model(),
+            Some("gpt-5.6-luna")
+        );
     }
 
     #[test]
@@ -726,7 +843,7 @@ mod tests {
 
         assert_eq!(
             provider.approval_review_preferred_model(),
-            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+            Some(DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL)
         );
     }
 
