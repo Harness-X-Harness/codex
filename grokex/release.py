@@ -395,6 +395,10 @@ VALIDATION_ONLY_PATHS = (
     "grokex/test_release.py",
     "grokex/test_seam_series.py",
     "grokex/validator/",
+    # Retired validators: a carrier diff against an older product still lists
+    # their deletion, which is validation-only.
+    "grokex/live_smoke.py",
+    "grokex/test_live_smoke.py",
 )
 
 

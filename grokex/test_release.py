@@ -194,6 +194,8 @@ class ReleaseIdentityTest(unittest.TestCase):
                 "grokex/test_release.py",
                 "grokex/validator/internal/oracle/image.go",
                 "grokex/validator/go.sum",
+                "grokex/live_smoke.py",
+                "grokex/test_live_smoke.py",
             ]
         )
         for product_path in (
