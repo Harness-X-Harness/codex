@@ -102,12 +102,7 @@
       "name": "grokex-distribution",
       "summary": "Grokex launcher, installers, profile, and install guide",
       "paths": [
-        "grokex/INSTALL.md",
-        "grokex/config.toml.example",
-        "grokex/grokex",
-        "grokex/grokex.ps1",
-        "grokex/install-grokex.ps1",
-        "grokex/install-grokex.sh"
+        "grokex/dist/"
       ]
     },
     {
@@ -119,7 +114,7 @@
     },
     {
       "name": "grokex-workflows",
-      "summary": "Grokex GitHub Actions: checks, candidate, live, release, observe",
+      "summary": "Grokex GitHub Actions: checks, tree-hash cached build, single-run release",
       "paths": [
         ".github/actions/build-grokex/",
         ".github/workflows/grokex-"

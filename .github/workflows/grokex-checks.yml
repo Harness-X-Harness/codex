@@ -43,11 +43,9 @@ jobs:
           go vet ./...
           go test ./...
           go build -o "${RUNNER_TEMP}/grokex-live" ./cmd/grokex-live
-          # Every scenario names the canonical-session oracle and the validator
-          # refuses a scenario the contract does not name.
-          jq -e '[.scenarios[] | .oracle] | all(. == "canonical_session")' ../live_contracts.json
+          # The validator refuses a scenario the contract does not name.
           if "${RUNNER_TEMP}/grokex-live" --contracts ../live_contracts.json --archive x --config x --evidence x \
-              --source-sha x --validator-sha x --run-id x --scenario not-a-scenario; then
+              --source-sha x --run-id x --scenario not-a-scenario; then
             echo "validator accepted a scenario outside the contract" >&2
             exit 1
           fi
@@ -66,11 +64,12 @@ jobs:
           python3 grokex/seam_series.py plan --head "${CHECKOUT_SHA}" > "${RUNNER_TEMP}/seam-plan.txt"
           python3 grokex/seam_series.py export --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series" > /dev/null
           python3 grokex/seam_series.py verify --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series"
-          bash -n grokex/grokex grokex/install-grokex.sh
-          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/install-grokex.ps1))'
-          python3 grokex/release.py verify-profile --path grokex/config.toml.example
+          bash -n grokex/dist/grokex grokex/dist/install-grokex.sh grokex/download-archives.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/dist/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/dist/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/dist/config.toml.example
           release_tag="$(python3 grokex/release.py identity --github-output | sed -n 's/^release_tag=//p')"
-          [[ -n "${release_tag}" ]]
+          product_tree="$(python3 grokex/release.py identity --github-output | sed -n 's/^product_tree=//p')"
+          [[ -n "${release_tag}" && -n "${product_tree}" ]]
           fixture="${RUNNER_TEMP}/grokex-fixture"
           mkdir -p "${fixture}/raw"
           for target in \
@@ -91,11 +90,12 @@ jobs:
             --raw-root "${fixture}/raw" \
             --output "${fixture}/dist" \
             --repository . \
-            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --built-from-sha "${CHECKOUT_SHA}" \
             --target x86_64-unknown-linux-musl
           python3 grokex/release.py verify-archives \
             --dist "${fixture}/dist" \
-            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
             --target x86_64-unknown-linux-musl
           candidate="${fixture}/dist/${release_tag}-x86_64-unknown-linux-musl.tar.gz"
           mkdir -p "${fixture}/extracted" "${fixture}/installed"
@@ -109,7 +109,8 @@ jobs:
             --raw-root "${fixture}/raw" \
             --output "${fixture}/dist" \
             --repository . \
-            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --built-from-sha "${CHECKOUT_SHA}" \
             --target aarch64-apple-darwin \
             --target x86_64-apple-darwin \
             --target aarch64-unknown-linux-musl \
@@ -118,7 +119,29 @@ jobs:
           [[ "$(sha256sum "${candidate}" | awk '{print $1}')" == "${candidate_sha}" ]]
           python3 grokex/release.py verify-archives \
             --dist "${fixture}/dist" \
-            --source-sha "${CHECKOUT_SHA}"
+            --product-tree "${product_tree}"
+          # Assemble a full asset set from synthetic completed evidence and
+          # verify it the way the publish job does.
+          mkdir -p "${fixture}/evidence"
+          for scenario in $(jq -r '.scenarios | keys[]' grokex/live_contracts.json); do
+            story="$(jq -r --arg s "${scenario}" '.scenarios[$s].story' grokex/live_contracts.json)"
+            jq -n --arg scenario "${scenario}" --arg story "${story}" \
+              '{scenario: $scenario, story: $story, mode: "release", status: "completed", turn_durations_seconds: [1.5]}' \
+              > "${fixture}/evidence/LIVE_EVIDENCE-${scenario}.json"
+          done
+          python3 grokex/release.py assemble \
+            --archives "${fixture}/dist" \
+            --evidence-dir "${fixture}/evidence" \
+            --output "${fixture}/assets" \
+            --repository . \
+            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --release-run 0
+          python3 grokex/release.py verify-assets \
+            --dist "${fixture}/assets" \
+            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --release-run 0
 
   formatting:
     name: Formatting
