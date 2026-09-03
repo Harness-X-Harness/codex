@@ -10,6 +10,7 @@ pub(crate) fn image_generation_artifact_path(
     save_root: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
+    extension: &str,
 ) -> AbsolutePathBuf {
     let sanitize = |value: &str| {
         let mut sanitized: String = value
@@ -31,7 +32,7 @@ pub(crate) fn image_generation_artifact_path(
     save_root
         .join(GENERATED_IMAGE_ARTIFACTS_DIR)
         .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
+        .join(format!("{}.{}", sanitize(call_id), extension))
 }
 
 /// Returns the model-facing generated-image path hint, or omits it if it is too large.

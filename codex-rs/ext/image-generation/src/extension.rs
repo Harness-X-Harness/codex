@@ -18,6 +18,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
+use crate::tool::MAX_EDIT_IMAGES;
 
 #[derive(Clone)]
 struct ImageGenerationExtension {
@@ -29,7 +30,6 @@ type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync
 
 #[derive(Clone)]
 struct ImageGenerationExtensionConfig {
-    available: bool,
     provider: ModelProviderInfo,
     save_root: Option<AbsolutePathBuf>,
 }
@@ -38,9 +38,6 @@ impl ImageGenerationExtensionConfig {
     /// Resolves the image provider and save root for a thread.
     fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
         Self {
-            available: config.model_provider.is_openai()
-                || config.model_provider.requires_openai_auth
-                || config.model_provider.uses_openai_actor_authorization(),
             provider: config.model_provider.clone(),
             save_root: resolve_save_root(config),
         }
@@ -90,17 +87,24 @@ impl ToolContributor for ImageGenerationExtension {
         let Some(config) = thread_store.get::<ImageGenerationExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.available {
+        let provider =
+            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
+        if !provider.capabilities().image_generation {
             return Vec::new();
         }
-
+        let image_model = provider.image_generation_model();
+        let max_edit_images = provider
+            .images_dialect()
+            .effective_max_edit_images(MAX_EDIT_IMAGES);
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
-                create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+                provider,
                 thread_store
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
             ),
+            image_model,
+            max_edit_images,
             config.save_root.clone(),
             thread_store.level_id().to_string(),
         ))]
