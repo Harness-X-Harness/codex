@@ -34,14 +34,15 @@ jobs:
     outputs:
       product_tree: ${{ steps.identity.outputs.product_tree }}
       release_tag: ${{ steps.identity.outputs.release_tag }}
-      targets: ${{ steps.targets.outputs.targets }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - id: identity
         run: python3 grokex/release.py identity --github-output >> "${GITHUB_OUTPUT}"
-      - id: targets
+      - id: matrix
+        name: Pair each requested target with its native runner
         env:
           REQUESTED: ${{ inputs.targets }}
         run: |
@@ -51,8 +52,19 @@ jobs:
           else
             targets='["x86_64-unknown-linux-musl"]'
           fi
-          jq -e 'type == "array" and length > 0' <<<"${targets}" >/dev/null
-          echo "targets=$(jq -c . <<<"${targets}")" >> "${GITHUB_OUTPUT}"
+          runners='{
+            "aarch64-apple-darwin": "macos-15",
+            "x86_64-apple-darwin": "macos-15-intel",
+            "aarch64-unknown-linux-musl": "ubuntu-24.04-arm",
+            "x86_64-unknown-linux-musl": "ubuntu-24.04",
+            "aarch64-pc-windows-msvc": "windows-11-arm",
+            "x86_64-pc-windows-msvc": "windows-2025"
+          }'
+          matrix="$(jq -c --argjson runners "${runners}" '
+            if type != "array" or length == 0 then error("targets must be a non-empty array") else . end
+            | map({target: ., runner: ($runners[.] // error("no runner for target \(.)"))})
+          ' <<<"${targets}")"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
 
   build:
     name: Build ${{ matrix.target }}
@@ -60,8 +72,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(needs.identity.outputs.targets) }}
-    runs-on: ${{ contains(matrix.target, 'apple') && 'macos-15-xlarge' || contains(matrix.target, 'windows') && 'windows-2025' || 'ubuntu-24.04' }}
+        include: ${{ fromJSON(needs.identity.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 170
     env:
       ARTIFACT: grokex-build-${{ needs.identity.outputs.product_tree }}-${{ matrix.target }}
