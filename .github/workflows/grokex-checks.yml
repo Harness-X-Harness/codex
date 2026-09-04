@@ -273,6 +273,11 @@ jobs:
           }
           run_exact suite::v2::model_list::grok_model_list::list_models_uses_grok_release_catalog_through_stock_model_dto
           run_exact suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities
+          # Thread Provider Binding Stories proven deterministically: fork,
+          # cold restart and resume, manual compaction.
+          run_exact suite::v2::compaction::grok_provider_binding::grok_fork_keeps_provider_binding_and_isolates_branch_failure
+          run_exact suite::v2::compaction::grok_provider_binding::grok_cold_restart_resume_keeps_provider_binding
+          run_exact suite::v2::compaction::grok_provider_binding::grok_manual_compaction_keeps_provider_binding
       - id: controls
         name: Shared stock seam controls
         continue-on-error: true

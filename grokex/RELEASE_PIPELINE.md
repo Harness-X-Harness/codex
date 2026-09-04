@@ -112,7 +112,9 @@ and the test body lives in the Grok module:
   `seam_pins_tests.rs` (declared from the Grok `flat_projection` module)
 - `codex-rs/core/tests/suite/grok_*.rs`
 - `codex-rs/app-server/tests/suite/v2/grok_*.rs` (declared from the stock
-  suite file whose helpers they reuse)
+  suite file whose helpers they reuse); `grok_provider_binding.rs` is the
+  deterministic gate for the Thread Provider Binding Stories (fork, cold
+  restart and resume, manual compaction) against a mock Grok gateway
 - `codex-rs/codex-api/src/provider_grok_tests.rs` and
   `codex-rs/codex-api/tests/clients/grok_tests.rs`
 - `codex-rs/model-provider/src/grok_provider_tests.rs`
