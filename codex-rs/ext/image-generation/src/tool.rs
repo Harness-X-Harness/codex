@@ -1,4 +1,5 @@
 use std::io;
+use std::path::Path;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -55,16 +56,15 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
-const IMAGE_MODEL: &str = "gpt-image-2";
-const MAX_EDIT_IMAGES: usize = 5;
+pub(crate) const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
-    MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
+    image_model: &'static str,
+    max_edit_images: usize,
     save_root: Option<AbsolutePathBuf>,
     thread_id: String,
 }
@@ -73,11 +73,15 @@ impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
     pub(crate) fn new(
         backend: CodexImagesBackend,
+        image_model: &'static str,
+        max_edit_images: usize,
         save_root: Option<AbsolutePathBuf>,
         thread_id: String,
     ) -> Self {
         Self {
             backend,
+            image_model,
+            max_edit_images,
             save_root,
             thread_id,
         }
@@ -88,9 +92,8 @@ impl ImageGenerationTool {
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
     prompt: String,
-    #[schemars(length(max = 5))]
     referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
-    #[schemars(range(min = 1, max = 5))]
+    #[schemars(range(min = 1))]
     num_last_images_to_include: Option<usize>,
 }
 
@@ -121,7 +124,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
 
     /// Advertises the model contract: a rewritten prompt and optional edit references.
     fn spec(&self) -> ToolSpec {
-        imagegen_tool_spec()
+        imagegen_tool_spec(self.max_edit_images)
     }
 
     /// Exposes image generation directly and through the nested code-mode tool surface.
@@ -144,9 +147,14 @@ impl ImageGenerationTool {
         call: ToolCall<'_>,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request =
-            request_for_call_args(&args, call.conversation_history.items(), &call.environments)
-                .await?;
+        let request = request_for_call_args(
+            &args,
+            call.conversation_history.items(),
+            &call.environments,
+            self.image_model,
+            self.max_edit_images,
+        )
+        .await?;
         call.turn_item_emitter
             .emit_started(extension_turn_item(
                 ImageGenerationItem {
@@ -184,10 +192,11 @@ impl ImageGenerationTool {
                 .data
                 .into_iter()
                 .next()
-                .map(|data| (data.b64_json, transparent_background, imagegen_request_id))
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
+                .and_then(normalize_image_data)
+                .map(|image| (image, transparent_background, imagegen_request_id))
         });
-        let (result, transparent_background, imagegen_request_id) = match result {
+        let (image, transparent_background, imagegen_request_id) = match result {
             Ok(result) => result,
             Err((message, failure)) => {
                 let item = ImageGenerationItem {
@@ -212,14 +221,15 @@ impl ImageGenerationTool {
             call.environments.first(),
             &self.thread_id,
             &call.call_id,
-            &result,
+            &image.bytes,
+            image.extension,
         )
         .await;
         let item = ImageGenerationItem {
             id: call.call_id.clone(),
             status: "completed".to_string(),
             revised_prompt: Some(args.prompt),
-            result: result.clone(),
+            result: image.base64_data.clone(),
             transparent_background,
             failure: None,
             saved_path: saved_path.clone(),
@@ -234,10 +244,63 @@ impl ImageGenerationTool {
             image_generation_output_hint(output_dir.display(), output_path.display())
         });
         Ok(Box::new(GeneratedImageOutput {
-            result,
+            base64_data: image.base64_data,
+            mime_type: image.mime_type,
             output_hint,
         }))
     }
+}
+
+struct NormalizedImage {
+    bytes: Vec<u8>,
+    base64_data: String,
+    mime_type: String,
+    extension: &'static str,
+}
+
+fn normalize_image_data(
+    data: codex_api::ImageData,
+) -> Result<NormalizedImage, (String, Option<ImageGenerationFailure>)> {
+    let bytes = BASE64_STANDARD.decode(data.b64_json.trim()).map_err(|_| {
+        (
+            "image generation returned invalid base64 data".to_string(),
+            None,
+        )
+    })?;
+    let image = load_for_prompt_bytes(
+        Path::new("generated-image"),
+        bytes,
+        PromptImageMode::Original,
+    )
+    .map_err(|_| {
+        (
+            "image generation returned invalid image data".to_string(),
+            None,
+        )
+    })?;
+    if data
+        .mime_type
+        .as_deref()
+        .is_some_and(|mime| mime != image.mime)
+    {
+        return Err((
+            "image generation returned mismatched MIME metadata".to_string(),
+            None,
+        ));
+    }
+    let extension = image_extension(&image.mime).ok_or_else(|| {
+        (
+            "image generation returned an unsupported MIME type".to_string(),
+            None,
+        )
+    })?;
+    let bytes = image.bytes.as_ref().to_vec();
+    Ok(NormalizedImage {
+        base64_data: BASE64_STANDARD.encode(&bytes),
+        bytes,
+        mime_type: image.mime,
+        extension,
+    })
 }
 
 fn usage_limit_failure(error: &CodexErr) -> Option<ImageGenerationFailure> {
@@ -272,16 +335,14 @@ async fn save_image_generation_result(
     environment: Option<&ToolEnvironment<'_>>,
     session_id: &str,
     call_id: &str,
-    result: &str,
+    bytes: &[u8],
+    extension: &str,
 ) -> Option<AbsolutePathBuf> {
     let (output_dir, save_result) = match save_root {
         Some(save_root) => {
-            let path = image_generation_artifact_path(save_root, session_id, call_id);
+            let path = image_generation_artifact_path(save_root, session_id, call_id, extension);
             let output_dir = path.parent().unwrap_or_else(|| save_root.clone());
             let save_result: io::Result<AbsolutePathBuf> = async {
-                let bytes = BASE64_STANDARD
-                    .decode(result.trim().as_bytes())
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 if let Some(parent) = path.parent() {
                     LOCAL_FS
                         .create_directory(
@@ -297,7 +358,7 @@ async fn save_image_generation_result(
                 LOCAL_FS
                     .write_file(
                         &PathUri::from_abs_path(&path),
-                        bytes,
+                        bytes.to_vec(),
                         Default::default(),
                         /*sandbox*/ None,
                     )
@@ -311,16 +372,6 @@ async fn save_image_generation_result(
             let environment = environment?;
             let output_dir = environment.cwd.join("generated_images");
             let save_result: io::Result<AbsolutePathBuf> = async {
-                let result = result.trim();
-                if result.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "generated image exceeds the executor file size limit",
-                    ));
-                }
-                let bytes = BASE64_STANDARD
-                    .decode(result.as_bytes())
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                 if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -328,8 +379,12 @@ async fn save_image_generation_result(
                     ));
                 }
 
-                let artifact_path =
-                    image_generation_artifact_path(&environment.cwd, session_id, call_id);
+                let artifact_path = image_generation_artifact_path(
+                    &environment.cwd,
+                    session_id,
+                    call_id,
+                    extension,
+                );
                 let path = output_dir.join(artifact_path.as_path().file_name().unwrap_or_default());
                 let sandbox = Some(&environment.file_system_sandbox_context);
                 if let Some(parent) = path.parent() {
@@ -378,7 +433,7 @@ async fn save_image_generation_result(
 
                 environment
                     .file_system
-                    .write_file(&path_uri, bytes, Default::default(), sandbox)
+                    .write_file(&path_uri, bytes.to_vec(), Default::default(), sandbox)
                     .await?;
                 Ok(path)
             }
@@ -410,11 +465,13 @@ async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
     environments: &[ToolEnvironment<'_>],
+    image_model: &str,
+    max_edit_images: usize,
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
-    if paths.len() > MAX_EDIT_IMAGES {
+    if paths.len() > max_edit_images {
         return Err(FunctionCallError::RespondToModel(format!(
-            "`referenced_image_paths` must contain at most {MAX_EDIT_IMAGES} paths"
+            "`referenced_image_paths` must contain at most {max_edit_images} paths"
         )));
     }
     let images = match (paths.is_empty(), args.num_last_images_to_include) {
@@ -422,7 +479,7 @@ async fn request_for_call_args(
             return Ok(ImageRequest::Generate(ImageGenerationRequest {
                 prompt: args.prompt.clone(),
                 background: Some(ImageBackground::Auto),
-                model: IMAGE_MODEL.to_string(),
+                model: image_model.to_string(),
                 n: None,
                 quality: Some(ImageQuality::Auto),
                 size: Some("auto".to_string()),
@@ -441,9 +498,9 @@ async fn request_for_call_args(
             images
         }
         (true, Some(count)) => {
-            if !(1..=MAX_EDIT_IMAGES).contains(&count) {
+            if !(1..=max_edit_images).contains(&count) {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
+                    "`num_last_images_to_include` must be between 1 and {max_edit_images}"
                 )));
             }
             // Pathless images have no stable reference, so this bounded window may include newer
@@ -470,7 +527,7 @@ async fn request_for_call_args(
         images,
         prompt: args.prompt.clone(),
         background: Some(ImageBackground::Auto),
-        model: IMAGE_MODEL.to_string(),
+        model: image_model.to_string(),
         n: None,
         quality: Some(ImageQuality::Auto),
         size: Some("auto".to_string()),
@@ -495,7 +552,16 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                 image_urls.extend(output_image_urls(output));
             }
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
-                image_urls.push(format!("data:image/png;base64,{result}"));
+                if let Ok(bytes) = BASE64_STANDARD.decode(result)
+                    && let Ok(image) = load_for_prompt_bytes(
+                        Path::new("history-image"),
+                        bytes,
+                        PromptImageMode::Original,
+                    )
+                    && image_extension(&image.mime).is_some()
+                {
+                    image_urls.push(image.into_data_url());
+                }
             }
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::Reasoning { .. }
@@ -574,7 +640,7 @@ fn parse_args(call: &ToolCall<'_>) -> Result<ImagegenArgs, FunctionCallError> {
 }
 
 /// Builds the namespace function schema exposed to the model.
-fn imagegen_tool_spec() -> ToolSpec {
+fn imagegen_tool_spec(max_edit_images: usize) -> ToolSpec {
     let mut schema_value = serde_json::to_value(
         SchemaSettings::draft2019_09()
             .with(|settings| settings.inline_subschemas = true)
@@ -596,7 +662,9 @@ fn imagegen_tool_spec() -> ToolSpec {
         description: default_namespace_description(IMAGE_GEN_NAMESPACE),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: IMAGEGEN_TOOL_NAME.to_string(),
-            description: IMAGEGEN_DESCRIPTION.to_string(),
+            description: format!(
+                "{IMAGEGEN_DESCRIPTION}\n- The current tool configuration accepts at most {max_edit_images} edit images."
+            ),
             strict: false,
             parameters: parse_tool_input_schema(&Value::Object(input_schema))
                 .unwrap_or_else(|err| panic!("imagegen input schema should parse: {err}")),
@@ -607,7 +675,8 @@ fn imagegen_tool_spec() -> ToolSpec {
 }
 
 struct GeneratedImageOutput {
-    result: String,
+    base64_data: String,
+    mime_type: String,
     output_hint: Option<String>,
 }
 
@@ -626,7 +695,10 @@ impl ToolOutput for GeneratedImageOutput {
     fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
         let mut result = Map::from_iter([(
             "image_url".to_string(),
-            Value::String(format!("data:image/png;base64,{}", self.result)),
+            Value::String(format!(
+                "data:{};base64,{}",
+                self.mime_type, self.base64_data
+            )),
         )]);
         if let Some(output_hint) = &self.output_hint {
             result.insert(
@@ -640,7 +712,7 @@ impl ToolOutput for GeneratedImageOutput {
     /// Returns generated bytes and persisted-artifact context for model follow-up.
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
         let mut content = vec![FunctionCallOutputContentItem::InputImage {
-            image_url: format!("data:image/png;base64,{}", self.result),
+            image_url: format!("data:{};base64,{}", self.mime_type, self.base64_data),
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }];
         if let Some(output_hint) = &self.output_hint {
@@ -655,6 +727,15 @@ impl ToolOutput for GeneratedImageOutput {
                 success: Some(true),
             },
         }
+    }
+}
+
+fn image_extension(mime_type: &str) -> Option<&'static str> {
+    match mime_type {
+        "image/jpeg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        "image/png" => Some("png"),
+        _ => None,
     }
 }
 
