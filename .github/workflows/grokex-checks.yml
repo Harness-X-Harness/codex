@@ -256,7 +256,7 @@ jobs:
           run_exact codex-api provider::grok_tests::grok_projects_verified_live_web_search_to_bare_declaration --lib
           run_exact codex-api provider::grok_tests::grok_rejects_unverified_web_search_declarations --lib
           run_exact codex-api provider::grok_tests::grok_rejects_residual_agent_message_before_transport --lib
-          run_exact codex-api grok_no_tool_request_omits_tool_controls --test clients
+          run_exact codex-api grok_tests::grok_no_tool_request_omits_tool_controls --test clients
       - id: projections
         name: Stock App Server Provider projections
         continue-on-error: true
@@ -272,7 +272,7 @@ jobs:
               exit 1
             }
           }
-          run_exact suite::v2::model_list::list_models_uses_grok_release_catalog_through_stock_model_dto
+          run_exact suite::v2::model_list::grok_model_list::list_models_uses_grok_release_catalog_through_stock_model_dto
           run_exact suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities
       - id: controls
         name: Shared stock seam controls
