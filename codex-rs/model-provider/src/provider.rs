@@ -732,12 +732,31 @@ mod tests {
     fn openai_provider_enables_remote_compaction() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                remote_compaction: RemoteCompactionSupport::V2,
+                ..ProviderCapabilities::default()
+            }
+        );
+    }
+
+    #[test]
+    fn openai_provider_without_codex_backend_auth_has_no_image_generation() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
         );
 
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
+                image_generation: false,
                 remote_compaction: RemoteCompactionSupport::V2,
                 ..ProviderCapabilities::default()
             }

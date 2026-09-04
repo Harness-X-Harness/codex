@@ -250,7 +250,6 @@ jobs:
             run_exact codex-model-provider "${test_name}" --lib
           done
           run_exact codex-model-provider provider::tests::configured_provider_uses_stock_background_models --lib
-          run_exact codex-model-provider-info tests::test_grok_wire_api_is_not_openai_by_name --lib
           run_exact codex-model-provider-info tests::test_validate_grok_provider_rejects_websockets --lib
           run_exact codex-api provider::grok_tests::grok_projection_forwards_only_reviewed_request_fields --lib
           run_exact codex-api provider::grok_tests::grok_projects_verified_live_web_search_to_bare_declaration --lib
@@ -304,6 +303,10 @@ jobs:
           run_exact codex-memories-write startup_tests::memories_without_provider_model_policy_do_not_egress --lib
           run_exact codex-config thread_config::remote::tests::model_provider_proto_round_trips_grok_wire_api --lib
           run_exact codex-app-server suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result --test all
+          # The crates the graft edits most carry stock unit tests that the exact
+          # selectors above do not name; run them whole so a stock regression in
+          # a Provider seam fails here, not after publication.
+          cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
       - id: grok
         name: Grok metadata-driven V2, Ultra, and hosted X Search
         continue-on-error: true

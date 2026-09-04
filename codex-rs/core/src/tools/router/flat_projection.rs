@@ -5,8 +5,8 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
-use sha2::Digest;
-use sha2::Sha256;
+use sha1::Digest;
+use sha1::Sha1;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +181,7 @@ fn flat_route_description(tool_name: &ToolName, description: &str) -> String {
 
 pub(super) fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
     // Match the stock Codex model-visible MCP tool-name budget and digest width. These are not
-    // Provider limits.
+    // Provider limits. SHA-1 is a stock core dependency; the digest only disambiguates names.
     const MAX_FLAT_WIRE_NAME_BYTES: usize = 128;
     const WIRE_NAME_PREFIX: &str = "local__";
     const WIRE_NAME_SEPARATOR: &str = "__";
@@ -194,7 +194,7 @@ pub(super) fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
     };
     let digest = format!(
         "{:x}",
-        Sha256::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
+        Sha1::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
     );
     let semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
     let mut semantic_name = semantic_name
