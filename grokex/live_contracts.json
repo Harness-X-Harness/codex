@@ -1,0 +1,21 @@
+{
+  "schema_version": 2,
+  "scenarios": {
+    "basic-exact-reply": {
+      "story": "grokex-provider-profile-startup",
+      "turn_deadline_seconds": 120
+    },
+    "encrypted-reasoning-tool-continuation": {
+      "story": "grokex-encrypted-reasoning-history-continuation",
+      "turn_deadline_seconds": 120
+    },
+    "ultra-full-history-collaboration": {
+      "story": "grokex-provider-binding-lifecycle",
+      "turn_deadline_seconds": 360
+    },
+    "image-generation-history-edit": {
+      "story": "grokex-image-generation-history-edit",
+      "turn_deadline_seconds": 180
+    }
+  }
+}
