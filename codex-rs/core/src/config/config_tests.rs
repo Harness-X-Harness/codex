@@ -6298,6 +6298,24 @@ fn web_search_mode_for_turn_falls_back_when_provider_disallows_external_web_acce
 }
 
 #[test]
+fn web_search_mode_for_turn_uses_live_when_provider_disallows_cached_or_indexed_search() {
+    for preferred in [WebSearchMode::Cached, WebSearchMode::Indexed] {
+        let web_search_mode = Constrained::allow_any(preferred);
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &PermissionProfile::read_only(),
+            ProviderCapabilities {
+                cached_web_search: false,
+                indexed_web_search: false,
+                ..ProviderCapabilities::default()
+            },
+        );
+
+        assert_eq!(mode, WebSearchMode::Live);
+    }
+}
+
+#[test]
 fn web_search_mode_for_turn_disables_when_external_access_and_cached_are_disallowed()
 -> anyhow::Result<()> {
     let allowed = [
