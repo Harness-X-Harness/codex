@@ -1,16 +1,30 @@
-use super::FunctionCallError;
-use codex_tools::FreeformTool;
-use codex_tools::JsonSchema;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
-use codex_tools::ToolName;
-use codex_tools::ToolSpec;
+//! Flat function projection of a finalized model-visible tool plan.
+//!
+//! A Provider whose Responses implementation accepts only plain `function`
+//! tools cannot receive stock namespaced or custom (freeform) declarations.
+//! This module rewrites such a plan into flat functions with stable,
+//! collision-checked wire names and keeps the reverse routes so a call the
+//! model makes on a wire name is restored to its canonical tool identity
+//! before dispatch. It is a Provider tool projection in the North Star sense:
+//! canonical tools stay canonical inside the harness, only the wire changes.
+//!
+//! Which Provider needs this is decided by the resolved model provider
+//! (`ModelProvider::projects_tools_as_flat_functions`); this module has no
+//! Provider-specific knowledge.
+
+use crate::FreeformTool;
+use crate::FunctionCallError;
+use crate::JsonSchema;
+use crate::ResponsesApiNamespaceTool;
+use crate::ResponsesApiTool;
+use crate::ToolName;
+use crate::ToolSpec;
 use sha1::Digest;
 use sha1::Sha1;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum WireToolRoute {
+pub enum WireToolRoute {
     Function(ToolName),
     Custom {
         tool_name: ToolName,
@@ -28,7 +42,7 @@ impl WireToolRoute {
 
 /// Compiled symbols for one finalized model-visible tool plan.
 #[derive(Default)]
-pub(super) struct FlatToolRoutes {
+pub struct FlatToolRoutes {
     by_wire_name: BTreeMap<String, WireToolRoute>,
 }
 
@@ -46,11 +60,11 @@ impl FlatToolRoutes {
         Ok(wire_name)
     }
 
-    pub(super) fn resolve(&self, name: &str) -> Option<&WireToolRoute> {
+    pub fn resolve(&self, name: &str) -> Option<&WireToolRoute> {
         self.by_wire_name.get(name)
     }
 
-    pub(super) fn contains_canonical(&self, tool_name: &ToolName) -> bool {
+    pub fn contains_canonical(&self, tool_name: &ToolName) -> bool {
         let tool_name = tool_name.clone().with_default_namespace();
         self.by_wire_name
             .values()
@@ -58,7 +72,7 @@ impl FlatToolRoutes {
     }
 }
 
-pub(super) fn project_flat_function_tools(
+pub fn project_flat_function_tools(
     specs: Vec<ToolSpec>,
 ) -> Result<(Vec<ToolSpec>, FlatToolRoutes), String> {
     let mut declarations = Vec::new();
@@ -179,7 +193,7 @@ fn flat_route_description(tool_name: &ToolName, description: &str) -> String {
     )
 }
 
-pub(super) fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
+pub fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
     // Match the stock Codex model-visible MCP tool-name budget and digest width. These are not
     // Provider limits. SHA-1 is a stock core dependency; the digest only disambiguates names.
     const MAX_FLAT_WIRE_NAME_BYTES: usize = 128;
@@ -196,7 +210,7 @@ pub(super) fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
         "{:x}",
         Sha1::digest(format!("{kind}\0{namespace}\0{}", tool_name.name).as_bytes())
     );
-    let semantic_name = codex_tools::code_mode_name_for_tool_name(tool_name);
+    let semantic_name = crate::code_mode_name_for_tool_name(tool_name);
     let mut semantic_name = semantic_name
         .bytes()
         .map(|byte| {
@@ -219,7 +233,7 @@ pub(super) fn flat_wire_name(kind: &str, tool_name: &ToolName) -> String {
     format!("{WIRE_NAME_PREFIX}{digest}")
 }
 
-pub(super) fn custom_input_key(tool_name: &str) -> &'static str {
+pub fn custom_input_key(tool_name: &str) -> &'static str {
     match tool_name {
         "apply_patch" => "patch",
         "exec" => "source",
@@ -227,7 +241,7 @@ pub(super) fn custom_input_key(tool_name: &str) -> &'static str {
     }
 }
 
-pub(super) fn decode_custom_input(
+pub fn decode_custom_input(
     wire_name: &str,
     arguments: &str,
     input_key: &str,
@@ -247,11 +261,3 @@ pub(super) fn decode_custom_input(
         })?;
     Ok(input.to_string())
 }
-
-#[cfg(test)]
-#[path = "flat_projection_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "seam_pins_tests.rs"]
-mod seam_pins;

@@ -136,10 +136,10 @@ fn flat_projection_round_trips_same_local_names_across_namespaces() -> anyhow::R
     for item in &mut items {
         router.restore_tool_call(item)?;
     }
-    assert_eq!(router.project_model_input(items.clone()), wire_items);
+    assert_eq!(router.project_tool_wire(items.clone()), wire_items);
     let standalone_output = FunctionCallOutputPayload::from_text("created".to_string());
     assert_eq!(
-        router.project_model_input(vec![ResponseItem::FunctionCallOutput {
+        router.project_tool_wire(vec![ResponseItem::FunctionCallOutput {
             id: None,
             call_id: None,
             name: Some("create_event".to_string()),
@@ -239,7 +239,7 @@ fn flat_projection_replays_custom_call_with_matching_output() -> anyhow::Result<
         spec => panic!("expected projected function, got {spec:?}"),
     };
     let output = FunctionCallOutputPayload::from_text("done".to_string());
-    let projected = router.project_model_input(vec![
+    let projected = router.project_tool_wire(vec![
         ResponseItem::CustomToolCall {
             id: None,
             status: None,
