@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_protocol::ResponseItemId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -73,6 +74,7 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
             metadata: Some(CodexHarnessMetadata {
                 client_authored: true,
                 fallback_token_limit_override: Some(20_000),
+                ..Default::default()
             }),
         }),
     };
@@ -99,6 +101,59 @@ fn response_item_envelope_stores_metadata_beside_rollout_payload() -> Result<()>
         Some(CodexHarnessMetadata {
             client_authored: true,
             fallback_token_limit_override: Some(20_000),
+            ..Default::default()
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_hosted_tool_metadata_round_trips_beside_rollout_payload() -> Result<()> {
+    let response_item = ResponseItem::CustomToolCall {
+        id: Some(ResponseItemId::with_suffix("ctc", "provider-item")),
+        status: Some("completed".to_string()),
+        call_id: "provider-call".to_string(),
+        name: "provider_search".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let line = RolloutLine {
+        timestamp: "2025-01-03T12:00:00.000Z".to_string(),
+        ordinal: Some(8),
+        item: RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item: response_item.clone(),
+            metadata: Some(CodexHarnessMetadata {
+                provider_hosted_tool_call: true,
+                ..Default::default()
+            }),
+        }),
+    };
+
+    let serialized = serde_json::to_value(&line)?;
+    assert_eq!(
+        serialized,
+        json!({
+            "timestamp": "2025-01-03T12:00:00.000Z",
+            "ordinal": 8,
+            "type": "response_item",
+            "payload": response_item.clone(),
+            "metadata": {
+                "client_authored": false,
+                "provider_hosted_tool_call": true,
+            },
+        })
+    );
+    let restored = serde_json::from_value::<RolloutLine>(serialized)?;
+    let RolloutItem::ResponseItem(envelope) = restored.item else {
+        panic!("expected response item");
+    };
+    assert_eq!(envelope.item, response_item);
+    assert_eq!(
+        envelope.metadata,
+        Some(CodexHarnessMetadata {
+            provider_hosted_tool_call: true,
+            ..Default::default()
         })
     );
     Ok(())
