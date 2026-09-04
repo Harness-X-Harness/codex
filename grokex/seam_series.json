@@ -9,7 +9,6 @@
         "codex-rs/model-provider-info/",
         "codex-rs/core/src/config/",
         "codex-rs/core/config.schema.json",
-        "codex-rs/core/Cargo.toml",
         "codex-rs/core/src/client.rs",
         "codex-rs/config/src/thread_config/",
         "codex-rs/app-server/tests/common/",
@@ -73,7 +72,7 @@
     },
     {
       "name": "image-generation",
-      "summary": "Grok image generation dialect and extension lifecycle",
+      "summary": "Grok image generation dialect, extension lifecycle, and the Bazel fixture filegroup its tests read",
       "paths": [
         "codex-rs/codex-api/src/endpoint/images.rs",
         "codex-rs/codex-api/src/images.rs",
@@ -83,7 +82,8 @@
         "codex-rs/core/src/tools/handlers/extension_tools.rs",
         "codex-rs/app-server/BUILD.bazel",
         "codex-rs/app-server/tests/suite/v2/imagegen_extension.rs",
-        "codex-rs/app-server/tests/suite/v2/grok_imagegen_extension.rs"
+        "codex-rs/app-server/tests/suite/v2/grok_imagegen_extension.rs",
+        "codex-rs/vendor/BUILD.bazel"
       ]
     },
     {
@@ -96,12 +96,10 @@
       ]
     },
     {
-      "name": "vendored-dependencies",
-      "summary": "Vendored crates and lockfile entries the Grok graft depends on",
+      "name": "lockfile-version",
+      "summary": "Cargo.lock workspace versions normalized to the release Cargo.toml version; the upstream tag leaves 0.0.0 in the lockfile and cargo rewrites it on first use",
       "paths": [
-        "codex-rs/vendor/",
-        "codex-rs/Cargo.lock",
-        "codex-rs/Cargo.toml"
+        "codex-rs/Cargo.lock"
       ]
     },
     {

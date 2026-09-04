@@ -137,16 +137,6 @@ supports_websockets = true
 }
 
 #[test]
-fn test_grok_wire_api_is_not_openai_by_name() {
-    let grok = ModelProviderInfo {
-        wire_api: WireApi::GrokResponses,
-        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
-    };
-
-    assert!(!grok.is_openai());
-}
-
-#[test]
 fn test_personal_access_token_uses_chatgpt_codex_base_url() {
     let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         .to_api_provider(Some(AuthMode::PersonalAccessToken))

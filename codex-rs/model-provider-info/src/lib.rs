@@ -481,7 +481,7 @@ impl ModelProviderInfo {
     }
 
     pub fn is_openai(&self) -> bool {
-        self.wire_api == WireApi::Responses && self.name == OPENAI_PROVIDER_NAME
+        self.name == OPENAI_PROVIDER_NAME
     }
 
     pub fn supports_codex_backend_routes(&self) -> bool {

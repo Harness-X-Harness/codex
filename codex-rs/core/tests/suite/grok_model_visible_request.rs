@@ -38,8 +38,8 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use sha2::Digest;
-use sha2::Sha256;
+use sha1::Digest;
+use sha1::Sha1;
 
 // The first-Turn prompts of grokex/live_contracts.json scenarios, verbatim.
 const BASIC_PROMPT: &str = "Reply with exactly GROKEX_BASIC_RESPONSE_OK and no other text.";
@@ -77,7 +77,7 @@ fn grok_builder() -> TestCodexBuilder {
 }
 
 fn digest(text: &str) -> String {
-    Sha256::digest(text.as_bytes())[..8]
+    Sha1::digest(text.as_bytes())[..8]
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
@@ -127,7 +127,7 @@ fn render_model_visible_request(scenario: &str, request: &ResponsesRequest) -> S
             "instructions" => {
                 let text = value.as_str().unwrap_or_default();
                 out.push_str(&format!(
-                    "instructions: sha256={} chars={} first_line={:?}\n",
+                    "instructions: sha1={} chars={} first_line={:?}\n",
                     digest(text),
                     text.chars().count(),
                     first_line(text, 72)
@@ -165,7 +165,7 @@ fn render_model_visible_request(scenario: &str, request: &ResponsesRequest) -> S
             })
             .unwrap_or_default();
         out.push_str(&format!(
-            "- {kind} {name} description=sha256:{}/{}chars params=sha256:{} props=[{}]{}\n  {:?}\n",
+            "- {kind} {name} description=sha1:{}/{}chars params=sha1:{} props=[{}]{}\n  {:?}\n",
             digest(description),
             description.chars().count(),
             digest(&parameters),
