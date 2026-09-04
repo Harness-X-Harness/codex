@@ -11,6 +11,12 @@ filegroup(
 )
 
 filegroup(
+    name = "bubblewrap_jpeg",
+    srcs = ["bubblewrap/bubblewrap.jpg"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "bubblewrap_sources",
     srcs = [
         ":bubblewrap_c_sources",
