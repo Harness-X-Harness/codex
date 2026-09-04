@@ -14,6 +14,7 @@
         "codex-rs/config/src/thread_config/",
         "codex-rs/app-server/tests/common/",
         "codex-rs/app-server/tests/suite/v2/model_list.rs",
+        "codex-rs/app-server/tests/suite/v2/grok_model_list.rs",
         "codex-rs/app-server/tests/suite/v2/model_provider_capabilities_read.rs"
       ]
     },
