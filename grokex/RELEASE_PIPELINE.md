@@ -103,14 +103,25 @@ scenario as proven in that run.
 
 ## Seam pins and Grok test placement
 
-Grok-specific tests never live inside stock test files, so an upstream bump
-rebases them without conflicts:
+Grok-named tests live in Grok-owned test modules, so an upstream bump rebases
+them without conflicts. When a Grok test needs a stock test file's private
+helpers, the stock file carries only a `#[path = "..."] mod ...;` declaration
+and the test body lives in the Grok module:
 
 - `codex-rs/core/src/tools/router/flat_projection_tests.rs` and
   `seam_pins_tests.rs` (declared from the Grok `flat_projection` module)
 - `codex-rs/core/tests/suite/grok_*.rs`
-- `codex-rs/codex-api/src/provider_grok_tests.rs`
+- `codex-rs/app-server/tests/suite/v2/grok_*.rs` (declared from the stock
+  suite file whose helpers they reuse)
+- `codex-rs/codex-api/src/provider_grok_tests.rs` and
+  `codex-rs/codex-api/tests/clients/grok_tests.rs`
 - `codex-rs/model-provider/src/grok_provider_tests.rs`
+
+Provider-neutral policy tests are different: when a common-file hook makes a
+stock code path handle "this Provider has no model policy" (guardian review,
+memories, history normalization), the regression test for that hook belongs
+next to the stock tests it extends, because it protects stock behavior for
+every non-OpenAI Provider rather than a Grok fact.
 
 `seam_pins_tests.rs` and `provider_grok_tests.rs` are executable assumptions
 about stock shapes the graft depends on: every `ToolSpec` variant is classified
