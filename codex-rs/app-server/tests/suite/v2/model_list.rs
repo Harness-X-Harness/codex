@@ -27,6 +27,9 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
+#[path = "grok_model_list.rs"]
+mod grok_model_list;
+
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
