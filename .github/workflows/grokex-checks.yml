@@ -295,13 +295,13 @@ jobs:
               exit 1
             }
           }
-          run_exact codex-core tools::router::flat_projection::tests::flat_projection_disambiguates_retained_indirect_guidance --lib
-          run_exact codex-core tools::router::flat_projection::tests::flat_projection_round_trips_same_local_names_across_namespaces --lib
-          run_exact codex-core tools::router::flat_projection::tests::flat_projection_replays_custom_call_with_matching_output --lib
-          run_exact codex-core tools::router::flat_projection::tests::flat_projection_marks_only_plaintext_collaboration_calls --lib
-          run_exact codex-core tools::router::flat_projection::seam_pins::every_tool_spec_variant_is_classified_for_flat_projection --lib
-          run_exact codex-core tools::router::flat_projection::seam_pins::plaintext_collaboration_routing_covers_every_stock_collab_tool --lib
-          run_exact codex-core tools::router::flat_projection::seam_pins::spawn_agent_flat_projection_keeps_the_stock_argument_contract --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_disambiguates_retained_indirect_guidance --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_round_trips_same_local_names_across_namespaces --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_replays_custom_call_with_matching_output --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_marks_only_plaintext_collaboration_calls --lib
+          run_exact codex-core tools::router::grok_tests::seam_pins::every_tool_spec_variant_is_classified_for_flat_projection --lib
+          run_exact codex-core tools::router::grok_tests::seam_pins::plaintext_collaboration_routing_covers_every_stock_collab_tool --lib
+          run_exact codex-core tools::router::grok_tests::seam_pins::spawn_agent_flat_projection_keeps_the_stock_argument_contract --lib
           run_exact codex-core guardian::tests::guardian_review_session_config_rejects_provider_without_review_model_policy --lib
           run_exact codex-guardian-v2 async_scorer::extension::tests::installed_extension_skips_provider_without_reviewer_model_policy --lib
           run_exact codex-guardian-v2 sync_reviewer::reviewer_config::tests::rejects_provider_without_reviewer_model_policy --lib

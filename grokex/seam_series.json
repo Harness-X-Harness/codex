@@ -37,8 +37,11 @@
     },
     {
       "name": "flat-tool-projection",
-      "summary": "Flat Provider function projection of namespaced and custom tools",
+      "summary": "Flat Provider function projection of namespaced and custom tools (codex-tools module, wired through the core tool router)",
       "paths": [
+        "codex-rs/tools/src/flat_projection.rs",
+        "codex-rs/tools/src/lib.rs",
+        "codex-rs/tools/Cargo.toml",
         "codex-rs/core/src/tools/router.rs",
         "codex-rs/core/src/tools/router/",
         "codex-rs/core/src/tools/router_tests.rs",
@@ -99,7 +102,7 @@
     },
     {
       "name": "lockfile-version",
-      "summary": "Cargo.lock workspace versions normalized to the release Cargo.toml version; the upstream tag leaves 0.0.0 in the lockfile and cargo rewrites it on first use",
+      "summary": "Cargo.lock: workspace versions normalized to the release Cargo.toml version (the upstream tag leaves 0.0.0 and cargo rewrites it on first use) plus the dependency edges the graft adds",
       "paths": [
         "codex-rs/Cargo.lock"
       ]

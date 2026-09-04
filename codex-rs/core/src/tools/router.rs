@@ -34,13 +34,16 @@ use tracing::instrument;
 
 pub use crate::tools::context::ToolCallSource;
 
-mod flat_projection;
-use flat_projection::FlatToolRoutes;
-use flat_projection::WireToolRoute;
-use flat_projection::custom_input_key;
-use flat_projection::decode_custom_input;
-use flat_projection::flat_wire_name;
-use flat_projection::project_flat_function_tools;
+use codex_tools::FlatToolRoutes;
+use codex_tools::WireToolRoute;
+use codex_tools::custom_input_key;
+use codex_tools::decode_custom_input;
+use codex_tools::flat_wire_name;
+use codex_tools::project_flat_function_tools;
+
+#[cfg(test)]
+#[path = "router/grok_tests.rs"]
+mod grok_tests;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
@@ -266,7 +269,14 @@ impl ToolRouter {
             })
     }
 
-    pub(crate) fn project_model_input(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    /// Rewrites canonical tool call and output items to the flat wire names
+    /// this router declared, when the Provider projects tools as flat functions.
+    ///
+    /// This is the tool-name half of the request projection; it runs while the
+    /// prompt is built because only the router knows the wire routes. The
+    /// Provider's own `ModelProvider::project_model_input` runs later in the
+    /// client and owns every other wire difference.
+    pub(crate) fn project_tool_wire(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {
         if !self.projects_tools_as_flat_functions {
             return input;
         }

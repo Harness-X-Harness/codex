@@ -108,8 +108,10 @@ them without conflicts. When a Grok test needs a stock test file's private
 helpers, the stock file carries only a `#[path = "..."] mod ...;` declaration
 and the test body lives in the Grok module:
 
-- `codex-rs/core/src/tools/router/flat_projection_tests.rs` and
-  `seam_pins_tests.rs` (declared from the Grok `flat_projection` module)
+- `codex-rs/core/src/tools/router/grok_tests.rs`, which declares
+  `flat_projection_tests.rs` and `seam_pins_tests.rs` beside it (the flat
+  projection itself is the provider-neutral `codex_tools::flat_projection`
+  module; the router only holds the routes and the restore hook)
 - `codex-rs/core/tests/suite/grok_*.rs`
 - `codex-rs/app-server/tests/suite/v2/grok_*.rs` (declared from the stock
   suite file whose helpers they reuse); `grok_provider_binding.rs` is the

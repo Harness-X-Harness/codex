@@ -170,7 +170,9 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Projects canonical model input onto this provider's request wire.
     ///
     /// The default keeps stock input unchanged. Implementations may remove or transform only
-    /// provider-incompatible wire fields; durable Session history remains canonical.
+    /// provider-incompatible wire fields; durable Session history remains canonical. Tool
+    /// call names have already been projected by the tool router (`projects_tools_as_flat_functions`)
+    /// by the time this runs; this method owns every other wire difference.
     fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
         input
     }
