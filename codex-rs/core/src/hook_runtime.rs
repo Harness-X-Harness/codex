@@ -144,6 +144,7 @@ pub(crate) async fn run_pending_session_start_hooks(
                 }
             }
             SessionSource::SubAgent(_) => return false,
+            SessionSource::Internal(InternalSessionSource::GoalSkeptic) => return false,
             _ => StartHookTarget::SessionStart {
                 source: session_start_source,
             },
@@ -422,6 +423,9 @@ pub(crate) async fn run_turn_stop_hooks(
         // Internal/synthetic subagents do not expose user-configured lifecycle
         // hooks, so there is no Stop or SubagentStop request to dispatch.
         SessionSource::SubAgent(_) => return StopOutcome::default(),
+        SessionSource::Internal(InternalSessionSource::GoalSkeptic) => {
+            return StopOutcome::default();
+        }
         SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => (
             StopHookTarget::MemoryConsolidation,
             sess.hook_transcript_path().await,
@@ -463,7 +467,10 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
 
     // SessionEnd is root-only; ThreadSpawn uses SubagentStart/SubagentStop and other subagents
     // are internal implementation details.
-    if matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+    if matches!(
+        &turn_context.session_source,
+        SessionSource::SubAgent(_) | SessionSource::Internal(InternalSessionSource::GoalSkeptic)
+    ) {
         return;
     }
 
@@ -488,7 +495,10 @@ pub(crate) async fn run_turn_interrupt_hooks(
     turn_context: &Arc<TurnContext>,
     turn_state: &Mutex<TurnState>,
 ) {
-    if matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
+    if matches!(
+        &turn_context.session_source,
+        SessionSource::SubAgent(_) | SessionSource::Internal(InternalSessionSource::GoalSkeptic)
+    ) {
         return;
     }
 

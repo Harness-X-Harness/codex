@@ -39,6 +39,7 @@ use crate::analytics::GoalAnalytics;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
 use crate::host_evaluate::GoalRoundEvaluator;
+use crate::host_verify::GoalSkepticPanel;
 use crate::metrics::GoalMetrics;
 use crate::policy::GoalCompletionAuthority;
 use crate::policy::GoalPolicy;
@@ -60,6 +61,13 @@ pub struct GoalExtensionConfig {
     pub policy: GoalPolicy,
 }
 
+/// Optional host-owned evaluator and skeptic panel installed with the extension.
+#[derive(Clone, Default)]
+pub struct GoalHostCapabilities {
+    pub evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+    pub skeptic_panel: Option<Arc<dyn GoalSkepticPanel>>,
+}
+
 #[derive(Clone)]
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -70,6 +78,7 @@ pub struct GoalExtension<C> {
     goal_service: Arc<GoalService>,
     goal_config: Arc<dyn Fn(&C) -> GoalExtensionConfig + Send + Sync>,
     evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+    skeptic_panel: Option<Arc<dyn GoalSkepticPanel>>,
 }
 
 impl<C> std::fmt::Debug for GoalExtension<C> {
@@ -88,7 +97,7 @@ impl<C> GoalExtension<C> {
         thread_manager: Weak<ThreadManager>,
         goal_service: Arc<GoalService>,
         goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
-        evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+        capabilities: GoalHostCapabilities,
     ) -> Self {
         Self {
             state_dbs,
@@ -98,7 +107,8 @@ impl<C> GoalExtension<C> {
             thread_manager,
             goal_service,
             goal_config: Arc::new(goal_config),
-            evaluator,
+            evaluator: capabilities.evaluator,
+            skeptic_panel: capabilities.skeptic_panel,
         }
     }
 }
@@ -110,12 +120,13 @@ where
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let config = (self.goal_config)(input.config);
-            let enabled = config.enabled;
+            let enabled =
+                config.enabled && !matches!(input.session_source, SessionSource::Internal(_));
             let policy = config.policy;
             let tools_available_for_thread = input.persistent_thread_state_available
                 && !matches!(
                     input.session_source,
-                    SessionSource::SubAgent(SubAgentSource::Review)
+                    SessionSource::SubAgent(SubAgentSource::Review) | SessionSource::Internal(_)
                 );
             input.thread_store.insert(config);
             let accounting_state = input
@@ -334,6 +345,7 @@ where
                 && let Err(err) = crate::host_evaluate::evaluate_active_round(
                     runtime.as_ref(),
                     self.evaluator.as_deref(),
+                    self.skeptic_panel.as_deref(),
                     turn_id,
                 )
                 .await
@@ -589,7 +601,7 @@ pub fn install_with_backend<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    install_with_evaluator(
+    install_with_host_capabilities(
         registry,
         state_dbs,
         analytics_events_client,
@@ -597,7 +609,7 @@ pub fn install_with_backend<C>(
         thread_manager,
         goal_service,
         goal_config,
-        /*evaluator*/ None,
+        GoalHostCapabilities::default(),
     );
 }
 
@@ -614,6 +626,34 @@ pub fn install_with_evaluator<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    install_with_host_capabilities(
+        registry,
+        state_dbs,
+        analytics_events_client,
+        metrics_client,
+        thread_manager,
+        goal_service,
+        goal_config,
+        GoalHostCapabilities {
+            evaluator,
+            skeptic_panel: None,
+        },
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn install_with_host_capabilities<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    state_dbs: Arc<codex_state::StateRuntime>,
+    analytics_events_client: AnalyticsEventsClient,
+    metrics_client: Option<MetricsClient>,
+    thread_manager: Weak<ThreadManager>,
+    goal_service: Arc<GoalService>,
+    goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
+    capabilities: GoalHostCapabilities,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         analytics_events_client,
@@ -622,7 +662,7 @@ pub fn install_with_evaluator<C>(
         thread_manager,
         Arc::clone(&goal_service),
         goal_config,
-        evaluator,
+        capabilities,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
