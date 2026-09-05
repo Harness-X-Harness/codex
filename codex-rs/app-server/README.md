@@ -198,8 +198,8 @@ Example with notification opt-out:
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/workflow/get` — experimental; fetch the independent `/workflow` run for a thread. Requires `goal_host`. Returns `workflow: null` when none exists. Distinct from `/goal`.
-- `thread/workflow/start` — experimental; start a markdown workflow run on a thread. Requires `goal_host`. Rejects if a run is already `active`.
-- `thread/workflow/advance` — experimental; host-advance the current workflow step. Completing the last step marks the run `complete`.
+- `thread/workflow/start` — experimental; start an independent `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active`.
+- `thread/workflow/advance` — experimental; host-advance the current workflow run.
 - `thread/workflow/stop` — experimental; pause an active workflow run.
 - `thread/workflow/resume` — experimental; resume a paused workflow run.
 - `thread/workflow/updated` — experimental notification emitted whenever a workflow run changes.
@@ -889,7 +889,7 @@ Use `thread/goal/clear` to remove the current goal.
 
 ### Example: Independent `/workflow` run (experimental)
 
-Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the HOW layer and do not complete or replace `/goal`. When `goal_host` is on, App Server installs `GoalPolicy::host()`, which binds HOW to this independent `/workflow` engine. Setting a thread goal does not auto-continue agent turns; start a workflow separately. Completing a workflow does not complete the goal.
+Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the independent HOW layer and do not complete or replace `/goal`.
 
 ```json
 { "method": "thread/workflow/start", "id": 31, "params": {
