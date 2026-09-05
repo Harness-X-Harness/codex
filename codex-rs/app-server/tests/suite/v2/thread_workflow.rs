@@ -17,6 +17,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadWorkflowAdvanceParams;
 use codex_app_server_protocol::ThreadWorkflowAdvanceResponse;
 use codex_app_server_protocol::ThreadWorkflowGetParams;
+use codex_app_server_protocol::ThreadWorkflowGetResponse;
 use codex_app_server_protocol::ThreadWorkflowStartParams;
 use codex_app_server_protocol::ThreadWorkflowStartResponse;
 use codex_app_server_protocol::ThreadWorkflowStatus;
@@ -176,6 +177,137 @@ async fn workflow_start_continues_with_workflow_trigger_and_does_not_create_a_go
         })
         .await?;
     assert_eq!(get_goal_after.goal, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<()> {
+    let (mut app, _codex_home, server) =
+        app_with_features(&[Feature::Goals, Feature::GoalHost]).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![text("materialize this thread")],
+        ..Default::default()
+    })
+    .await?;
+    let before_goal = response_turn_triggers(&server).await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("keep /goal and /workflow distinct".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    let after_goal = response_turn_triggers(&server).await?;
+    assert_eq!(after_goal, before_goal);
+    assert!(
+        !after_goal
+            .iter()
+            .any(|trigger| trigger.as_deref() == Some("goal")),
+        "setting a goal must not start turn_trigger=goal: {after_goal:?}"
+    );
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: ONE_STEP_WORKFLOW.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let triggers = response_turn_triggers(&server).await?;
+    assert!(
+        triggers
+            .iter()
+            .any(|trigger| trigger.as_deref() == Some("workflow")),
+        "workflow start should continue with turn_trigger=workflow: {triggers:?}"
+    );
+    assert!(
+        triggers
+            .iter()
+            .all(|trigger| trigger.as_deref() != Some("goal")),
+        "/workflow must not use the goal continuation trigger: {triggers:?}"
+    );
+
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_goal.goal.as_ref().map(|goal| goal.status),
+        Some(ThreadGoalStatus::Active)
+    );
+
+    let get_workflow: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_workflow
+            .workflow
+            .as_ref()
+            .map(|workflow| workflow.status),
+        Some(ThreadWorkflowStatus::Active)
+    );
+
+    let advanced: ThreadWorkflowAdvanceResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowAdvance {
+            request_id,
+            params: ThreadWorkflowAdvanceParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(advanced.workflow.status, ThreadWorkflowStatus::Complete);
+
+    let get_goal_after: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_goal_after.goal.map(|goal| goal.status),
+        Some(ThreadGoalStatus::Active)
+    );
+
+    let get_workflow_after: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_workflow_after.workflow.map(|workflow| workflow.status),
+        Some(ThreadWorkflowStatus::Complete)
+    );
     Ok(())
 }
 
