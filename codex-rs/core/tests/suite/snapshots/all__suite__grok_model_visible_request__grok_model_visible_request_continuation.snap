@@ -1,0 +1,51 @@
+---
+source: core/tests/suite/grok_model_visible_request.rs
+expression: "render_model_visible_request(\"encrypted-reasoning-tool-continuation first Turn (dynamic tool declared at thread/start is not part of this fixture)\",\n&request)"
+---
+Scenario: encrypted-reasoning-tool-continuation first Turn (dynamic tool declared at thread/start is not part of this fixture)
+
+## Request
+client_metadata: keys=[root_turn_id,session_id,thread_id,turn_id,x-codex-installation-id,x-codex-turn-metadata,x-codex-window-id]
+include: ["reasoning.encrypted_content"]
+model: "grok-4.6"
+parallel_tool_calls: true
+prompt_cache_key: <thread id>
+reasoning: {"effort":"high"}
+store: false
+stream: true
+tool_choice: "auto"
+
+## Tools (13)
+- function local__exec_command__a70c06930ea0 description=sha1:3544717dc7749d6f/372chars params=sha1:bd3335a047b43441 props=[cmd,justification,login,max_output_tokens,prefix_rule,sandbox_permissions,shell,tty,workdir,yield_time_ms] strict=false
+  "This flat Provider function directly invokes the canonical `exec_command` tool. Call this functi…"
+- function local__write_stdin__2f14658fb101 description=sha1:18065cc092b0da4d/369chars params=sha1:9742360936a9a00a props=[chars,max_output_tokens,session_id,yield_time_ms] strict=false
+  "This flat Provider function directly invokes the canonical `write_stdin` tool. Call this functio…"
+- function local__request_user_input__e2efd87c90e0 description=sha1:84fd5d2686b59d1a/416chars params=sha1:73346c988ebde984 props=[questions] strict=false
+  "This flat Provider function directly invokes the canonical `request_user_input` tool. Call this …"
+- function local__view_image__216f5593e999 description=sha1:a224e6215acdc287/412chars params=sha1:ca5635be5793a9ef props=[path] strict=false
+  "This flat Provider function directly invokes the canonical `view_image` tool. Call this function…"
+- function local__collaboration__followup_task__c24c46210ddc description=sha1:5314db29c8eb174f/537chars params=sha1:de77596fd113b15c props=[message,target] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.followup_task` tool. C…"
+- function local__collaboration__interrupt_agent__74b6fb81fba7 description=sha1:b53d9c6eec406d18/443chars params=sha1:8f72cdb9cdaffa05 props=[target] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.interrupt_agent` tool.…"
+- function local__collaboration__list_agents__f794de01704b description=sha1:c6f84bf906e74469/391chars params=sha1:d920e678931a29ed props=[path_prefix] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.list_agents` tool. Cal…"
+- function local__collaboration__send_message__63c6b98e395f description=sha1:23fa9642f32ec558/409chars params=sha1:42e40908998e4d8e props=[message,target] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.send_message` tool. Ca…"
+- function local__collaboration__spawn_agent__fd5a63e74bda description=sha1:87d34c9adcb7d236/1605chars params=sha1:e1fe3cf8a033fdb5 props=[fork_turns,message,model,reasoning_effort,task_name] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.spawn_agent` tool. Cal…"
+- function local__collaboration__wait_agent__20265311f6f5 description=sha1:0ae3d33ff4a23c9a/685chars params=sha1:17dcb2a73f5d1680 props=[timeout_ms] strict=false
+  "This flat Provider function directly invokes the canonical `collaboration.wait_agent` tool. Call…"
+- function local__image_gen__imagegen__a7589a1c0abd description=sha1:f1c8eaac92582902/2086chars params=sha1:fc9f75a55193a007 props=[num_last_images_to_include,prompt,referenced_image_paths] strict=false
+  "This flat Provider function directly invokes the canonical `image_gen.imagegen` tool. Call this …"
+- web_search - description=sha1:da39a3ee5e6b4b0d/0chars params=sha1:da39a3ee5e6b4b0d props=[]
+  ""
+- x_search - description=sha1:da39a3ee5e6b4b0d/0chars params=sha1:da39a3ee5e6b4b0d props=[]
+  ""
+
+## Input
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/developer:You are `/root`, the primary agent in a team of agents collaborating to ...
+02:message/developer:<multi_agent_mode>Any earlier instruction enabling proactive multi-agent...
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+04:message/user:Use the grokex_live_probe result, then reply with exactly GROKEX_LIVE_RE...

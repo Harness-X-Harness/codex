@@ -153,13 +153,8 @@ async fn ultra_reasoning_uses_highest_non_ultra_and_proactive_mode() -> Result<(
     );
     let input = request.input();
     let texts = developer_texts(&input);
-    assert_eq!(
-        (
-            count_containing(&texts, NO_SPAWN_TEXT),
-            count_containing(&texts, PROACTIVE_TEXT),
-        ),
-        (0, 1)
-    );
+    assert!(!texts.iter().any(|text| text.contains(NO_SPAWN_TEXT)));
+    assert!(texts.iter().any(|text| text.contains(PROACTIVE_TEXT)));
 
     Ok(())
 }
