@@ -85,11 +85,8 @@ impl GoalPolicy {
         }
     }
 
-    /// Policy installed when the unified `goal_host` harness feature is on.
-    ///
-    /// Host evaluation plus a Guardian skeptic panel. Idle progress uses the
-    /// independent `/workflow` engine (`GoalHow::Workflow`) without adding
-    /// another feature flag.
+    /// Policy App Server installs when `goal_host` is on: host evaluation
+    /// and a Guardian skeptic panel.
     pub const fn host() -> Self {
         Self {
             completion: GoalCompletionAuthority::HostEvaluate,

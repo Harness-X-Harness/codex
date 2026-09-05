@@ -15,13 +15,10 @@
 //! - evaluator failure pauses the goal rather than treating it as complete
 //!
 //! When no evaluator is installed, HostEvaluate still hides `update_goal` and
-//! leaves the goal `Active` so idle continuation can proceed. App Server
-//! installs [`crate::ModelGoalRoundEvaluator`] and
-//! [`crate::GuardianGoalSkepticPanel`] under the unified `goal_host` feature.
-//! [`crate::GoalPolicy::host`] sets [`crate::GoalHow::Workflow`], so Goal does
-//! not inject idle continuation; the independent `/workflow` engine owns HOW.
-//! Turns started with `turn_trigger = "workflow"` are HOW turns, not goal
-//! rounds, so host evaluation does not run on them.
+//! leaves the goal `Active`. App Server installs
+//! [`crate::ModelGoalRoundEvaluator`] and
+//! [`crate::GuardianGoalSkepticPanel`] when `goal_host` is on. Turns started
+//! with `turn_trigger = "workflow"` skip host evaluation.
 
 use std::future::Future;
 use std::pin::Pin;
