@@ -39,6 +39,7 @@ use crate::analytics::GoalAnalytics;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::policy::GoalPolicy;
 use crate::runtime::ActiveGoalStopReason;
 use crate::runtime::GoalRuntimeConfig;
 use crate::runtime::GoalRuntimeHandle;
@@ -51,6 +52,10 @@ use crate::tool::GoalToolExecutor;
 pub struct GoalExtensionConfig {
     pub enabled: bool,
     pub max_goal_token_budget: Option<i64>,
+    /// Who may complete the goal, whether the host verifies, and how work proceeds.
+    ///
+    /// Defaults to stock `update_goal` completion. Independent of Provider.
+    pub policy: GoalPolicy,
 }
 
 #[derive(Clone)]
@@ -100,6 +105,7 @@ where
         Box::pin(async move {
             let config = (self.goal_config)(input.config);
             let enabled = config.enabled;
+            let policy = config.policy;
             let tools_available_for_thread = input.persistent_thread_state_available
                 && !matches!(
                     input.session_source,
@@ -147,12 +153,14 @@ where
                     GoalRuntimeConfig {
                         analytics: self.analytics.clone(),
                         enabled,
+                        policy,
                         tools_available_for_thread,
                         root_accounting_state,
                     },
                 )
             });
             runtime.set_enabled(enabled);
+            runtime.set_policy(policy);
             self.goal_service.register_runtime(&runtime);
         })
     }
@@ -209,9 +217,11 @@ where
     ) {
         let config = (self.goal_config)(new_config);
         let enabled = config.enabled;
+        let policy = config.policy;
         thread_store.insert(config);
         if let Some(runtime) = goal_runtime_handle(thread_store) {
             runtime.set_enabled(enabled);
+            runtime.set_policy(policy);
         }
     }
 }

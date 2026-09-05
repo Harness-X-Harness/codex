@@ -22,6 +22,7 @@ use codex_extension_api::ExtensionWarning;
 use codex_extension_api::InternalSessionSpawnFuture;
 use codex_extension_api::InternalSessionSpawner;
 use codex_goal_extension::GoalExtensionConfig;
+use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalService;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -88,6 +89,7 @@ where
             |config: &Config| GoalExtensionConfig {
                 enabled: config.features.enabled(codex_features::Feature::Goals),
                 max_goal_token_budget: config.max_goal_token_budget,
+                policy: GoalPolicy::model_commit(),
             },
         );
     }
