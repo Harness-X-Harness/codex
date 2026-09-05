@@ -8,6 +8,11 @@
 //! `complete` or `blocked` through `update_goal`, the host does not run a
 //! verifier panel, and the thread pursues the objective with ordinary agent
 //! turns plus idle continuation.
+//!
+//! The stacked host-owned Goal series (round-end evaluation, skeptics,
+//! `/workflow`, and optional Goal-to-workflow bind) is one harness feature:
+//! `goal_host`. App Server installs [`GoalPolicy::host`] when that flag is on.
+//! Later stages extend that constructor; they do not add more feature flags.
 
 /// Who may mark a persisted thread goal `complete` or `blocked`.
 ///
@@ -74,6 +79,14 @@ impl GoalPolicy {
             verification: GoalVerification::None,
             how: GoalHow::AgentTurns,
         }
+    }
+
+    /// Policy installed when the unified `goal_host` harness feature is on.
+    ///
+    /// Later stacked stages extend this constructor (host skeptics, optional
+    /// workflow bind) without adding more feature flags.
+    pub const fn host() -> Self {
+        Self::host_evaluate()
     }
 }
 
