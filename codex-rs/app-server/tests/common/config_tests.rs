@@ -9,6 +9,7 @@ fn mock_responses_config_composes_model_provider_features_and_extra_tables() {
         .with_model_provider("openai-custom")
         .with_provider_name("OpenAI")
         .with_provider_base_url("http://127.0.0.1:1234/api/codex")
+        .with_grok_responses_wire_api()
         .with_approval_policy("on-request")
         .with_sandbox_mode("workspace-write")
         .enable_feature(Feature::Personality)
@@ -31,6 +32,7 @@ fn mock_responses_config_composes_model_provider_features_and_extra_tables() {
         "personality = true",
         "[model_providers.openai-custom]\nname = \"OpenAI\"",
         "base_url = \"http://127.0.0.1:1234/api/codex\"",
+        "wire_api = \"grok_responses\"",
         "requires_openai_auth = true",
         "[extra]\nenabled = true",
     ] {
