@@ -9,6 +9,13 @@ from typing import AsyncIterator, Callable, ParamSpec, TypeVar
 from pydantic import BaseModel
 
 from ._goal import _GoalOperationState
+from ._workflow import (
+    ThreadWorkflowAdvanceResponse,
+    ThreadWorkflowGetResponse,
+    ThreadWorkflowResumeResponse,
+    ThreadWorkflowStartResponse,
+    ThreadWorkflowStopResponse,
+)
 from .client import CodexClient, CodexConfig
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
@@ -224,6 +231,28 @@ class AsyncCodexClient:
             objective=objective,
             status=status,
         )
+
+    async def thread_workflow_get(self, thread_id: str) -> ThreadWorkflowGetResponse:
+        """Return the independent `/workflow` run through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_workflow_get, thread_id)
+
+    async def thread_workflow_start(
+        self, thread_id: str, source: str
+    ) -> ThreadWorkflowStartResponse:
+        """Start a host-owned Rhai `/workflow` run through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_workflow_start, thread_id, source)
+
+    async def thread_workflow_advance(self, thread_id: str) -> ThreadWorkflowAdvanceResponse:
+        """Optionally resume a yielded `/workflow` run through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_workflow_advance, thread_id)
+
+    async def thread_workflow_stop(self, thread_id: str) -> ThreadWorkflowStopResponse:
+        """Pause an active `/workflow` run through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_workflow_stop, thread_id)
+
+    async def thread_workflow_resume(self, thread_id: str) -> ThreadWorkflowResumeResponse:
+        """Resume a paused `/workflow` run through the wrapped sync client."""
+        return await self._call_sync(self._sync.thread_workflow_resume, thread_id)
 
     async def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
         """Pause the active goal through the wrapped sync client."""
