@@ -8,8 +8,8 @@
 //!   when [`crate::GoalHow::AgentTurns`] is set
 //! - `candidate_complete` with [`GoalVerification::None`] marks the goal `Complete`
 //! - `candidate_complete` with [`GoalVerification::HostSkeptics`] runs the panel;
-//!   all not-refuted votes mark `Complete`, any refute stays `Active`, and panel
-//!   failure pauses the goal
+//!   all not-refuted votes mark `Complete`; refute or a missing panel pauses
+//!   the goal; panel failure also pauses the goal
 //! - `blocked` is host-counted; the same `blocker_key` for three consecutive rounds
 //!   marks the goal `Blocked`
 //! - evaluator failure pauses the goal rather than treating it as complete
@@ -313,8 +313,12 @@ async fn apply_verdict(
                 }
                 GoalVerification::HostSkeptics { count } => {
                     let Some(panel) = skeptics else {
-                        runtime.set_host_next_step(verdict.next_step);
-                        return Ok(());
+                        tracing::warn!(
+                            "host skeptics were requested but no panel is installed; pausing"
+                        );
+                        return runtime
+                            .apply_host_goal_status(turn_id, HostGoalStatus::Paused)
+                            .await;
                     };
                     let Some(goal) = runtime.load_thread_goal().await? else {
                         return Ok(());

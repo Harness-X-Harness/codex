@@ -7,6 +7,11 @@ use std::sync::PoisonError;
 
 type ErasedData = Arc<dyn Any + Send + Sync>;
 
+/// Present on a thread store while an independent `/workflow` run is Active.
+/// Host goal idle continuation must not start while this hold is attached.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HostIdleHold;
+
 /// Typed values supplied before an [`ExtensionData`] scope is created.
 ///
 /// Hosts may retain a clone when later operations must use the same initial

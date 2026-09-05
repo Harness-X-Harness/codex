@@ -425,8 +425,7 @@ async fn workflow_how_turn_skips_host_evaluation() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn host_evaluate_candidate_complete_stays_active_when_verification_requested()
--> anyhow::Result<()> {
+async fn host_evaluate_candidate_complete_pauses_when_skeptics_missing() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -456,7 +455,7 @@ async fn host_evaluate_candidate_complete_stays_active_when_verification_request
         .get_thread_goal(thread_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
-    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     Ok(())
 }
 
@@ -504,7 +503,7 @@ async fn host_skeptics_confirm_marks_complete() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn host_skeptics_refute_keeps_goal_active() -> anyhow::Result<()> {
+async fn host_skeptics_refute_pauses_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -542,7 +541,7 @@ async fn host_skeptics_refute_keeps_goal_active() -> anyhow::Result<()> {
         .get_thread_goal(thread_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
-    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     Ok(())
 }
 

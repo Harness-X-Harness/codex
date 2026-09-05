@@ -1,7 +1,7 @@
 //! Host skeptic panel invoked after a HostEvaluate `candidate_complete` verdict.
 //!
 //! Production uses Guardian [`InternalSessionSpawner`] sessions. Tests inject a
-//! scripted [`GoalSkepticPanel`]. Missing panels leave the goal `Active`.
+//! scripted [`GoalSkepticPanel`]. A refute or missing panel pauses the goal.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -119,7 +119,7 @@ pub fn parse_goal_skeptic_vote(raw: &str) -> Result<GoalSkepticVote, GoalSkeptic
         .validate()
 }
 
-/// Combine independent skeptic votes. Any refute keeps the goal active.
+/// Combine independent skeptic votes. Any refute pauses the goal.
 pub fn aggregate_skeptic_votes(
     votes: &[GoalSkepticVote],
 ) -> Result<GoalSkepticPanelVerdict, GoalSkepticError> {
@@ -156,8 +156,9 @@ pub(crate) async fn apply_skeptic_panel(
     match panel.verify(input).await {
         Ok(verdict) => {
             if verdict.refuted {
-                runtime.set_host_next_step(verdict.next_step);
-                Ok(())
+                runtime
+                    .apply_host_goal_status(turn_id, HostGoalStatus::Paused)
+                    .await
             } else {
                 runtime
                     .apply_host_goal_status(turn_id, HostGoalStatus::Complete)
