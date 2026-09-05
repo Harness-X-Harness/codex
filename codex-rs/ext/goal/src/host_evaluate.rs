@@ -11,10 +11,9 @@
 //! - evaluator failure pauses the goal rather than treating it as complete
 //!
 //! When no evaluator is installed, HostEvaluate still hides `update_goal` and
-//! leaves the goal `Active` so idle continuation can proceed.
-//!
-//! App Server turns this path on through the unified `goal_host` feature, not a
-//! stage-specific flag.
+//! leaves the goal `Active` so idle continuation can proceed. App Server
+//! installs [`crate::ModelGoalRoundEvaluator`] under the unified `goal_host`
+//! feature so production HostEvaluate is not a no-op.
 
 use std::future::Future;
 use std::pin::Pin;

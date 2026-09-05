@@ -24,6 +24,7 @@ use codex_extension_api::InternalSessionSpawner;
 use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalService;
+use codex_goal_extension::ModelGoalRoundEvaluator;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
@@ -79,7 +80,7 @@ where
     }
     codex_history_notes_extension::install(&mut builder, auth_manager.clone());
     if let Some(state_db) = state_db {
-        codex_goal_extension::install_with_backend(
+        codex_goal_extension::install_with_evaluator(
             &mut builder,
             state_db,
             analytics_events_client,
@@ -95,6 +96,10 @@ where
                     GoalPolicy::model_commit()
                 },
             },
+            Some(Arc::new(ModelGoalRoundEvaluator::new(
+                thread_manager.clone(),
+                auth_manager.clone(),
+            ))),
         );
     }
     codex_git_attribution::install(

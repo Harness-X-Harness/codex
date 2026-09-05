@@ -249,6 +249,19 @@ pub struct CodexResponsesMetadata {
 }
 
 impl CodexResponsesMetadata {
+    /// Metadata for a tool-free model request that is not a user turn.
+    ///
+    /// Host-owned evaluators and similar one-shot completions use this instead of
+    /// turn-scoped metadata built by the session event loop.
+    pub fn detached(
+        installation_id: String,
+        session_id: String,
+        thread_id: String,
+        window_id: String,
+    ) -> Self {
+        Self::new(installation_id, session_id, thread_id, window_id)
+    }
+
     pub(crate) fn new(
         installation_id: String,
         session_id: String,
