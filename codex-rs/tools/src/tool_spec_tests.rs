@@ -71,6 +71,7 @@ fn tool_spec_name_covers_all_variants() {
         .name(),
         "web_search"
     );
+    assert_eq!(ToolSpec::XSearch.name(), "x_search");
     assert_eq!(
         ToolSpec::Freeform(FreeformTool {
             name: "exec".to_string(),
