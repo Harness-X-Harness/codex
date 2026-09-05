@@ -663,6 +663,7 @@ impl ChatComposer {
                 context_window_used_tokens: None,
                 context_window_pending: false,
                 collaboration_mode_indicator: None,
+                workflow_status_indicator: None,
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
@@ -989,6 +990,13 @@ impl ChatComposer {
 
     pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
         self.footer.goal_status_indicator = indicator;
+    }
+
+    pub fn set_workflow_status_indicator(
+        &mut self,
+        indicator: Option<super::footer::WorkflowStatusIndicator>,
+    ) {
+        self.footer.workflow_status_indicator = indicator;
     }
 
     pub fn set_ide_context_active(&mut self, active: bool) {
@@ -1455,6 +1463,7 @@ impl ChatComposer {
         }
         if let Some(indicators) = status_line_right_indicator_line(
             self.footer.collaboration_mode_indicator,
+            self.footer.workflow_status_indicator.as_ref(),
             self.footer.goal_status_indicator.as_ref(),
             self.footer.ide_context_active,
             show_cycle_hint,
