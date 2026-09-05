@@ -1,9 +1,11 @@
+use crate::common::ResponsesApiRequest;
 use codex_client::Request;
 use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use http::Method;
 use http::header::HeaderMap;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
@@ -19,6 +21,80 @@ pub struct RetryConfig {
     pub retry_429: bool,
     pub retry_5xx: bool,
     pub retry_transport: bool,
+}
+
+/// Internal Responses wire shape selected by the resolved model provider.
+///
+/// This value is runtime-only. It is not a config, schema, or protocol selector.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResponsesDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
+impl ResponsesDialect {
+    pub(crate) fn project_request(
+        self,
+        request: &ResponsesApiRequest,
+    ) -> serde_json::Result<Value> {
+        let mut value = serde_json::to_value(request)?;
+        if self == Self::Grok
+            && let Some(object) = value.as_object_mut()
+        {
+            let has_agent_message =
+                object
+                    .get("input")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item.get("type").and_then(Value::as_str) == Some("agent_message")
+                        })
+                    });
+            if has_agent_message {
+                return Err(<serde_json::Error as serde::ser::Error>::custom(
+                    "Grok cannot replay unsupported encrypted collaboration history",
+                ));
+            }
+            if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
+                for tool in tools {
+                    project_grok_web_search_tool(tool)?;
+                }
+            }
+            let has_no_tools = match object.get("tools") {
+                None => true,
+                Some(tools) => tools.as_array().is_some_and(Vec::is_empty),
+            };
+            if has_no_tools {
+                object.remove("tools");
+                object.remove("tool_choice");
+                object.remove("parallel_tool_calls");
+            }
+        }
+        Ok(value)
+    }
+}
+
+fn project_grok_web_search_tool(tool: &mut Value) -> serde_json::Result<()> {
+    let Some(object) = tool.as_object_mut() else {
+        return Ok(());
+    };
+    if object.get("type").and_then(Value::as_str) != Some("web_search") {
+        return Ok(());
+    }
+
+    if object.remove("external_web_access") != Some(Value::Bool(true)) {
+        return Err(<serde_json::Error as serde::ser::Error>::custom(
+            "Grok Web Search supports only verified live external access",
+        ));
+    }
+    if object.len() != 1 {
+        return Err(<serde_json::Error as serde::ser::Error>::custom(
+            "Grok Web Search projection requires the verified bare declaration",
+        ));
+    }
+
+    Ok(())
 }
 
 impl RetryConfig {
@@ -47,6 +123,7 @@ pub struct Provider {
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
+    pub responses_dialect: ResponsesDialect,
 }
 
 impl Provider {
@@ -121,6 +198,10 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
     ];
     AZURE_MARKERS.iter().any(|marker| base_url.contains(marker))
 }
+
+#[cfg(test)]
+#[path = "provider_grok_tests.rs"]
+mod grok_tests;
 
 #[cfg(test)]
 mod tests {
