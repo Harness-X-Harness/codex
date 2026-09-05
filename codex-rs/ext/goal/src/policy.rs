@@ -54,10 +54,11 @@ pub enum GoalVerification {
 pub enum GoalHow {
     /// Ordinary agent turns plus idle continuation. Current stock behavior.
     AgentTurns,
-    /// Bound to a named workflow run.
+    /// Bound to the independent `/workflow` HOW layer.
     ///
-    /// Reserved for a later harness stage. This crate currently always
-    /// continues through agent turns.
+    /// Goal still owns why / until-when. Idle progress does not inject
+    /// ordinary goal continuation; the `/workflow` engine owns the scripted
+    /// steps when a run is active.
     Workflow,
 }
 
@@ -90,15 +91,16 @@ impl GoalPolicy {
 
     /// Policy installed when the unified `goal_host` harness feature is on.
     ///
-    /// Host evaluation plus a Guardian skeptic panel. Later stacked stages
-    /// may add an optional workflow bind without adding more feature flags.
+    /// Host evaluation plus a Guardian skeptic panel. Idle progress uses the
+    /// independent `/workflow` engine (`GoalHow::Workflow`) without adding
+    /// another feature flag.
     pub const fn host() -> Self {
         Self {
             completion: GoalCompletionAuthority::HostEvaluate,
             verification: GoalVerification::HostSkeptics {
                 count: HOST_SKEPTIC_DEFAULT_COUNT,
             },
-            how: GoalHow::AgentTurns,
+            how: GoalHow::Workflow,
         }
     }
 }

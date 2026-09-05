@@ -889,7 +889,7 @@ Use `thread/goal/clear` to remove the current goal.
 
 ### Example: Independent `/workflow` run (experimental)
 
-Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the HOW layer and do not complete or replace `/goal`.
+Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the HOW layer and do not complete or replace `/goal`. When `goal_host` is on, App Server installs `GoalPolicy::host()`, which binds HOW to this independent `/workflow` engine. Setting a thread goal does not auto-continue agent turns; start a workflow separately. Completing a workflow does not complete the goal.
 
 ```json
 { "method": "thread/workflow/start", "id": 31, "params": {
