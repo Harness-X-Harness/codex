@@ -5,6 +5,7 @@
 //! crate applies it:
 //!
 //! - `continue` keeps the goal `Active` and stores a next step for idle continuation
+//!   when [`crate::GoalHow::AgentTurns`] is set
 //! - `candidate_complete` with [`GoalVerification::None`] marks the goal `Complete`
 //! - `candidate_complete` with [`GoalVerification::HostSkeptics`] runs the panel;
 //!   all not-refuted votes mark `Complete`, any refute stays `Active`, and panel
@@ -17,6 +18,8 @@
 //! leaves the goal `Active` so idle continuation can proceed. App Server
 //! installs [`crate::ModelGoalRoundEvaluator`] and
 //! [`crate::GuardianGoalSkepticPanel`] under the unified `goal_host` feature.
+//! [`crate::GoalPolicy::host`] sets [`crate::GoalHow::Workflow`], so Goal does
+//! not inject idle continuation; the independent `/workflow` engine owns HOW.
 
 use std::future::Future;
 use std::pin::Pin;

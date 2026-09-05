@@ -1,5 +1,7 @@
 //! Host skeptic vote parsing, clamp, and aggregation.
 
+use codex_goal_extension::GoalCompletionAuthority;
+use codex_goal_extension::GoalHow;
 use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalSkepticPanelVerdict;
 use codex_goal_extension::GoalSkepticParseError;
@@ -16,11 +18,17 @@ use pretty_assertions::assert_eq;
 #[test]
 fn host_policy_installs_default_skeptic_panel() {
     assert_eq!(
-        GoalPolicy::host().verification,
-        GoalVerification::HostSkeptics {
-            count: HOST_SKEPTIC_DEFAULT_COUNT
+        GoalPolicy::host(),
+        GoalPolicy {
+            completion: GoalCompletionAuthority::HostEvaluate,
+            verification: GoalVerification::HostSkeptics {
+                count: HOST_SKEPTIC_DEFAULT_COUNT
+            },
+            how: GoalHow::Workflow,
         }
     );
+    assert_eq!(GoalPolicy::host_evaluate().how, GoalHow::AgentTurns);
+    assert_eq!(GoalPolicy::model_commit().how, GoalHow::AgentTurns);
 }
 
 #[test]
