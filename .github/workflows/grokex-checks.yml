@@ -1,0 +1,436 @@
+name: grokex-checks
+
+on:
+  pull_request:
+    branches: ['release/**']
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-checks-${{ inputs.source_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CHECKOUT_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  # The path contract (grokex/check_scope.py) decides which gate groups a pull
+  # request needs from the paths it changes. Anything that is not a pull
+  # request, and any path the contract does not name, needs every gate.
+  scope:
+    name: Resolve the path contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      helpers: ${{ steps.scope.outputs.helpers }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            git fetch --quiet --depth=1 origin "${BASE_SHA}"
+            python3 grokex/check_scope.py --base "${BASE_SHA}" --head "${CHECKOUT_SHA}" --github-output | tee -a "${GITHUB_OUTPUT}"
+          else
+            python3 grokex/check_scope.py --all --github-output | tee -a "${GITHUB_OUTPUT}"
+          fi
+
+  helpers:
+    name: Release helper contracts
+    needs: scope
+    if: needs.scope.outputs.helpers == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: grokex/validator/go.mod
+          cache-dependency-path: grokex/validator/go.sum
+      - name: Lint the Grokex workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grokex-*.yml
+      - name: Verify the canonical-session validator
+        working-directory: grokex/validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go build -o "${RUNNER_TEMP}/grokex-live" ./cmd/grokex-live
+          # The validator refuses a scenario the contract does not name.
+          if "${RUNNER_TEMP}/grokex-live" --contracts ../live_contracts.json --archive x --config x --evidence x \
+              --source-sha x --run-id x --scenario not-a-scenario; then
+            echo "validator accepted a scenario outside the contract" >&2
+            exit 1
+          fi
+      - name: Verify helper contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            grokex/check_scope.py \
+            grokex/release.py \
+            grokex/seam_series.py \
+            grokex/test_check_scope.py \
+            grokex/test_release.py \
+            grokex/test_seam_series.py
+          python3 -m unittest grokex.test_check_scope grokex.test_release grokex.test_seam_series
+          upstream_commit="$(python3 grokex/release.py identity --github-output | sed -n 's/^upstream_commit=//p')"
+          git fetch --quiet --depth=1 origin "${upstream_commit}"
+          python3 grokex/seam_series.py plan --head "${CHECKOUT_SHA}" > "${RUNNER_TEMP}/seam-plan.txt"
+          python3 grokex/seam_series.py export --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series" > /dev/null
+          python3 grokex/seam_series.py verify --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series"
+          bash -n grokex/dist/grokex grokex/dist/install-grokex.sh grokex/download-archives.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/dist/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/dist/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/dist/config.toml.example
+          release_tag="$(python3 grokex/release.py identity --github-output | sed -n 's/^release_tag=//p')"
+          product_tree="$(python3 grokex/release.py identity --github-output | sed -n 's/^product_tree=//p')"
+          [[ -n "${release_tag}" && -n "${product_tree}" ]]
+          fixture="${RUNNER_TEMP}/grokex-fixture"
+          mkdir -p "${fixture}/raw"
+          for target in \
+            aarch64-apple-darwin x86_64-apple-darwin \
+            aarch64-unknown-linux-musl x86_64-unknown-linux-musl \
+            aarch64-pc-windows-msvc x86_64-pc-windows-msvc; do
+            mkdir -p "${fixture}/raw/${target}"
+            if [[ "${target}" == *windows* ]]; then
+              touch "${fixture}/raw/${target}/codex.exe" "${fixture}/raw/${target}/codex-code-mode-host.exe"
+            else
+              touch "${fixture}/raw/${target}/codex" "${fixture}/raw/${target}/codex-code-mode-host"
+            fi
+            if [[ "${target}" == *linux* ]]; then
+              touch "${fixture}/raw/${target}/bwrap"
+            fi
+          done
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --product-tree "${product_tree}" \
+            --built-from-sha "${CHECKOUT_SHA}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --product-tree "${product_tree}" \
+            --target x86_64-unknown-linux-musl
+          candidate="${fixture}/dist/${release_tag}-x86_64-unknown-linux-musl.tar.gz"
+          mkdir -p "${fixture}/extracted" "${fixture}/installed"
+          tar -xzf "${candidate}" -C "${fixture}/extracted"
+          GROKEX_BIN_DIR="${fixture}/installed/bin" \
+            GROKEX_HOME="${fixture}/installed/home" \
+            sh "${fixture}/extracted/${release_tag}/install-grokex.sh"
+          test -x "${fixture}/installed/bin/bwrap"
+          candidate_sha="$(sha256sum "${candidate}" | awk '{print $1}')"
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --product-tree "${product_tree}" \
+            --built-from-sha "${CHECKOUT_SHA}" \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --target aarch64-unknown-linux-musl \
+            --target aarch64-pc-windows-msvc \
+            --target x86_64-pc-windows-msvc
+          [[ "$(sha256sum "${candidate}" | awk '{print $1}')" == "${candidate_sha}" ]]
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --product-tree "${product_tree}"
+          # Assemble a full asset set from synthetic completed evidence and
+          # verify it the way the publish job does.
+          mkdir -p "${fixture}/evidence"
+          for scenario in $(jq -r '.scenarios | keys[]' grokex/live_contracts.json); do
+            story="$(jq -r --arg s "${scenario}" '.scenarios[$s].story' grokex/live_contracts.json)"
+            jq -n --arg scenario "${scenario}" --arg story "${story}" \
+              '{scenario: $scenario, story: $story, mode: "release", status: "completed", turn_durations_seconds: [1.5]}' \
+              > "${fixture}/evidence/LIVE_EVIDENCE-${scenario}.json"
+          done
+          python3 grokex/release.py assemble \
+            --archives "${fixture}/dist" \
+            --evidence-dir "${fixture}/evidence" \
+            --output "${fixture}/assets" \
+            --repository . \
+            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --release-run 0
+          python3 grokex/release.py verify-assets \
+            --dist "${fixture}/assets" \
+            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --release-run 0
+
+  formatting:
+    name: Formatting
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - run: cargo fmt -- --config imports_granularity=Item --check
+
+  contracts:
+    name: Stock and Grok contracts
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - id: provider
+        name: Provider contracts
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_exact() {
+            package="$1"
+            test_name="$2"
+            shift 2
+            output="$(mktemp)"
+            cargo test -p "${package}" "$@" "${test_name}" -- --exact | tee "${output}"
+            grep -Eq 'test result: ok\. 1 passed; 0 failed;' "${output}" || {
+              echo "exact selector did not execute one test: ${test_name}" >&2
+              exit 1
+            }
+          }
+          for test_name in \
+            grok_provider::tests::grok_projects_only_plaintext_agent_message_on_request_copy \
+            grok_provider::tests::grok_provider_projects_text_and_tool_continuation \
+            grok_provider::tests::grok_provider_replays_encrypted_reasoning_without_null_content \
+            grok_provider::tests::grok_recognizes_only_completed_provider_hosted_x_calls \
+            grok_provider::tests::stock_openai_provider_keeps_canonical_history_unchanged \
+            grok_provider::tests::resolved_provider_derives_internal_responses_dialect \
+            grok_provider::tests::grok_models_manager_uses_bundle_or_exact_config_replacement; do
+            run_exact codex-model-provider "${test_name}" --lib
+          done
+          run_exact codex-model-provider provider::tests::configured_provider_uses_stock_background_models --lib
+          run_exact codex-model-provider-info tests::test_validate_grok_provider_rejects_websockets --lib
+          run_exact codex-api provider::grok_tests::grok_projection_forwards_only_reviewed_request_fields --lib
+          run_exact codex-api provider::grok_tests::grok_projects_verified_live_web_search_to_bare_declaration --lib
+          run_exact codex-api provider::grok_tests::grok_rejects_unverified_web_search_declarations --lib
+          run_exact codex-api provider::grok_tests::grok_rejects_residual_agent_message_before_transport --lib
+          run_exact codex-api grok_tests::grok_no_tool_request_omits_tool_controls --test clients
+      - id: projections
+        name: Stock App Server Provider projections
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_exact() {
+            test_name="$1"
+            output="$(mktemp)"
+            cargo test -p codex-app-server --test all "${test_name}" -- --exact | tee "${output}"
+            grep -Eq 'test result: ok\. 1 passed; 0 failed;' "${output}" || {
+              echo "exact selector did not execute one test: ${test_name}" >&2
+              exit 1
+            }
+          }
+          run_exact suite::v2::model_list::grok_model_list::list_models_uses_grok_release_catalog_through_stock_model_dto
+          run_exact suite::v2::model_provider_capabilities_read::read_grok_provider_capabilities
+          # Thread Provider Binding Stories proven deterministically: fork,
+          # cold restart and resume, manual compaction.
+          run_exact suite::v2::compaction::grok_provider_binding::grok_fork_keeps_provider_binding_and_isolates_branch_failure
+          run_exact suite::v2::compaction::grok_provider_binding::grok_cold_restart_resume_keeps_provider_binding
+          run_exact suite::v2::compaction::grok_provider_binding::grok_manual_compaction_keeps_provider_binding
+      - id: controls
+        name: Shared stock seam controls
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_exact() {
+            package="$1"
+            test_name="$2"
+            shift 2
+            output="$(mktemp)"
+            cargo test -p "${package}" "$@" "${test_name}" -- --exact | tee "${output}"
+            grep -Eq 'test result: ok\. 1 passed; 0 failed;' "${output}" || {
+              echo "exact selector did not execute one test: ${test_name}" >&2
+              exit 1
+            }
+          }
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_disambiguates_retained_indirect_guidance --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_round_trips_same_local_names_across_namespaces --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_replays_custom_call_with_matching_output --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_marks_only_plaintext_collaboration_calls --lib
+          run_exact codex-core tools::router::grok_tests::seam_pins::every_tool_spec_variant_is_classified_for_flat_projection --lib
+          run_exact codex-core tools::router::grok_tests::seam_pins::plaintext_collaboration_routing_covers_every_stock_collab_tool --lib
+          run_exact codex-core tools::router::grok_tests::seam_pins::spawn_agent_flat_projection_keeps_the_stock_argument_contract --lib
+          run_exact codex-core guardian::tests::guardian_review_session_config_rejects_provider_without_review_model_policy --lib
+          run_exact codex-guardian-v2 async_scorer::extension::tests::installed_extension_skips_provider_without_reviewer_model_policy --lib
+          run_exact codex-guardian-v2 sync_reviewer::reviewer_config::tests::rejects_provider_without_reviewer_model_policy --lib
+          run_exact codex-memories-write startup_tests::memories_without_provider_model_policy_do_not_egress --lib
+          run_exact codex-config thread_config::remote::tests::model_provider_proto_round_trips_grok_wire_api --lib
+          run_exact codex-app-server suite::v2::mcp_tool::mcp_server_tool_call_returns_tool_result --test all
+          # The crates the graft edits most carry stock unit tests that the exact
+          # selectors above do not name; run them whole so a stock regression in
+          # a Provider seam fails here, not after publication.
+          cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
+      - id: grok
+        name: Grok metadata-driven V2, Ultra, and hosted X Search
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_exact() {
+            package="$1"
+            test_name="$2"
+            shift 2
+            output="$(mktemp)"
+            cargo test -p "${package}" "$@" "${test_name}" -- --exact | tee "${output}"
+            grep -Eq 'test result: ok\. 1 passed; 0 failed;' "${output}" || {
+              echo "exact selector did not execute one test: ${test_name}" >&2
+              exit 1
+            }
+          }
+          run_exact codex-core suite::grok_agent_execution::grok_ultra_v2_full_history_is_gateway_compatible --test all
+          # Model-visible request snapshots: what grok-4.6 sees for each Live
+          # Story's first Turn (tool inventory, digests, reasoning, input kinds).
+          # An upstream bump that changes the visible surface fails here at PR
+          # time instead of in a Live scenario. Review and accept via cargo-insta.
+          for snapshot in basic continuation collaboration_ultra image; do
+            run_exact codex-core "suite::grok_model_visible_request::snapshot_grok_model_visible_request_${snapshot}" --test all
+          done
+          run_exact codex-history tests::provider_hosted_tool_metadata_round_trips_beside_rollout_payload --lib
+          run_exact codex-core context_manager::history::tests::normalize_keeps_provider_hosted_custom_tool_call_without_output --lib
+          run_exact codex-core suite::grok_web_search::grok_web_search_uses_bare_live_declaration_and_replays_stock_history --test all
+          run_exact codex-core suite::x_search::grok_x_search_is_provider_hosted_and_replays_canonical_history --test all
+          run_exact codex-api endpoint::images::tests::generate_posts_typed_request_and_parses_image_response --lib
+          run_exact codex-api endpoint::images::tests::edit_posts_typed_request_and_parses_image_response --lib
+          run_exact codex-api endpoint::images::tests::grok_edit_projects_single_and_multiple_image_shapes --lib
+          run_exact codex-api endpoint::images::tests::grok_edit_rejects_unsupported_cardinality_before_transport --lib
+          run_exact codex-image-generation-extension tool::tests::recent_image_fallback_selects_newest_images_in_chronological_order --lib
+          run_exact codex-app-server suite::v2::imagegen_extension::grok_imagegen_extension::grok_image_generation_then_history_edit_uses_stock_lifecycle --test all
+      - name: Require every contract group
+        if: always()
+        env:
+          CONTROLS: ${{ steps.controls.outcome }}
+          GROK: ${{ steps.grok.outcome }}
+          PROJECTIONS: ${{ steps.projections.outcome }}
+          PROVIDER: ${{ steps.provider.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${PROVIDER}" == "success" ]] || failures+=("Provider contracts")
+          [[ "${PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
+          [[ "${CONTROLS}" == "success" ]] || failures+=("stock controls")
+          [[ "${GROK}" == "success" ]] || failures+=("Grok contracts")
+          if (( ${#failures[@]} )); then
+            printf 'Failed contract group: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
+
+  lints:
+    name: Affected library lints
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - name: Lint affected libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy -p codex-api -p codex-config -p codex-guardian-v2 -p codex-image-generation-extension -p codex-memories-write -p codex-model-provider -p codex-model-provider-info -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
+          cargo clippy -p codex-core --test all -- -D warnings
+          cargo clippy -p codex-app-server --test all -- -D warnings
+
+  require:
+    name: Require every deterministic gate
+    needs: [scope, helpers, formatting, contracts, lints]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require success, or a skip the path contract asked for
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          WANT_RUST: ${{ needs.scope.outputs.rust }}
+          WANT_HELPERS: ${{ needs.scope.outputs.helpers }}
+          CONTRACTS: ${{ needs.contracts.result }}
+          FORMATTING: ${{ needs.formatting.result }}
+          HELPERS: ${{ needs.helpers.result }}
+          LINTS: ${{ needs.lints.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${SCOPE}" == "success" ]] || failures+=("path contract")
+          gate() {
+            # A gate passes when it succeeded, or when the contract said the
+            # change does not need it and the job was therefore skipped.
+            local label="$1" result="$2" wanted="$3"
+            if [[ "${result}" == "success" ]]; then
+              return
+            fi
+            if [[ "${wanted}" == "false" && "${result}" == "skipped" ]]; then
+              echo "${label}: not needed by the path contract"
+              return
+            fi
+            failures+=("${label} (${result})")
+          }
+          gate "release helpers" "${HELPERS}" "${WANT_HELPERS}"
+          gate "formatting" "${FORMATTING}" "${WANT_RUST}"
+          gate "contracts" "${CONTRACTS}" "${WANT_RUST}"
+          gate "lints" "${LINTS}" "${WANT_RUST}"
+          if (( ${#failures[@]} )); then
+            printf 'Failed deterministic gate: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
