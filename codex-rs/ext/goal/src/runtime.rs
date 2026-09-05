@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -18,6 +20,7 @@ use crate::analytics::GoalAnalytics;
 use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::policy::GoalPolicy;
 use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
@@ -32,6 +35,7 @@ pub struct GoalRuntimeHandle {
 pub(crate) struct GoalRuntimeConfig {
     pub(crate) analytics: GoalAnalytics,
     pub(crate) enabled: bool,
+    pub(crate) policy: GoalPolicy,
     pub(crate) tools_available_for_thread: bool,
     pub(crate) root_accounting_state: Option<Arc<GoalAccountingState>>,
 }
@@ -52,6 +56,7 @@ struct GoalRuntimeInner {
     accounting_state: Arc<GoalAccountingState>,
     root_accounting_state: Option<Arc<GoalAccountingState>>,
     enabled: AtomicBool,
+    policy: Mutex<GoalPolicy>,
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
 }
@@ -105,6 +110,7 @@ impl GoalRuntimeHandle {
                 accounting_state,
                 root_accounting_state: config.root_accounting_state,
                 enabled: AtomicBool::new(config.enabled),
+                policy: Mutex::new(config.policy),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
@@ -115,8 +121,25 @@ impl GoalRuntimeHandle {
         self.inner.enabled.store(enabled, Ordering::Relaxed);
     }
 
+    pub(crate) fn set_policy(&self, policy: GoalPolicy) {
+        *self
+            .inner
+            .policy
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = policy;
+    }
+
     pub(crate) fn is_enabled(&self) -> bool {
         self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Current completion, verification, and how-work policy for this thread.
+    pub fn policy(&self) -> GoalPolicy {
+        *self
+            .inner
+            .policy
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn tools_visible(&self) -> bool {

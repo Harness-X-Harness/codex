@@ -29,6 +29,7 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalObjectiveUpdate;
+use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalRuntimeHandle;
 use codex_goal_extension::GoalService;
 use codex_goal_extension::GoalSetRequest;
@@ -107,6 +108,7 @@ async fn installed_goal_tools_apply_maximum_token_budget() -> anyhow::Result<()>
     harness.thread_store.insert(GoalExtensionConfig {
         enabled: true,
         max_goal_token_budget: Some(100),
+        policy: GoalPolicy::model_commit(),
     });
     let tools = harness.tools();
     let create_tool = tool_by_name(&tools, "create_goal");
@@ -233,6 +235,132 @@ async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()>
     assert_eq!(json!("replacement goal"), result["goal"]["objective"]);
     assert_eq!(json!("active"), result["goal"]["status"]);
     assert_eq!(json!(0), result["goal"]["tokensUsed"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn installed_goal_runtime_stores_model_commit_policy() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
+    let stored = harness
+        .thread_store
+        .get::<GoalExtensionConfig>()
+        .ok_or_else(|| anyhow::anyhow!("goal config should be stored on thread start"))?;
+    assert_eq!(stored.policy, GoalPolicy::model_commit());
+    let handle = harness
+        .thread_store
+        .get::<GoalRuntimeHandle>()
+        .ok_or_else(|| anyhow::anyhow!("goal runtime should be stored on thread start"))?;
+    assert_eq!(handle.policy(), GoalPolicy::model_commit());
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_evaluate_policy_does_not_change_update_goal_completion() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new_with_config(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy::host_evaluate(),
+        },
+    )
+    .await?;
+    let handle = harness
+        .thread_store
+        .get::<GoalRuntimeHandle>()
+        .ok_or_else(|| anyhow::anyhow!("goal runtime should be stored on thread start"))?;
+    assert_eq!(handle.policy(), GoalPolicy::host_evaluate());
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "host evaluate still model-committed" }),
+        ))
+        .await?;
+    tool_by_name(&tools, "update_goal")
+        .handle(tool_call(
+            "update_goal",
+            "call-complete-goal",
+            json!({ "status": "complete" }),
+        ))
+        .await?;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("completed goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_policy_follows_config_changes() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let mut builder = ExtensionRegistryBuilder::<GoalExtensionConfig>::new();
+    let goal_service = Arc::new(GoalService::new());
+    install_with_backend(
+        &mut builder,
+        runtime,
+        AnalyticsEventsClient::disabled(),
+        /*metrics_client*/ None,
+        Weak::new(),
+        goal_service,
+        GoalExtensionConfig::clone,
+    );
+    let registry = builder.build();
+    let session_store = ExtensionData::new(thread_id.to_string());
+    let thread_store = ExtensionData::new(thread_id.to_string());
+    let session_source = SessionSource::Cli;
+    let start_config = GoalExtensionConfig {
+        enabled: true,
+        max_goal_token_budget: None,
+        policy: GoalPolicy::model_commit(),
+    };
+    for contributor in registry.thread_lifecycle_contributors() {
+        contributor
+            .on_thread_start(ThreadStartInput {
+                config: &start_config,
+                session_source: &session_source,
+                persistent_thread_state_available: true,
+                environments: &[],
+                mcp_resource_client: None,
+                extension_metrics: None,
+                session_store: &session_store,
+                thread_store: &thread_store,
+            })
+            .await;
+    }
+    let handle = thread_store
+        .get::<GoalRuntimeHandle>()
+        .ok_or_else(|| anyhow::anyhow!("goal runtime should be stored on thread start"))?;
+    assert_eq!(handle.policy(), GoalPolicy::model_commit());
+
+    let next_config = GoalExtensionConfig {
+        enabled: true,
+        max_goal_token_budget: None,
+        policy: GoalPolicy::host_evaluate(),
+    };
+    for contributor in registry.config_contributors() {
+        contributor.on_config_changed(&session_store, &thread_store, &start_config, &next_config);
+    }
+    assert_eq!(handle.policy(), GoalPolicy::host_evaluate());
+    let stored = thread_store
+        .get::<GoalExtensionConfig>()
+        .ok_or_else(|| anyhow::anyhow!("goal config should update with config changes"))?;
+    assert_eq!(stored.policy, GoalPolicy::host_evaluate());
     Ok(())
 }
 
@@ -1520,6 +1648,7 @@ async fn installed_tools_with_start(
         |_| GoalExtensionConfig {
             enabled: true,
             max_goal_token_budget: None,
+            policy: GoalPolicy::model_commit(),
         },
     );
     let registry = builder.build();
@@ -1564,6 +1693,23 @@ impl GoalExtensionHarness {
         runtime: Arc<codex_state::StateRuntime>,
         thread_id: ThreadId,
     ) -> anyhow::Result<Self> {
+        Self::new_with_config(
+            runtime,
+            thread_id,
+            GoalExtensionConfig {
+                enabled: true,
+                max_goal_token_budget: None,
+                policy: GoalPolicy::model_commit(),
+            },
+        )
+        .await
+    }
+
+    async fn new_with_config(
+        runtime: Arc<codex_state::StateRuntime>,
+        thread_id: ThreadId,
+        config: GoalExtensionConfig,
+    ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
         let goal_service = Arc::new(GoalService::new());
@@ -1574,10 +1720,7 @@ impl GoalExtensionHarness {
             /*metrics_client*/ None,
             Weak::new(),
             Arc::clone(&goal_service),
-            |_| GoalExtensionConfig {
-                enabled: true,
-                max_goal_token_budget: None,
-            },
+            move |_| config.clone(),
         );
         let registry = Arc::new(builder.build());
         let session_store = ExtensionData::new(thread_id.to_string());
