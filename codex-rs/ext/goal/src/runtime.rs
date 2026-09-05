@@ -549,6 +549,14 @@ impl GoalRuntimeHandle {
             tracing::debug!("skipping goal continuation because live thread is unavailable");
             return Ok(());
         };
+        if thread
+            .thread_extension_data()
+            .get::<codex_extension_api::HostIdleHold>()
+            .is_some()
+        {
+            tracing::debug!("skipping goal continuation because workflow occupies idle");
+            return Ok(());
+        }
 
         let Some(goal) = self
             .inner
