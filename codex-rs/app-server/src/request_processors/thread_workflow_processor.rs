@@ -26,24 +26,16 @@ use codex_workflow_extension::WorkflowRun;
 use codex_workflow_extension::WorkflowService;
 use codex_workflow_extension::WorkflowServiceError;
 use codex_workflow_extension::WorkflowStatus;
+use codex_workflow_extension::WorkflowUpdateSink;
 
 pub(crate) struct ThreadWorkflowRequestProcessor {
-    outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     service: Arc<WorkflowService>,
 }
 
 impl ThreadWorkflowRequestProcessor {
-    pub(crate) fn new(
-        outgoing: Arc<OutgoingMessageSender>,
-        config: Arc<Config>,
-        service: Arc<WorkflowService>,
-    ) -> Self {
-        Self {
-            outgoing,
-            config,
-            service,
-        }
+    pub(crate) fn new(config: Arc<Config>, service: Arc<WorkflowService>) -> Self {
+        Self { config, service }
     }
 
     pub(crate) async fn get(
@@ -73,7 +65,7 @@ impl ThreadWorkflowRequestProcessor {
             .await
             .map_err(workflow_service_error)?;
         Ok(ThreadWorkflowStartResponse {
-            workflow: self.emit_updated(run).await,
+            workflow: api_workflow(run),
         })
     }
 
@@ -89,7 +81,7 @@ impl ThreadWorkflowRequestProcessor {
             .await
             .map_err(workflow_service_error)?;
         Ok(ThreadWorkflowAdvanceResponse {
-            workflow: self.emit_updated(run).await,
+            workflow: api_workflow(run),
         })
     }
 
@@ -105,7 +97,7 @@ impl ThreadWorkflowRequestProcessor {
             .await
             .map_err(workflow_service_error)?;
         Ok(ThreadWorkflowStopResponse {
-            workflow: self.emit_updated(run).await,
+            workflow: api_workflow(run),
         })
     }
 
@@ -121,7 +113,7 @@ impl ThreadWorkflowRequestProcessor {
             .await
             .map_err(workflow_service_error)?;
         Ok(ThreadWorkflowResumeResponse {
-            workflow: self.emit_updated(run).await,
+            workflow: api_workflow(run),
         })
     }
 
@@ -132,22 +124,26 @@ impl ThreadWorkflowRequestProcessor {
             Err(invalid_request("goal_host feature is disabled"))
         }
     }
-
-    async fn emit_updated(&self, run: WorkflowRun) -> ThreadWorkflow {
-        let workflow = api_workflow(run);
-        self.outgoing
-            .send_server_notification(ServerNotification::ThreadWorkflowUpdated(
-                ThreadWorkflowUpdatedNotification {
-                    thread_id: workflow.thread_id.clone(),
-                    workflow: workflow.clone(),
-                },
-            ))
-            .await;
-        workflow
-    }
 }
 
-fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
+pub(crate) fn workflow_update_sink(outgoing: Arc<OutgoingMessageSender>) -> WorkflowUpdateSink {
+    Arc::new(move |run| {
+        let outgoing = Arc::clone(&outgoing);
+        Box::pin(async move {
+            let workflow = api_workflow(run);
+            outgoing
+                .send_server_notification(ServerNotification::ThreadWorkflowUpdated(
+                    ThreadWorkflowUpdatedNotification {
+                        thread_id: workflow.thread_id.clone(),
+                        workflow,
+                    },
+                ))
+                .await;
+        })
+    })
+}
+
+pub(crate) fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
     let current_step_index = u32::try_from(run.current_step_index()).unwrap_or(u32::MAX);
     let steps = run
         .display_steps()
