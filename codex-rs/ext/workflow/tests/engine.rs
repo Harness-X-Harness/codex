@@ -1,15 +1,17 @@
 use pretty_assertions::assert_eq;
 
+use codex_workflow_extension::MAX_WORKFLOW_REPLY_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowSourceError;
 use codex_workflow_extension::eval_source;
+use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
 
 #[test]
 fn complete_ends_the_run() {
     assert_eq!(
-        eval_source("complete();", 0).expect("eval"),
+        eval_source("complete();", &[]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -17,7 +19,7 @@ fn complete_ends_the_run() {
 #[test]
 fn falling_off_the_end_completes_the_run() {
     assert_eq!(
-        eval_source("let x = 1 + 1;", 0).expect("eval"),
+        eval_source("let x = 1 + 1;", &[]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -25,13 +27,32 @@ fn falling_off_the_end_completes_the_run() {
 #[test]
 fn ask_yields_then_complete_after_host_resume() {
     assert_eq!(
-        eval_source(r#"ask("Compile the crate."); complete();"#, 0).expect("eval"),
+        eval_source(r#"ask("Compile the crate."); complete();"#, &[]).expect("eval"),
         WorkflowEval::Yielded {
             instruction: "Compile the crate.".to_string(),
         }
     );
     assert_eq!(
-        eval_source(r#"ask("Compile the crate."); complete();"#, 1).expect("eval"),
+        eval_source(
+            r#"ask("Compile the crate."); complete();"#,
+            &[String::new()]
+        )
+        .expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn ask_returns_the_host_reply() {
+    let source = r#"let x = ask("Say ok."); if x == "ok" { complete(); }"#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(
+        eval_source(source, &["ok".to_string()]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -48,7 +69,7 @@ fn rhai_control_flow_is_evaluated() {
         }
     "#;
     assert_eq!(
-        eval_source(source, 0).expect("eval"),
+        eval_source(source, &[]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -93,7 +114,7 @@ fn goal_bindings_cannot_commit_goal_state() {
         "mark_goal_complete();",
         "mark_goal_blocked();",
     ] {
-        let error = eval_source(source, 0).expect_err(source);
+        let error = eval_source(source, &[]).expect_err(source);
         match error {
             WorkflowSourceError::Invalid { reason } => {
                 assert!(
@@ -107,8 +128,17 @@ fn goal_bindings_cannot_commit_goal_state() {
 }
 
 #[test]
+fn truncate_workflow_reply_caps_injected_text() {
+    let reply = "x".repeat(MAX_WORKFLOW_REPLY_CHARS + 8);
+    assert_eq!(
+        truncate_workflow_reply(&reply).chars().count(),
+        MAX_WORKFLOW_REPLY_CHARS
+    );
+}
+
+#[test]
 fn max_operations_stops_unbounded_work() {
-    let error = eval_source("loop { }", 0).expect_err("loop");
+    let error = eval_source("loop { }", &[]).expect_err("loop");
     match error {
         WorkflowSourceError::Invalid { reason } => {
             assert!(

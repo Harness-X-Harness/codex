@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_core::TurnStartOptions;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
@@ -7,6 +8,8 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStopInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 
@@ -58,6 +61,36 @@ where
     }
 }
 
+impl<C> TurnLifecycleContributor for WorkflowExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let enabled = input
+                .thread_store
+                .get::<WorkflowExtensionConfig>()
+                .is_some_and(|config| config.enabled);
+            if !enabled {
+                return;
+            }
+            let is_workflow_turn = input
+                .turn_store
+                .get::<TurnStartOptions>()
+                .is_some_and(|options| options.turn_trigger.as_deref() == Some("workflow"));
+            if !is_workflow_turn {
+                return;
+            }
+            let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+                return;
+            };
+            if let Err(err) = self.service.finish_yield_turn(thread_id).await {
+                tracing::warn!("failed to host-resume workflow after yield for {thread_id}: {err}");
+            }
+        })
+    }
+}
+
 impl<C> ConfigContributor<C> for WorkflowExtension<C>
 where
     C: Send + Sync + 'static,
@@ -86,5 +119,6 @@ pub fn install<C>(
         workflow_config: Arc::new(workflow_config),
     });
     registry.thread_lifecycle_contributor(extension.clone());
+    registry.turn_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension);
 }

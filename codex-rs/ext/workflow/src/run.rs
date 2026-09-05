@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::engine::WorkflowEval;
 use crate::engine::eval_source;
+use crate::engine::truncate_workflow_reply;
 
 /// Lifecycle of one thread's workflow run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -37,6 +38,8 @@ pub struct WorkflowRun {
     pub status: WorkflowStatus,
     pub source: String,
     pub served_asks: u32,
+    #[serde(default)]
+    pub served_replies: Vec<String>,
     pub pending_instruction: Option<String>,
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
@@ -62,12 +65,13 @@ impl WorkflowRun {
             status: WorkflowStatus::Active,
             source: source.trim().to_string(),
             served_asks: 0,
+            served_replies: Vec::new(),
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
             updated_at: now,
         };
-        run.apply_eval(eval_source(&run.source, 0).map_err(|error| error.to_string())?)?;
+        run.apply_eval(eval_source(&run.source, &[]).map_err(|error| error.to_string())?)?;
         Ok(run)
     }
 
@@ -91,27 +95,46 @@ impl WorkflowRun {
     }
 
     pub fn advance(&mut self) -> Result<WorkflowAdvance, String> {
+        self.advance_with_reply(String::new())
+    }
+
+    pub fn advance_with_reply(&mut self, reply: String) -> Result<WorkflowAdvance, String> {
         if self.status != WorkflowStatus::Active {
             return Err("workflow is not active".to_string());
         }
         let Some(_) = self.pending_instruction.as_ref() else {
             return Err("workflow has no pending yield".to_string());
         };
-        let served_asks = self.served_asks.saturating_add(1);
         let pending = self.pending_instruction.clone();
         let pending_yield_started = self.pending_yield_started;
-        self.served_asks = served_asks;
+        let previous_asks = self.served_asks;
+        let previous_replies = self.served_replies.clone();
+        self.served_replies.push(truncate_workflow_reply(&reply));
+        self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
         self.pending_instruction = None;
         self.pending_yield_started = false;
-        match eval_source(&self.source, served_asks) {
+        match eval_source(&self.source, &self.served_replies) {
             Ok(outcome) => self.apply_eval(outcome),
             Err(error) => {
-                self.served_asks = served_asks.saturating_sub(1);
+                self.served_asks = previous_asks;
+                self.served_replies = previous_replies;
                 self.pending_instruction = pending;
                 self.pending_yield_started = pending_yield_started;
                 Err(error.to_string())
             }
         }
+    }
+
+    pub fn occupies_idle(&self) -> bool {
+        self.status == WorkflowStatus::Active
+    }
+
+    pub fn normalize_served_replies(&mut self) {
+        let expected = usize::try_from(self.served_asks).unwrap_or(usize::MAX);
+        if self.served_replies.len() < expected {
+            self.served_replies.resize(expected, String::new());
+        }
+        self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
     }
 
     pub fn stop(&mut self) -> Result<(), String> {

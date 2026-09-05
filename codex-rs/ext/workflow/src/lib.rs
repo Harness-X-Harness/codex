@@ -10,11 +10,13 @@ mod service;
 mod steering;
 
 pub use engine::MAX_WORKFLOW_OPERATIONS;
+pub use engine::MAX_WORKFLOW_REPLY_CHARS;
 pub use engine::MAX_WORKFLOW_SOURCE_CHARS;
 pub use engine::MAX_WORKFLOW_YIELDS;
 pub use engine::WorkflowEval;
 pub use engine::WorkflowSourceError;
 pub use engine::eval_source;
+pub use engine::truncate_workflow_reply;
 pub use engine::validate_source;
 pub use extension::WorkflowExtensionConfig;
 pub use extension::install;
@@ -25,3 +27,4 @@ pub use run::WorkflowStep;
 pub use service::SharedWorkflowService;
 pub use service::WorkflowService;
 pub use service::WorkflowServiceError;
+pub use service::WorkflowUpdateSink;

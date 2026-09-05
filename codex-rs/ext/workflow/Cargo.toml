@@ -17,6 +17,7 @@ workspace = true
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
 codex-utils-template = { workspace = true }
 rhai = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
