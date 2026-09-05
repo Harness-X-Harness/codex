@@ -197,6 +197,12 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes. Parent-owned Multi-Agent V2 subagents reject goal clearing, including while unloaded.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
+- `thread/workflow/get` — experimental; fetch the independent `/workflow` run for a thread. Requires `goal_host`. Returns `workflow: null` when none exists. Distinct from `/goal`.
+- `thread/workflow/start` — experimental; start a markdown workflow run on a thread. Requires `goal_host`. Rejects if a run is already `active`.
+- `thread/workflow/advance` — experimental; host-advance the current workflow step. Completing the last step marks the run `complete`.
+- `thread/workflow/stop` — experimental; pause an active workflow run.
+- `thread/workflow/resume` — experimental; resume a paused workflow run.
+- `thread/workflow/updated` — experimental notification emitted whenever a workflow run changes.
 - `thread/queue/add` — experimental; persist a user turn for automatic FIFO submission when the thread next becomes idle.
 - `thread/queue/list` — experimental; return one page of a thread's queued turns.
 - `thread/queue/update` — experimental; edit a queued turn while preserving its stable submission ID, client message ID, and position.
@@ -879,6 +885,19 @@ Use `thread/goal/clear` to remove the current goal.
 { "method": "thread/goal/clear", "id": 30, "params": { "threadId": "thr_123" } }
 { "id": 30, "result": { "cleared": true } }
 { "method": "thread/goal/cleared", "params": { "threadId": "thr_123" } }
+```
+
+### Example: Independent `/workflow` run (experimental)
+
+Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the HOW layer and do not complete or replace `/goal`.
+
+```json
+{ "method": "thread/workflow/start", "id": 31, "params": {
+    "threadId": "thr_123",
+    "source": "# Review PR\n\n## Gather context\nRead the diff.\n\n## Write findings\nList bugs.\n"
+} }
+{ "method": "thread/workflow/advance", "id": 32, "params": { "threadId": "thr_123" } }
+{ "method": "thread/workflow/stop", "id": 33, "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Queue a follow-up user turn (experimental)

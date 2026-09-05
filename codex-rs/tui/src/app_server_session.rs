@@ -113,6 +113,17 @@ use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadWorkflow;
+use codex_app_server_protocol::ThreadWorkflowAdvanceParams;
+use codex_app_server_protocol::ThreadWorkflowAdvanceResponse;
+use codex_app_server_protocol::ThreadWorkflowGetParams;
+use codex_app_server_protocol::ThreadWorkflowGetResponse;
+use codex_app_server_protocol::ThreadWorkflowResumeParams;
+use codex_app_server_protocol::ThreadWorkflowResumeResponse;
+use codex_app_server_protocol::ThreadWorkflowStartParams;
+use codex_app_server_protocol::ThreadWorkflowStartResponse;
+use codex_app_server_protocol::ThreadWorkflowStopParams;
+use codex_app_server_protocol::ThreadWorkflowStopResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -1426,6 +1437,96 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/goal/clear failed in TUI")
+    }
+
+    pub(crate) async fn thread_workflow_get(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadWorkflowGetResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadWorkflowGet {
+                request_id,
+                params: ThreadWorkflowGetParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/workflow/get failed in TUI")
+    }
+
+    pub(crate) async fn thread_workflow_start(
+        &mut self,
+        thread_id: ThreadId,
+        source: String,
+    ) -> Result<ThreadWorkflow> {
+        let request_id = self.next_request_id();
+        let response: ThreadWorkflowStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadWorkflowStart {
+                request_id,
+                params: ThreadWorkflowStartParams {
+                    thread_id: thread_id.to_string(),
+                    source,
+                },
+            })
+            .await
+            .wrap_err("thread/workflow/start failed in TUI")?;
+        Ok(response.workflow)
+    }
+
+    pub(crate) async fn thread_workflow_advance(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadWorkflow> {
+        let request_id = self.next_request_id();
+        let response: ThreadWorkflowAdvanceResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadWorkflowAdvance {
+                request_id,
+                params: ThreadWorkflowAdvanceParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/workflow/advance failed in TUI")?;
+        Ok(response.workflow)
+    }
+
+    pub(crate) async fn thread_workflow_stop(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadWorkflow> {
+        let request_id = self.next_request_id();
+        let response: ThreadWorkflowStopResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadWorkflowStop {
+                request_id,
+                params: ThreadWorkflowStopParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/workflow/stop failed in TUI")?;
+        Ok(response.workflow)
+    }
+
+    pub(crate) async fn thread_workflow_resume(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadWorkflow> {
+        let request_id = self.next_request_id();
+        let response: ThreadWorkflowResumeResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadWorkflowResume {
+                request_id,
+                params: ThreadWorkflowResumeParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/workflow/resume failed in TUI")?;
+        Ok(response.workflow)
     }
 
     pub(crate) async fn logout_account(&mut self) -> Result<()> {

@@ -46,6 +46,7 @@ use crate::request_processors::SearchRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
+use crate::request_processors::ThreadWorkflowRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::read_server_diagnostics;
@@ -90,6 +91,7 @@ use codex_rollout::StateDbHandle;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::LocalQueueStore;
 use codex_thread_store::QueueStore;
+use codex_workflow_extension::WorkflowService;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast;
@@ -159,6 +161,7 @@ pub(crate) struct MessageProcessor {
     search_processor: SearchRequestProcessor,
     thread_goal_processor: ThreadGoalRequestProcessor,
     thread_queue_processor: ThreadQueueRequestProcessor,
+    thread_workflow_processor: ThreadWorkflowRequestProcessor,
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
@@ -313,6 +316,7 @@ impl MessageProcessor {
         let extension_event_sink =
             app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone());
         let mut queue_service = None;
+        let mut workflow_service = None;
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             queue_service = queue_store.map(|queue| {
                 Arc::new(QueuedItemService::new(
@@ -321,6 +325,11 @@ impl MessageProcessor {
                     Arc::clone(&extension_event_sink),
                 ))
             });
+            let workflows = Arc::new(WorkflowService::new(
+                config.codex_home.join("workflows"),
+                thread_manager.clone(),
+            ));
+            workflow_service = Some(Arc::clone(&workflows));
             let manager = ThreadManager::new(
                 config.as_ref(),
                 auth_manager.clone(),
@@ -342,6 +351,7 @@ impl MessageProcessor {
                         git_attribution_base_url: config.chatgpt_base_url.clone(),
                         http_client_factory: config.http_client_factory(),
                         queue_service: queue_service.clone(),
+                        workflow_service: Some(workflows),
                     },
                 ),
                 Arc::new(CodexHomeUserInstructionsProvider::new(
@@ -483,6 +493,16 @@ impl MessageProcessor {
             outgoing.clone(),
             queue_service,
         );
+        let thread_workflow_processor = ThreadWorkflowRequestProcessor::new(
+            outgoing.clone(),
+            Arc::clone(&config),
+            workflow_service.unwrap_or_else(|| {
+                Arc::new(WorkflowService::new(
+                    config.codex_home.join("workflows"),
+                    Arc::downgrade(&thread_manager),
+                ))
+            }),
+        );
         let project_processor = ProjectRequestProcessor::new(
             Arc::clone(&thread_store),
             outgoing.clone(),
@@ -591,6 +611,7 @@ impl MessageProcessor {
             search_processor,
             thread_goal_processor,
             thread_queue_processor,
+            thread_workflow_processor,
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
@@ -1208,6 +1229,31 @@ impl MessageProcessor {
                     .thread_goal_clear(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadWorkflowGet { params, .. } => self
+                .thread_workflow_processor
+                .get(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadWorkflowStart { params, .. } => self
+                .thread_workflow_processor
+                .start(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadWorkflowAdvance { params, .. } => self
+                .thread_workflow_processor
+                .advance(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadWorkflowStop { params, .. } => self
+                .thread_workflow_processor
+                .stop(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadWorkflowResume { params, .. } => self
+                .thread_workflow_processor
+                .resume(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadQueueAdd { params, .. } => self
                 .thread_queue_processor
                 .add(params)
