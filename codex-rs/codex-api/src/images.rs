@@ -1,6 +1,26 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+pub(crate) const GROK_MAX_EDIT_IMAGES: usize = 3;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImagesDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
+impl ImagesDialect {
+    /// Applies the Provider edit limit to a caller-owned source-image budget.
+    pub const fn effective_max_edit_images(self, codex_max_edit_images: usize) -> usize {
+        match self {
+            Self::OpenAi => codex_max_edit_images,
+            Self::Grok if codex_max_edit_images > GROK_MAX_EDIT_IMAGES => GROK_MAX_EDIT_IMAGES,
+            Self::Grok => codex_max_edit_images,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
     pub prompt: String,
@@ -54,7 +74,8 @@ pub enum ImageQuality {
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageResponse {
-    pub created: u64,
+    #[serde(default)]
+    pub created: Option<u64>,
     pub data: Vec<ImageData>,
     #[serde(default)]
     pub background: Option<ImageBackground>,
@@ -67,4 +88,6 @@ pub struct ImageResponse {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageData {
     pub b64_json: String,
+    #[serde(default)]
+    pub mime_type: Option<String>,
 }
