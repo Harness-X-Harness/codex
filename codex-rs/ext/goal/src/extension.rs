@@ -38,7 +38,9 @@ use crate::accounting::GoalAccountingState;
 use crate::analytics::GoalAnalytics;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
+use crate::host_evaluate::GoalRoundEvaluator;
 use crate::metrics::GoalMetrics;
+use crate::policy::GoalCompletionAuthority;
 use crate::policy::GoalPolicy;
 use crate::runtime::ActiveGoalStopReason;
 use crate::runtime::GoalRuntimeConfig;
@@ -67,6 +69,7 @@ pub struct GoalExtension<C> {
     thread_manager: Weak<ThreadManager>,
     goal_service: Arc<GoalService>,
     goal_config: Arc<dyn Fn(&C) -> GoalExtensionConfig + Send + Sync>,
+    evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
 }
 
 impl<C> std::fmt::Debug for GoalExtension<C> {
@@ -84,6 +87,7 @@ impl<C> GoalExtension<C> {
         thread_manager: Weak<ThreadManager>,
         goal_service: Arc<GoalService>,
         goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
+        evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
     ) -> Self {
         Self {
             state_dbs,
@@ -93,6 +97,7 @@ impl<C> GoalExtension<C> {
             thread_manager,
             goal_service,
             goal_config: Arc::new(goal_config),
+            evaluator,
         }
     }
 }
@@ -321,6 +326,23 @@ where
                 );
                 return;
             }
+            if runtime
+                .accounting_state()
+                .current_active_goal_id_for_turn(turn_id)
+                .is_some()
+                && let Err(err) = crate::host_evaluate::evaluate_active_round(
+                    runtime.as_ref(),
+                    self.evaluator.as_deref(),
+                    turn_id,
+                )
+                .await
+            {
+                input.thread_store.remove::<TurnStartOptions>();
+                tracing::warn!(
+                    "failed to apply host goal evaluation at turn stop for {turn_id}: {err}"
+                );
+                return;
+            }
             let accounting = runtime.accounting_state();
             if accounting
                 .current_active_goal_id_for_turn(turn_id)
@@ -520,25 +542,29 @@ where
         let max_goal_token_budget = thread_store
             .get::<GoalExtensionConfig>()
             .and_then(|config| config.max_goal_token_budget);
-
+        let get = Arc::new(GoalToolExecutor::get(
+            runtime.thread_id(),
+            Arc::clone(&self.state_dbs),
+            runtime.accounting_state(),
+            self.analytics.clone(),
+            self.event_emitter.clone(),
+            self.metrics.clone(),
+        ));
+        let create = Arc::new(GoalToolExecutor::create(
+            runtime.thread_id(),
+            Arc::clone(&self.state_dbs),
+            runtime.accounting_state(),
+            self.analytics.clone(),
+            self.event_emitter.clone(),
+            self.metrics.clone(),
+            max_goal_token_budget,
+        ));
+        if runtime.policy().completion == GoalCompletionAuthority::HostEvaluate {
+            return vec![get, create];
+        }
         vec![
-            Arc::new(GoalToolExecutor::get(
-                runtime.thread_id(),
-                Arc::clone(&self.state_dbs),
-                runtime.accounting_state(),
-                self.analytics.clone(),
-                self.event_emitter.clone(),
-                self.metrics.clone(),
-            )),
-            Arc::new(GoalToolExecutor::create(
-                runtime.thread_id(),
-                Arc::clone(&self.state_dbs),
-                runtime.accounting_state(),
-                self.analytics.clone(),
-                self.event_emitter.clone(),
-                self.metrics.clone(),
-                max_goal_token_budget,
-            )),
+            get,
+            create,
             Arc::new(GoalToolExecutor::update(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
@@ -562,6 +588,30 @@ pub fn install_with_backend<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    install_with_evaluator(
+        registry,
+        state_dbs,
+        analytics_events_client,
+        metrics_client,
+        thread_manager,
+        goal_service,
+        goal_config,
+        /*evaluator*/ None,
+    );
+}
+
+pub fn install_with_evaluator<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    state_dbs: Arc<codex_state::StateRuntime>,
+    analytics_events_client: AnalyticsEventsClient,
+    metrics_client: Option<MetricsClient>,
+    thread_manager: Weak<ThreadManager>,
+    goal_service: Arc<GoalService>,
+    goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
+    evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         analytics_events_client,
@@ -570,6 +620,7 @@ pub fn install_with_backend<C>(
         thread_manager,
         Arc::clone(&goal_service),
         goal_config,
+        evaluator,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());

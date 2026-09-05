@@ -19,8 +19,9 @@ pub enum GoalCompletionAuthority {
     ModelCommit,
     /// The host evaluates each goal round independently.
     ///
-    /// Reserved for a later harness stage. This crate currently still honors
-    /// `update_goal` even when a thread is configured with this variant.
+    /// `update_goal` is hidden. After an active goal turn stops, an optional
+    /// [`crate::GoalRoundEvaluator`] decides whether the goal stays active,
+    /// is complete, or is blocked. Missing evaluators leave the goal active.
     HostEvaluate,
 }
 
