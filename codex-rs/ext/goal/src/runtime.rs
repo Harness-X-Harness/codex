@@ -524,7 +524,6 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
         if self.policy().how == GoalHow::Workflow {
-            // `/workflow` owns idle HOW. Goal still evaluates rounds on turn stop.
             return Ok(());
         }
         // Hold this through the read/start window so external set/clear cannot

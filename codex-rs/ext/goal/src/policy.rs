@@ -48,13 +48,12 @@ pub enum GoalVerification {
 /// How an active goal makes progress.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GoalHow {
-    /// Ordinary agent turns plus idle continuation. Current stock behavior.
+    /// Ordinary agent turns plus idle continuation. Stock Goals and `goal_host`.
     AgentTurns,
-    /// Bound to the independent `/workflow` HOW layer.
+    /// Skip goal idle continuation. Not the App Server `goal_host` policy.
     ///
-    /// Goal still owns why / until-when. Idle progress does not inject
-    /// ordinary goal continuation; the `/workflow` engine owns the scripted
-    /// steps when a run is active.
+    /// `/workflow` is an independent Rhai HOW VM. Completing that program is
+    /// not goal pursuit and is not a host evaluator verdict.
     Workflow,
 }
 
@@ -85,15 +84,15 @@ impl GoalPolicy {
         }
     }
 
-    /// Policy App Server installs when `goal_host` is on: host evaluation
-    /// and a Guardian skeptic panel.
+    /// Policy App Server installs when `goal_host` is on: host evaluation,
+    /// a Guardian skeptic panel, and host-owned agent-turn pursuit.
     pub const fn host() -> Self {
         Self {
             completion: GoalCompletionAuthority::HostEvaluate,
             verification: GoalVerification::HostSkeptics {
                 count: HOST_SKEPTIC_DEFAULT_COUNT,
             },
-            how: GoalHow::Workflow,
+            how: GoalHow::AgentTurns,
         }
     }
 }

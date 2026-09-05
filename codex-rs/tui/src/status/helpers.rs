@@ -198,7 +198,7 @@ fn title_case(s: &str) -> String {
         return String::new();
     };
     let rest = chars.as_str().to_ascii_lowercase();
-    first.to_uppercase().collect::<String>() + &rest
+    first.to_uppercase().collect::<String>() + rest.as_str()
 }
 
 #[cfg(test)]

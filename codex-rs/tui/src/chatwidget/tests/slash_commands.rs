@@ -923,12 +923,12 @@ async fn workflow_control_slash_commands_emit_workflow_events() {
 }
 
 #[tokio::test]
-async fn workflow_start_slash_command_sends_markdown_source() {
+async fn workflow_start_slash_command_sends_rhai_source() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    let source = "# Review\n## Gather\nRead the diff.";
+    let source = r#"ask("Read the diff."); complete();"#;
 
     submit_composer_text(&mut chat, &format!("/workflow start {source}"));
 
@@ -950,12 +950,12 @@ async fn workflow_start_slash_command_reads_existing_file() {
     chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    let source = "# File workflow\n## Step\nDo the work.\n";
+    let source = r#"ask("Do the work."); complete();"#;
     std::fs::create_dir_all(&chat.config.cwd).expect("cwd");
-    let path = chat.config.cwd.join("review.md");
+    let path = chat.config.cwd.join("review.rhai");
     std::fs::write(&path, source).expect("write workflow file");
 
-    submit_composer_text(&mut chat, "/workflow start review.md");
+    submit_composer_text(&mut chat, "/workflow start review.rhai");
 
     let event = rx.try_recv().expect("expected start workflow event");
     let AppEvent::StartThreadWorkflow {

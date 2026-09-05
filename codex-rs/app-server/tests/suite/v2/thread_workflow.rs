@@ -4,7 +4,6 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
-use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
@@ -31,10 +30,18 @@ use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
-const ONE_STEP_WORKFLOW: &str = "# Ship\n\n## Build\nCompile the crate.\n";
+const ASK_THEN_COMPLETE: &str = r#"ask("Compile the crate."); complete();"#;
+const COMPLETE_ONLY: &str = "complete();";
+const MARKDOWN_STEP_TABLE: &str = "# Ship\n\n## Build\nCompile the crate.\n";
+const CONTINUE_VERDICT: &str = r#"{"decision":"continue","evidence":"objective still open","next_step":"keep working","blocker_key":""}"#;
 
 #[tokio::test]
 async fn workflow_rpc_requires_goal_host() -> Result<()> {
@@ -172,7 +179,7 @@ async fn stock_goals_set_continues_with_update_goal_and_rejects_workflow() -> Re
 }
 
 #[tokio::test]
-async fn goal_host_set_does_not_start_goal_continuation() -> Result<()> {
+async fn goal_host_set_starts_pursuit_without_update_goal() -> Result<()> {
     let (mut app, _codex_home, server) =
         app_with_features(&[Feature::Goals, Feature::GoalHost]).await?;
     let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
@@ -183,7 +190,6 @@ async fn goal_host_set_does_not_start_goal_continuation() -> Result<()> {
     })
     .await?;
     let before_goal = response_turn_triggers(&server).await?;
-    assert_eq!(before_goal.len(), 1);
     assert!(
         !before_goal
             .iter()
@@ -203,13 +209,26 @@ async fn goal_host_set_does_not_start_goal_continuation() -> Result<()> {
         })
         .await?;
     assert_eq!(set.goal.status, ThreadGoalStatus::Active);
-    let after_goal = response_turn_triggers(&server).await?;
-    assert_eq!(after_goal, before_goal);
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_requests(&server).await?;
+    let goal_bodies = requests
+        .iter()
+        .filter_map(|(trigger, body)| (trigger.as_deref() == Some("goal")).then_some(body))
+        .collect::<Vec<_>>();
     assert!(
-        !after_goal
+        !goal_bodies.is_empty(),
+        "goal_host must start host-owned pursuit with turn_trigger=goal: {requests:?}"
+    );
+    assert!(
+        goal_bodies
             .iter()
-            .any(|trigger| trigger.as_deref() == Some("goal")),
-        "goal_host GoalHow::Workflow must not auto-continue with turn_trigger=goal: {after_goal:?}"
+            .all(|body| !request_exposes_tool(body, "update_goal")),
+        "goal_host pursuit must not expose update_goal: {goal_bodies:?}"
     );
 
     let get: ThreadGoalGetResponse = app
@@ -228,6 +247,71 @@ async fn goal_host_set_does_not_start_goal_continuation() -> Result<()> {
 }
 
 #[tokio::test]
+async fn workflow_start_accepts_rhai_and_rejects_markdown() -> Result<()> {
+    let (mut app, _codex_home, _server) =
+        app_with_features(&[Feature::Goals, Feature::GoalHost]).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: MARKDOWN_STEP_TABLE.to_string(),
+            })?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("not valid Rhai"),
+        "unexpected error: {}",
+        error.error.message
+    );
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id,
+                source: COMPLETE_ONLY.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Complete);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_rhai_bindings_cannot_commit_goal_state() -> Result<()> {
+    let (mut app, _codex_home, _server) =
+        app_with_features(&[Feature::Goals, Feature::GoalHost]).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(ThreadWorkflowStartParams {
+                thread_id: thread.id,
+                source: "update_goal();".to_string(),
+            })?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("cannot commit goal"),
+        "unexpected error: {}",
+        error.error.message
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn workflow_start_continues_with_workflow_trigger_and_does_not_create_a_goal() -> Result<()> {
     let (mut app, _codex_home, server) =
         app_with_features(&[Feature::Goals, Feature::GoalHost]).await?;
@@ -237,24 +321,13 @@ async fn workflow_start_continues_with_workflow_trigger_and_does_not_create_a_go
             request_id,
             params: ThreadWorkflowStartParams {
                 thread_id: thread.id.clone(),
-                source: ONE_STEP_WORKFLOW.to_string(),
+                source: ASK_THEN_COMPLETE.to_string(),
             },
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
 
-    timeout(
-        READ_TIMEOUT,
-        app.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-    let triggers = response_turn_triggers(&server).await?;
-    assert!(
-        triggers
-            .iter()
-            .any(|trigger| trigger.as_deref() == Some("workflow")),
-        "workflow start should continue with turn_trigger=workflow: {triggers:?}"
-    );
+    let triggers = wait_until_turn_trigger(&server, "workflow").await?;
     assert!(
         triggers
             .iter()
@@ -305,7 +378,6 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
         ..Default::default()
     })
     .await?;
-    let before_goal = response_turn_triggers(&server).await?;
 
     let set: ThreadGoalSetResponse = app
         .request(|request_id| ClientRequest::ThreadGoalSet {
@@ -319,13 +391,26 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
         })
         .await?;
     assert_eq!(set.goal.status, ThreadGoalStatus::Active);
-    let after_goal = response_turn_triggers(&server).await?;
-    assert_eq!(after_goal, before_goal);
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_requests(&server).await?;
+    let goal_bodies = requests
+        .iter()
+        .filter_map(|(trigger, body)| (trigger.as_deref() == Some("goal")).then_some(body))
+        .collect::<Vec<_>>();
     assert!(
-        !after_goal
+        !goal_bodies.is_empty(),
+        "setting a goal must start turn_trigger=goal: {requests:?}"
+    );
+    assert!(
+        goal_bodies
             .iter()
-            .any(|trigger| trigger.as_deref() == Some("goal")),
-        "setting a goal must not start turn_trigger=goal: {after_goal:?}"
+            .all(|body| !request_exposes_tool(body, "update_goal")),
+        "goal-owned turns must not expose update_goal: {goal_bodies:?}"
     );
 
     let started: ThreadWorkflowStartResponse = app
@@ -333,30 +418,13 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
             request_id,
             params: ThreadWorkflowStartParams {
                 thread_id: thread.id.clone(),
-                source: ONE_STEP_WORKFLOW.to_string(),
+                source: ASK_THEN_COMPLETE.to_string(),
             },
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
 
-    timeout(
-        READ_TIMEOUT,
-        app.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-    let triggers = response_turn_triggers(&server).await?;
-    assert!(
-        triggers
-            .iter()
-            .any(|trigger| trigger.as_deref() == Some("workflow")),
-        "workflow start should continue with turn_trigger=workflow: {triggers:?}"
-    );
-    assert!(
-        triggers
-            .iter()
-            .all(|trigger| trigger.as_deref() != Some("goal")),
-        "/workflow must not use the goal continuation trigger: {triggers:?}"
-    );
+    let _triggers = wait_until_turn_trigger(&server, "workflow").await?;
 
     let get_goal: ThreadGoalGetResponse = app
         .request(|request_id| ClientRequest::ThreadGoalGet {
@@ -426,7 +494,11 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
 }
 
 async fn app_with_features(features: &[Feature]) -> Result<(TestAppServer, TempDir, MockServer)> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let server = if features.contains(&Feature::GoalHost) {
+        create_mock_responses_server_with_host_goal_continue().await
+    } else {
+        create_repeating_assistant_server("Done").await
+    };
     let (app, codex_home) = app_with_server(&server, features).await?;
     Ok((app, codex_home, server))
 }
@@ -449,25 +521,75 @@ async fn app_with_server(
     Ok((app, codex_home))
 }
 
+async fn create_repeating_assistant_server(message: &str) -> MockServer {
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", message),
+        responses::ev_completed("resp-1"),
+    ]);
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responses::sse_response(body))
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn create_mock_responses_server_with_host_goal_continue() -> MockServer {
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(HostGoalAwareResponder)
+        .mount(&server)
+        .await;
+    server
+}
+
+struct HostGoalAwareResponder;
+
+impl Respond for HostGoalAwareResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body = String::from_utf8_lossy(&request.body);
+        let message = if body.contains("candidate_complete") {
+            CONTINUE_VERDICT
+        } else {
+            "Done"
+        };
+        responses::sse_response(responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", message),
+            responses::ev_completed("resp-1"),
+        ]))
+    }
+}
+
 async fn response_turn_triggers(server: &MockServer) -> Result<Vec<Option<String>>> {
-    let requests = server
-        .received_requests()
-        .await
-        .context("wiremock should record response requests")?;
-    requests
-        .iter()
-        .filter(|request| request.url.path().ends_with("/responses"))
-        .map(|request| {
-            let Some(header) = request.headers.get("x-codex-turn-metadata") else {
-                return Ok(None);
-            };
-            let metadata: Value = serde_json::from_str(header.to_str()?)?;
-            Ok(metadata
-                .get("turn_trigger")
-                .and_then(Value::as_str)
-                .map(str::to_string))
-        })
-        .collect()
+    Ok(response_requests(server)
+        .await?
+        .into_iter()
+        .map(|(trigger, _)| trigger)
+        .collect())
+}
+
+async fn wait_until_turn_trigger(
+    server: &MockServer,
+    expected: &str,
+) -> Result<Vec<Option<String>>> {
+    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+    loop {
+        let triggers = response_turn_triggers(server).await?;
+        if triggers
+            .iter()
+            .any(|trigger| trigger.as_deref() == Some(expected))
+        {
+            return Ok(triggers);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("{expected} trigger not observed: {triggers:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 async fn response_requests(server: &MockServer) -> Result<Vec<(Option<String>, Value)>> {

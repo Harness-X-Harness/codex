@@ -148,6 +148,16 @@ impl ThreadWorkflowRequestProcessor {
 }
 
 fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
+    let current_step_index = u32::try_from(run.current_step_index()).unwrap_or(u32::MAX);
+    let steps = run
+        .display_steps()
+        .into_iter()
+        .map(|step| ThreadWorkflowStep {
+            id: step.id,
+            title: step.title,
+            instruction: step.instruction,
+        })
+        .collect();
     ThreadWorkflow {
         thread_id: run.thread_id.to_string(),
         run_id: run.run_id,
@@ -157,16 +167,8 @@ fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
             WorkflowStatus::Paused => ThreadWorkflowStatus::Paused,
             WorkflowStatus::Complete => ThreadWorkflowStatus::Complete,
         },
-        current_step_index: u32::try_from(run.current_step_index).unwrap_or(u32::MAX),
-        steps: run
-            .steps
-            .into_iter()
-            .map(|step| ThreadWorkflowStep {
-                id: step.id,
-                title: step.title,
-                instruction: step.instruction,
-            })
-            .collect(),
+        current_step_index,
+        steps,
         created_at: run.created_at,
         updated_at: run.updated_at,
     }
