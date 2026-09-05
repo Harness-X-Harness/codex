@@ -1,5 +1,4 @@
 use super::ChatWidget;
-use crate::bottom_pane::WorkflowStatusIndicator;
 use crate::workflow_display::workflow_status_indicator_from_workflow;
 use codex_app_server_protocol::ThreadWorkflow;
 use codex_features::Feature;
