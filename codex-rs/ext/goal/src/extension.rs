@@ -618,34 +618,6 @@ pub fn install_with_backend<C>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn install_with_evaluator<C>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    state_dbs: Arc<codex_state::StateRuntime>,
-    analytics_events_client: AnalyticsEventsClient,
-    metrics_client: Option<MetricsClient>,
-    thread_manager: Weak<ThreadManager>,
-    goal_service: Arc<GoalService>,
-    goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
-    evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
-) where
-    C: Send + Sync + 'static,
-{
-    install_with_host_capabilities(
-        registry,
-        state_dbs,
-        analytics_events_client,
-        metrics_client,
-        thread_manager,
-        goal_service,
-        goal_config,
-        GoalHostCapabilities {
-            evaluator,
-            skeptic_panel: None,
-        },
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
 pub fn install_with_host_capabilities<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,

@@ -1,18 +1,14 @@
 //! Completion, verification, and how-work policy for persisted thread goals.
 //!
-//! These axes are harness concerns. They are independent of Provider
-//! selection: a ChatGPT-bound thread and a Grok-bound thread share the same
-//! policy type and the same default.
+//! These axes are harness concerns. The policy type is independent of
+//! `model_provider`.
 //!
 //! Stock behavior is [`GoalPolicy::model_commit`]: the worker commits
 //! `complete` or `blocked` through `update_goal`, the host does not run a
 //! verifier panel, and the thread pursues the objective with ordinary agent
 //! turns plus idle continuation.
 //!
-//! The stacked host-owned Goal series (round-end evaluation, skeptics,
-//! `/workflow`, and optional Goal-to-workflow bind) is one harness feature:
-//! `goal_host`. App Server installs [`GoalPolicy::host`] when that flag is on.
-//! Later stages extend that constructor; they do not add more feature flags.
+//! App Server installs [`GoalPolicy::host`] when `goal_host` is on.
 
 /// Who may mark a persisted thread goal `complete` or `blocked`.
 ///

@@ -34,7 +34,6 @@ pub use extension::GoalExtension;
 pub use extension::GoalExtensionConfig;
 pub use extension::GoalHostCapabilities;
 pub use extension::install_with_backend;
-pub use extension::install_with_evaluator;
 pub use extension::install_with_host_capabilities;
 pub use guardian_skeptics::GuardianGoalSkepticPanel;
 pub use host_evaluate::GoalEvaluatorDecision;
