@@ -50,6 +50,7 @@ use crate::request_processors::ThreadWorkflowRequestProcessor;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::read_server_diagnostics;
+use crate::request_processors::workflow_update_sink;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
@@ -493,16 +494,11 @@ impl MessageProcessor {
             outgoing.clone(),
             queue_service,
         );
-        let thread_workflow_processor = ThreadWorkflowRequestProcessor::new(
-            outgoing.clone(),
-            Arc::clone(&config),
-            workflow_service.unwrap_or_else(|| {
-                Arc::new(WorkflowService::new(
-                    config.codex_home.join("workflows"),
-                    Arc::downgrade(&thread_manager),
-                ))
-            }),
-        );
+        let workflow_service =
+            workflow_service.expect("workflow service is installed with the thread manager");
+        workflow_service.set_update_sink(workflow_update_sink(outgoing.clone()));
+        let thread_workflow_processor =
+            ThreadWorkflowRequestProcessor::new(Arc::clone(&config), workflow_service);
         let project_processor = ProjectRequestProcessor::new(
             Arc::clone(&thread_store),
             outgoing.clone(),
