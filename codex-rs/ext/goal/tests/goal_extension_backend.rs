@@ -10,6 +10,7 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use codex_analytics::AnalyticsEventsClient;
+use codex_core::TurnStartOptions;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -28,11 +29,13 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_goal_extension::GoalCompletionAuthority;
 use codex_goal_extension::GoalEvaluatorDecision;
 use codex_goal_extension::GoalEvaluatorError;
 use codex_goal_extension::GoalEvaluatorVerdict;
 use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalHostCapabilities;
+use codex_goal_extension::GoalHow;
 use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalRoundEvaluationFuture;
@@ -47,6 +50,7 @@ use codex_goal_extension::GoalSkepticPanelFuture;
 use codex_goal_extension::GoalSkepticPanelInput;
 use codex_goal_extension::GoalSkepticPanelVerdict;
 use codex_goal_extension::GoalTokenBudgetUpdate;
+use codex_goal_extension::GoalVerification;
 use codex_goal_extension::install_with_backend;
 use codex_goal_extension::install_with_host_capabilities;
 use codex_goal_extension::parse_goal_evaluator_verdict;
@@ -366,6 +370,57 @@ async fn host_evaluate_candidate_complete_marks_complete() -> anyhow::Result<()>
         .await?
         .ok_or_else(|| anyhow::anyhow!("completed goal should persist"))?;
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_how_turn_skips_host_evaluation() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([
+        Ok(host_verdict(
+            GoalEvaluatorDecision::Continue,
+            "work remains",
+            "keep going",
+            "",
+        )),
+        Ok(host_verdict(
+            GoalEvaluatorDecision::CandidateComplete,
+            "deliverable is present",
+            "stop",
+            "",
+        )),
+    ]);
+    let harness = GoalExtensionHarness::new_with_config_and_evaluator(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy {
+                completion: GoalCompletionAuthority::HostEvaluate,
+                verification: GoalVerification::None,
+                how: GoalHow::Workflow,
+            },
+        },
+        Some(evaluator),
+    )
+    .await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "workflow how is not a goal round").await?;
+    harness.stop_turn("turn-1").await;
+
+    harness
+        .start_and_stop_turn_with_trigger("turn-2", &TokenUsage::default(), Some("workflow"))
+        .await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
     Ok(())
 }
 
@@ -2351,12 +2406,46 @@ impl GoalExtensionHarness {
 
     async fn stop_turn(&self, turn_id: &str) {
         let turn_store = ExtensionData::new(turn_id);
+        self.emit_turn_stop(&turn_store).await;
+    }
+
+    async fn start_and_stop_turn_with_trigger(
+        &self,
+        turn_id: &str,
+        usage: &TokenUsage,
+        turn_trigger: Option<&str>,
+    ) {
+        let turn_store = ExtensionData::new(turn_id);
+        if let Some(turn_trigger) = turn_trigger {
+            turn_store.insert(TurnStartOptions {
+                turn_trigger: Some(turn_trigger.to_string()),
+                ..Default::default()
+            });
+        }
+        let mut collaboration_mode = default_collaboration_mode();
+        collaboration_mode.mode = ModeKind::Default;
+        for contributor in self.registry.turn_lifecycle_contributors() {
+            contributor
+                .on_turn_start(TurnStartInput {
+                    turn_id,
+                    collaboration_mode: &collaboration_mode,
+                    token_usage_at_turn_start: usage,
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                    turn_store: &turn_store,
+                })
+                .await;
+        }
+        self.emit_turn_stop(&turn_store).await;
+    }
+
+    async fn emit_turn_stop(&self, turn_store: &ExtensionData) {
         for contributor in self.registry.turn_lifecycle_contributors() {
             contributor
                 .on_turn_stop(TurnStopInput {
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
-                    turn_store: &turn_store,
+                    turn_store,
                 })
                 .await;
         }
