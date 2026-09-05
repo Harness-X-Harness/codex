@@ -198,8 +198,8 @@ Example with notification opt-out:
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/workflow/get` — experimental; fetch the independent `/workflow` run for a thread. Requires `goal_host`. Returns `workflow: null` when none exists. Distinct from `/goal`.
-- `thread/workflow/start` — experimental; start an independent Rhai `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active`. A markdown step table is not a valid program.
-- `thread/workflow/advance` — experimental; host-resume the current Rhai workflow run after a yield.
+- `thread/workflow/start` — experimental; start an independent Rhai `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active`. A markdown step table is not a valid program. The host auto-resumes the VM after each yield until the program completes or the user stops it.
+- `thread/workflow/advance` — experimental; optional client override to host-resume the current Rhai workflow run after a yield. Not required for ordinary completion.
 - `thread/workflow/stop` — experimental; pause an active workflow run.
 - `thread/workflow/resume` — experimental; resume a paused workflow run.
 - `thread/workflow/updated` — experimental notification emitted whenever a workflow run changes.
@@ -889,7 +889,7 @@ Use `thread/goal/clear` to remove the current goal.
 
 ### Example: Independent `/workflow` run (experimental)
 
-Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the independent HOW layer and do not complete or replace `/goal`.
+Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the independent HOW layer and do not complete or replace `/goal`. After `start`, the host auto-resumes the Rhai VM after each yield. `thread/workflow/advance` is an optional override; `thread/workflow/stop` pauses an active run.
 
 ```json
 { "method": "thread/workflow/start", "id": 31, "params": {
