@@ -79,6 +79,7 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 }
 
 impl<C> GoalExtension<C> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
         analytics_events_client: AnalyticsEventsClient,
@@ -600,6 +601,7 @@ pub fn install_with_backend<C>(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn install_with_evaluator<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,

@@ -78,7 +78,8 @@ fn host_evaluate_continuation_omits_update_goal_and_includes_next_step() {
     assert!(text.contains("Finish the feature."));
     assert!(text.contains("Inspect the current worktree."));
     assert!(text.contains("Host-owned completion:"));
-    assert!(!text.contains("call update_goal"));
+    assert!(text.contains("Do not call update_goal"));
+    assert!(!text.contains("call update_goal with status"));
     assert!(!text.contains("Blocked audit:"));
 }
 
