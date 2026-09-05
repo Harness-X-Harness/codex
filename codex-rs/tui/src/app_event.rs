@@ -530,6 +530,32 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
+    /// Show the current independent `/workflow` run, if any.
+    OpenThreadWorkflowStatus {
+        thread_id: ThreadId,
+    },
+
+    /// Start a markdown workflow run on the current thread.
+    StartThreadWorkflow {
+        thread_id: ThreadId,
+        source: String,
+    },
+
+    /// Host-advance the current workflow step.
+    AdvanceThreadWorkflow {
+        thread_id: ThreadId,
+    },
+
+    /// Pause the current workflow run.
+    StopThreadWorkflow {
+        thread_id: ThreadId,
+    },
+
+    /// Resume a paused workflow run.
+    ResumeThreadWorkflow {
+        thread_id: ThreadId,
+    },
+
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         request_id: u64,

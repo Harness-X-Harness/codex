@@ -6050,6 +6050,94 @@
       ],
       "type": "object"
     },
+    "ThreadWorkflow": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "currentStepIndex": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadWorkflowStatus"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/definitions/ThreadWorkflowStep"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "currentStepIndex",
+        "name",
+        "runId",
+        "status",
+        "steps",
+        "threadId",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadWorkflowStatus": {
+      "enum": [
+        "active",
+        "paused",
+        "complete"
+      ],
+      "type": "string"
+    },
+    "ThreadWorkflowStep": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "instruction",
+        "title"
+      ],
+      "type": "object"
+    },
+    "ThreadWorkflowUpdatedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "workflow": {
+          "$ref": "#/definitions/ThreadWorkflow"
+        }
+      },
+      "required": [
+        "threadId",
+        "workflow"
+      ],
+      "type": "object"
+    },
     "TokenUsageBreakdown": {
       "properties": {
         "cacheWriteInputTokens": {
@@ -6943,6 +7031,26 @@
         "params"
       ],
       "title": "Thread/goal/clearedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/workflow/updated"
+          ],
+          "title": "Thread/workflow/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadWorkflowUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/workflow/updatedNotification",
       "type": "object"
     },
     {

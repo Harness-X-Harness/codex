@@ -878,6 +878,97 @@ async fn goal_control_slash_command_without_thread_shows_full_usage() {
 }
 
 #[tokio::test]
+async fn bare_workflow_slash_command_opens_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    submit_composer_text(&mut chat, "/workflow");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenThreadWorkflowStatus { thread_id: opened }) if opened == thread_id
+    );
+}
+
+#[tokio::test]
+async fn workflow_control_slash_commands_emit_workflow_events() {
+    let cases = [
+        ("/workflow next", "advance"),
+        ("/workflow stop", "stop"),
+        ("/workflow resume", "resume"),
+    ];
+
+    for (command, kind) in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+        submit_composer_text(&mut chat, command);
+        let event = rx.try_recv().expect("expected workflow event");
+        match (kind, event) {
+            ("advance", AppEvent::AdvanceThreadWorkflow { thread_id: actual }) => {
+                assert_eq!(actual, thread_id);
+            }
+            ("stop", AppEvent::StopThreadWorkflow { thread_id: actual }) => {
+                assert_eq!(actual, thread_id);
+            }
+            ("resume", AppEvent::ResumeThreadWorkflow { thread_id: actual }) => {
+                assert_eq!(actual, thread_id);
+            }
+            (_, event) => panic!("unexpected workflow event for {command}: {event:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn workflow_start_slash_command_sends_markdown_source() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let source = "# Review\n## Gather\nRead the diff.";
+
+    submit_composer_text(&mut chat, &format!("/workflow start {source}"));
+
+    let event = rx.try_recv().expect("expected start workflow event");
+    let AppEvent::StartThreadWorkflow {
+        thread_id: actual_thread_id,
+        source: actual_source,
+    } = event
+    else {
+        panic!("expected StartThreadWorkflow, got {event:?}");
+    };
+    assert_eq!(actual_thread_id, thread_id);
+    assert_eq!(actual_source, source);
+}
+
+#[tokio::test]
+async fn workflow_start_slash_command_reads_existing_file() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let source = "# File workflow\n## Step\nDo the work.\n";
+    std::fs::create_dir_all(&chat.config.cwd).expect("cwd");
+    let path = chat.config.cwd.join("review.md");
+    std::fs::write(&path, source).expect("write workflow file");
+
+    submit_composer_text(&mut chat, "/workflow start review.md");
+
+    let event = rx.try_recv().expect("expected start workflow event");
+    let AppEvent::StartThreadWorkflow {
+        source: actual_source,
+        ..
+    } = event
+    else {
+        panic!("expected StartThreadWorkflow, got {event:?}");
+    };
+    assert_eq!(actual_source, source);
+}
+
+#[tokio::test]
 async fn goal_edit_slash_command_opens_goal_editor() {
     for thread_id in [Some(ThreadId::new()), None] {
         let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
