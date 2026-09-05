@@ -123,8 +123,11 @@ mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
+pub(crate) use footer::WorkflowStatusIndicator;
 #[cfg(test)]
 pub(crate) use footer::goal_status_indicator_line;
+#[cfg(test)]
+pub(crate) use footer::workflow_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::OnSelectionChangedCallback;
@@ -493,6 +496,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_workflow_status_indicator(&mut self, indicator: Option<WorkflowStatusIndicator>) {
+        self.composer.set_workflow_status_indicator(indicator);
+        self.request_redraw();
+    }
+
     pub fn set_ide_context_active(&mut self, active: bool) {
         self.composer.set_ide_context_active(active);
         self.request_redraw();
@@ -515,6 +523,11 @@ impl BottomPane {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.composer.set_goal_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_workflow_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_workflow_command_enabled(enabled);
         self.request_redraw();
     }
 

@@ -70,6 +70,7 @@ members = [
     "ext/queue",
     "ext/skills",
     "ext/web-search",
+    "ext/workflow",
     "external-agent-migration",
     "keyring-store",
     "file-search",
@@ -230,6 +231,7 @@ codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
 codex-web-search-extension = { path = "ext/web-search" }
+codex-workflow-extension = { path = "ext/workflow" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -414,6 +416,7 @@ rcgen = { version = "0.14.7", default-features = false, features = [
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }
+rhai = "1.25"
 rmcp = { version = "=3.1.3", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustix = { version = "1.1.4", features = ["net"] }

@@ -295,6 +295,7 @@ use crate::bottom_pane::QueuedInputAction;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::WorkflowStatusIndicator;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -348,6 +349,7 @@ use self::exec_state::is_standard_tool_call;
 use self::exec_state::is_unified_exec_source;
 mod goal_status;
 use self::goal_status::GoalStatusState;
+mod workflow_status;
 #[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
@@ -787,6 +789,7 @@ pub(crate) struct ChatWidget {
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
+    current_workflow_status_indicator: Option<WorkflowStatusIndicator>,
     external_editor_state: ExternalEditorState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,

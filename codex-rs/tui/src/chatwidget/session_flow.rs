@@ -35,6 +35,7 @@ impl ChatWidget {
         self.thread_name = session.thread_name.clone();
         self.current_goal_status_indicator = None;
         self.current_goal_status = None;
+        self.clear_workflow_status_indicator();
         self.update_collaboration_mode_indicator();
         self.forked_from = session.forked_from_id;
         self.current_rollout_path = session.rollout_path.clone();
@@ -118,6 +119,7 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
+        self.sync_workflow_command_enabled();
         self.refresh_plugin_mentions();
         let model_for_header = self.current_model().to_string();
         if matches!(

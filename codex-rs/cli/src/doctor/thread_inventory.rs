@@ -675,6 +675,7 @@ fn source_category(source: &str) -> &'static str {
             "internal:memory_consolidation"
         }
         SessionSource::Internal(InternalSessionSource::Guardian) => "internal:guardian",
+        SessionSource::Internal(InternalSessionSource::GoalSkeptic) => "internal:goal_skeptic",
         SessionSource::SubAgent(SubAgentSource::Review) => "subagent:review",
         SessionSource::SubAgent(SubAgentSource::Compact) => "subagent:compact",
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => "subagent:thread_spawn",

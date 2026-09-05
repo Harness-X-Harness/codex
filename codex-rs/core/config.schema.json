@@ -753,6 +753,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "goal_host": {
+              "type": "boolean"
+            },
             "goals": {
               "type": "boolean"
             },
@@ -6063,6 +6066,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "goal_host": {
           "type": "boolean"
         },
         "goals": {

@@ -161,6 +161,12 @@ impl PreparedTurnInputSettings {
         let Some((turn_context, settings_snapshot)) = turn_context else {
             return Ok(None);
         };
+        turn_context.extension_data.insert(TurnStartOptions {
+            turn_trigger: turn_trigger.clone(),
+            parent_turn_id: parent_turn_id.clone(),
+            root_turn_id: root_turn_id.clone(),
+            ..Default::default()
+        });
         if let Some(turn_trigger) = turn_trigger {
             turn_context
                 .turn_metadata_state

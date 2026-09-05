@@ -14,6 +14,13 @@ from typing import Callable, Iterator, TypeVar
 from pydantic import BaseModel
 
 from ._goal import _GoalOperationState
+from ._workflow import (
+    ThreadWorkflowAdvanceResponse,
+    ThreadWorkflowGetResponse,
+    ThreadWorkflowResumeResponse,
+    ThreadWorkflowStartResponse,
+    ThreadWorkflowStopResponse,
+)
 from ._message_router import MessageRouter
 from ._version import __version__ as SDK_VERSION
 from .errors import CodexError, InvalidRequestError, TransportClosedError
@@ -515,6 +522,46 @@ class CodexClient:
             "thread/goal/set",
             payload,
             response_model=ThreadGoalSetResponse,
+        )
+
+    def thread_workflow_get(self, thread_id: str) -> ThreadWorkflowGetResponse:
+        """Return the independent `/workflow` run for a thread, if any."""
+        return self.request(
+            "thread/workflow/get",
+            {"threadId": thread_id},
+            response_model=ThreadWorkflowGetResponse,
+        )
+
+    def thread_workflow_start(self, thread_id: str, source: str) -> ThreadWorkflowStartResponse:
+        """Start a host-owned Rhai `/workflow` run on a thread."""
+        return self.request(
+            "thread/workflow/start",
+            {"threadId": thread_id, "source": source},
+            response_model=ThreadWorkflowStartResponse,
+        )
+
+    def thread_workflow_advance(self, thread_id: str) -> ThreadWorkflowAdvanceResponse:
+        """Optionally resume a yielded `/workflow` run before the host auto-resumes it."""
+        return self.request(
+            "thread/workflow/advance",
+            {"threadId": thread_id},
+            response_model=ThreadWorkflowAdvanceResponse,
+        )
+
+    def thread_workflow_stop(self, thread_id: str) -> ThreadWorkflowStopResponse:
+        """Pause an active `/workflow` run."""
+        return self.request(
+            "thread/workflow/stop",
+            {"threadId": thread_id},
+            response_model=ThreadWorkflowStopResponse,
+        )
+
+    def thread_workflow_resume(self, thread_id: str) -> ThreadWorkflowResumeResponse:
+        """Resume a paused `/workflow` run."""
+        return self.request(
+            "thread/workflow/resume",
+            {"threadId": thread_id},
+            response_model=ThreadWorkflowResumeResponse,
         )
 
     def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:

@@ -14,6 +14,7 @@ use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
+use crate::workflow_display::WORKFLOW_USAGE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -35,6 +36,8 @@ const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const WORKFLOW_USAGE_HINT: &str =
+    r#"Example: /workflow start ask("Compile the crate."); complete();"#;
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
@@ -316,6 +319,21 @@ impl ChatWidget {
                     self.add_info_message(
                         GOAL_USAGE.to_string(),
                         Some(GOAL_USAGE_HINT.to_string()),
+                    );
+                }
+            }
+            SlashCommand::Workflow => {
+                if !self.config.features.enabled(Feature::GoalHost) {
+                    return;
+                }
+                if let Some(thread_id) = self.thread_id {
+                    self.app_event_tx
+                        .send(AppEvent::OpenThreadWorkflowStatus { thread_id });
+                    self.append_message_history_entry("/workflow".to_string());
+                } else {
+                    self.add_info_message(
+                        WORKFLOW_USAGE.to_string(),
+                        Some(WORKFLOW_USAGE_HINT.to_string()),
                     );
                 }
             }
@@ -941,6 +959,64 @@ impl ChatWidget {
                     self.clear_live_goal_submission();
                 }
             }
+            SlashCommand::Workflow if !trimmed.is_empty() => {
+                if !self.config.features.enabled(Feature::GoalHost) {
+                    return;
+                }
+                let Some(thread_id) = self.thread_id else {
+                    self.add_info_message(
+                        WORKFLOW_USAGE.to_string(),
+                        Some(
+                            "The session must start before you can change a workflow.".to_string(),
+                        ),
+                    );
+                    return;
+                };
+                let (verb, rest) = match trimmed.split_once(char::is_whitespace) {
+                    Some((verb, rest)) => (verb, rest.trim()),
+                    None => (trimmed, ""),
+                };
+                match verb.to_ascii_lowercase().as_str() {
+                    "next" | "advance" if rest.is_empty() => {
+                        self.app_event_tx
+                            .send(AppEvent::AdvanceThreadWorkflow { thread_id });
+                    }
+                    "stop" | "pause" if rest.is_empty() => {
+                        self.app_event_tx
+                            .send(AppEvent::StopThreadWorkflow { thread_id });
+                    }
+                    "resume" if rest.is_empty() => {
+                        self.app_event_tx
+                            .send(AppEvent::ResumeThreadWorkflow { thread_id });
+                    }
+                    "start" if !rest.is_empty() => {
+                        let source_path = self.config.cwd.join(rest);
+                        let source = if source_path.is_file() {
+                            match std::fs::read_to_string(&source_path) {
+                                Ok(contents) => contents,
+                                Err(err) => {
+                                    self.add_error_message(format!(
+                                        "Failed to read workflow file {rest}: {err}"
+                                    ));
+                                    return;
+                                }
+                            }
+                        } else {
+                            rest.to_string()
+                        };
+                        self.app_event_tx
+                            .send(AppEvent::StartThreadWorkflow { thread_id, source });
+                    }
+                    _ => {
+                        self.add_info_message(
+                            WORKFLOW_USAGE.to_string(),
+                            Some(WORKFLOW_USAGE_HINT.to_string()),
+                        );
+                        return;
+                    }
+                }
+                self.append_message_history_entry(format!("/workflow {trimmed}"));
+            }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
                     let command = cmd.command();
@@ -1113,6 +1189,7 @@ impl ChatWidget {
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
+            workflow_command_enabled: self.config.features.enabled(Feature::GoalHost),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             allow_elevate_sandbox,
@@ -1173,6 +1250,7 @@ impl ChatWidget {
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal
+            | SlashCommand::Workflow
             | SlashCommand::Side
             | SlashCommand::Btw
             | SlashCommand::Keymap

@@ -261,6 +261,7 @@ impl ChatWidget {
             thread_usage: thread_usage::ThreadUsageState::default(),
             current_goal_status_indicator: None,
             current_goal_status: None,
+            current_workflow_status_indicator: None,
             external_editor_state: ExternalEditorState::Closed,
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
@@ -285,6 +286,7 @@ impl ChatWidget {
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
+        widget.sync_workflow_command_enabled();
         widget.sync_mentions_v2_enabled();
         widget
             .bottom_pane

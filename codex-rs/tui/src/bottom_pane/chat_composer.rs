@@ -541,6 +541,7 @@ pub(crate) struct ChatComposer {
     service_tier_commands: Vec<ServiceTierCommand>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
+    workflow_command_enabled: bool,
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     side_conversation_active: bool,
@@ -606,6 +607,7 @@ impl ChatComposer {
             token_activity_command_enabled: self.token_activity_command_enabled,
             service_tier_commands_enabled: self.service_tier_commands_enabled,
             goal_command_enabled: self.goal_command_enabled,
+            workflow_command_enabled: self.workflow_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
             side_conversation_active: self.side_conversation_active,
@@ -664,6 +666,7 @@ impl ChatComposer {
                 context_window_used_tokens: None,
                 context_window_pending: false,
                 collaboration_mode_indicator: None,
+                workflow_status_indicator: None,
                 goal_status_indicator: None,
                 ide_context_active: false,
                 status_line_value: None,
@@ -716,6 +719,7 @@ impl ChatComposer {
             service_tier_commands: Vec::new(),
             mentions_v2_enabled: false,
             goal_command_enabled: false,
+            workflow_command_enabled: false,
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
             side_conversation_active: false,
@@ -922,6 +926,10 @@ impl ChatComposer {
         self.goal_command_enabled = enabled;
     }
 
+    pub fn set_workflow_command_enabled(&mut self, enabled: bool) {
+        self.workflow_command_enabled = enabled;
+    }
+
     /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
     ///
     /// Submit and queue bindings are cached here because composer dispatch must
@@ -985,6 +993,13 @@ impl ChatComposer {
 
     pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
         self.footer.goal_status_indicator = indicator;
+    }
+
+    pub fn set_workflow_status_indicator(
+        &mut self,
+        indicator: Option<super::footer::WorkflowStatusIndicator>,
+    ) {
+        self.footer.workflow_status_indicator = indicator;
     }
 
     pub fn set_ide_context_active(&mut self, active: bool) {
@@ -1452,6 +1467,7 @@ impl ChatComposer {
         }
         if let Some(indicators) = status_line_right_indicator_line(
             self.footer.collaboration_mode_indicator,
+            self.footer.workflow_status_indicator.as_ref(),
             self.footer.goal_status_indicator.as_ref(),
             self.footer.ide_context_active,
             show_cycle_hint,

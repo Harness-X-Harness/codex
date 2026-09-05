@@ -56,6 +56,8 @@ impl App {
                         status: ThreadGoalStatus::Active,
                         ..
                     }
+                    | AppEvent::StartThreadWorkflow { .. }
+                    | AppEvent::ResumeThreadWorkflow { .. }
             )
         {
             return Ok(AppRunControl::Continue);
@@ -1251,6 +1253,23 @@ impl App {
             }
             AppEvent::ClearThreadGoal { thread_id } => {
                 self.clear_thread_goal(app_server, thread_id).await;
+            }
+            AppEvent::OpenThreadWorkflowStatus { thread_id } => {
+                self.open_thread_workflow_status(app_server, thread_id)
+                    .await;
+            }
+            AppEvent::StartThreadWorkflow { thread_id, source } => {
+                self.start_thread_workflow(app_server, thread_id, source)
+                    .await;
+            }
+            AppEvent::AdvanceThreadWorkflow { thread_id } => {
+                self.advance_thread_workflow(app_server, thread_id).await;
+            }
+            AppEvent::StopThreadWorkflow { thread_id } => {
+                self.stop_thread_workflow(app_server, thread_id).await;
+            }
+            AppEvent::ResumeThreadWorkflow { thread_id } => {
+                self.resume_thread_workflow(app_server, thread_id).await;
             }
             AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
                 if let Some(request_id) = self

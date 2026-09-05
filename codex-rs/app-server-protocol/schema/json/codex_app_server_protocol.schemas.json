@@ -4715,6 +4715,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/workflow/updated"
+              ],
+              "title": "Thread/workflow/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflow/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/queue/changed"
               ],
               "title": "Thread/queue/changedNotificationMethod",
@@ -24209,6 +24229,96 @@
         "required": [
           "estimatedUsageCreditsMicros"
         ],
+        "type": "object"
+      },
+      "ThreadWorkflow": {
+        "properties": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "currentStepIndex": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/ThreadWorkflowStatus"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadWorkflowStep"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "currentStepIndex",
+          "name",
+          "runId",
+          "status",
+          "steps",
+          "threadId",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ThreadWorkflowStatus": {
+        "enum": [
+          "active",
+          "paused",
+          "complete"
+        ],
+        "type": "string"
+      },
+      "ThreadWorkflowStep": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "instruction",
+          "title"
+        ],
+        "type": "object"
+      },
+      "ThreadWorkflowUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/definitions/v2/ThreadWorkflow"
+          }
+        },
+        "required": [
+          "threadId",
+          "workflow"
+        ],
+        "title": "ThreadWorkflowUpdatedNotification",
         "type": "object"
       },
       "TokenUsageBreakdown": {

@@ -583,6 +583,36 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadGoalClearResponse,
     },
+    #[experimental("thread/workflow/get")]
+    ThreadWorkflowGet => "thread/workflow/get" {
+        params: v2::ThreadWorkflowGetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowGetResponse,
+    },
+    #[experimental("thread/workflow/start")]
+    ThreadWorkflowStart => "thread/workflow/start" {
+        params: v2::ThreadWorkflowStartParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowStartResponse,
+    },
+    #[experimental("thread/workflow/advance")]
+    ThreadWorkflowAdvance => "thread/workflow/advance" {
+        params: v2::ThreadWorkflowAdvanceParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowAdvanceResponse,
+    },
+    #[experimental("thread/workflow/stop")]
+    ThreadWorkflowStop => "thread/workflow/stop" {
+        params: v2::ThreadWorkflowStopParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowStopResponse,
+    },
+    #[experimental("thread/workflow/resume")]
+    ThreadWorkflowResume => "thread/workflow/resume" {
+        params: v2::ThreadWorkflowResumeParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadWorkflowResumeResponse,
+    },
     #[experimental("thread/queue/add")]
     ThreadQueueAdd => "thread/queue/add" {
         params: v2::ThreadQueueAddParams,
@@ -1852,6 +1882,8 @@ server_notification_definitions! {
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
+    #[experimental("thread/workflow/updated")]
+    ThreadWorkflowUpdated => "thread/workflow/updated" (v2::ThreadWorkflowUpdatedNotification),
     #[experimental("thread/queue/changed")]
     ThreadQueueChanged => "thread/queue/changed" (v2::ThreadQueueChangedNotification),
     #[experimental("project/changed")]

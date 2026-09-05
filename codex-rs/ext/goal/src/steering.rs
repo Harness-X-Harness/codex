@@ -35,6 +35,20 @@ static OBJECTIVE_UPDATED_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| 
     )
 });
 
+static HOST_EVALUATE_FOOTER_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    parse_embedded_template(
+        include_str!("../templates/goals/host_evaluate_footer.md"),
+        "goals/host_evaluate_footer.md",
+    )
+});
+
+/// Who owns completion language in the idle continuation prompt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GoalContinuationOwner<'a> {
+    ModelCommit,
+    HostEvaluate { next_step: Option<&'a str> },
+}
+
 fn parse_embedded_template(source: &str, template_name: &str) -> Template {
     match Template::parse(source) {
         Ok(template) => template,
@@ -53,8 +67,9 @@ pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseItem
 pub(crate) fn continuation_steering_item(
     goal: &ThreadGoal,
     update_plan_enabled: bool,
+    owner: GoalContinuationOwner<'_>,
 ) -> ResponseItem {
-    goal_context_input_item(continuation_prompt(goal, update_plan_enabled))
+    goal_context_input_item(continuation_prompt(goal, update_plan_enabled, owner))
 }
 
 fn goal_context_input_item(prompt: String) -> ResponseItem {
@@ -64,7 +79,11 @@ fn goal_context_input_item(prompt: String) -> ResponseItem {
     ))
 }
 
-fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> String {
+fn continuation_prompt(
+    goal: &ThreadGoal,
+    update_plan_enabled: bool,
+    owner: GoalContinuationOwner<'_>,
+) -> String {
     let objective = escape_xml_text(&goal.objective);
     let tokens_used = goal.tokens_used.to_string();
     let token_budget = goal
@@ -81,7 +100,7 @@ fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> String {
     } else {
         &*CONTINUATION_PROMPT_WITHOUT_UPDATE_PLAN
     };
-    template
+    let mut prompt = template
         .render([
             ("objective", objective.as_str()),
             ("tokens_used", tokens_used.as_str()),
@@ -90,7 +109,41 @@ fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> String {
         ])
         .unwrap_or_else(|err| {
             panic!("embedded goals/continuation.md template failed to render: {err}")
-        })
+        });
+    match owner {
+        GoalContinuationOwner::ModelCommit => prompt,
+        GoalContinuationOwner::HostEvaluate { next_step } => {
+            prompt = strip_model_commit_tool_instructions(&prompt);
+            prompt.push_str(&host_evaluate_continuation_footer(next_step));
+            prompt
+        }
+    }
+}
+
+fn strip_model_commit_tool_instructions(prompt: &str) -> String {
+    const MARKERS: [&str; 2] = [
+        "If the objective is achieved, call update_goal",
+        "Blocked audit:",
+    ];
+    let cut = MARKERS
+        .iter()
+        .filter_map(|marker| prompt.find(marker))
+        .min()
+        .unwrap_or(prompt.len());
+    prompt[..cut].trim_end().to_string()
+}
+
+fn host_evaluate_continuation_footer(next_step: Option<&str>) -> String {
+    let next_step = next_step
+        .map(str::trim)
+        .filter(|step| !step.is_empty())
+        .unwrap_or("Continue working toward the objective.");
+    let footer = HOST_EVALUATE_FOOTER_TEMPLATE
+        .render([("next_step", next_step)])
+        .unwrap_or_else(|err| {
+            panic!("embedded goals/host_evaluate_footer.md template failed to render: {err}")
+        });
+    format!("\n\n{footer}")
 }
 
 fn budget_limit_prompt(goal: &ThreadGoal) -> String {
