@@ -16,6 +16,8 @@ pub const MAX_WORKFLOW_SOURCE_CHARS: usize = 32_000;
 pub const MAX_WORKFLOW_OPERATIONS: u64 = 50_000;
 /// Inclusive cap on `ask` yields in one run.
 pub const MAX_WORKFLOW_YIELDS: u32 = 32;
+/// Inclusive cap on one `ask()` reply injected back into the VM.
+pub const MAX_WORKFLOW_REPLY_CHARS: usize = 4_096;
 /// Inclusive cap on Rhai call depth.
 const MAX_CALL_LEVELS: usize = 32;
 
@@ -74,7 +76,7 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
     if actual > MAX_WORKFLOW_SOURCE_CHARS {
         return Err(WorkflowSourceError::TooLarge { actual });
     }
-    let engine = build_engine(/*served_asks*/ 0);
+    let engine = build_engine(&[]);
     engine
         .compile(source)
         .map(|_| ())
@@ -83,16 +85,19 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
         })
 }
 
-/// Run or resume a Rhai program. `served_asks` is how many `ask` calls already
-/// received a host reply.
-pub fn eval_source(source: &str, served_asks: u32) -> Result<WorkflowEval, WorkflowSourceError> {
+/// Run or resume a Rhai program. `served_replies` are host answers for
+/// already-served `ask` calls, in program order.
+pub fn eval_source(
+    source: &str,
+    served_replies: &[String],
+) -> Result<WorkflowEval, WorkflowSourceError> {
     validate_source(source)?;
-    if served_asks > MAX_WORKFLOW_YIELDS {
+    if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
         return Err(WorkflowSourceError::Invalid {
             reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} yields"),
         });
     }
-    let engine = build_engine(served_asks);
+    let engine = build_engine(served_replies);
     let ast = engine
         .compile(source)
         .map_err(|error| WorkflowSourceError::Invalid {
@@ -105,7 +110,19 @@ pub fn eval_source(source: &str, served_asks: u32) -> Result<WorkflowEval, Workf
     }
 }
 
-fn build_engine(served_asks: u32) -> Engine {
+/// Bound a model reply before it re-enters the VM.
+pub fn truncate_workflow_reply(reply: &str) -> String {
+    let mut out = String::new();
+    for ch in reply.chars() {
+        if out.chars().count() >= MAX_WORKFLOW_REPLY_CHARS {
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn build_engine(served_replies: &[String]) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_WORKFLOW_OPERATIONS);
     engine.set_max_call_levels(MAX_CALL_LEVELS);
@@ -123,15 +140,17 @@ fn build_engine(served_asks: u32) -> Engine {
         },
     );
 
-    let remaining = Rc::new(Cell::new(served_asks));
-    let remaining_for_ask = Rc::clone(&remaining);
+    let replies = Rc::new(served_replies.to_vec());
+    let index = Rc::new(Cell::new(0usize));
+    let replies_for_ask = Rc::clone(&replies);
+    let index_for_ask = Rc::clone(&index);
     engine.register_fn(
         "ask",
         move |instruction: &str| -> Result<String, Box<EvalAltResult>> {
-            let left = remaining_for_ask.get();
-            if left > 0 {
-                remaining_for_ask.set(left.saturating_sub(1));
-                return Ok(String::new());
+            let i = index_for_ask.get();
+            if i < replies_for_ask.len() {
+                index_for_ask.set(i.saturating_add(1));
+                return Ok(replies_for_ask[i].clone());
             }
             if instruction.trim().is_empty() {
                 return Err(runtime_error("ask() requires a nonempty instruction"));

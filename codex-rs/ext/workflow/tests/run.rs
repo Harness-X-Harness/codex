@@ -30,8 +30,20 @@ fn advance_resumes_after_ask_then_completes() {
     assert!(!run.pending_yield_started);
     run.mark_pending_yield_started();
     assert!(run.pending_yield_started);
-    assert_eq!(run.advance(), Ok(WorkflowAdvance::Completed));
+    assert_eq!(
+        run.advance_with_reply("compiled".to_string()),
+        Ok(WorkflowAdvance::Completed)
+    );
     assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.served_replies, vec!["compiled".to_string()]);
+    assert!(!run.occupies_idle());
+}
+
+#[test]
+fn active_run_occupies_idle() {
+    let run = WorkflowRun::start(ThreadId::from_u128(8), yield_then_complete()).expect("start");
+    assert_eq!(run.status, WorkflowStatus::Active);
+    assert!(run.occupies_idle());
 }
 
 #[test]

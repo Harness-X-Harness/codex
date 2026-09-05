@@ -2,9 +2,13 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::PoisonError;
 use std::sync::Weak;
 
 use codex_core::StartIfIdleSubmission;
@@ -12,10 +16,15 @@ use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
+use codex_core::content_items_to_text;
+use codex_extension_api::HostIdleHold;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
+use codex_rollout::RolloutItem;
 use tokio::sync::Mutex;
 
 use crate::engine::WorkflowSourceError;
+use crate::engine::truncate_workflow_reply;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
 use crate::steering::yield_steering_item;
@@ -43,11 +52,16 @@ impl From<WorkflowSourceError> for WorkflowServiceError {
     }
 }
 
+/// Async sink invoked after a persisted run changes.
+pub type WorkflowUpdateSink =
+    Arc<dyn Fn(WorkflowRun) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// Process-scoped workflow runs, persisted as JSON under `persist_root`.
 pub struct WorkflowService {
     persist_root: PathBuf,
     runs: Mutex<HashMap<String, WorkflowRun>>,
     thread_manager: Weak<ThreadManager>,
+    update_sink: StdMutex<Option<WorkflowUpdateSink>>,
 }
 
 impl WorkflowService {
@@ -56,7 +70,15 @@ impl WorkflowService {
             persist_root: persist_root.into(),
             runs: Mutex::new(HashMap::new()),
             thread_manager,
+            update_sink: StdMutex::new(None),
         }
+    }
+
+    pub fn set_update_sink(&self, sink: WorkflowUpdateSink) {
+        *self
+            .update_sink
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(sink);
     }
 
     pub async fn get_run(
@@ -85,6 +107,7 @@ impl WorkflowService {
             WorkflowRun::start(thread_id, source).map_err(WorkflowServiceError::InvalidRequest)?;
         persist_run(&self.persist_root, &run).await?;
         self.remember(key, run.clone()).await;
+        self.after_run_changed(&run).await;
         self.kick_if_active(&run).await;
         Ok(run)
     }
@@ -93,11 +116,40 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
+        let reply = match self.get_run(thread_id).await? {
+            Some(run) if run.pending_yield_started => self.latest_assistant_reply(thread_id).await,
+            _ => String::new(),
+        };
         let run = self
-            .mutate_run(thread_id, |run| run.advance().map(|_| ()))
+            .mutate_run(thread_id, move |run| {
+                run.advance_with_reply(reply).map(|_| ())
+            })
             .await?;
         self.kick_if_active(&run).await;
         Ok(run)
+    }
+
+    pub async fn finish_yield_turn(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
+        let Some(existing) = self.get_run(thread_id).await? else {
+            return Ok(None);
+        };
+        if existing.status != WorkflowStatus::Active || !existing.pending_yield_started {
+            return Ok(Some(existing));
+        }
+        let reply = self.latest_assistant_reply(thread_id).await;
+        let run = self
+            .mutate_run(thread_id, move |run| {
+                if run.status != WorkflowStatus::Active || !run.pending_yield_started {
+                    return Ok(());
+                }
+                run.advance_with_reply(reply).map(|_| ())
+            })
+            .await?;
+        self.kick_if_active(&run).await;
+        Ok(Some(run))
     }
 
     pub async fn stop_run(&self, thread_id: ThreadId) -> Result<WorkflowRun, WorkflowServiceError> {
@@ -186,12 +238,20 @@ impl WorkflowService {
         mutate: impl FnOnce(&mut WorkflowRun) -> Result<(), String>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
         let key = thread_id.to_string();
-        let mut run = self.load_cached_or_disk(&key).await?.ok_or_else(|| {
-            WorkflowServiceError::InvalidRequest("no workflow is set for this thread".to_string())
-        })?;
+        let mut runs = self.runs.lock().await;
+        let mut run = match runs.get(&key).cloned() {
+            Some(run) => run,
+            None => load_run(&self.persist_root, &key).await?.ok_or_else(|| {
+                WorkflowServiceError::InvalidRequest(
+                    "no workflow is set for this thread".to_string(),
+                )
+            })?,
+        };
         mutate(&mut run).map_err(WorkflowServiceError::InvalidRequest)?;
         persist_run(&self.persist_root, &run).await?;
-        self.remember(key, run.clone()).await;
+        runs.insert(key, run.clone());
+        drop(runs);
+        self.after_run_changed(&run).await;
         Ok(run)
     }
 
@@ -211,6 +271,62 @@ impl WorkflowService {
 
     async fn remember(&self, key: String, run: WorkflowRun) {
         self.runs.lock().await.insert(key, run);
+    }
+
+    async fn after_run_changed(&self, run: &WorkflowRun) {
+        self.refresh_idle_hold(run).await;
+        let sink = self
+            .update_sink
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(sink) = sink {
+            sink(run.clone()).await;
+        }
+    }
+
+    async fn refresh_idle_hold(&self, run: &WorkflowRun) {
+        let Some(thread_manager) = self.thread_manager.upgrade() else {
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(run.thread_id).await else {
+            return;
+        };
+        if run.occupies_idle() {
+            thread.thread_extension_data().insert(HostIdleHold);
+        } else {
+            thread.thread_extension_data().remove::<HostIdleHold>();
+        }
+    }
+
+    async fn latest_assistant_reply(&self, thread_id: ThreadId) -> String {
+        let Some(thread_manager) = self.thread_manager.upgrade() else {
+            return String::new();
+        };
+        let Ok(thread) = thread_manager.get_thread(thread_id).await else {
+            return String::new();
+        };
+        let Ok(items) = thread
+            .load_latest_model_context_items(/*include_archived*/ false)
+            .await
+        else {
+            return String::new();
+        };
+        for item in items.iter().rev() {
+            let RolloutItem::ResponseItem(envelope) = item else {
+                continue;
+            };
+            let ResponseItem::Message { role, content, .. } = &envelope.item else {
+                continue;
+            };
+            if role != "assistant" {
+                continue;
+            }
+            if let Some(text) = content_items_to_text(content) {
+                return truncate_workflow_reply(&text);
+            }
+        }
+        String::new()
     }
 
     async fn kick_if_active(&self, run: &WorkflowRun) {
@@ -245,9 +361,10 @@ async fn load_run(
     let path = persist_root.join(format!("{thread_id}.json"));
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
-            let run = serde_json::from_slice(&bytes).map_err(|err| {
+            let mut run: WorkflowRun = serde_json::from_slice(&bytes).map_err(|err| {
                 WorkflowServiceError::Internal(format!("failed to parse workflow: {err}"))
             })?;
+            run.normalize_served_replies();
             Ok(Some(run))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
