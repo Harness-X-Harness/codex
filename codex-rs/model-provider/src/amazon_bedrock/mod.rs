@@ -200,30 +200,33 @@ impl ModelProvider for AmazonBedrockModelProvider {
             namespace_tools: true,
             image_generation: false,
             web_search: self.endpoint == BedrockEndpoint::Mantle,
+            x_search: false,
+            cached_web_search: self.endpoint == BedrockEndpoint::Mantle,
             external_web_access: false,
+            indexed_web_search: false,
             remote_compaction: RemoteCompactionSupport::V2,
         }
     }
 
-    fn approval_review_preferred_model(&self) -> &'static str {
-        match self.endpoint {
+    fn approval_review_preferred_model(&self) -> Option<&'static str> {
+        Some(match self.endpoint {
             BedrockEndpoint::Mantle => AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
             BedrockEndpoint::Runtime => AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-        }
+        })
     }
 
-    fn memory_extraction_preferred_model(&self) -> &'static str {
-        match self.endpoint {
+    fn memory_extraction_preferred_model(&self) -> Option<&'static str> {
+        Some(match self.endpoint {
             BedrockEndpoint::Mantle => AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
             BedrockEndpoint::Runtime => AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-        }
+        })
     }
 
-    fn memory_consolidation_preferred_model(&self) -> &'static str {
-        match self.endpoint {
+    fn memory_consolidation_preferred_model(&self) -> Option<&'static str> {
+        Some(match self.endpoint {
             BedrockEndpoint::Mantle => AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
             BedrockEndpoint::Runtime => AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID,
-        }
+        })
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -579,7 +582,10 @@ mod tests {
                 namespace_tools: true,
                 image_generation: false,
                 web_search: true,
+                x_search: false,
+                cached_web_search: true,
                 external_web_access: false,
+                indexed_web_search: false,
                 remote_compaction: RemoteCompactionSupport::V2,
             }
         );
@@ -598,7 +604,10 @@ mod tests {
                 namespace_tools: true,
                 image_generation: false,
                 web_search: false,
+                x_search: false,
+                cached_web_search: false,
                 external_web_access: false,
+                indexed_web_search: false,
                 remote_compaction: RemoteCompactionSupport::V2,
             }
         );
@@ -644,9 +653,9 @@ mod tests {
                 mantle_provider.memory_consolidation_preferred_model(),
             ),
             (
-                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
+                Some(AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID),
             )
         );
         assert_eq!(
@@ -656,9 +665,9 @@ mod tests {
                 runtime_provider.memory_consolidation_preferred_model(),
             ),
             (
-                AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID,
-                AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID,
+                Some(AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID),
+                Some(AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID),
             )
         );
     }

@@ -617,6 +617,17 @@ fn test_validate_provider_aws_rejects_websockets() {
 }
 
 #[test]
+fn test_validate_grok_provider_rejects_websockets() {
+    let provider = ModelProviderInfo {
+        wire_api: WireApi::GrokResponses,
+        supports_websockets: true,
+        ..ModelProviderInfo::default()
+    };
+
+    assert!(provider.validate().is_err());
+}
+
+#[test]
 fn test_validate_provider_aws_auth_refresh_command() {
     for (command, expected) in [
         (
