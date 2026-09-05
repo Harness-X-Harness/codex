@@ -1,0 +1,10 @@
+model = "grok-4.6"
+model_provider = "grok"
+
+[model_providers.grok]
+name = "Grok"
+base_url = "https://grok.trustedtunnel.app/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+requires_openai_auth = false
+supports_websockets = false
