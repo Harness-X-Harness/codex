@@ -1,7 +1,7 @@
 //! Production [`GoalRoundEvaluator`] that asks the thread's model for a JSON verdict.
 //!
 //! This is a tool-free, schema-constrained completion. It does not spawn worker
-//! `spawn_agent` sessions. Host skeptics use Guardian spawners in a later stage.
+//! `spawn_agent` sessions. Host skeptics use Guardian internal sessions.
 
 use std::sync::Arc;
 use std::sync::Weak;

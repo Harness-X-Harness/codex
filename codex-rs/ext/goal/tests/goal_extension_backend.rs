@@ -28,12 +28,11 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
-use codex_goal_extension::GoalCompletionAuthority;
 use codex_goal_extension::GoalEvaluatorDecision;
 use codex_goal_extension::GoalEvaluatorError;
 use codex_goal_extension::GoalEvaluatorVerdict;
 use codex_goal_extension::GoalExtensionConfig;
-use codex_goal_extension::GoalHow;
+use codex_goal_extension::GoalHostCapabilities;
 use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalRoundEvaluationFuture;
@@ -42,10 +41,14 @@ use codex_goal_extension::GoalRoundEvaluator;
 use codex_goal_extension::GoalRuntimeHandle;
 use codex_goal_extension::GoalService;
 use codex_goal_extension::GoalSetRequest;
+use codex_goal_extension::GoalSkepticError;
+use codex_goal_extension::GoalSkepticPanel;
+use codex_goal_extension::GoalSkepticPanelFuture;
+use codex_goal_extension::GoalSkepticPanelInput;
+use codex_goal_extension::GoalSkepticPanelVerdict;
 use codex_goal_extension::GoalTokenBudgetUpdate;
-use codex_goal_extension::GoalVerification;
 use codex_goal_extension::install_with_backend;
-use codex_goal_extension::install_with_evaluator;
+use codex_goal_extension::install_with_host_capabilities;
 use codex_goal_extension::parse_goal_evaluator_verdict;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -384,11 +387,7 @@ async fn host_evaluate_candidate_complete_stays_active_when_verification_request
         GoalExtensionConfig {
             enabled: true,
             max_goal_token_budget: None,
-            policy: GoalPolicy {
-                completion: GoalCompletionAuthority::HostEvaluate,
-                verification: GoalVerification::HostSkeptics { count: 3 },
-                how: GoalHow::AgentTurns,
-            },
+            policy: GoalPolicy::host(),
         },
         Some(evaluator),
     )
@@ -403,6 +402,132 @@ async fn host_evaluate_candidate_complete_stays_active_when_verification_request
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_skeptics_confirm_marks_complete() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::CandidateComplete,
+        "deliverable is present",
+        "await host skeptics",
+        "",
+    ))]);
+    let panel = ScriptedSkepticPanel::new([Ok(GoalSkepticPanelVerdict {
+        refuted: false,
+        evidence: "tests cover the deliverable".into(),
+        next_step: "none".into(),
+    })]);
+    let harness = GoalExtensionHarness::new_with_host_capabilities(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy::host(),
+        },
+        GoalHostCapabilities {
+            evaluator: Some(evaluator),
+            skeptic_panel: Some(panel),
+        },
+    )
+    .await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host skeptics confirm").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("completed goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_skeptics_refute_keeps_goal_active() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::CandidateComplete,
+        "deliverable is present",
+        "await host skeptics",
+        "",
+    ))]);
+    let panel = ScriptedSkepticPanel::new([Ok(GoalSkepticPanelVerdict {
+        refuted: true,
+        evidence: "named artifact is missing".into(),
+        next_step: "add the missing proof".into(),
+    })]);
+    let harness = GoalExtensionHarness::new_with_host_capabilities(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy::host(),
+        },
+        GoalHostCapabilities {
+            evaluator: Some(evaluator),
+            skeptic_panel: Some(panel),
+        },
+    )
+    .await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host skeptics refute").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_skeptics_error_pauses_goal() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::CandidateComplete,
+        "deliverable is present",
+        "await host skeptics",
+        "",
+    ))]);
+    let panel =
+        ScriptedSkepticPanel::new([Err(GoalSkepticError::Failed("spawner unavailable".into()))]);
+    let harness = GoalExtensionHarness::new_with_host_capabilities(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy::host(),
+        },
+        GoalHostCapabilities {
+            evaluator: Some(evaluator),
+            skeptic_panel: Some(panel),
+        },
+    )
+    .await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host skeptics pause").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("paused goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     Ok(())
 }
 
@@ -1996,6 +2121,33 @@ impl GoalRoundEvaluator for ScriptedEvaluator {
     }
 }
 
+struct ScriptedSkepticPanel {
+    responses: Mutex<VecDeque<Result<GoalSkepticPanelVerdict, GoalSkepticError>>>,
+}
+
+impl ScriptedSkepticPanel {
+    fn new(
+        responses: impl IntoIterator<Item = Result<GoalSkepticPanelVerdict, GoalSkepticError>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            responses: Mutex::new(responses.into_iter().collect()),
+        })
+    }
+}
+
+impl GoalSkepticPanel for ScriptedSkepticPanel {
+    fn verify(&self, _input: GoalSkepticPanelInput) -> GoalSkepticPanelFuture<'_> {
+        let next = self
+            .responses
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front();
+        Box::pin(async move {
+            next.ok_or_else(|| GoalSkepticError::Failed("no scripted panel verdict".to_string()))?
+        })
+    }
+}
+
 async fn host_evaluate_harness(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -2065,10 +2217,28 @@ impl GoalExtensionHarness {
         config: GoalExtensionConfig,
         evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_host_capabilities(
+            runtime,
+            thread_id,
+            config,
+            GoalHostCapabilities {
+                evaluator,
+                skeptic_panel: None,
+            },
+        )
+        .await
+    }
+
+    async fn new_with_host_capabilities(
+        runtime: Arc<codex_state::StateRuntime>,
+        thread_id: ThreadId,
+        config: GoalExtensionConfig,
+        capabilities: GoalHostCapabilities,
+    ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
         let goal_service = Arc::new(GoalService::new());
-        install_with_evaluator(
+        install_with_host_capabilities(
             &mut builder,
             runtime,
             AnalyticsEventsClient::disabled(),
@@ -2076,7 +2246,7 @@ impl GoalExtensionHarness {
             Weak::new(),
             Arc::clone(&goal_service),
             move |_| config.clone(),
-            evaluator,
+            capabilities,
         );
         let registry = Arc::new(builder.build());
         let session_store = ExtensionData::new(thread_id.to_string());

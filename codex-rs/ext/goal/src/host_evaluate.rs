@@ -6,20 +6,26 @@
 //!
 //! - `continue` keeps the goal `Active` and stores a next step for idle continuation
 //! - `candidate_complete` with [`GoalVerification::None`] marks the goal `Complete`
+//! - `candidate_complete` with [`GoalVerification::HostSkeptics`] runs the panel;
+//!   all not-refuted votes mark `Complete`, any refute stays `Active`, and panel
+//!   failure pauses the goal
 //! - `blocked` is host-counted; the same `blocker_key` for three consecutive rounds
 //!   marks the goal `Blocked`
 //! - evaluator failure pauses the goal rather than treating it as complete
 //!
 //! When no evaluator is installed, HostEvaluate still hides `update_goal` and
 //! leaves the goal `Active` so idle continuation can proceed. App Server
-//! installs [`crate::ModelGoalRoundEvaluator`] under the unified `goal_host`
-//! feature so production HostEvaluate is not a no-op.
+//! installs [`crate::ModelGoalRoundEvaluator`] and
+//! [`crate::GuardianGoalSkepticPanel`] under the unified `goal_host` feature.
 
 use std::future::Future;
 use std::pin::Pin;
 
 use serde::Deserialize;
 
+use crate::host_verify::GoalSkepticPanel;
+use crate::host_verify::GoalSkepticPanelInput;
+use crate::host_verify::apply_skeptic_panel;
 use crate::policy::GoalCompletionAuthority;
 use crate::policy::GoalVerification;
 use crate::runtime::GoalRuntimeHandle;
@@ -183,8 +189,8 @@ pub type GoalRoundEvaluationFuture<'a> =
 ///
 /// Implementations inspect the ending round and return a structured verdict.
 /// This crate owns applying that verdict to persisted goal status. Do not
-/// spawn worker `spawn_agent` sessions from an implementation; later host
-/// verification uses Guardian-owned spawners.
+/// spawn worker `spawn_agent` sessions from an implementation. Host skeptics
+/// use Guardian [`codex_extension_api::InternalSessionSpawner`] sessions.
 pub trait GoalRoundEvaluator: Send + Sync {
     fn evaluate(&self, input: GoalRoundEvaluationInput) -> GoalRoundEvaluationFuture<'_>;
 }
@@ -244,6 +250,7 @@ impl HostEvaluateRoundState {
 pub(crate) async fn evaluate_active_round(
     runtime: &GoalRuntimeHandle,
     evaluator: Option<&dyn GoalRoundEvaluator>,
+    skeptics: Option<&dyn GoalSkepticPanel>,
     turn_id: &str,
 ) -> Result<(), String> {
     if runtime.policy().completion != GoalCompletionAuthority::HostEvaluate {
@@ -269,7 +276,7 @@ pub(crate) async fn evaluate_active_round(
         })
         .await;
     match verdict {
-        Ok(verdict) => apply_verdict(runtime, turn_id, verdict).await,
+        Ok(verdict) => apply_verdict(runtime, skeptics, turn_id, verdict).await,
         Err(error) => {
             tracing::warn!(
                 error = %error,
@@ -284,6 +291,7 @@ pub(crate) async fn evaluate_active_round(
 
 async fn apply_verdict(
     runtime: &GoalRuntimeHandle,
+    skeptics: Option<&dyn GoalSkepticPanel>,
     turn_id: &str,
     verdict: GoalEvaluatorVerdict,
 ) -> Result<(), String> {
@@ -301,9 +309,28 @@ async fn apply_verdict(
                         .apply_host_goal_status(turn_id, HostGoalStatus::Complete)
                         .await
                 }
-                GoalVerification::HostSkeptics { .. } => {
-                    runtime.set_host_next_step(verdict.next_step);
-                    Ok(())
+                GoalVerification::HostSkeptics { count } => {
+                    let Some(panel) = skeptics else {
+                        runtime.set_host_next_step(verdict.next_step);
+                        return Ok(());
+                    };
+                    let Some(goal) = runtime.load_thread_goal().await? else {
+                        return Ok(());
+                    };
+                    apply_skeptic_panel(
+                        runtime,
+                        turn_id,
+                        panel,
+                        GoalSkepticPanelInput {
+                            thread_id: runtime.thread_id(),
+                            turn_id: turn_id.to_string(),
+                            goal_id: goal.goal_id,
+                            objective: goal.objective,
+                            candidate_next_step: verdict.next_step,
+                            count,
+                        },
+                    )
+                    .await
                 }
             }
         }

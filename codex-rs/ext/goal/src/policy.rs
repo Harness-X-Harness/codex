@@ -30,15 +30,22 @@ pub enum GoalCompletionAuthority {
     HostEvaluate,
 }
 
+/// Default host skeptic panel size when `goal_host` is on.
+pub const HOST_SKEPTIC_DEFAULT_COUNT: u8 = 3;
+/// Inclusive lower bound for a host skeptic panel.
+pub const HOST_SKEPTIC_MIN_COUNT: u8 = 1;
+/// Inclusive upper bound for a host skeptic panel.
+pub const HOST_SKEPTIC_MAX_COUNT: u8 = 5;
+
 /// Whether the host runs an adversarial panel after a completion candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GoalVerification {
     /// No host verification panel. Current stock behavior.
     None,
-    /// Host-owned skeptic sessions.
+    /// Host-owned skeptic sessions spawned through Guardian internal sessions.
     ///
-    /// `count` is the requested panel size. A later harness stage owns
-    /// clamping and spawn.
+    /// `count` is the requested panel size. Spawn clamps it to
+    /// [`HOST_SKEPTIC_MIN_COUNT`]..=[`HOST_SKEPTIC_MAX_COUNT`].
     HostSkeptics { count: u8 },
 }
 
@@ -83,10 +90,16 @@ impl GoalPolicy {
 
     /// Policy installed when the unified `goal_host` harness feature is on.
     ///
-    /// Later stacked stages extend this constructor (host skeptics, optional
-    /// workflow bind) without adding more feature flags.
+    /// Host evaluation plus a Guardian skeptic panel. Later stacked stages
+    /// may add an optional workflow bind without adding more feature flags.
     pub const fn host() -> Self {
-        Self::host_evaluate()
+        Self {
+            completion: GoalCompletionAuthority::HostEvaluate,
+            verification: GoalVerification::HostSkeptics {
+                count: HOST_SKEPTIC_DEFAULT_COUNT,
+            },
+            how: GoalHow::AgentTurns,
+        }
     }
 }
 
