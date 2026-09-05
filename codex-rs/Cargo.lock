@@ -4982,6 +4982,7 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-protocol",
+ "codex-rollout",
  "codex-utils-template",
  "pretty_assertions",
  "rhai",
