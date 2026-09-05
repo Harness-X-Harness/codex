@@ -535,13 +535,13 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
-    /// Start a markdown workflow run on the current thread.
+    /// Start a Rhai workflow run on the current thread.
     StartThreadWorkflow {
         thread_id: ThreadId,
         source: String,
     },
 
-    /// Host-advance the current workflow step.
+    /// Host-resume the current Rhai workflow run.
     AdvanceThreadWorkflow {
         thread_id: ThreadId,
     },

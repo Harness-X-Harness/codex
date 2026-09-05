@@ -70,11 +70,11 @@ impl ModelGoalRoundEvaluator {
             .get_thread(input.thread_id)
             .await
             .map_err(|error| GoalEvaluatorError::Failed(error.to_string()))?;
-        let history = thread
-            .load_history(/*include_archived*/ false)
+        let items = thread
+            .load_latest_model_context_items(/*include_archived*/ false)
             .await
             .map_err(|error| GoalEvaluatorError::Failed(error.to_string()))?;
-        let evidence = goal_evaluator_evidence(&history.items);
+        let evidence = goal_evaluator_evidence(&items);
         let prompt = evaluator_prompt(
             &input.objective,
             &evidence.transcript,

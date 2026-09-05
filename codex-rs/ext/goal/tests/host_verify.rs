@@ -24,7 +24,7 @@ fn host_policy_installs_default_skeptic_panel() {
             verification: GoalVerification::HostSkeptics {
                 count: HOST_SKEPTIC_DEFAULT_COUNT
             },
-            how: GoalHow::Workflow,
+            how: GoalHow::AgentTurns,
         }
     );
     assert_eq!(GoalPolicy::host_evaluate().how, GoalHow::AgentTurns);

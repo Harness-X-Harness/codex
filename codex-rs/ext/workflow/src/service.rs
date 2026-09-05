@@ -1,4 +1,4 @@
-//! Start, inspect, and advance host-owned workflow runs.
+//! Start, inspect, and host-resume host-owned Rhai workflow runs.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -15,11 +15,10 @@ use codex_core::TurnStartOptions;
 use codex_protocol::ThreadId;
 use tokio::sync::Mutex;
 
+use crate::engine::WorkflowSourceError;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
-use crate::spec::WorkflowParseError;
-use crate::spec::parse_workflow_markdown;
-use crate::steering::current_step_steering_item;
+use crate::steering::yield_steering_item;
 
 /// Errors from the workflow service.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,8 +37,8 @@ impl fmt::Display for WorkflowServiceError {
 
 impl std::error::Error for WorkflowServiceError {}
 
-impl From<WorkflowParseError> for WorkflowServiceError {
-    fn from(error: WorkflowParseError) -> Self {
+impl From<WorkflowSourceError> for WorkflowServiceError {
+    fn from(error: WorkflowSourceError) -> Self {
         Self::InvalidRequest(error.to_string())
     }
 }
@@ -72,7 +71,6 @@ impl WorkflowService {
         thread_id: ThreadId,
         source: &str,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let definition = parse_workflow_markdown(source)?;
         let key = thread_id.to_string();
         if self
             .load_cached_or_disk(&key)
@@ -83,7 +81,8 @@ impl WorkflowService {
                 "a workflow is already active; /workflow stop first".to_string(),
             ));
         }
-        let run = WorkflowRun::start(thread_id, definition);
+        let run =
+            WorkflowRun::start(thread_id, source).map_err(WorkflowServiceError::InvalidRequest)?;
         persist_run(&self.persist_root, &run).await?;
         self.remember(key, run.clone()).await;
         self.kick_if_active(&run).await;
@@ -125,7 +124,10 @@ impl WorkflowService {
         if run.status != WorkflowStatus::Active {
             return Ok(());
         }
-        let Some(step) = run.current_step() else {
+        if run.pending_yield_started {
+            return Ok(());
+        }
+        let Some(instruction) = run.pending_instruction.as_deref() else {
             return Ok(());
         };
         let Some(thread_manager) = self.thread_manager.upgrade() else {
@@ -141,7 +143,7 @@ impl WorkflowService {
             .get::<TurnStartOptions>()
             .map(|options| options.as_ref().clone())
             .unwrap_or_default();
-        let item = current_step_steering_item(&run, step);
+        let item = yield_steering_item(&run, instruction);
         match thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
@@ -151,7 +153,17 @@ impl WorkflowService {
             )
             .await
         {
-            Ok(StartIfIdleSubmission::Started { .. }) => {}
+            Ok(StartIfIdleSubmission::Started { .. }) => {
+                if let Err(err) = self
+                    .mutate_run(thread_id, |run| {
+                        run.mark_pending_yield_started();
+                        Ok(())
+                    })
+                    .await
+                {
+                    tracing::debug!("failed to mark workflow yield started for {thread_id}: {err}");
+                }
+            }
             Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
                 tracing::debug!(
                     ?reason,
@@ -202,7 +214,7 @@ impl WorkflowService {
     }
 
     async fn kick_if_active(&self, run: &WorkflowRun) {
-        if run.status != WorkflowStatus::Active {
+        if run.status != WorkflowStatus::Active || run.pending_instruction.is_none() {
             return;
         }
         if let Err(err) = self.continue_if_idle(run.thread_id).await {

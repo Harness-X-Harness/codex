@@ -37,7 +37,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const WORKFLOW_USAGE_HINT: &str =
-    "Example: /workflow start # Review\\n## Gather\\nRead the diff.\\n## Write\\nList bugs.";
+    r#"Example: /workflow start ask("Compile the crate."); complete();"#;
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 

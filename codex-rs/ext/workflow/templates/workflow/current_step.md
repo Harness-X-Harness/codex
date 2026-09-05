@@ -1,7 +1,6 @@
 Active workflow: {{ name }}
-Current step ({{ index }}/{{ count }}): {{ title }}
 
-Do this step:
+Do this work:
 {{ instruction }}
 
-Stay on this step until the host advances the workflow. Do not skip ahead.
+The host resumes the workflow after this yield. Completing this work does not complete a thread goal. Do not call update_goal.

@@ -85,11 +85,11 @@ where
             .get_thread(input.thread_id)
             .await
             .map_err(|error| GoalSkepticError::Failed(error.to_string()))?;
-        let history = parent
-            .load_history(/*include_archived*/ false)
+        let items = parent
+            .load_latest_model_context_items(/*include_archived*/ false)
             .await
             .map_err(|error| GoalSkepticError::Failed(error.to_string()))?;
-        let evidence = goal_evaluator_evidence(&history.items);
+        let evidence = goal_evaluator_evidence(&items);
         let parent_config = parent.config().await;
         let config = isolated_skeptic_config(parent_config.as_ref())?;
         let environments = parent.environment_selections().await;

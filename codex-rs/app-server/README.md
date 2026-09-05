@@ -198,8 +198,8 @@ Example with notification opt-out:
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/workflow/get` — experimental; fetch the independent `/workflow` run for a thread. Requires `goal_host`. Returns `workflow: null` when none exists. Distinct from `/goal`.
-- `thread/workflow/start` — experimental; start an independent `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active`.
-- `thread/workflow/advance` — experimental; host-advance the current workflow run.
+- `thread/workflow/start` — experimental; start an independent Rhai `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active`. A markdown step table is not a valid program.
+- `thread/workflow/advance` — experimental; host-resume the current Rhai workflow run after a yield.
 - `thread/workflow/stop` — experimental; pause an active workflow run.
 - `thread/workflow/resume` — experimental; resume a paused workflow run.
 - `thread/workflow/updated` — experimental notification emitted whenever a workflow run changes.
@@ -894,7 +894,7 @@ Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` 
 ```json
 { "method": "thread/workflow/start", "id": 31, "params": {
     "threadId": "thr_123",
-    "source": "# Review PR\n\n## Gather context\nRead the diff.\n\n## Write findings\nList bugs.\n"
+    "source": "ask(\"Read the diff.\"); complete();"
 } }
 { "method": "thread/workflow/advance", "id": 32, "params": { "threadId": "thr_123" } }
 { "method": "thread/workflow/stop", "id": 33, "params": { "threadId": "thr_123" } }

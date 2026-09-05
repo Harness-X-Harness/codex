@@ -18,6 +18,7 @@ use crate::LocalThreadStore;
 use crate::PersistContext;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
+use crate::StoredModelContext;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
@@ -297,6 +298,18 @@ impl LiveThread {
     ) -> ThreadStoreResult<StoredThreadHistory> {
         self.thread_store
             .load_history(LoadThreadHistoryParams {
+                thread_id: self.thread_id,
+                include_archived,
+            })
+            .await
+    }
+
+    pub async fn load_latest_model_context(
+        &self,
+        include_archived: bool,
+    ) -> ThreadStoreResult<StoredModelContext> {
+        self.thread_store
+            .load_latest_model_context(LoadThreadHistoryParams {
                 thread_id: self.thread_id,
                 include_archived,
             })
