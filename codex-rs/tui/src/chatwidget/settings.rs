@@ -99,6 +99,9 @@ impl ChatWidget {
         }
         if feature == Feature::GoalHost {
             self.sync_workflow_command_enabled();
+            if !enabled {
+                self.clear_workflow_status_indicator();
+            }
         }
         if feature == Feature::MentionsV2 {
             self.sync_mentions_v2_enabled();

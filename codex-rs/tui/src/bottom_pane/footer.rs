@@ -102,6 +102,13 @@ pub(crate) enum GoalStatusIndicator {
     Complete { usage: Option<String> },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkflowStatusIndicator {
+    Active,
+    Paused,
+    Complete,
+}
+
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
@@ -550,6 +557,17 @@ pub(crate) fn mode_indicator_line(
     indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
 }
 
+pub(crate) fn workflow_status_indicator_line(
+    indicator: Option<&WorkflowStatusIndicator>,
+) -> Option<Line<'static>> {
+    let label = match indicator? {
+        WorkflowStatusIndicator::Active => "Workflow active",
+        WorkflowStatusIndicator::Paused => "Workflow paused (/workflow resume)",
+        WorkflowStatusIndicator::Complete => "Workflow complete",
+    };
+    Some(Line::from(vec![Span::from(label).cyan()]))
+}
+
 pub(crate) fn goal_status_indicator_line(
     indicator: Option<&GoalStatusIndicator>,
 ) -> Option<Line<'static>> {
@@ -586,18 +604,29 @@ pub(crate) fn goal_status_indicator_line(
 
 pub(crate) fn status_line_right_indicator_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    workflow_status_indicator: Option<&WorkflowStatusIndicator>,
     goal_status_indicator: Option<&GoalStatusIndicator>,
     ide_context_active: bool,
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
-    let primary_indicator = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
-        .or_else(|| goal_status_indicator_line(goal_status_indicator));
+    let mode_indicator = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint);
+    let workflow_indicator = workflow_status_indicator_line(workflow_status_indicator);
+    let goal_indicator = if mode_indicator.is_none() {
+        goal_status_indicator_line(goal_status_indicator)
+    } else {
+        None
+    };
     let ide_context_indicator = ide_context_active.then(|| Line::from(vec!["IDE context".cyan()]));
     let mut line: Option<Line<'static>> = None;
 
-    for indicator in [primary_indicator, ide_context_indicator]
-        .into_iter()
-        .flatten()
+    for indicator in [
+        mode_indicator,
+        workflow_indicator,
+        goal_indicator,
+        ide_context_indicator,
+    ]
+    .into_iter()
+    .flatten()
     {
         if let Some(line) = line.as_mut() {
             line.push_span(" · ".dim());
@@ -1402,12 +1431,14 @@ mod tests {
                 let right_line = if status_line_active {
                     let full = status_line_right_indicator_line(
                         collaboration_mode_indicator,
+                        /*workflow_status_indicator*/ None,
                         /*goal_status_indicator*/ None,
                         ide_context_active,
                         show_cycle_hint,
                     );
                     let compact = status_line_right_indicator_line(
                         collaboration_mode_indicator,
+                        /*workflow_status_indicator*/ None,
                         /*goal_status_indicator*/ None,
                         ide_context_active,
                         /*show_cycle_hint*/ false,
