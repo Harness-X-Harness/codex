@@ -238,19 +238,12 @@ impl WorkflowService {
         mutate: impl FnOnce(&mut WorkflowRun) -> Result<(), String>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
         let key = thread_id.to_string();
-        let mut runs = self.runs.lock().await;
-        let mut run = match runs.get(&key).cloned() {
-            Some(run) => run,
-            None => load_run(&self.persist_root, &key).await?.ok_or_else(|| {
-                WorkflowServiceError::InvalidRequest(
-                    "no workflow is set for this thread".to_string(),
-                )
-            })?,
-        };
+        let mut run = self.load_cached_or_disk(&key).await?.ok_or_else(|| {
+            WorkflowServiceError::InvalidRequest("no workflow is set for this thread".to_string())
+        })?;
         mutate(&mut run).map_err(WorkflowServiceError::InvalidRequest)?;
         persist_run(&self.persist_root, &run).await?;
-        runs.insert(key, run.clone());
-        drop(runs);
+        self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
         Ok(run)
     }

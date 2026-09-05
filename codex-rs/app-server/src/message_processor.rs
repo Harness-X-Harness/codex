@@ -494,8 +494,13 @@ impl MessageProcessor {
             outgoing.clone(),
             queue_service,
         );
-        let workflow_service =
-            workflow_service.expect("workflow service is installed with the thread manager");
+        let workflow_service = match workflow_service {
+            Some(service) => service,
+            None => Arc::new(WorkflowService::new(
+                config.codex_home.join("workflows"),
+                Arc::downgrade(&thread_manager),
+            )),
+        };
         workflow_service.set_update_sink(workflow_update_sink(outgoing.clone()));
         let thread_workflow_processor =
             ThreadWorkflowRequestProcessor::new(Arc::clone(&config), workflow_service);
