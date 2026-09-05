@@ -310,6 +310,8 @@ pub enum Feature {
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Host-owned round-end evaluation instead of worker `update_goal` completion.
+    GoalHostEvaluate,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
     /// Track and report a shared token budget across a session's agent threads.
@@ -1534,6 +1536,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GoalHostEvaluate,
+        key: "goal_host_evaluate",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TokenBudget,

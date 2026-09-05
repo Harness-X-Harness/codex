@@ -89,7 +89,14 @@ where
             |config: &Config| GoalExtensionConfig {
                 enabled: config.features.enabled(codex_features::Feature::Goals),
                 max_goal_token_budget: config.max_goal_token_budget,
-                policy: GoalPolicy::model_commit(),
+                policy: if config
+                    .features
+                    .enabled(codex_features::Feature::GoalHostEvaluate)
+                {
+                    GoalPolicy::host_evaluate()
+                } else {
+                    GoalPolicy::model_commit()
+                },
             },
         );
     }

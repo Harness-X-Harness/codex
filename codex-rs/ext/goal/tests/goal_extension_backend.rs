@@ -2,6 +2,7 @@
 #![allow(clippy::expect_used)]
 
 use codex_utils_absolute_path::test_support::PathExt;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -27,14 +28,25 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_goal_extension::GoalCompletionAuthority;
+use codex_goal_extension::GoalEvaluatorDecision;
+use codex_goal_extension::GoalEvaluatorError;
+use codex_goal_extension::GoalEvaluatorVerdict;
 use codex_goal_extension::GoalExtensionConfig;
+use codex_goal_extension::GoalHow;
 use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalPolicy;
+use codex_goal_extension::GoalRoundEvaluationFuture;
+use codex_goal_extension::GoalRoundEvaluationInput;
+use codex_goal_extension::GoalRoundEvaluator;
 use codex_goal_extension::GoalRuntimeHandle;
 use codex_goal_extension::GoalService;
 use codex_goal_extension::GoalSetRequest;
 use codex_goal_extension::GoalTokenBudgetUpdate;
+use codex_goal_extension::GoalVerification;
 use codex_goal_extension::install_with_backend;
+use codex_goal_extension::install_with_evaluator;
+use codex_goal_extension::parse_goal_evaluator_verdict;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -258,7 +270,8 @@ async fn installed_goal_runtime_stores_model_commit_policy() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn host_evaluate_policy_does_not_change_update_goal_completion() -> anyhow::Result<()> {
+async fn host_evaluate_hides_update_goal_and_leaves_goal_active_without_evaluator()
+-> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -279,21 +292,70 @@ async fn host_evaluate_policy_does_not_change_update_goal_completion() -> anyhow
     assert_eq!(handle.policy(), GoalPolicy::host_evaluate());
 
     let tools = harness.tools();
-    let create_tool = tool_by_name(&tools, "create_goal");
-    create_tool
+    assert_eq!(
+        vec!["get_goal".to_string(), "create_goal".to_string()],
+        tool_names(&tools)
+    );
+
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    tool_by_name(&tools, "create_goal")
         .handle(tool_call(
             "create_goal",
             "call-create-goal",
-            json!({ "objective": "host evaluate still model-committed" }),
+            json!({ "objective": "host evaluate without evaluator stays active" }),
         ))
         .await?;
-    tool_by_name(&tools, "update_goal")
-        .handle(tool_call(
-            "update_goal",
-            "call-complete-goal",
-            json!({ "status": "complete" }),
-        ))
-        .await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_evaluate_continue_keeps_goal_active() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::Continue,
+        "work remains",
+        "inspect the worktree",
+        "",
+    ))]);
+    let harness = host_evaluate_harness(runtime.clone(), thread_id, evaluator).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host evaluate continue").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_evaluate_candidate_complete_marks_complete() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::CandidateComplete,
+        "deliverable is present",
+        "stop",
+        "",
+    ))]);
+    let harness = host_evaluate_harness(runtime.clone(), thread_id, evaluator).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host evaluate complete").await?;
+    harness.stop_turn("turn-1").await;
 
     let goal = runtime
         .thread_goals()
@@ -302,6 +364,219 @@ async fn host_evaluate_policy_does_not_change_update_goal_completion() -> anyhow
         .ok_or_else(|| anyhow::anyhow!("completed goal should persist"))?;
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
     Ok(())
+}
+
+#[tokio::test]
+async fn host_evaluate_candidate_complete_stays_active_when_verification_requested()
+-> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::CandidateComplete,
+        "deliverable is present",
+        "await host skeptics",
+        "",
+    ))]);
+    let harness = GoalExtensionHarness::new_with_config_and_evaluator(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy {
+                completion: GoalCompletionAuthority::HostEvaluate,
+                verification: GoalVerification::HostSkeptics { count: 3 },
+                how: GoalHow::AgentTurns,
+            },
+        },
+        Some(evaluator),
+    )
+    .await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host evaluate waits for skeptics").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_evaluate_blocked_streak_marks_blocked() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([
+        Ok(host_verdict(
+            GoalEvaluatorDecision::Blocked,
+            "missing credentials",
+            "ask the user",
+            "missing_credentials",
+        )),
+        Ok(host_verdict(
+            GoalEvaluatorDecision::Blocked,
+            "still missing credentials",
+            "ask the user",
+            "missing_credentials",
+        )),
+        Ok(host_verdict(
+            GoalEvaluatorDecision::Blocked,
+            "still missing credentials",
+            "ask the user",
+            "missing_credentials",
+        )),
+    ]);
+    let harness = host_evaluate_harness(runtime.clone(), thread_id, evaluator).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host evaluate blocked").await?;
+    harness.stop_turn("turn-1").await;
+    let after_first = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, after_first.status);
+
+    harness.start_turn("turn-2", &TokenUsage::default()).await;
+    harness.stop_turn("turn-2").await;
+    let after_second = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, after_second.status);
+
+    harness.start_turn("turn-3", &TokenUsage::default()).await;
+    harness.stop_turn("turn-3").await;
+    let after_third = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("blocked goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Blocked, after_third.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_evaluate_evaluator_error_pauses_goal() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Err(GoalEvaluatorError::Failed(
+        "evaluator unavailable".to_string(),
+    ))]);
+    let harness = host_evaluate_harness(runtime.clone(), thread_id, evaluator).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "host evaluate pause").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("paused goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_commit_ignores_installed_host_evaluator() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let evaluator = ScriptedEvaluator::new([Ok(host_verdict(
+        GoalEvaluatorDecision::CandidateComplete,
+        "would complete on host path",
+        "stop",
+        "",
+    ))]);
+    let harness = GoalExtensionHarness::new_with_config_and_evaluator(
+        runtime.clone(),
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy::model_commit(),
+        },
+        Some(evaluator),
+    )
+    .await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "model commit ignores evaluator").await?;
+    harness.stop_turn("turn-1").await;
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[test]
+fn parse_goal_evaluator_verdict_accepts_valid_decisions() {
+    assert_eq!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"continue","evidence":"observed evidence","next_step":"do one thing","blocker_key":""}"#
+        )
+        .expect("continue verdict"),
+        host_verdict(
+            GoalEvaluatorDecision::Continue,
+            "observed evidence",
+            "do one thing",
+            "",
+        )
+    );
+    assert_eq!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"candidate_complete","evidence":"observed evidence","next_step":"stop","blocker_key":""}"#
+        )
+        .expect("candidate complete verdict")
+        .decision,
+        GoalEvaluatorDecision::CandidateComplete
+    );
+    assert_eq!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"blocked","evidence":"observed evidence","next_step":"ask the user","blocker_key":"missing_access"}"#
+        )
+        .expect("blocked verdict")
+        .blocker_key,
+        "missing_access"
+    );
+}
+
+#[test]
+fn parse_goal_evaluator_verdict_rejects_invalid_payloads() {
+    assert!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"continue","evidence":"x","next_step":"y","blocker_key":"","extra":true}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"continue","evidence":" ","next_step":"y","blocker_key":""}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"blocked","evidence":"x","next_step":"y","blocker_key":""}"#
+        )
+        .is_err()
+    );
+    assert!(
+        parse_goal_evaluator_verdict(
+            r#"{"decision":"continue","evidence":"x","next_step":"y","blocker_key":"missing_access"}"#
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -1680,6 +1955,77 @@ fn tool_names(tools: &[Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>]) -> Ve
     tools.iter().map(|tool| tool.tool_name().name).collect()
 }
 
+fn host_verdict(
+    decision: GoalEvaluatorDecision,
+    evidence: &str,
+    next_step: &str,
+    blocker_key: &str,
+) -> GoalEvaluatorVerdict {
+    GoalEvaluatorVerdict {
+        decision,
+        evidence: evidence.to_string(),
+        next_step: next_step.to_string(),
+        blocker_key: blocker_key.to_string(),
+    }
+}
+
+struct ScriptedEvaluator {
+    responses: Mutex<VecDeque<Result<GoalEvaluatorVerdict, GoalEvaluatorError>>>,
+}
+
+impl ScriptedEvaluator {
+    fn new(
+        responses: impl IntoIterator<Item = Result<GoalEvaluatorVerdict, GoalEvaluatorError>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            responses: Mutex::new(responses.into_iter().collect()),
+        })
+    }
+}
+
+impl GoalRoundEvaluator for ScriptedEvaluator {
+    fn evaluate(&self, _input: GoalRoundEvaluationInput) -> GoalRoundEvaluationFuture<'_> {
+        let next = self
+            .responses
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front();
+        Box::pin(async move {
+            next.ok_or_else(|| GoalEvaluatorError::Failed("no scripted verdict".to_string()))?
+        })
+    }
+}
+
+async fn host_evaluate_harness(
+    runtime: Arc<codex_state::StateRuntime>,
+    thread_id: ThreadId,
+    evaluator: Arc<dyn GoalRoundEvaluator>,
+) -> anyhow::Result<GoalExtensionHarness> {
+    GoalExtensionHarness::new_with_config_and_evaluator(
+        runtime,
+        thread_id,
+        GoalExtensionConfig {
+            enabled: true,
+            max_goal_token_budget: None,
+            policy: GoalPolicy::host_evaluate(),
+        },
+        Some(evaluator),
+    )
+    .await
+}
+
+async fn create_active_goal(harness: &GoalExtensionHarness, objective: &str) -> anyhow::Result<()> {
+    let tools = harness.tools();
+    tool_by_name(&tools, "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": objective }),
+        ))
+        .await?;
+    Ok(())
+}
+
 struct GoalExtensionHarness {
     registry: Arc<codex_extension_api::ExtensionRegistry<()>>,
     session_store: ExtensionData,
@@ -1710,10 +2056,19 @@ impl GoalExtensionHarness {
         thread_id: ThreadId,
         config: GoalExtensionConfig,
     ) -> anyhow::Result<Self> {
+        Self::new_with_config_and_evaluator(runtime, thread_id, config, /*evaluator*/ None).await
+    }
+
+    async fn new_with_config_and_evaluator(
+        runtime: Arc<codex_state::StateRuntime>,
+        thread_id: ThreadId,
+        config: GoalExtensionConfig,
+        evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+    ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
         let goal_service = Arc::new(GoalService::new());
-        install_with_backend(
+        install_with_evaluator(
             &mut builder,
             runtime,
             AnalyticsEventsClient::disabled(),
@@ -1721,6 +2076,7 @@ impl GoalExtensionHarness {
             Weak::new(),
             Arc::clone(&goal_service),
             move |_| config.clone(),
+            evaluator,
         );
         let registry = Arc::new(builder.build());
         let session_store = ExtensionData::new(thread_id.to_string());

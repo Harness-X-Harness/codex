@@ -32,7 +32,11 @@ fn enabled_checklist_preserves_the_original_continuation_prompt() {
         original,
     ));
     assert_eq!(
-        steering::continuation_steering_item(&goal, /*update_plan_enabled*/ true),
+        steering::continuation_steering_item(
+            &goal,
+            /*update_plan_enabled*/ true,
+            steering::GoalContinuationOwner::ModelCommit,
+        ),
         expected,
     );
 }
@@ -43,6 +47,7 @@ fn disabled_checklist_preserves_goal_text_that_mentions_the_tool() {
     let item = steering::continuation_steering_item(
         &test_goal(objective),
         /*update_plan_enabled*/ false,
+        steering::GoalContinuationOwner::ModelCommit,
     );
     let ResponseItem::Message { content, .. } = item else {
         panic!("expected goal continuation message");
@@ -53,6 +58,28 @@ fn disabled_checklist_preserves_goal_text_that_mentions_the_tool() {
     assert!(text.contains(objective));
     assert!(!text.contains("If update_plan is available"));
     assert!(text.contains("Completion audit:"));
+}
+
+#[test]
+fn host_evaluate_continuation_omits_update_goal_and_includes_next_step() {
+    let item = steering::continuation_steering_item(
+        &test_goal("Finish the feature."),
+        /*update_plan_enabled*/ true,
+        steering::GoalContinuationOwner::HostEvaluate {
+            next_step: Some("Inspect the current worktree."),
+        },
+    );
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("expected goal continuation message");
+    };
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected goal continuation text");
+    };
+    assert!(text.contains("Finish the feature."));
+    assert!(text.contains("Inspect the current worktree."));
+    assert!(text.contains("Host-owned completion:"));
+    assert!(!text.contains("call update_goal"));
+    assert!(!text.contains("Blocked audit:"));
 }
 
 fn test_goal(objective: &str) -> ThreadGoal {
