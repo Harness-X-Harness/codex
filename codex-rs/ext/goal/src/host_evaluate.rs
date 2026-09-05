@@ -20,6 +20,8 @@
 //! [`crate::GuardianGoalSkepticPanel`] under the unified `goal_host` feature.
 //! [`crate::GoalPolicy::host`] sets [`crate::GoalHow::Workflow`], so Goal does
 //! not inject idle continuation; the independent `/workflow` engine owns HOW.
+//! Turns started with `turn_trigger = "workflow"` are HOW turns, not goal
+//! rounds, so host evaluation does not run on them.
 
 use std::future::Future;
 use std::pin::Pin;

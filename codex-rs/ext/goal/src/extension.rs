@@ -278,6 +278,9 @@ where
                 accounting.clear_current_turn_goal();
                 return;
             }
+            if workflow_how_turn(input.turn_store) {
+                return;
+            }
             let Ok(goal) = self
                 .state_dbs
                 .thread_goals()
@@ -342,6 +345,7 @@ where
                 .accounting_state()
                 .current_active_goal_id_for_turn(turn_id)
                 .is_some()
+                && !workflow_how_turn(input.turn_store)
                 && let Err(err) = crate::host_evaluate::evaluate_active_round(
                     runtime.as_ref(),
                     self.evaluator.as_deref(),
@@ -674,6 +678,12 @@ pub fn install_with_host_capabilities<C>(
 
 fn goal_runtime_handle(thread_store: &ExtensionData) -> Option<Arc<GoalRuntimeHandle>> {
     thread_store.get::<GoalRuntimeHandle>()
+}
+
+fn workflow_how_turn(turn_store: &ExtensionData) -> bool {
+    turn_store
+        .get::<TurnStartOptions>()
+        .is_some_and(|options| options.turn_trigger.as_deref() == Some("workflow"))
 }
 
 fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
