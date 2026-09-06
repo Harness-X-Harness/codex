@@ -152,9 +152,9 @@ fn scratch_survives_stop_and_resume() {
 }
 
 #[test]
-fn parallel_stop_after_first_item_replays_without_a_second_turn() {
+fn batch_agent_stop_after_first_item_replays_without_a_second_turn() {
     let source = r#"
-        let results = parallel([
+        let results = batch_agent([
             #{ prompt: "first" },
             #{ prompt: "second" },
         ]);

@@ -32,9 +32,9 @@ use tokio::time::timeout;
 use super::goal_host_support::AGENT_REQUIRES_OK_RESULT;
 use super::goal_host_support::ASK_REQUIRES_OK_REPLY;
 use super::goal_host_support::ASK_THEN_COMPLETE;
+use super::goal_host_support::BATCH_AGENT_REQUIRES_OK_RESULTS;
 use super::goal_host_support::COMPLETE_ONLY;
 use super::goal_host_support::INVALID_RHAI;
-use super::goal_host_support::PARALLEL_REQUIRES_OK_RESULTS;
 use super::goal_host_support::READ_TIMEOUT;
 use super::goal_host_support::ScriptedHostResponder;
 use super::goal_host_support::app_with_features;
@@ -532,7 +532,7 @@ async fn workflow_agent_branches_on_structured_host_result() -> Result<()> {
 }
 
 #[tokio::test]
-async fn workflow_parallel_branches_on_ordered_host_results() -> Result<()> {
+async fn workflow_batch_agent_branches_on_ordered_host_results() -> Result<()> {
     let server = create_scripted_host_server(ScriptedHostResponder {
         worker: "ok",
         ..ScriptedHostResponder::default()
@@ -543,7 +543,7 @@ async fn workflow_parallel_branches_on_ordered_host_results() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: start_params(thread.id.clone(), PARALLEL_REQUIRES_OK_RESULTS),
+            params: start_params(thread.id.clone(), BATCH_AGENT_REQUIRES_OK_RESULTS),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -605,7 +605,7 @@ async fn workflow_spawn_without_task_name_is_rejected_before_a_host_turn() -> Re
             "thread/workflow/start",
             Some(serde_json::to_value(start_params(
                 thread.id,
-                r#"agent("Say ok.", #{ "spawn": true, extra: "unused" });"#,
+                r#"agent("Say ok.", #{ "spawn": true });"#,
             ))?),
         )
         .await?;
@@ -616,6 +616,65 @@ async fn workflow_spawn_without_task_name_is_rejected_before_a_host_turn() -> Re
     .await??;
     assert!(
         error.error.message.contains("task_name"),
+        "unexpected error: {}",
+        error.error.message
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_unknown_agent_option_is_rejected_before_a_host_turn() -> Result<()> {
+    let (mut app, _codex_home, server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(start_params(
+                thread.id,
+                r#"agent("Say ok.", #{ model: "x" });"#,
+            ))?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("does not accept option"),
+        "unexpected error: {}",
+        error.error.message
+    );
+    let triggers = response_turn_triggers(&server).await?;
+    assert!(
+        triggers
+            .iter()
+            .all(|trigger| trigger.as_deref() != Some("workflow")),
+        "unknown option must not start a host turn: {triggers:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_old_parallel_name_is_rejected() -> Result<()> {
+    let (mut app, _codex_home, _server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(start_params(
+                thread.id,
+                r#"parallel([#{ prompt: "Say ok." }]);"#,
+            ))?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("renamed to batch_agent()"),
         "unexpected error: {}",
         error.error.message
     );

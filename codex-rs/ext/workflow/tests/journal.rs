@@ -148,9 +148,9 @@ fn legacy_positional_active_run_is_rejected() {
 }
 
 #[test]
-fn parallel_item_identity_change_fails_closed() {
+fn batch_agent_item_identity_change_fails_closed() {
     let first = r#"
-        let results = parallel([
+        let results = batch_agent([
             #{ prompt: "first" },
             #{ prompt: "second" },
         ]);
@@ -160,7 +160,7 @@ fn parallel_item_identity_change_fails_closed() {
     run.advance_with_reply("one".to_string()).expect("first");
     run.advance_with_reply("two".to_string()).expect("second");
     let changed = r#"
-        let results = parallel([
+        let results = batch_agent([
             #{ prompt: "other" },
             #{ prompt: "second" },
         ]);

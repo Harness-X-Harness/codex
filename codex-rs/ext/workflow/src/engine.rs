@@ -16,6 +16,7 @@ use rhai::Scope;
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::host_opts;
 use crate::journal::ContinuationKind;
 use crate::journal::ContinuationRecord;
 use crate::journal::HostCallResult;
@@ -361,7 +362,7 @@ fn build_engine(
         move |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
             take_agent_call(
                 prompt,
-                /*opts*/ None,
+                /*spawn_task_name*/ None,
                 spawn,
                 &index_for_agent,
                 &yield_index_for_agent,
@@ -379,7 +380,7 @@ fn build_engine(
         move |prompt: &str, opts: Map| -> Result<Dynamic, Box<EvalAltResult>> {
             take_agent_call(
                 prompt,
-                Some(&opts),
+                host_opts::spawn_task_name(Some(&opts))?,
                 spawn,
                 &index_for_agent_opts,
                 &yield_index_for_agent_opts,
@@ -390,58 +391,69 @@ fn build_engine(
     );
 
     let index_for_budget = Rc::clone(&yield_index);
-    engine.register_fn("budget", move || -> Result<Dynamic, Box<EvalAltResult>> {
-        let spent = i64::try_from(index_for_budget.get()).unwrap_or(i64::MAX);
-        let total = i64::from(MAX_WORKFLOW_YIELDS);
-        let remaining = total.saturating_sub(spent);
-        let mut map = Map::new();
-        map.insert("total".into(), Dynamic::from(total));
-        map.insert("spent".into(), Dynamic::from(spent));
-        map.insert("reserved".into(), Dynamic::from(0_i64));
-        map.insert("remaining".into(), Dynamic::from(remaining));
-        Ok(Dynamic::from(map))
+    engine.register_fn(
+        "yield_budget",
+        move || -> Result<Dynamic, Box<EvalAltResult>> {
+            let spent = i64::try_from(index_for_budget.get()).unwrap_or(i64::MAX);
+            let total = i64::from(MAX_WORKFLOW_YIELDS);
+            let remaining = total.saturating_sub(spent);
+            let mut map = Map::new();
+            map.insert("total".into(), Dynamic::from(total));
+            map.insert("spent".into(), Dynamic::from(spent));
+            map.insert("remaining".into(), Dynamic::from(remaining));
+            Ok(Dynamic::from(map))
+        },
+    );
+    engine.register_fn("budget", || -> Result<Dynamic, Box<EvalAltResult>> {
+        Err(runtime_error(
+            "budget() was renamed to yield_budget(); it reports the workflow yield allowance, not a token ledger",
+        ))
     });
 
-    let journal_for_parallel = Rc::clone(&journal);
-    let index_for_parallel = Rc::clone(&index);
-    let yield_index_for_parallel = Rc::clone(&yield_index);
-    let pending_for_parallel = Rc::clone(&pending_spawn);
+    let journal_for_batch = Rc::clone(&journal);
+    let index_for_batch = Rc::clone(&index);
+    let yield_index_for_batch = Rc::clone(&yield_index);
+    let pending_for_batch = Rc::clone(&pending_spawn);
     engine.register_fn(
-        "parallel",
+        "batch_agent",
         move |items: Array| -> Result<Array, Box<EvalAltResult>> {
             let remaining =
-                (MAX_WORKFLOW_YIELDS as usize).saturating_sub(yield_index_for_parallel.get());
+                (MAX_WORKFLOW_YIELDS as usize).saturating_sub(yield_index_for_batch.get());
             if items.len() > remaining {
                 return Err(runtime_error(format!(
-                    "parallel() exceeds the remaining yield budget (need {}, have {remaining})",
+                    "batch_agent() exceeds the remaining yield budget (need {}, have {remaining})",
                     items.len()
                 )));
             }
-            let mut results = Array::with_capacity(items.len());
+            let mut prepared = Vec::with_capacity(items.len());
             for item in items {
                 let map = item
                     .try_cast::<Map>()
-                    .ok_or_else(|| runtime_error("parallel() items must be option maps"))?;
-                let prompt = match map.get("prompt") {
-                    Some(value) => value
-                        .clone()
-                        .into_string()
-                        .map_err(|_| runtime_error("parallel() requires a nonempty prompt"))?,
-                    None => {
-                        return Err(runtime_error("parallel() requires a nonempty prompt"));
-                    }
-                };
+                    .ok_or_else(|| runtime_error("batch_agent() items must be option maps"))?;
+                let (prompt, spawn_task_name) = host_opts::batch_item_prompt_and_spawn(&map)?;
+                prepared.push((prompt, spawn_task_name));
+            }
+            let mut results = Array::with_capacity(prepared.len());
+            for (prompt, spawn_task_name) in prepared {
                 results.push(take_agent_call(
                     &prompt,
-                    Some(&map),
+                    spawn_task_name,
                     spawn,
-                    &index_for_parallel,
-                    &yield_index_for_parallel,
-                    &journal_for_parallel,
-                    &pending_for_parallel,
+                    &index_for_batch,
+                    &yield_index_for_batch,
+                    &journal_for_batch,
+                    &pending_for_batch,
                 )?);
             }
             Ok(results)
+        },
+    );
+    engine.register_fn(
+        "parallel",
+        |_: Array| -> Result<Array, Box<EvalAltResult>> {
+            Err(runtime_error(
+                "parallel() was renamed to batch_agent(); it is sequential ordered agent work, not concurrent fan-out",
+            ))
         },
     );
 
@@ -689,14 +701,13 @@ fn host_call_dynamic(result: &HostCallResult) -> Dynamic {
 
 fn take_agent_call(
     prompt: &str,
-    opts: Option<&Map>,
+    spawn_task_name: Option<String>,
     spawn: SpawnBinding,
     index: &Rc<Cell<usize>>,
     yield_index: &Rc<Cell<usize>>,
     journal: &Rc<Vec<ContinuationRecord>>,
     pending_spawn: &Rc<RefCell<Option<String>>>,
 ) -> Result<Dynamic, Box<EvalAltResult>> {
-    let spawn_task_name = spawn_task_name_from_opts(opts)?;
     if let Some(task_name) = spawn_task_name {
         if spawn != SpawnBinding::Available {
             return Err(runtime_error("stock spawn_agent is unavailable"));
@@ -735,29 +746,4 @@ fn take_agent_call(
         "agent() requires a nonempty prompt",
     )
     .map(|result| host_call_dynamic(&result))
-}
-
-/// A spawn request is `opts["spawn"] == true` (boolean). Rhai reserves the
-/// identifier `spawn`, so scripts write the key as `"spawn"`.
-fn spawn_task_name_from_opts(opts: Option<&Map>) -> Result<Option<String>, Box<EvalAltResult>> {
-    let Some(opts) = opts else {
-        return Ok(None);
-    };
-    let Some(spawn) = opts.get("spawn") else {
-        return Ok(None);
-    };
-    let Some(true) = spawn.clone().try_cast::<bool>() else {
-        return Ok(None);
-    };
-    let task_name = match opts.get("task_name") {
-        Some(value) => value
-            .clone()
-            .into_string()
-            .map_err(|_| runtime_error("spawn requires a nonempty task_name"))?,
-        None => return Err(runtime_error("spawn requires a nonempty task_name")),
-    };
-    if task_name.trim().is_empty() {
-        return Err(runtime_error("spawn requires a nonempty task_name"));
-    }
-    Ok(Some(task_name))
 }

@@ -41,8 +41,8 @@ pub(super) const AGENT_REQUIRES_OK_RESULT: &str = r#"
     let r = agent("Say ok.");
     if r.ok && r.text == "ok" { complete(); } else { ask("wrong reply"); }
 "#;
-pub(super) const PARALLEL_REQUIRES_OK_RESULTS: &str = r#"
-    let results = parallel([
+pub(super) const BATCH_AGENT_REQUIRES_OK_RESULTS: &str = r#"
+    let results = batch_agent([
         #{ prompt: "Say ok." },
         #{ prompt: "Say ok." },
     ]);

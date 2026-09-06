@@ -237,9 +237,9 @@ fn failed_spawn_result_replays_without_a_second_child() {
 }
 
 #[test]
-fn agent_opts_map_is_accepted() {
+fn agent_empty_opts_map_is_accepted() {
     let source = r#"
-        let r = agent("Say ok.", #{ label: "w1" });
+        let r = agent("Say ok.", #{});
         if r.ok && r.text == "ok" {
             complete();
         }
@@ -407,10 +407,10 @@ fn empty_agent_prompt_is_rejected() {
 }
 
 #[test]
-fn budget_before_any_yield_reports_the_full_allowance() {
+fn yield_budget_before_any_yield_reports_the_full_allowance() {
     let source = r#"
-        let b = budget();
-        if b.total == 32 && b.spent == 0 && b.reserved == 0 && b.remaining == 32 {
+        let b = yield_budget();
+        if b.total == 32 && b.spent == 0 && b.remaining == 32 && b.reserved == () {
             complete();
         } else {
             ask("wrong budget");
@@ -423,11 +423,11 @@ fn budget_before_any_yield_reports_the_full_allowance() {
 }
 
 #[test]
-fn budget_after_one_journaled_agent_decrements_remaining() {
+fn yield_budget_after_one_journaled_agent_decrements_remaining() {
     let source = r#"
         let r = agent("Say ok.");
-        let b = budget();
-        if r.ok && b.spent == 1 && b.remaining == 31 && b.reserved == 0 && b.total == 32 {
+        let b = yield_budget();
+        if r.ok && b.spent == 1 && b.remaining == 31 && b.total == 32 {
             complete();
         } else {
             ask("wrong budget");
@@ -446,14 +446,14 @@ fn budget_after_one_journaled_agent_decrements_remaining() {
 }
 
 #[test]
-fn budget_branch_on_remaining_is_recomputed_on_resume() {
+fn yield_budget_branch_on_remaining_is_recomputed_on_resume() {
     let source = r#"
-        let first = budget();
+        let first = yield_budget();
         if first.remaining != 32 {
             ask("wrong first remaining");
         }
         agent("Say ok.");
-        let second = budget();
+        let second = yield_budget();
         if second.remaining == 31 {
             complete();
         } else {
@@ -473,19 +473,19 @@ fn budget_branch_on_remaining_is_recomputed_on_resume() {
 }
 
 #[test]
-fn empty_parallel_completes_without_a_yield() {
+fn empty_batch_agent_completes_without_a_yield() {
     assert_eq!(
-        eval_source("parallel([]); complete();", &[]).expect("eval"),
+        eval_source("batch_agent([]); complete();", &[]).expect("eval"),
         WorkflowEval::Completed
     );
 }
 
 #[test]
-fn parallel_yields_each_prompt_then_branches_on_ordered_results() {
+fn batch_agent_yields_each_prompt_then_branches_on_ordered_results() {
     let source = r#"
-        let results = parallel([
+        let results = batch_agent([
             #{ prompt: "first" },
-            #{ prompt: "second", label: "unused" },
+            #{ prompt: "second" },
         ]);
         if results[0].ok && results[0].text == "one"
             && results[1].ok && results[1].text == "two"
@@ -528,11 +528,11 @@ fn parallel_yields_each_prompt_then_branches_on_ordered_results() {
 }
 
 #[test]
-fn parallel_rejects_non_map_items_and_empty_prompts() {
+fn batch_agent_rejects_non_map_items_and_empty_prompts() {
     for source in [
-        r#"parallel(["x"]);"#,
-        r#"parallel([#{ label: "no-prompt" }]);"#,
-        r#"parallel([#{ prompt: "" }]);"#,
+        r#"batch_agent(["x"]);"#,
+        r#"batch_agent([#{ }]);"#,
+        r#"batch_agent([#{ prompt: "" }]);"#,
     ] {
         let error = eval_source(source, &[]).expect_err(source);
         match error {
@@ -550,8 +550,8 @@ fn parallel_rejects_non_map_items_and_empty_prompts() {
 }
 
 #[test]
-fn parallel_rejects_over_yield_budget_before_yielding() {
-    let mut source = String::from("parallel([");
+fn batch_agent_rejects_over_yield_budget_before_yielding() {
+    let mut source = String::from("batch_agent([");
     for index in 0..=MAX_WORKFLOW_YIELDS {
         if index > 0 {
             source.push(',');
@@ -572,9 +572,9 @@ fn parallel_rejects_over_yield_budget_before_yielding() {
 }
 
 #[test]
-fn parallel_pause_replays_the_first_item_without_a_second_turn() {
+fn batch_agent_pause_replays_the_first_item_without_a_second_turn() {
     let source = r#"
-        let results = parallel([
+        let results = batch_agent([
             #{ prompt: "first" },
             #{ prompt: "second" },
         ]);
@@ -896,7 +896,7 @@ fn spawn_request_without_task_name_is_rejected_before_a_yield() {
         r#"agent("Say ok.", #{ "spawn": true });"#,
         r#"agent("Say ok.", #{ "spawn": true, task_name: "" });"#,
         r#"agent("Say ok.", #{ "spawn": true, task_name: "   " });"#,
-        r#"parallel([#{ prompt: "Say ok.", "spawn": true }]);"#,
+        r#"batch_agent([#{ prompt: "Say ok.", "spawn": true }]);"#,
     ] {
         let error = eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available)
             .expect_err(source);
@@ -928,29 +928,23 @@ fn unavailable_spawn_is_rejected_before_a_yield() {
 }
 
 #[test]
-fn spawn_string_or_false_stays_same_thread() {
-    for source in [
-        r#"let r = agent("Say ok.", #{ "spawn": "true", task_name: "review" }); if r.ok { complete(); }"#,
-        r#"let r = agent("Say ok.", #{ "spawn": false, task_name: "review" }); if r.ok { complete(); }"#,
-        r#"let r = agent("Say ok.", #{ label: "unused" }); if r.ok { complete(); }"#,
-    ] {
-        let outcome = eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available)
-            .expect(source);
-        assert_eq!(
-            outcome.eval,
-            WorkflowEval::Yielded {
-                instruction: "Say ok.".to_string(),
-            },
-            "{source}"
-        );
-        assert_eq!(outcome.spawn_task_name, None, "{source}");
-    }
+fn spawn_false_without_task_name_stays_same_thread() {
+    let source = r#"let r = agent("Say ok.", #{ "spawn": false }); if r.ok { complete(); }"#;
+    let outcome =
+        eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available).expect("eval");
+    assert_eq!(
+        outcome.eval,
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(outcome.spawn_task_name, None);
 }
 
 #[test]
 fn available_spawn_yields_then_replays_without_a_second_child() {
     let source = r#"
-        let r = agent("Say ok.", #{ "spawn": true, task_name: "review", extra: "unused" });
+        let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
         if r.ok && r.text == "ok" {
             complete();
         } else {
@@ -978,9 +972,9 @@ fn available_spawn_yields_then_replays_without_a_second_child() {
 }
 
 #[test]
-fn parallel_items_can_request_spawn_independently() {
+fn batch_agent_items_can_request_spawn_independently() {
     let source = r#"
-        let results = parallel([
+        let results = batch_agent([
             #{ prompt: "first" },
             #{ prompt: "second", "spawn": true, task_name: "review" },
         ]);
@@ -1011,6 +1005,112 @@ fn parallel_items_can_request_spawn_independently() {
         }
     );
     assert_eq!(second.spawn_task_name.as_deref(), Some("review"));
+}
+
+#[test]
+fn unknown_agent_option_keys_fail_before_a_yield() {
+    for source in [
+        r#"agent("Say ok.", #{ model: "x" });"#,
+        r#"agent("Say ok.", #{ effort: "high" });"#,
+        r#"agent("Say ok.", #{ isolation_worktree: true });"#,
+        r#"agent("Say ok.", #{ fork_context: true });"#,
+        r#"agent("Say ok.", #{ resume_from: "id" });"#,
+        r#"agent("Say ok.", #{ output_schema: #{} });"#,
+        r#"agent("Say ok.", #{ label: "unused" });"#,
+    ] {
+        let error = eval_source(source, &[]).expect_err(source);
+        match error {
+            WorkflowSourceError::Invalid { reason } => {
+                assert!(
+                    reason.contains("does not accept option"),
+                    "{source} unexpected reason: {reason}"
+                );
+            }
+            other => panic!("{source} expected Invalid, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn unknown_batch_agent_item_key_fails_before_any_host_work() {
+    let source = r#"
+        batch_agent([
+            #{ prompt: "first" },
+            #{ prompt: "second", model: "x" },
+        ]);
+    "#;
+    let error = eval_source(source, &[]).expect_err("unknown item key");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("does not accept option"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn task_name_without_spawn_fails_before_a_yield() {
+    for source in [
+        r#"agent("Say ok.", #{ task_name: "review" });"#,
+        r#"agent("Say ok.", #{ "spawn": false, task_name: "review" });"#,
+        r#"batch_agent([#{ prompt: "Say ok.", task_name: "review" }]);"#,
+    ] {
+        let error = eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available)
+            .expect_err(source);
+        match error {
+            WorkflowSourceError::Invalid { reason } => {
+                assert!(
+                    reason.contains("task_name") && reason.contains("spawn"),
+                    "{source} unexpected reason: {reason}"
+                );
+            }
+            other => panic!("{source} expected Invalid, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn spawn_option_must_be_boolean() {
+    let source = r#"agent("Say ok.", #{ "spawn": "true", task_name: "review" });"#;
+    let error = eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available)
+        .expect_err("spawn string");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("spawn") && reason.contains("boolean"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn old_parallel_and_budget_names_fail_with_migration_messages() {
+    let parallel = eval_source(r#"parallel([#{ prompt: "first" }]);"#, &[]).expect_err("parallel");
+    match parallel {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("renamed to batch_agent()"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    let budget = eval_source("budget();", &[]).expect_err("budget");
+    match budget {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("renamed to yield_budget()"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
 }
 
 #[test]

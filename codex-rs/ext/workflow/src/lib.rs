@@ -6,6 +6,7 @@
 mod catalog;
 mod engine;
 mod extension;
+mod host_opts;
 mod journal;
 mod run;
 mod scratch;
