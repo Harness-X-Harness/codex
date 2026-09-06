@@ -15,13 +15,15 @@ store: false
 stream: true
 tool_choice: "auto"
 
-## Tools (13)
+## Tools (14)
 - function local__exec_command__a70c06930ea0 description=sha1:3544717dc7749d6f/372chars params=sha1:bd3335a047b43441 props=[cmd,justification,login,max_output_tokens,prefix_rule,sandbox_permissions,shell,tty,workdir,yield_time_ms] strict=false
   "This flat Provider function directly invokes the canonical `exec_command` tool. Call this functi…"
 - function local__write_stdin__2f14658fb101 description=sha1:18065cc092b0da4d/369chars params=sha1:9742360936a9a00a props=[chars,max_output_tokens,session_id,yield_time_ms] strict=false
   "This flat Provider function directly invokes the canonical `write_stdin` tool. Call this functio…"
 - function local__request_user_input__e2efd87c90e0 description=sha1:84fd5d2686b59d1a/416chars params=sha1:73346c988ebde984 props=[questions] strict=false
   "This flat Provider function directly invokes the canonical `request_user_input` tool. Call this …"
+- function local__apply_patch__55462583fbb1 description=sha1:789e890d004996a3/977chars params=sha1:2aa876cc616ab19e props=[patch] strict=true
+  "This flat Provider function directly invokes the canonical `apply_patch` tool. Call this functio…"
 - function local__view_image__216f5593e999 description=sha1:a224e6215acdc287/412chars params=sha1:ca5635be5793a9ef props=[path] strict=false
   "This flat Provider function directly invokes the canonical `view_image` tool. Call this function…"
 - function local__collaboration__followup_task__c24c46210ddc description=sha1:5314db29c8eb174f/537chars params=sha1:de77596fd113b15c props=[message,target] strict=false
