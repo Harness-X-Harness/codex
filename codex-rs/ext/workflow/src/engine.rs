@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
+use rhai::Array;
 use rhai::Dynamic;
 use rhai::Engine;
 use rhai::EvalAltResult;
@@ -250,6 +251,44 @@ fn build_engine(served_replies: &[String], served_pauses: u32) -> Engine {
         map.insert("remaining".into(), Dynamic::from(remaining));
         Ok(Dynamic::from(map))
     });
+
+    let replies_for_parallel = Rc::clone(&replies);
+    let index_for_parallel = Rc::clone(&index);
+    engine.register_fn(
+        "parallel",
+        move |items: Array| -> Result<Array, Box<EvalAltResult>> {
+            let remaining = (MAX_WORKFLOW_YIELDS as usize).saturating_sub(index_for_parallel.get());
+            if items.len() > remaining {
+                return Err(runtime_error(format!(
+                    "parallel() exceeds the remaining yield budget (need {}, have {remaining})",
+                    items.len()
+                )));
+            }
+            let mut results = Array::with_capacity(items.len());
+            for item in items {
+                let map = item
+                    .try_cast::<Map>()
+                    .ok_or_else(|| runtime_error("parallel() items must be option maps"))?;
+                let prompt = match map.get("prompt") {
+                    Some(value) => value
+                        .clone()
+                        .into_string()
+                        .map_err(|_| runtime_error("parallel() requires a nonempty prompt"))?,
+                    None => {
+                        return Err(runtime_error("parallel() requires a nonempty prompt"));
+                    }
+                };
+                let reply = take_served_or_yield(
+                    &index_for_parallel,
+                    &replies_for_parallel,
+                    &prompt,
+                    "parallel() requires a nonempty prompt",
+                )?;
+                results.push(agent_result_from_reply(&reply));
+            }
+            Ok(results)
+        },
+    );
 
     let pause_index = Rc::new(Cell::new(0u32));
     let pause_for_pause = Rc::clone(&pause_index);
