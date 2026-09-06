@@ -148,6 +148,15 @@ impl GoalRuntimeHandle {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    pub(crate) fn continuation_owner(&self) -> GoalContinuationOwner<'static> {
+        match self.policy().completion {
+            GoalCompletionAuthority::ModelCommit => GoalContinuationOwner::ModelCommit,
+            GoalCompletionAuthority::HostEvaluate => {
+                GoalContinuationOwner::HostEvaluate { next_step: None }
+            }
+        }
+    }
+
     pub(crate) async fn load_thread_goal(&self) -> Result<Option<codex_state::ThreadGoal>, String> {
         self.inner
             .state_dbs
@@ -345,7 +354,10 @@ impl GoalRuntimeHandle {
                         .mark_idle_goal_active(goal.goal_id.clone());
                 }
                 if objective_changed {
-                    let item = objective_updated_steering_item(&protocol_goal_from_state(goal));
+                    let item = objective_updated_steering_item(
+                        &protocol_goal_from_state(goal),
+                        self.continuation_owner(),
+                    );
                     self.inject_active_turn_steering(item).await;
                 }
                 self.continue_if_idle().await?;

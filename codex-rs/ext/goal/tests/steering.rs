@@ -61,6 +61,44 @@ fn disabled_checklist_preserves_goal_text_that_mentions_the_tool() {
 }
 
 #[test]
+fn host_evaluate_budget_limit_omits_model_commit_closing() {
+    let item = steering::budget_limit_steering_item(
+        &test_goal("Finish the feature."),
+        steering::GoalContinuationOwner::HostEvaluate { next_step: None },
+    );
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("expected goal budget-limit message");
+    };
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected goal budget-limit text");
+    };
+    assert!(text.contains("Finish the feature."));
+    assert!(
+        text.contains("The host evaluates whether this goal is complete. Do not call update_goal.")
+    );
+    assert!(!text.contains("Do not call update_goal unless"));
+}
+
+#[test]
+fn host_evaluate_objective_updated_omits_model_commit_closing() {
+    let item = steering::objective_updated_steering_item(
+        &test_goal("Finish the feature."),
+        steering::GoalContinuationOwner::HostEvaluate { next_step: None },
+    );
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("expected goal objective-updated message");
+    };
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected goal objective-updated text");
+    };
+    assert!(text.contains("Finish the feature."));
+    assert!(
+        text.contains("The host evaluates whether this goal is complete. Do not call update_goal.")
+    );
+    assert!(!text.contains("Do not call update_goal unless"));
+}
+
+#[test]
 fn host_evaluate_continuation_omits_update_goal_and_includes_next_step() {
     let item = steering::continuation_steering_item(
         &test_goal("Finish the feature."),

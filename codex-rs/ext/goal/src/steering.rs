@@ -56,12 +56,21 @@ fn parse_embedded_template(source: &str, template_name: &str) -> Template {
     }
 }
 
-pub(crate) fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseItem {
-    goal_context_input_item(budget_limit_prompt(goal))
+pub(crate) fn budget_limit_steering_item(
+    goal: &ThreadGoal,
+    owner: GoalContinuationOwner<'_>,
+) -> ResponseItem {
+    goal_context_input_item(with_completion_closing(budget_limit_prompt(goal), owner))
 }
 
-pub(crate) fn objective_updated_steering_item(goal: &ThreadGoal) -> ResponseItem {
-    goal_context_input_item(objective_updated_prompt(goal))
+pub(crate) fn objective_updated_steering_item(
+    goal: &ThreadGoal,
+    owner: GoalContinuationOwner<'_>,
+) -> ResponseItem {
+    goal_context_input_item(with_completion_closing(
+        objective_updated_prompt(goal),
+        owner,
+    ))
 }
 
 pub(crate) fn continuation_steering_item(
@@ -116,6 +125,22 @@ fn continuation_prompt(
             prompt = strip_model_commit_tool_instructions(&prompt);
             prompt.push_str(&host_evaluate_continuation_footer(next_step));
             prompt
+        }
+    }
+}
+
+fn with_completion_closing(prompt: String, owner: GoalContinuationOwner<'_>) -> String {
+    match owner {
+        GoalContinuationOwner::ModelCommit => prompt,
+        GoalContinuationOwner::HostEvaluate { .. } => {
+            const MARKER: &str = "Do not call update_goal unless";
+            match prompt.rfind(MARKER) {
+                Some(idx) => format!(
+                    "{}The host evaluates whether this goal is complete. Do not call update_goal.",
+                    &prompt[..idx]
+                ),
+                None => prompt,
+            }
         }
     }
 }

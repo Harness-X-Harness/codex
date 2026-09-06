@@ -533,7 +533,7 @@ where
             {
                 return;
             }
-            let item = budget_limit_steering_item(&goal);
+            let item = budget_limit_steering_item(&goal, runtime.continuation_owner());
             runtime.inject_active_turn_steering(item).await;
         })
     }
