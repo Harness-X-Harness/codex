@@ -10,6 +10,7 @@ class ThreadWorkflowStatus(str, Enum):
     active = "active"
     paused = "paused"
     complete = "complete"
+    waiting = "waiting"
 
 
 class ThreadWorkflow(BaseModel):

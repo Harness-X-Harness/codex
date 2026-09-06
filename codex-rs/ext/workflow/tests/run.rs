@@ -46,6 +46,27 @@ fn active_run_occupies_idle() {
 }
 
 #[test]
+fn queued_run_does_not_occupy_until_activated() {
+    let mut run =
+        WorkflowRun::queue(ThreadId::from_u128(11), yield_then_complete()).expect("queue");
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+    assert!(!run.occupies_idle());
+    assert_eq!(run.activate(), Ok(WorkflowAdvance::Yielded));
+    assert_eq!(run.status, WorkflowStatus::Active);
+    assert!(run.occupies_idle());
+}
+
+#[test]
+fn stop_can_cancel_a_waiting_run() {
+    let mut run =
+        WorkflowRun::queue(ThreadId::from_u128(12), yield_then_complete()).expect("queue");
+    run.stop().expect("stop");
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    run.park().expect("park");
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+}
+
+#[test]
 fn stop_and_resume_are_host_owned() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(3), yield_then_complete()).expect("start");
     run.mark_pending_yield_started();

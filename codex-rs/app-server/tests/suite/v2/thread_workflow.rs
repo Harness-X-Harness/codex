@@ -460,9 +460,7 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
             },
         })
         .await?;
-    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
-
-    let _triggers = wait_until_turn_trigger(&server, "workflow").await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Waiting);
 
     let get_goal: ThreadGoalGetResponse = app
         .request(|request_id| ClientRequest::ThreadGoalGet {
@@ -477,53 +475,27 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
         Some(ThreadGoalStatus::Active)
     );
 
-    let get_workflow: ThreadWorkflowGetResponse = app
-        .request(|request_id| ClientRequest::ThreadWorkflowGet {
-            request_id,
-            params: ThreadWorkflowGetParams {
-                thread_id: thread.id.clone(),
-            },
-        })
-        .await?;
-    let mid_status = get_workflow
-        .workflow
-        .as_ref()
-        .map(|workflow| workflow.status);
+    let triggers = response_turn_triggers(&server).await?;
     assert!(
-        matches!(
-            mid_status,
-            Some(ThreadWorkflowStatus::Active | ThreadWorkflowStatus::Complete)
-        ),
-        "workflow must exist after start: {get_workflow:?}"
+        triggers
+            .iter()
+            .all(|trigger| trigger.as_deref() != Some("workflow")),
+        "waiting workflow must not start a workflow turn: {triggers:?}"
     );
 
-    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
-
-    let get_goal_after: ThreadGoalGetResponse = app
-        .request(|request_id| ClientRequest::ThreadGoalGet {
+    let paused: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
             request_id,
-            params: ThreadGoalGetParams {
+            params: ThreadGoalSetParams {
                 thread_id: thread.id.clone(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
             },
         })
         .await?;
-    assert_eq!(
-        get_goal_after.goal.map(|goal| goal.status),
-        Some(ThreadGoalStatus::Active)
-    );
-
-    let get_workflow_after: ThreadWorkflowGetResponse = app
-        .request(|request_id| ClientRequest::ThreadWorkflowGet {
-            request_id,
-            params: ThreadWorkflowGetParams {
-                thread_id: thread.id,
-            },
-        })
-        .await?;
-    assert_eq!(
-        get_workflow_after.workflow.map(|workflow| workflow.status),
-        Some(ThreadWorkflowStatus::Complete)
-    );
+    assert_eq!(paused.goal.status, ThreadGoalStatus::Paused);
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
     Ok(())
 }
 
@@ -585,6 +557,20 @@ async fn active_workflow_hold_blocks_goal_idle() -> Result<()> {
         }
         sleep(std::time::Duration::from_millis(25)).await;
     }
+
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_goal.goal.map(|goal| goal.status),
+        Some(ThreadGoalStatus::Active)
+    );
     Ok(())
 }
 

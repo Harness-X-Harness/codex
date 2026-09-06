@@ -1,5 +1,6 @@
 mod capabilities;
 mod contributors;
+mod occupancy;
 mod registry;
 mod state;
 mod user_instructions;
@@ -90,6 +91,9 @@ pub use contributors::TurnStartInput;
 pub use contributors::TurnStopInput;
 pub use contributors::WorldStateContributionInput;
 pub use contributors::WorldStateSectionContribution;
+pub use occupancy::EngineOccupant;
+pub use occupancy::EngineSlot;
+pub use occupancy::engine_slot;
 pub use registry::ExtensionRegistry;
 pub use registry::ExtensionRegistryBuilder;
 pub use registry::empty_extension_registry;

@@ -24274,7 +24274,8 @@
         "enum": [
           "active",
           "paused",
-          "complete"
+          "complete",
+          "waiting"
         ],
         "type": "string"
       },
