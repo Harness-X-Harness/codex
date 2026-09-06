@@ -47,22 +47,17 @@ pub enum JournalLookup {
     Diverged,
 }
 
-impl ContinuationKind {
-    fn wire_name(self) -> &'static str {
-        match self {
-            Self::Ask => "ask",
-            Self::Agent => "agent",
-            Self::SpawnAgent => "spawnAgent",
-            Self::Pause => "pause",
-            Self::AwaitUser => "awaitUser",
-        }
-    }
-}
-
 /// Full SHA-256 hex of the canonical request identity. Not Grok `request_hash`.
 pub fn request_digest(kind: ContinuationKind, request: &serde_json::Value) -> String {
+    let kind_name = match kind {
+        ContinuationKind::Ask => "ask",
+        ContinuationKind::Agent => "agent",
+        ContinuationKind::SpawnAgent => "spawnAgent",
+        ContinuationKind::Pause => "pause",
+        ContinuationKind::AwaitUser => "awaitUser",
+    };
     let body = serde_json::json!({
-        "kind": kind.wire_name(),
+        "kind": kind_name,
         "request": request,
     });
     let encoded = serde_json::to_vec(&body).unwrap_or_else(|_| Vec::new());
@@ -104,10 +99,6 @@ pub fn lookup(
     }
 }
 
-pub fn next_seq(records: &[ContinuationRecord]) -> u32 {
-    u32::try_from(records.len().saturating_add(1)).unwrap_or(u32::MAX)
-}
-
 pub fn result_bearing_count(records: &[ContinuationRecord]) -> u32 {
     u32::try_from(
         records
@@ -137,37 +128,4 @@ pub fn bounded(records: &[ContinuationRecord]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-pub fn ask_record(instruction: &str, reply: &str) -> ContinuationRecord {
-    record(ContinuationKind::Ask, &ask_request(instruction), reply)
-}
-
-pub fn agent_record(prompt: &str, reply: &str) -> ContinuationRecord {
-    record(ContinuationKind::Agent, &agent_request(prompt), reply)
-}
-
-pub fn spawn_record(prompt: &str, task_name: &str, reply: &str) -> ContinuationRecord {
-    record(
-        ContinuationKind::SpawnAgent,
-        &spawn_request(prompt, task_name),
-        reply,
-    )
-}
-
-pub fn pause_record() -> ContinuationRecord {
-    record(ContinuationKind::Pause, &control_request(), "")
-}
-
-pub fn await_user_record() -> ContinuationRecord {
-    record(ContinuationKind::AwaitUser, &control_request(), "")
-}
-
-fn record(kind: ContinuationKind, request: &serde_json::Value, result: &str) -> ContinuationRecord {
-    ContinuationRecord {
-        seq: 0,
-        kind,
-        request_digest: request_digest(kind, request),
-        result: result.to_string(),
-    }
 }

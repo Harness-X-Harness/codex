@@ -4,6 +4,7 @@ use tempfile::TempDir;
 
 use codex_protocol::ThreadId;
 use codex_workflow_extension::ContinuationKind;
+use codex_workflow_extension::ContinuationRecord;
 use codex_workflow_extension::LEGACY_RESUME_REQUIRED;
 use codex_workflow_extension::REPLAY_DIVERGENCE;
 use codex_workflow_extension::SpawnBinding;
@@ -175,9 +176,12 @@ fn parallel_item_identity_change_fails_closed() {
 #[test]
 fn malformed_journal_sequence_is_rejected() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(9), "complete();").expect("start");
-    run.continuations
-        .push(codex_workflow_extension::ask_record("x", "y"));
-    run.continuations[0].seq = 9;
+    run.continuations.push(ContinuationRecord {
+        seq: 9,
+        kind: ContinuationKind::Ask,
+        request_digest: "nonzero".to_string(),
+        result: "y".to_string(),
+    });
     let error = run.prepare_restored().expect_err("seq");
     assert!(error.contains("sequence"), "unexpected error: {error}");
 }

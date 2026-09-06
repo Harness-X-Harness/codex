@@ -22,7 +22,6 @@ use crate::journal::ContinuationRecord;
 use crate::journal::LEGACY_RESUME_REQUIRED;
 use crate::journal::WORKFLOW_PERSIST_VERSION;
 use crate::journal::bounded;
-use crate::journal::next_seq;
 use crate::journal::result_bearing_count;
 
 /// Lifecycle of one thread's workflow run.
@@ -483,7 +482,7 @@ impl WorkflowRun {
         result: String,
     ) {
         self.continuations.push(ContinuationRecord {
-            seq: next_seq(&self.continuations),
+            seq: u32::try_from(self.continuations.len().saturating_add(1)).unwrap_or(u32::MAX),
             kind,
             request_digest,
             result,

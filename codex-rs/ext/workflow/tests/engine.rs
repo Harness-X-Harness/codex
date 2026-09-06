@@ -9,17 +9,19 @@ use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowEvalOutcome;
 use codex_workflow_extension::WorkflowSourceError;
-use codex_workflow_extension::agent_record;
-use codex_workflow_extension::ask_record;
-use codex_workflow_extension::await_user_record;
 use codex_workflow_extension::eval_source;
 use codex_workflow_extension::eval_source_with_env;
 use codex_workflow_extension::eval_source_with_scratch;
 use codex_workflow_extension::eval_source_with_spawn;
-use codex_workflow_extension::pause_record;
-use codex_workflow_extension::spawn_record;
 use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
+
+mod common;
+use common::agent_record;
+use common::ask_record;
+use common::await_user_record;
+use common::pause_record;
+use common::spawn_record;
 
 #[test]
 fn complete_ends_the_run() {
