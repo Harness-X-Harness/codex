@@ -418,6 +418,56 @@ async fn workflow_how_turn_skips_host_evaluation() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn workflow_how_turn_error_does_not_block_goal() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+    create_active_goal(&harness, "workflow errors are not Goal writes").await?;
+    harness.stop_turn("turn-1").await;
+
+    let turn_store = ExtensionData::new("turn-2");
+    turn_store.insert(TurnStartOptions {
+        turn_trigger: Some("workflow".to_string()),
+        ..Default::default()
+    });
+    let mut collaboration_mode = default_collaboration_mode();
+    collaboration_mode.mode = ModeKind::Default;
+    for contributor in harness.registry.turn_lifecycle_contributors() {
+        contributor
+            .on_turn_start(TurnStartInput {
+                turn_id: "turn-2",
+                collaboration_mode: &collaboration_mode,
+                token_usage_at_turn_start: &TokenUsage::default(),
+                session_store: &harness.session_store,
+                thread_store: &harness.thread_store,
+                turn_store: &turn_store,
+            })
+            .await;
+    }
+    for contributor in harness.registry.turn_lifecycle_contributors() {
+        contributor
+            .on_turn_error(TurnErrorInput {
+                turn_id: "turn-2",
+                error: CodexErrorInfo::Other,
+                session_store: &harness.session_store,
+                thread_store: &harness.thread_store,
+                turn_store: &turn_store,
+            })
+            .await;
+    }
+
+    let goal = runtime
+        .thread_goals()
+        .get_thread_goal(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should persist"))?;
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    Ok(())
+}
+
+#[tokio::test]
 async fn host_evaluate_candidate_complete_pauses_when_skeptics_missing() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
