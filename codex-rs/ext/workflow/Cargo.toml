@@ -22,6 +22,7 @@ codex-utils-template = { workspace = true }
 rhai = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["fs", "sync"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }

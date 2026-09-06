@@ -524,6 +524,131 @@ fn truncate_workflow_reply_caps_injected_text() {
 }
 
 #[test]
+fn fingerprint_is_stable_lowercase_hex_sha256() {
+    let source = r#"
+        let first = fingerprint("a");
+        let second = fingerprint("a");
+        let other = fingerprint("b");
+        let empty = fingerprint("");
+        if first == second
+            && first != other
+            && first == "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+            && other == "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d"
+            && empty == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        {
+            complete();
+        } else {
+            ask("wrong fingerprint");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn json_encode_covers_accepted_types_and_rejects_others() {
+    let accepted = r#"
+        if json_encode(()) == "null"
+            && json_encode(true) == "true"
+            && json_encode(1) == "1"
+            && json_encode(1.5) == "1.5"
+            && json_encode("x") == "\"x\""
+            && json_encode([1, "x"]) == "[1,\"x\"]"
+            && json_encode(#{ ok: true }) == "{\"ok\":true}"
+        {
+            complete();
+        } else {
+            ask("wrong json");
+        }
+    "#;
+    assert_eq!(
+        eval_source(accepted, &[]).expect("eval"),
+        WorkflowEval::Completed
+    );
+
+    let object = eval_source(
+        r#"
+            let text = json_encode(#{ ok: true, n: 1 });
+            ask(text);
+        "#,
+        &[],
+    )
+    .expect("eval");
+    match object {
+        WorkflowEval::Yielded { instruction } => {
+            let value: serde_json::Value = serde_json::from_str(&instruction).expect("object json");
+            assert_eq!(
+                value,
+                serde_json::json!({
+                    "ok": true,
+                    "n": 1
+                })
+            );
+        }
+        other => panic!("expected Yielded object text, got {other:?}"),
+    }
+
+    let error = eval_source(r#"json_encode('x');"#, &[]).expect_err("char");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("does not accept"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    let mut oversized = Map::new();
+    oversized.insert(
+        "big".into(),
+        rhai::Dynamic::from("x".repeat(MAX_WORKFLOW_SOURCE_CHARS)),
+    );
+    let error = eval_source_with_env("json_encode(args.big);", &[], 0, &oversized)
+        .expect_err("oversize json");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(reason.contains("exceeds"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn script_branches_on_fingerprint_and_json_encode() {
+    let source = r#"
+        if fingerprint(args.text) == fingerprint("a")
+            && json_encode(()) == "null"
+        {
+            complete();
+        } else {
+            ask("wrong helper result");
+        }
+    "#;
+    let mut matching = Map::new();
+    matching.insert("text".into(), rhai::Dynamic::from("a"));
+    assert_eq!(
+        eval_source_with_env(source, &[], 0, &matching)
+            .expect("eval")
+            .eval,
+        WorkflowEval::Completed
+    );
+
+    let mut other = Map::new();
+    other.insert("text".into(), rhai::Dynamic::from("b"));
+    assert_eq!(
+        eval_source_with_env(source, &[], 0, &other)
+            .expect("eval")
+            .eval,
+        WorkflowEval::Yielded {
+            instruction: "wrong helper result".to_string(),
+        }
+    );
+}
+
+#[test]
 fn named_program_reads_args_and_records_phase() {
     let source = r#"
         let meta = #{
