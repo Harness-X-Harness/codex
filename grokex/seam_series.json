@@ -47,6 +47,7 @@
         "codex-rs/core/src/tools/router_tests.rs",
         "codex-rs/core/src/tools/spec_plan.rs",
         "codex-rs/core/src/tools/spec_plan_tests.rs",
+        "codex-rs/core/src/tools/spec_plan_grok_tests.rs",
         "codex-rs/core/src/tools/parallel.rs",
         "codex-rs/core/src/tools/registry.rs",
         "codex-rs/core/src/tools/tool_namespaces_info.rs",
@@ -61,7 +62,8 @@
         "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_basic.snap",
         "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_collaboration_ultra.snap",
         "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_continuation.snap",
-        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_image.snap"
+        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_image.snap",
+        "codex-rs/core/tests/suite/snapshots/all__suite__grok_model_visible_request__grok_model_visible_request_apply_patch.snap"
       ]
     },
     {

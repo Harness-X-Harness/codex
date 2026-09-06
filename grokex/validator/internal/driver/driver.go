@@ -129,11 +129,19 @@ func (d *Driver) VerifyCatalog(ctx context.Context) (Catalog, error) {
 	return Catalog{}, fmt.Errorf("model/list does not list %s", Model)
 }
 
+// ThreadPolicy is optional thread/start configuration for one scenario.
+type ThreadPolicy struct {
+	ApprovalNever    bool
+	DangerFullAccess bool
+	DisableShell     bool
+}
+
 // TurnRequest describes one user Turn.
 type TurnRequest struct {
-	Prompt   string
-	Effort   string
-	Deadline time.Duration
+	Prompt       string
+	Effort       string
+	Deadline     time.Duration
+	ThreadPolicy *ThreadPolicy
 }
 
 // params builds the Turn parameters; Turn.ThreadID stays empty because the exact
@@ -160,6 +168,21 @@ func (d *Driver) StartThread(ctx context.Context, request TurnRequest) (TurnRun,
 		CWD:           protocolv2.Value(d.Workspace),
 		Model:         protocolv2.Value(Model),
 		ModelProvider: protocolv2.Value(Provider),
+	}
+	if policy := request.ThreadPolicy; policy != nil {
+		if policy.ApprovalNever {
+			thread.ApprovalPolicy = protocolv2.Value(protocolv2.NewAskForApprovalNever())
+		}
+		if policy.DangerFullAccess {
+			thread.Sandbox = protocolv2.Value(protocolv2.SandboxModeDangerFullAccess)
+		}
+		if policy.DisableShell {
+			thread.Config = protocolv2.Value(map[string]protocolv2.JSONValue{
+				"features": protocolv2.JSONObject(map[string]protocolv2.JSONValue{
+					"shell_tool": protocolv2.JSONBool(false),
+				}),
+			})
+		}
 	}
 	if d.Requests.tool != nil {
 		thread.DynamicTools = protocolv2.Value([]protocolv2.DynamicToolSpec{d.Requests.tool.Spec()})

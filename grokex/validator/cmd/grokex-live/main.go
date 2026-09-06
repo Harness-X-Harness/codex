@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -31,6 +32,7 @@ const (
 	scenarioContinuation  = "encrypted-reasoning-tool-continuation"
 	scenarioCollaboration = "ultra-full-history-collaboration"
 	scenarioImage         = "image-generation-history-edit"
+	scenarioApplyPatch    = "custom-apply-patch"
 	// rolloutSettle bounds how long to wait for the canonical task_complete
 	// record after the app-server reported the terminal Turn.
 	rolloutSettle = 15 * time.Second
@@ -172,6 +174,14 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), config, 0o600); err != nil {
 		return evidence.Document{}, environmentError{err}
 	}
+	if opts.scenario == scenarioApplyPatch {
+		if err := disableShellTool(filepath.Join(home, "config.toml")); err != nil {
+			return evidence.Document{}, environmentError{err}
+		}
+		if err := oracle.SeedApplyPatchWorkspace(workspace); err != nil {
+			return evidence.Document{}, environmentError{err}
+		}
+	}
 	clock.Mark("fresh_home_prepared")
 
 	ctx := context.Background()
@@ -261,6 +271,23 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 			lastRun = edit
 		}
 		verdictFor = func(graph *rollout.Graph) oracle.Verdict { return oracle.Image(graph, generation, edit) }
+	case scenarioApplyPatch:
+		clock.Mark("turn_submitted")
+		run, err := app.StartThread(ctx, driver.TurnRequest{
+			Prompt:   oracle.ApplyPatchPrompt,
+			Deadline: scenario.TurnDeadline(),
+			ThreadPolicy: &driver.ThreadPolicy{
+				ApprovalNever:    true,
+				DangerFullAccess: true,
+				DisableShell:     true,
+			},
+		})
+		if err != nil && !errors.Is(err, driver.ErrDeadline) {
+			return evidence.Document{}, err
+		}
+		clock.Mark(terminalStage("turn", run))
+		lastRun = run
+		verdictFor = func(graph *rollout.Graph) oracle.Verdict { return oracle.ApplyPatch(graph, run, workspace) }
 	default:
 		return evidence.Document{}, fmt.Errorf("scenario %s has no canonical-session oracle", opts.scenario)
 	}
@@ -289,4 +316,19 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 	}
 	clock.Mark("verdict")
 	return evidence.FromVerdict(*identity, clock, verdict), nil
+}
+
+func disableShellTool(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if bytes.Contains(data, []byte("shell_tool")) {
+		return nil
+	}
+	extra := []byte("\n[features]\nshell_tool = false\n")
+	if bytes.Contains(data, []byte("[features]")) {
+		extra = []byte("\nshell_tool = false\n")
+	}
+	return os.WriteFile(path, append(data, extra...), 0o600)
 }

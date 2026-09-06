@@ -16,6 +16,10 @@
     "image-generation-history-edit": {
       "story": "grokex-image-generation-history-edit",
       "turn_deadline_seconds": 180
+    },
+    "custom-apply-patch": {
+      "story": "grokex-custom-apply-patch",
+      "turn_deadline_seconds": 120
     }
   }
 }

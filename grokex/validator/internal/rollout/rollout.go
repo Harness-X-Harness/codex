@@ -70,6 +70,10 @@ type Turn struct {
 	SubAgentCompletions []string
 	// ItemTypes counts persisted response_item types; a diagnostic, never a contract.
 	ItemTypes map[string]int
+	// FileChangeCount and CommandExecutionCount count completed Turn items of
+	// those kinds. They are evidence representations, not a unique oracle.
+	FileChangeCount       int
+	CommandExecutionCount int
 }
 
 // State summarizes the persisted lifecycle of the Turn for post-mortems.
@@ -284,6 +288,7 @@ type responseItem struct {
 	Namespace        string          `json:"namespace"`
 	CallID           string          `json:"call_id"`
 	Arguments        string          `json:"arguments"`
+	Input            string          `json:"input"`
 	EncryptedContent string          `json:"encrypted_content"`
 	Output           json.RawMessage `json:"output"`
 	Content          []struct {
@@ -448,14 +453,18 @@ func ReadSession(path string) (*Session, error) {
 			turn := currentTurn()
 			turn.ItemTypes[item.Type]++
 			switch item.Type {
-			case "function_call":
+			case "function_call", "custom_tool_call":
+				arguments := item.Arguments
+				if arguments == "" {
+					arguments = item.Input
+				}
 				turn.FunctionCalls = append(turn.FunctionCalls, FunctionCall{
 					CallID:    item.CallID,
 					Name:      item.Name,
 					Namespace: item.Namespace,
-					Arguments: item.Arguments,
+					Arguments: arguments,
 				})
-			case "function_call_output":
+			case "function_call_output", "custom_tool_call_output":
 				turn.FunctionCallOutputs = append(turn.FunctionCallOutputs, FunctionCallOutput{
 					CallID: item.CallID,
 					Text:   outputText(item.Output),
@@ -504,7 +513,14 @@ func recordCompletedItem(turn *Turn, raw json.RawMessage) {
 	if json.Unmarshal(raw, &item) != nil {
 		return
 	}
+	if item.Type != "" {
+		turn.ItemTypes[item.Type]++
+	}
 	switch item.Type {
+	case "FileChange":
+		turn.FileChangeCount++
+	case "CommandExecution":
+		turn.CommandExecutionCount++
 	case "SubAgentActivity":
 		if item.Kind == "completed" && item.AgentThreadID != "" {
 			turn.SubAgentCompletions = append(turn.SubAgentCompletions, item.AgentThreadID)

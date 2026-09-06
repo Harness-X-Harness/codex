@@ -9,7 +9,7 @@ PR ──► grokex-checks        deterministic gate: Rust contract tests and se
                             model-visible request snapshots, validator tests,
                             seam series, release helper contracts
 push ► grokex-build         Linux archive for the product tree (cached by tree)
-dispatch ► grokex-release   identities → six archives (cached) → four Live
+dispatch ► grokex-release   identities → six archives (cached) → five Live
                             scenarios → assemble → publish once → verify
 schedule ► grokex-release   same build and Live jobs in observation mode
 ```
@@ -69,7 +69,11 @@ rollouts under `sessions/`, the saved artifacts, and the reply the app-server
 delivered. It answers app-server requests fail-closed: approvals are declined,
 the one client-owned dynamic tool of the continuation scenario
 (`grokex_live_probe`) is answered with its fixed marker, anything else fails
-the run as a harness failure. Notification kinds, tool-call names, item types,
+the run as a harness failure. The `custom-apply-patch` scenario starts its
+Thread with approval policy `never`, sandbox `danger-full-access`, and
+`shell_tool` disabled so the only offered file-edit tool is custom
+`apply_patch`; that scenario does not change the global fail-closed approval
+handler. Notification kinds, tool-call names, item types,
 server-request counts, and timings are diagnostics; a deadline expiry records
 `last_proven_stage` and the persisted Turn state. Raw rollout lines never leave
 the validator.

@@ -415,6 +415,119 @@ func TestContinuationRequiresEncryptedReasoning(t *testing.T) {
 	}
 }
 
+func applyPatchGraph(fileChange bool, calls []rollout.FunctionCall, commandExecutions int) *rollout.Graph {
+	turn := &rollout.Turn{
+		ID:                    "turn-apply",
+		Model:                 "grok-4.6",
+		Completed:             true,
+		LastAgentMessage:      ApplyPatchMarker,
+		FunctionCalls:         calls,
+		FileChangeCount:       0,
+		CommandExecutionCount: commandExecutions,
+		ItemTypes:             map[string]int{},
+	}
+	if fileChange {
+		turn.FileChangeCount = 1
+	}
+	return &rollout.Graph{Sessions: []*rollout.Session{{
+		ID:            "thread-apply",
+		ModelProvider: "grok",
+		Turns:         []*rollout.Turn{turn},
+	}}}
+}
+
+func seedWorkspace(t *testing.T, contents string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, applyPatchFile), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestApplyPatchProvesFileResultAndCustomTool(t *testing.T) {
+	workspace := seedWorkspace(t, "WORLD\n")
+	verdict := ApplyPatch(
+		applyPatchGraph(false, []rollout.FunctionCall{{Name: "apply_patch", CallID: "c1"}}, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+	)
+	if !verdict.OK() {
+		t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
+	}
+	want := map[string]any{
+		"apply_patch_path":             "custom_apply_patch",
+		"evidence_source":              "canonical_session",
+		"provider_binding":             "grok/grok-4.6",
+		"response_assertion":           "nonempty_agent_message",
+		"result_delivery_verified":     true,
+		"runner_turn_submission_count": 1,
+		"shell_edit_absent":            true,
+		"status":                       "completed",
+		"workspace_file_result":        applyPatchExpected,
+	}
+	if !reflect.DeepEqual(verdict.Assertions, want) {
+		t.Fatalf("assertions = %#v", verdict.Assertions)
+	}
+	if verdict.Diagnostics["reply_matches_requested_marker"] != true {
+		t.Fatalf("marker hint = %#v", verdict.Diagnostics["reply_matches_requested_marker"])
+	}
+}
+
+func TestApplyPatchAcceptsHashedWireNameAndFileChange(t *testing.T) {
+	workspace := seedWorkspace(t, "WORLD")
+	verdict := ApplyPatch(
+		applyPatchGraph(true, []rollout.FunctionCall{{Name: "local__apply_patch__abc123def456", CallID: "c1"}}, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+	)
+	if !verdict.OK() {
+		t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
+	}
+}
+
+func TestApplyPatchAcceptsFileChangeWithoutCallName(t *testing.T) {
+	workspace := seedWorkspace(t, "WORLD")
+	verdict := ApplyPatch(
+		applyPatchGraph(true, nil, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+	)
+	if !verdict.OK() {
+		t.Fatalf("file_change without a named call should prove the edit path: %+v", verdict)
+	}
+}
+
+func TestApplyPatchRejectsShellEdit(t *testing.T) {
+	workspace := seedWorkspace(t, "WORLD")
+	verdict := ApplyPatch(
+		applyPatchGraph(true, []rollout.FunctionCall{
+			{Name: "apply_patch", CallID: "c1"},
+			{Name: "exec_command", CallID: "c2"},
+		}, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+	)
+	if verdict.OK() || verdict.FailureCategory != "semantic_contract" || verdict.LastProvenStage != "apply_patch_path_verified" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	if _, ok := verdict.Assertions["shell_edit_absent"]; ok {
+		t.Fatal("failed contract must not be asserted")
+	}
+}
+
+func TestApplyPatchRejectsWrongFile(t *testing.T) {
+	workspace := seedWorkspace(t, "HELLO\n")
+	verdict := ApplyPatch(
+		applyPatchGraph(false, []rollout.FunctionCall{{Name: "apply_patch", CallID: "c1"}}, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+	)
+	if verdict.OK() || verdict.LastProvenStage != "shell_edit_absent" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+}
+
 func TestContinuationHistoryMustReturnToolOutput(t *testing.T) {
 	graph := fixtures(t, "probe")
 	verdict := Continuation(graph,
