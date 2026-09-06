@@ -13,6 +13,8 @@ use rhai::EvalAltResult;
 use rhai::Map;
 use rhai::Position;
 use rhai::Scope;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::scratch;
 
@@ -238,6 +240,22 @@ fn build_engine(
             Err(terminated(ControlToken::Complete))
         },
     );
+    engine.register_fn("fingerprint", |text: &str| -> String {
+        format!("{:x}", Sha256::digest(text.as_bytes()))
+    });
+    engine.register_fn(
+        "json_encode",
+        |value: Dynamic| -> Result<String, Box<EvalAltResult>> {
+            let encoded = serde_json::to_string(&dynamic_to_json(value)?)
+                .map_err(|error| runtime_error(format!("json_encode() failed: {error}")))?;
+            if encoded.chars().count() > MAX_WORKFLOW_SOURCE_CHARS {
+                return Err(runtime_error(format!(
+                    "json_encode() exceeds {MAX_WORKFLOW_SOURCE_CHARS} characters"
+                )));
+            }
+            Ok(encoded)
+        },
+    );
 
     let replies = Rc::new(served_replies.to_vec());
     let index = Rc::new(Cell::new(0usize));
@@ -422,6 +440,62 @@ fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
         Dynamic::from(message.into()),
         Position::NONE,
     ))
+}
+
+fn dynamic_to_json(value: Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {
+    if value.is_unit() {
+        return Ok(serde_json::Value::Null);
+    }
+    if value.is_bool() {
+        let flag = value
+            .as_bool()
+            .map_err(|_| runtime_error("json_encode() requires a bool"))?;
+        return Ok(serde_json::Value::Bool(flag));
+    }
+    if value.is_int() {
+        let number = value
+            .as_int()
+            .map_err(|_| runtime_error("json_encode() requires an integer"))?;
+        return Ok(serde_json::Value::Number(number.into()));
+    }
+    if value.is_float() {
+        let number = value
+            .as_float()
+            .map_err(|_| runtime_error("json_encode() requires a float"))?;
+        let encoded = serde_json::Number::from_f64(number)
+            .ok_or_else(|| runtime_error("json_encode() requires a finite float"))?;
+        return Ok(serde_json::Value::Number(encoded));
+    }
+    if value.is_string() {
+        let text = value
+            .into_string()
+            .map_err(|_| runtime_error("json_encode() requires a string"))?;
+        return Ok(serde_json::Value::String(text));
+    }
+    if value.is_array() {
+        let items = value
+            .into_array()
+            .map_err(|_| runtime_error("json_encode() requires an array"))?;
+        let mut encoded = Vec::with_capacity(items.len());
+        for item in items {
+            encoded.push(dynamic_to_json(item)?);
+        }
+        return Ok(serde_json::Value::Array(encoded));
+    }
+    if value.is_map() {
+        let map = value
+            .try_cast::<Map>()
+            .ok_or_else(|| runtime_error("json_encode() requires a map"))?;
+        let mut object = serde_json::Map::new();
+        for (key, item) in map {
+            object.insert(key.to_string(), dynamic_to_json(item)?);
+        }
+        return Ok(serde_json::Value::Object(object));
+    }
+    Err(runtime_error(format!(
+        "json_encode() does not accept {}",
+        value.type_name()
+    )))
 }
 
 fn take_served_or_yield(
