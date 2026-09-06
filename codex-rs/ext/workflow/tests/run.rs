@@ -46,6 +46,40 @@ fn advance_resumes_after_agent_then_branches() {
 }
 
 #[test]
+fn parallel_stop_after_first_item_replays_without_a_second_turn() {
+    let source = r#"
+        let results = parallel([
+            #{ prompt: "first" },
+            #{ prompt: "second" },
+        ]);
+        if results[0].text == "one" && results[1].text == "two" {
+            complete();
+        }
+    "#;
+    let mut run = WorkflowRun::start(ThreadId::from_u128(14), source).expect("start");
+    assert_eq!(run.pending_instruction.as_deref(), Some("first"));
+    assert_eq!(
+        run.advance_with_reply("one".to_string()),
+        Ok(WorkflowAdvance::Yielded)
+    );
+    assert_eq!(run.pending_instruction.as_deref(), Some("second"));
+    assert_eq!(run.served_replies, vec!["one".to_string()]);
+    run.stop().expect("stop");
+    run.resume().expect("resume");
+    assert_eq!(run.status, WorkflowStatus::Active);
+    assert_eq!(run.pending_instruction.as_deref(), Some("second"));
+    assert_eq!(run.served_replies, vec!["one".to_string()]);
+    assert_eq!(
+        run.advance_with_reply("two".to_string()),
+        Ok(WorkflowAdvance::Completed)
+    );
+    assert_eq!(
+        run.served_replies,
+        vec!["one".to_string(), "two".to_string()]
+    );
+}
+
+#[test]
 fn agent_then_pause_resumes_without_a_second_host_turn() {
     let source = r#"
         let r = agent("Say ok.");

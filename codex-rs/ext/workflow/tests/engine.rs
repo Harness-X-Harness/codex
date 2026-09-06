@@ -2,6 +2,7 @@ use pretty_assertions::assert_eq;
 
 use codex_workflow_extension::MAX_WORKFLOW_REPLY_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
+use codex_workflow_extension::MAX_WORKFLOW_YIELDS;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowSourceError;
 use codex_workflow_extension::eval_source;
@@ -130,6 +131,119 @@ fn empty_agent_prompt_is_rejected() {
         }
         other => panic!("expected Invalid, got {other:?}"),
     }
+}
+
+#[test]
+fn empty_parallel_completes_without_a_yield() {
+    assert_eq!(
+        eval_source("parallel([]); complete();", &[]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn parallel_yields_each_prompt_then_branches_on_ordered_results() {
+    let source = r#"
+        let results = parallel([
+            #{ prompt: "first" },
+            #{ prompt: "second", label: "unused" },
+        ]);
+        if results[0].ok && results[0].text == "one"
+            && results[1].ok && results[1].text == "two"
+        {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "first".to_string(),
+        }
+    );
+    assert_eq!(
+        eval_source(source, &["one".to_string()]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "second".to_string(),
+        }
+    );
+    assert_eq!(
+        eval_source(source, &["one".to_string(), "two".to_string()]).expect("eval"),
+        WorkflowEval::Completed
+    );
+    assert_eq!(
+        eval_source(source, &["one".to_string(), "no".to_string()]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "wrong reply".to_string(),
+        }
+    );
+}
+
+#[test]
+fn parallel_rejects_non_map_items_and_empty_prompts() {
+    for source in [
+        r#"parallel(["x"]);"#,
+        r#"parallel([#{ label: "no-prompt" }]);"#,
+        r#"parallel([#{ prompt: "" }]);"#,
+    ] {
+        let error = eval_source(source, &[]).expect_err(source);
+        match error {
+            WorkflowSourceError::Invalid { reason } => {
+                assert!(
+                    reason.contains("option maps")
+                        || reason.contains("nonempty prompt")
+                        || reason.contains("prompt"),
+                    "{source} unexpected reason: {reason}"
+                );
+            }
+            other => panic!("{source} expected Invalid, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn parallel_rejects_over_yield_budget_before_yielding() {
+    let mut source = String::from("parallel([");
+    for index in 0..=MAX_WORKFLOW_YIELDS {
+        if index > 0 {
+            source.push(',');
+        }
+        source.push_str(&format!("#{{ prompt: \"p{index}\" }}"));
+    }
+    source.push_str("]);");
+    let error = eval_source(&source, &[]).expect_err("over budget");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("remaining yield budget"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn parallel_pause_replays_the_first_item_without_a_second_turn() {
+    let source = r#"
+        let results = parallel([
+            #{ prompt: "first" },
+            #{ prompt: "second" },
+        ]);
+        pause();
+        if results[0].text == "one" && results[1].text == "two" {
+            complete();
+        }
+    "#;
+    assert_eq!(
+        eval_source_with_pauses(source, &["one".to_string(), "two".to_string()], 0).expect("eval"),
+        WorkflowEval::Paused
+    );
+    assert_eq!(
+        eval_source_with_pauses(source, &["one".to_string(), "two".to_string()], 1).expect("eval"),
+        WorkflowEval::Completed
+    );
 }
 
 #[test]
