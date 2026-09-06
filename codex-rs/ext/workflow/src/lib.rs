@@ -16,6 +16,7 @@ pub use engine::MAX_WORKFLOW_YIELDS;
 pub use engine::WorkflowEval;
 pub use engine::WorkflowSourceError;
 pub use engine::eval_source;
+pub use engine::eval_source_with_pauses;
 pub use engine::truncate_workflow_reply;
 pub use engine::validate_source;
 pub use extension::WorkflowExtensionConfig;

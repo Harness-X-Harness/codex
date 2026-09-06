@@ -5,6 +5,7 @@ use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowSourceError;
 use codex_workflow_extension::eval_source;
+use codex_workflow_extension::eval_source_with_pauses;
 use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
 
@@ -80,6 +81,37 @@ fn agent_opts_map_is_accepted() {
     "#;
     assert_eq!(
         eval_source(source, &["ok".to_string()]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn pause_replays_completed_agent_and_then_completes() {
+    let source = r#"
+        let r = agent("Say ok.");
+        pause();
+        if r.ok && r.text == "ok" {
+            complete();
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &["ok".to_string()]).expect("eval"),
+        WorkflowEval::Paused
+    );
+    assert_eq!(
+        eval_source_with_pauses(source, &["ok".to_string()], 1).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn await_user_is_a_this_run_pause() {
+    assert_eq!(
+        eval_source("await_user(); complete();", &[]).expect("eval"),
+        WorkflowEval::Paused
+    );
+    assert_eq!(
+        eval_source_with_pauses("await_user(); complete();", &[], 1).expect("eval"),
         WorkflowEval::Completed
     );
 }

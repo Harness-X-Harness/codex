@@ -9,7 +9,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::engine::WorkflowEval;
-use crate::engine::eval_source;
+use crate::engine::eval_source_with_pauses;
 use crate::engine::truncate_workflow_reply;
 
 /// Lifecycle of one thread's workflow run.
@@ -32,6 +32,8 @@ pub struct WorkflowRun {
     pub served_asks: u32,
     #[serde(default)]
     pub served_replies: Vec<String>,
+    #[serde(default)]
+    pub served_pauses: u32,
     pub pending_instruction: Option<String>,
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
@@ -45,6 +47,7 @@ pub struct WorkflowRun {
 pub enum WorkflowAdvance {
     Yielded,
     Completed,
+    Paused,
 }
 
 impl WorkflowRun {
@@ -58,12 +61,15 @@ impl WorkflowRun {
             source: source.trim().to_string(),
             served_asks: 0,
             served_replies: Vec::new(),
+            served_pauses: 0,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
             updated_at: now,
         };
-        run.apply_eval(eval_source(&run.source, &[]).map_err(|error| error.to_string())?)?;
+        run.apply_eval(
+            eval_source_with_pauses(&run.source, &[], 0).map_err(|error| error.to_string())?,
+        )?;
         Ok(run)
     }
 
@@ -82,15 +88,17 @@ impl WorkflowRun {
         let pending_yield_started = self.pending_yield_started;
         let previous_asks = self.served_asks;
         let previous_replies = self.served_replies.clone();
+        let previous_pauses = self.served_pauses;
         self.served_replies.push(truncate_workflow_reply(&reply));
         self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
         self.pending_instruction = None;
         self.pending_yield_started = false;
-        match eval_source(&self.source, &self.served_replies) {
+        match eval_source_with_pauses(&self.source, &self.served_replies, self.served_pauses) {
             Ok(outcome) => self.apply_eval(outcome),
             Err(error) => {
                 self.served_asks = previous_asks;
                 self.served_replies = previous_replies;
+                self.served_pauses = previous_pauses;
                 self.pending_instruction = pending;
                 self.pending_yield_started = pending_yield_started;
                 Err(error.to_string())
@@ -127,7 +135,19 @@ impl WorkflowRun {
         }
         self.status = WorkflowStatus::Active;
         self.updated_at = unix_seconds();
-        Ok(())
+        if self.pending_instruction.is_some() {
+            return Ok(());
+        }
+        let previous = self.served_pauses;
+        self.served_pauses = self.served_pauses.saturating_add(1);
+        match eval_source_with_pauses(&self.source, &self.served_replies, self.served_pauses) {
+            Ok(outcome) => self.apply_eval(outcome).map(|_| ()),
+            Err(error) => {
+                self.served_pauses = previous;
+                self.status = WorkflowStatus::Paused;
+                Err(error.to_string())
+            }
+        }
     }
 
     pub fn mark_pending_yield_started(&mut self) {
@@ -150,6 +170,13 @@ impl WorkflowRun {
                 self.pending_yield_started = false;
                 self.updated_at = unix_seconds();
                 Ok(WorkflowAdvance::Yielded)
+            }
+            WorkflowEval::Paused => {
+                self.status = WorkflowStatus::Paused;
+                self.pending_instruction = None;
+                self.pending_yield_started = false;
+                self.updated_at = unix_seconds();
+                Ok(WorkflowAdvance::Paused)
             }
         }
     }

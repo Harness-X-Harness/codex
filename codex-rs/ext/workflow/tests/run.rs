@@ -46,6 +46,28 @@ fn advance_resumes_after_agent_then_branches() {
 }
 
 #[test]
+fn agent_then_pause_resumes_without_a_second_host_turn() {
+    let source = r#"
+        let r = agent("Say ok.");
+        pause();
+        if r.ok && r.text == "ok" {
+            complete();
+        }
+    "#;
+    let mut run = WorkflowRun::start(ThreadId::from_u128(11), source).expect("start");
+    assert_eq!(
+        run.advance_with_reply("ok".to_string()),
+        Ok(WorkflowAdvance::Paused)
+    );
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    run.resume().expect("resume");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.served_pauses, 1);
+    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+}
+
+#[test]
 fn advance_resumes_after_ask_then_completes() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(2), yield_then_complete()).expect("start");
     assert_eq!(run.status, WorkflowStatus::Active);

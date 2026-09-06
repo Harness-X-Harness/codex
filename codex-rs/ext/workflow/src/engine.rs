@@ -50,12 +50,14 @@ impl std::error::Error for WorkflowSourceError {}
 pub enum WorkflowEval {
     Completed,
     Yielded { instruction: String },
+    Paused,
 }
 
 #[derive(Clone, Debug)]
 enum ControlToken {
     Complete,
     Yield(String),
+    Pause,
 }
 
 const FORBIDDEN_GOAL_BINDINGS: &[&str] = &[
@@ -77,7 +79,7 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
     if actual > MAX_WORKFLOW_SOURCE_CHARS {
         return Err(WorkflowSourceError::TooLarge { actual });
     }
-    let engine = build_engine(&[]);
+    let engine = build_engine(&[], 0);
     engine
         .compile(source)
         .map(|_| ())
@@ -92,13 +94,27 @@ pub fn eval_source(
     source: &str,
     served_replies: &[String],
 ) -> Result<WorkflowEval, WorkflowSourceError> {
+    eval_source_with_pauses(source, served_replies, 0)
+}
+
+/// Resume a program with replayed host replies and consumed `pause` / `await_user` calls.
+pub fn eval_source_with_pauses(
+    source: &str,
+    served_replies: &[String],
+    served_pauses: u32,
+) -> Result<WorkflowEval, WorkflowSourceError> {
     validate_source(source)?;
     if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
         return Err(WorkflowSourceError::Invalid {
             reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} yields"),
         });
     }
-    let engine = build_engine(served_replies);
+    if served_pauses > MAX_WORKFLOW_YIELDS {
+        return Err(WorkflowSourceError::Invalid {
+            reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} pauses"),
+        });
+    }
+    let engine = build_engine(served_replies, served_pauses);
     let ast = engine
         .compile(source)
         .map_err(|error| WorkflowSourceError::Invalid {
@@ -123,7 +139,7 @@ pub fn truncate_workflow_reply(reply: &str) -> String {
     out
 }
 
-fn build_engine(served_replies: &[String]) -> Engine {
+fn build_engine(served_replies: &[String], served_pauses: u32) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_WORKFLOW_OPERATIONS);
     engine.set_max_call_levels(MAX_CALL_LEVELS);
@@ -186,6 +202,16 @@ fn build_engine(served_replies: &[String]) -> Engine {
         },
     );
 
+    let pause_index = Rc::new(Cell::new(0u32));
+    let pause_for_pause = Rc::clone(&pause_index);
+    engine.register_fn("pause", move || -> Result<(), Box<EvalAltResult>> {
+        take_served_or_pause(&pause_for_pause, served_pauses)
+    });
+    let pause_for_await = Rc::clone(&pause_index);
+    engine.register_fn("await_user", move || -> Result<(), Box<EvalAltResult>> {
+        take_served_or_pause(&pause_for_await, served_pauses)
+    });
+
     for name in FORBIDDEN_GOAL_BINDINGS {
         let binding = (*name).to_string();
         engine.register_fn(binding.as_str(), || -> Result<(), Box<EvalAltResult>> {
@@ -209,6 +235,7 @@ fn outcome_from_error(error: EvalAltResult) -> Result<WorkflowEval, WorkflowSour
         return match token {
             ControlToken::Complete => Ok(WorkflowEval::Completed),
             ControlToken::Yield(instruction) => Ok(WorkflowEval::Yielded { instruction }),
+            ControlToken::Pause => Ok(WorkflowEval::Paused),
         };
     }
     Err(WorkflowSourceError::Invalid {
@@ -254,6 +281,18 @@ fn take_served_or_yield(
         return Err(runtime_error(empty_error));
     }
     Err(terminated(ControlToken::Yield(instruction.to_string())))
+}
+
+fn take_served_or_pause(
+    index: &Rc<Cell<u32>>,
+    served_pauses: u32,
+) -> Result<(), Box<EvalAltResult>> {
+    let i = index.get();
+    if i < served_pauses {
+        index.set(i.saturating_add(1));
+        return Ok(());
+    }
+    Err(terminated(ControlToken::Pause))
 }
 
 fn agent_result_from_reply(reply: &str) -> Dynamic {
