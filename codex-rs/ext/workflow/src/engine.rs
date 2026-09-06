@@ -238,6 +238,19 @@ fn build_engine(served_replies: &[String], served_pauses: u32) -> Engine {
         },
     );
 
+    let index_for_budget = Rc::clone(&index);
+    engine.register_fn("budget", move || -> Result<Dynamic, Box<EvalAltResult>> {
+        let spent = i64::try_from(index_for_budget.get()).unwrap_or(i64::MAX);
+        let total = i64::from(MAX_WORKFLOW_YIELDS);
+        let remaining = total.saturating_sub(spent);
+        let mut map = Map::new();
+        map.insert("total".into(), Dynamic::from(total));
+        map.insert("spent".into(), Dynamic::from(spent));
+        map.insert("reserved".into(), Dynamic::from(0_i64));
+        map.insert("remaining".into(), Dynamic::from(remaining));
+        Ok(Dynamic::from(map))
+    });
+
     let pause_index = Rc::new(Cell::new(0u32));
     let pause_for_pause = Rc::clone(&pause_index);
     engine.register_fn("pause", move || -> Result<(), Box<EvalAltResult>> {

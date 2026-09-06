@@ -133,6 +133,72 @@ fn empty_agent_prompt_is_rejected() {
 }
 
 #[test]
+fn budget_before_any_yield_reports_the_full_allowance() {
+    let source = r#"
+        let b = budget();
+        if b.total == 32 && b.spent == 0 && b.reserved == 0 && b.remaining == 32 {
+            complete();
+        } else {
+            ask("wrong budget");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn budget_after_one_journaled_agent_decrements_remaining() {
+    let source = r#"
+        let r = agent("Say ok.");
+        let b = budget();
+        if r.ok && b.spent == 1 && b.remaining == 31 && b.reserved == 0 && b.total == 32 {
+            complete();
+        } else {
+            ask("wrong budget");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(
+        eval_source(source, &["ok".to_string()]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn budget_branch_on_remaining_is_recomputed_on_resume() {
+    let source = r#"
+        let first = budget();
+        if first.remaining != 32 {
+            ask("wrong first remaining");
+        }
+        agent("Say ok.");
+        let second = budget();
+        if second.remaining == 31 {
+            complete();
+        } else {
+            ask("wrong second remaining");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(
+        eval_source(source, &["ok".to_string()]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
 fn ask_returns_the_host_reply() {
     let source = r#"let x = ask("Say ok."); if x == "ok" { complete(); }"#;
     assert_eq!(
