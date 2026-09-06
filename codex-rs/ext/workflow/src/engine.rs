@@ -380,7 +380,7 @@ fn build_engine(
         move |prompt: &str, opts: Map| -> Result<Dynamic, Box<EvalAltResult>> {
             take_agent_call(
                 prompt,
-                host_opts::spawn_task_name(Some(&opts))?,
+                host_opts::spawn_task_name(&opts)?,
                 spawn,
                 &index_for_agent_opts,
                 &yield_index_for_agent_opts,

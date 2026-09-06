@@ -27,10 +27,7 @@ fn reject_unknown_keys(opts: &Map, allowed: &[&str], what: &str) -> Result<(), B
 }
 
 /// Validate `agent(prompt, opts)` and return a spawn `task_name` when requested.
-pub fn spawn_task_name(opts: Option<&Map>) -> Result<Option<String>, Box<EvalAltResult>> {
-    let Some(opts) = opts else {
-        return Ok(None);
-    };
+pub fn spawn_task_name(opts: &Map) -> Result<Option<String>, Box<EvalAltResult>> {
     reject_unknown_keys(opts, AGENT_KEYS, "agent()")?;
     spawn_task_name_from_validated(opts, "agent()")
 }

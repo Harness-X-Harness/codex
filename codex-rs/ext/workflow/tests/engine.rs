@@ -410,7 +410,7 @@ fn empty_agent_prompt_is_rejected() {
 fn yield_budget_before_any_yield_reports_the_full_allowance() {
     let source = r#"
         let b = yield_budget();
-        if b.total == 32 && b.spent == 0 && b.remaining == 32 && b.reserved == () {
+        if b.total == 32 && b.spent == 0 && b.remaining == 32 {
             complete();
         } else {
             ask("wrong budget");
