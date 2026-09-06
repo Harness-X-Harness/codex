@@ -9,11 +9,15 @@ use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowEvalOutcome;
 use codex_workflow_extension::WorkflowSourceError;
+use codex_workflow_extension::agent_record;
+use codex_workflow_extension::ask_record;
+use codex_workflow_extension::await_user_record;
 use codex_workflow_extension::eval_source;
 use codex_workflow_extension::eval_source_with_env;
-use codex_workflow_extension::eval_source_with_pauses;
 use codex_workflow_extension::eval_source_with_scratch;
 use codex_workflow_extension::eval_source_with_spawn;
+use codex_workflow_extension::pause_record;
+use codex_workflow_extension::spawn_record;
 use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
 
@@ -27,16 +31,16 @@ fn complete_ends_the_run() {
 
 #[test]
 fn complete_stores_this_run_json_result() {
-    let none = eval_source_with_env("complete();", &[], 0, &Map::new()).expect("eval");
+    let none = eval_source_with_env("complete();", &[], &Map::new()).expect("eval");
     assert_eq!(none.eval, WorkflowEval::Completed);
     assert_eq!(none.result, serde_json::Value::Null);
 
-    let done = eval_source_with_env(r#"complete("done");"#, &[], 0, &Map::new()).expect("eval");
+    let done = eval_source_with_env(r#"complete("done");"#, &[], &Map::new()).expect("eval");
     assert_eq!(done.eval, WorkflowEval::Completed);
     assert_eq!(done.result, serde_json::json!("done"));
 
     let object =
-        eval_source_with_env(r#"complete(#{ ok: true });"#, &[], 0, &Map::new()).expect("eval");
+        eval_source_with_env(r#"complete(#{ ok: true });"#, &[], &Map::new()).expect("eval");
     assert_eq!(object.eval, WorkflowEval::Completed);
     assert_eq!(object.result, serde_json::json!({ "ok": true }));
 }
@@ -59,7 +63,7 @@ fn complete_rejects_other_types_and_oversize_without_completing() {
         "big".into(),
         rhai::Dynamic::from("x".repeat(MAX_WORKFLOW_SOURCE_CHARS)),
     );
-    let error = eval_source_with_env("complete(args.big);", &[], 0, &oversized)
+    let error = eval_source_with_env("complete(args.big);", &[], &oversized)
         .expect_err("oversize complete");
     match error {
         WorkflowSourceError::Invalid { reason } => {
@@ -88,7 +92,7 @@ fn ask_yields_then_complete_after_host_resume() {
     assert_eq!(
         eval_source(
             r#"ask("Compile the crate."); complete();"#,
-            &[String::new()]
+            &[ask_record("Compile the crate.", "")],
         )
         .expect("eval"),
         WorkflowEval::Completed
@@ -112,11 +116,11 @@ fn agent_yields_then_branches_on_structured_result() {
         }
     );
     assert_eq!(
-        eval_source(source, &["ok".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "ok")]).expect("eval"),
         WorkflowEval::Completed
     );
     assert_eq!(
-        eval_source(source, &["no".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "no")]).expect("eval"),
         WorkflowEval::Yielded {
             instruction: "wrong reply".to_string(),
         }
@@ -132,7 +136,7 @@ fn agent_opts_map_is_accepted() {
         }
     "#;
     assert_eq!(
-        eval_source(source, &["ok".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "ok")]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -147,11 +151,11 @@ fn pause_replays_completed_agent_and_then_completes() {
         }
     "#;
     assert_eq!(
-        eval_source(source, &["ok".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "ok")]).expect("eval"),
         WorkflowEval::Paused
     );
     assert_eq!(
-        eval_source_with_pauses(source, &["ok".to_string()], 1).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "ok"), pause_record()]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -163,7 +167,7 @@ fn await_user_is_a_this_run_pause() {
         WorkflowEval::Paused
     );
     assert_eq!(
-        eval_source_with_pauses("await_user(); complete();", &[], 1).expect("eval"),
+        eval_source("await_user(); complete();", &[await_user_record()]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -177,7 +181,7 @@ fn write_then_read_scratch_file_completes() {
             complete();
         }
     "#;
-    let outcome = eval_source_with_scratch(source, &[], 0, &Map::new(), dir.path()).expect("eval");
+    let outcome = eval_source_with_scratch(source, &[], &Map::new(), dir.path()).expect("eval");
     assert_eq!(outcome.eval, WorkflowEval::Completed);
 }
 
@@ -193,7 +197,7 @@ fn scratch_rejects_path_components_empty_name_and_missing_file() {
         r#"read_scratch_file("missing.txt");"#,
     ] {
         let error =
-            eval_source_with_scratch(source, &[], 0, &Map::new(), dir.path()).expect_err(source);
+            eval_source_with_scratch(source, &[], &Map::new(), dir.path()).expect_err(source);
         match error {
             WorkflowSourceError::Invalid { reason } => {
                 assert!(
@@ -218,7 +222,6 @@ fn scratch_write_rejects_symlink_file() {
     let error = eval_source_with_scratch(
         r#"write_scratch_file("note.txt", "hello");"#,
         &[],
-        0,
         &Map::new(),
         dir.path(),
     )
@@ -244,7 +247,6 @@ fn scratch_does_not_follow_parent_symlink() {
     let error = eval_source_with_scratch(
         r#"write_scratch_file("note.txt", "hello");"#,
         &[],
-        0,
         &Map::new(),
         &scratch,
     )
@@ -269,7 +271,6 @@ fn scratch_read_rejects_oversized_file() {
     let error = eval_source_with_scratch(
         r#"read_scratch_file("big.txt");"#,
         &[],
-        0,
         &Map::new(),
         dir.path(),
     )
@@ -330,7 +331,7 @@ fn budget_after_one_journaled_agent_decrements_remaining() {
         }
     );
     assert_eq!(
-        eval_source(source, &["ok".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "ok")]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -357,7 +358,7 @@ fn budget_branch_on_remaining_is_recomputed_on_resume() {
         }
     );
     assert_eq!(
-        eval_source(source, &["ok".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("Say ok.", "ok")]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -392,17 +393,25 @@ fn parallel_yields_each_prompt_then_branches_on_ordered_results() {
         }
     );
     assert_eq!(
-        eval_source(source, &["one".to_string()]).expect("eval"),
+        eval_source(source, &[agent_record("first", "one")]).expect("eval"),
         WorkflowEval::Yielded {
             instruction: "second".to_string(),
         }
     );
     assert_eq!(
-        eval_source(source, &["one".to_string(), "two".to_string()]).expect("eval"),
+        eval_source(
+            source,
+            &[agent_record("first", "one"), agent_record("second", "two")]
+        )
+        .expect("eval"),
         WorkflowEval::Completed
     );
     assert_eq!(
-        eval_source(source, &["one".to_string(), "no".to_string()]).expect("eval"),
+        eval_source(
+            source,
+            &[agent_record("first", "one"), agent_record("second", "no")]
+        )
+        .expect("eval"),
         WorkflowEval::Yielded {
             instruction: "wrong reply".to_string(),
         }
@@ -466,11 +475,23 @@ fn parallel_pause_replays_the_first_item_without_a_second_turn() {
         }
     "#;
     assert_eq!(
-        eval_source_with_pauses(source, &["one".to_string(), "two".to_string()], 0).expect("eval"),
+        eval_source(
+            source,
+            &[agent_record("first", "one"), agent_record("second", "two")]
+        )
+        .expect("eval"),
         WorkflowEval::Paused
     );
     assert_eq!(
-        eval_source_with_pauses(source, &["one".to_string(), "two".to_string()], 1).expect("eval"),
+        eval_source(
+            source,
+            &[
+                agent_record("first", "one"),
+                agent_record("second", "two"),
+                pause_record()
+            ]
+        )
+        .expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -485,7 +506,7 @@ fn ask_returns_the_host_reply() {
         }
     );
     assert_eq!(
-        eval_source(source, &["ok".to_string()]).expect("eval"),
+        eval_source(source, &[ask_record("Say ok.", "ok")]).expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -652,8 +673,8 @@ fn json_encode_covers_accepted_types_and_rejects_others() {
         "big".into(),
         rhai::Dynamic::from("x".repeat(MAX_WORKFLOW_SOURCE_CHARS)),
     );
-    let error = eval_source_with_env("json_encode(args.big);", &[], 0, &oversized)
-        .expect_err("oversize json");
+    let error =
+        eval_source_with_env("json_encode(args.big);", &[], &oversized).expect_err("oversize json");
     match error {
         WorkflowSourceError::Invalid { reason } => {
             assert!(reason.contains("exceeds"), "unexpected reason: {reason}");
@@ -676,7 +697,7 @@ fn script_branches_on_fingerprint_and_json_encode() {
     let mut matching = Map::new();
     matching.insert("text".into(), rhai::Dynamic::from("a"));
     assert_eq!(
-        eval_source_with_env(source, &[], 0, &matching)
+        eval_source_with_env(source, &[], &matching)
             .expect("eval")
             .eval,
         WorkflowEval::Completed
@@ -685,7 +706,7 @@ fn script_branches_on_fingerprint_and_json_encode() {
     let mut other = Map::new();
     other.insert("text".into(), rhai::Dynamic::from("b"));
     assert_eq!(
-        eval_source_with_env(source, &[], 0, &other)
+        eval_source_with_env(source, &[], &other)
             .expect("eval")
             .eval,
         WorkflowEval::Yielded {
@@ -710,7 +731,7 @@ fn named_program_reads_args_and_records_phase() {
     "#;
     let mut args = Map::new();
     args.insert("topic".into(), rhai::Dynamic::from("rust"));
-    let outcome = eval_source_with_env(source, &[], 0, &args).expect("eval");
+    let outcome = eval_source_with_env(source, &[], &args).expect("eval");
     assert_eq!(
         outcome,
         WorkflowEvalOutcome {
@@ -719,6 +740,8 @@ fn named_program_reads_args_and_records_phase() {
             log: None,
             result: serde_json::Value::Null,
             spawn_task_name: None,
+            yield_kind: None,
+            yield_request_digest: None,
         }
     );
 }
@@ -728,7 +751,6 @@ fn log_records_last_nonempty_message_and_rejects_empty() {
     let outcome = eval_source_with_env(
         r#"log("first"); log("note"); complete();"#,
         &[],
-        0,
         &Map::new(),
     )
     .expect("eval");
@@ -740,6 +762,8 @@ fn log_records_last_nonempty_message_and_rejects_empty() {
             log: Some("note".to_string()),
             result: serde_json::Value::Null,
             spawn_task_name: None,
+            yield_kind: None,
+            yield_request_digest: None,
         }
     );
 
@@ -765,7 +789,7 @@ fn spawn_request_without_task_name_is_rejected_before_a_yield() {
         r#"agent("Say ok.", #{ "spawn": true, task_name: "   " });"#,
         r#"parallel([#{ prompt: "Say ok.", "spawn": true }]);"#,
     ] {
-        let error = eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available)
+        let error = eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available)
             .expect_err(source);
         match error {
             WorkflowSourceError::Invalid { reason } => {
@@ -801,7 +825,7 @@ fn spawn_string_or_false_stays_same_thread() {
         r#"let r = agent("Say ok.", #{ "spawn": false, task_name: "review" }); if r.ok { complete(); }"#,
         r#"let r = agent("Say ok.", #{ label: "unused" }); if r.ok { complete(); }"#,
     ] {
-        let outcome = eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available)
+        let outcome = eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available)
             .expect(source);
         assert_eq!(
             outcome.eval,
@@ -825,7 +849,7 @@ fn available_spawn_yields_then_replays_without_a_second_child() {
         }
     "#;
     let first =
-        eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available).expect("eval");
+        eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available).expect("eval");
     assert_eq!(
         first.eval,
         WorkflowEval::Yielded {
@@ -835,8 +859,7 @@ fn available_spawn_yields_then_replays_without_a_second_child() {
     assert_eq!(first.spawn_task_name.as_deref(), Some("review"));
     let replayed = eval_source_with_spawn(
         source,
-        &["ok".to_string()],
-        0,
+        &[spawn_record("Say ok.", "review", "ok")],
         &Map::new(),
         SpawnBinding::Available,
     )
@@ -857,7 +880,7 @@ fn parallel_items_can_request_spawn_independently() {
         }
     "#;
     let first =
-        eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available).expect("eval");
+        eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available).expect("eval");
     assert_eq!(
         first.eval,
         WorkflowEval::Yielded {
@@ -867,8 +890,7 @@ fn parallel_items_can_request_spawn_independently() {
     assert_eq!(first.spawn_task_name, None);
     let second = eval_source_with_spawn(
         source,
-        &["one".to_string()],
-        0,
+        &[agent_record("first", "one")],
         &Map::new(),
         SpawnBinding::Available,
     )

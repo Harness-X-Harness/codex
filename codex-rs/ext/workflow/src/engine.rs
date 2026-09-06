@@ -16,6 +16,16 @@ use rhai::Scope;
 use sha2::Digest;
 use sha2::Sha256;
 
+use crate::journal::ContinuationKind;
+use crate::journal::ContinuationRecord;
+use crate::journal::JournalLookup;
+use crate::journal::REPLAY_DIVERGENCE;
+use crate::journal::agent_request;
+use crate::journal::ask_request;
+use crate::journal::control_request;
+use crate::journal::lookup;
+use crate::journal::request_digest;
+use crate::journal::spawn_request;
 use crate::scratch;
 
 /// Inclusive cap on the source document.
@@ -63,8 +73,15 @@ pub enum WorkflowEval {
 #[derive(Clone, Debug)]
 enum ControlToken {
     Complete(serde_json::Value),
-    Yield(String),
-    Pause,
+    Yield {
+        instruction: String,
+        kind: ContinuationKind,
+        request_digest: String,
+    },
+    Pause {
+        kind: ContinuationKind,
+        request_digest: String,
+    },
 }
 
 const FORBIDDEN_GOAL_BINDINGS: &[&str] = &[
@@ -88,7 +105,6 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
     }
     let engine = build_engine(
         &[],
-        0,
         ScratchBinding::Unavailable,
         SpawnBinding::Unavailable,
         Rc::new(RefCell::new(None)),
@@ -101,36 +117,24 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
         })
 }
 
-/// Run or resume a Rhai program. `served_replies` are host answers for
-/// already-served `ask` and `agent` yields, in program order.
+/// Run or resume a Rhai program. `journal` is the identity-checked
+/// continuation log; positional replies alone are not replay identity.
 pub fn eval_source(
     source: &str,
-    served_replies: &[String],
+    journal: &[ContinuationRecord],
 ) -> Result<WorkflowEval, WorkflowSourceError> {
-    eval_source_with_pauses(source, served_replies, 0)
+    eval_source_with_env(source, journal, &Map::new()).map(|outcome| outcome.eval)
 }
 
-/// Resume a program with replayed host replies and consumed `pause` / `await_user` calls.
-pub fn eval_source_with_pauses(
-    source: &str,
-    served_replies: &[String],
-    served_pauses: u32,
-) -> Result<WorkflowEval, WorkflowSourceError> {
-    eval_source_with_env(source, served_replies, served_pauses, &Map::new())
-        .map(|outcome| outcome.eval)
-}
-
-/// Resume a program with replayed host replies, consumed pauses, and `args`.
+/// Resume a program with an identity-checked journal and `args`.
 pub fn eval_source_with_env(
     source: &str,
-    served_replies: &[String],
-    served_pauses: u32,
+    journal: &[ContinuationRecord],
     args: &Map,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     eval_source_inner(
         source,
-        served_replies,
-        served_pauses,
+        journal,
         args,
         ScratchBinding::Unavailable,
         SpawnBinding::Unavailable,
@@ -140,15 +144,13 @@ pub fn eval_source_with_env(
 /// Resume a program with a thread-local scratch directory.
 pub fn eval_source_with_scratch(
     source: &str,
-    served_replies: &[String],
-    served_pauses: u32,
+    journal: &[ContinuationRecord],
     args: &Map,
     scratch_dir: &Path,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     eval_source_inner(
         source,
-        served_replies,
-        served_pauses,
+        journal,
         args,
         ScratchBinding::Directory(scratch_dir),
         SpawnBinding::Unavailable,
@@ -170,34 +172,24 @@ pub enum SpawnBinding {
 /// Resume a program with an explicit spawn-agent binding.
 pub fn eval_source_with_spawn(
     source: &str,
-    served_replies: &[String],
-    served_pauses: u32,
+    journal: &[ContinuationRecord],
     args: &Map,
     spawn: SpawnBinding,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
-    eval_source_inner(
-        source,
-        served_replies,
-        served_pauses,
-        args,
-        ScratchBinding::Unavailable,
-        spawn,
-    )
+    eval_source_inner(source, journal, args, ScratchBinding::Unavailable, spawn)
 }
 
 /// Resume a program with scratch files and an explicit spawn-agent binding.
 pub fn eval_source_with_scratch_and_spawn(
     source: &str,
-    served_replies: &[String],
-    served_pauses: u32,
+    journal: &[ContinuationRecord],
     args: &Map,
     scratch_dir: &Path,
     spawn: SpawnBinding,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     eval_source_inner(
         source,
-        served_replies,
-        served_pauses,
+        journal,
         args,
         ScratchBinding::Directory(scratch_dir),
         spawn,
@@ -206,33 +198,21 @@ pub fn eval_source_with_scratch_and_spawn(
 
 fn eval_source_inner(
     source: &str,
-    served_replies: &[String],
-    served_pauses: u32,
+    journal: &[ContinuationRecord],
     args: &Map,
     scratch: ScratchBinding<'_>,
     spawn: SpawnBinding,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     validate_source(source)?;
-    if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
+    if journal.len() > MAX_WORKFLOW_YIELDS as usize {
         return Err(WorkflowSourceError::Invalid {
             reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} yields"),
-        });
-    }
-    if served_pauses > MAX_WORKFLOW_YIELDS {
-        return Err(WorkflowSourceError::Invalid {
-            reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} pauses"),
         });
     }
     let phase = Rc::new(RefCell::new(None));
     let log = Rc::new(RefCell::new(None));
     let spawn_task_name = Rc::new(RefCell::new(None));
-    let mut engine = build_engine(
-        served_replies,
-        served_pauses,
-        scratch,
-        spawn,
-        Rc::clone(&spawn_task_name),
-    );
+    let mut engine = build_engine(journal, scratch, spawn, Rc::clone(&spawn_task_name));
     let phase_for_fn = Rc::clone(&phase);
     engine.register_fn(
         "phase",
@@ -262,16 +242,19 @@ fn eval_source_inner(
         })?;
     let mut scope = Scope::new();
     scope.push_dynamic("args", Dynamic::from(args.clone()));
-    let (eval, result) = match engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
-        Ok(_) => (WorkflowEval::Completed, serde_json::Value::Null),
-        Err(error) => outcome_from_error(*error)?,
-    };
+    let (eval, result, yield_kind, yield_request_digest) =
+        match engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
+            Ok(_) => (WorkflowEval::Completed, serde_json::Value::Null, None, None),
+            Err(error) => outcome_from_error(*error)?,
+        };
     Ok(WorkflowEvalOutcome {
         eval,
         phase: phase.borrow().clone(),
         log: log.borrow().clone(),
         result,
         spawn_task_name: spawn_task_name.borrow().clone(),
+        yield_kind,
+        yield_request_digest,
     })
 }
 
@@ -283,6 +266,8 @@ pub struct WorkflowEvalOutcome {
     pub log: Option<String>,
     pub result: serde_json::Value,
     pub spawn_task_name: Option<String>,
+    pub yield_kind: Option<ContinuationKind>,
+    pub yield_request_digest: Option<String>,
 }
 
 /// Bound a model reply before it re-enters the VM.
@@ -298,8 +283,7 @@ pub fn truncate_workflow_reply(reply: &str) -> String {
 }
 
 fn build_engine(
-    served_replies: &[String],
-    served_pauses: u32,
+    journal: &[ContinuationRecord],
     scratch: ScratchBinding<'_>,
     spawn: SpawnBinding,
     pending_spawn: Rc<RefCell<Option<String>>>,
@@ -345,40 +329,48 @@ fn build_engine(
         },
     );
 
-    let replies = Rc::new(served_replies.to_vec());
+    let journal = Rc::new(journal.to_vec());
     let index = Rc::new(Cell::new(0usize));
-    let replies_for_ask = Rc::clone(&replies);
+    let yield_index = Rc::new(Cell::new(0usize));
+    let journal_for_ask = Rc::clone(&journal);
     let index_for_ask = Rc::clone(&index);
+    let yield_index_for_ask = Rc::clone(&yield_index);
     engine.register_fn(
         "ask",
         move |instruction: &str| -> Result<String, Box<EvalAltResult>> {
-            take_served_or_yield(
+            take_journal_or_yield(
                 &index_for_ask,
-                &replies_for_ask,
+                &yield_index_for_ask,
+                &journal_for_ask,
+                ContinuationKind::Ask,
+                &ask_request(instruction),
                 instruction,
                 "ask() requires a nonempty instruction",
             )
         },
     );
 
-    let replies_for_agent = Rc::clone(&replies);
+    let journal_for_agent = Rc::clone(&journal);
     let index_for_agent = Rc::clone(&index);
+    let yield_index_for_agent = Rc::clone(&yield_index);
     let pending_for_agent = Rc::clone(&pending_spawn);
     engine.register_fn(
         "agent",
         move |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
             take_agent_call(
                 prompt,
-                None,
+                /*opts*/ None,
                 spawn,
                 &index_for_agent,
-                &replies_for_agent,
+                &yield_index_for_agent,
+                &journal_for_agent,
                 &pending_for_agent,
             )
         },
     );
-    let replies_for_agent_opts = Rc::clone(&replies);
+    let journal_for_agent_opts = Rc::clone(&journal);
     let index_for_agent_opts = Rc::clone(&index);
+    let yield_index_for_agent_opts = Rc::clone(&yield_index);
     let pending_for_agent_opts = Rc::clone(&pending_spawn);
     engine.register_fn(
         "agent",
@@ -388,13 +380,14 @@ fn build_engine(
                 Some(&opts),
                 spawn,
                 &index_for_agent_opts,
-                &replies_for_agent_opts,
+                &yield_index_for_agent_opts,
+                &journal_for_agent_opts,
                 &pending_for_agent_opts,
             )
         },
     );
 
-    let index_for_budget = Rc::clone(&index);
+    let index_for_budget = Rc::clone(&yield_index);
     engine.register_fn("budget", move || -> Result<Dynamic, Box<EvalAltResult>> {
         let spent = i64::try_from(index_for_budget.get()).unwrap_or(i64::MAX);
         let total = i64::from(MAX_WORKFLOW_YIELDS);
@@ -407,13 +400,15 @@ fn build_engine(
         Ok(Dynamic::from(map))
     });
 
-    let replies_for_parallel = Rc::clone(&replies);
+    let journal_for_parallel = Rc::clone(&journal);
     let index_for_parallel = Rc::clone(&index);
+    let yield_index_for_parallel = Rc::clone(&yield_index);
     let pending_for_parallel = Rc::clone(&pending_spawn);
     engine.register_fn(
         "parallel",
         move |items: Array| -> Result<Array, Box<EvalAltResult>> {
-            let remaining = (MAX_WORKFLOW_YIELDS as usize).saturating_sub(index_for_parallel.get());
+            let remaining =
+                (MAX_WORKFLOW_YIELDS as usize).saturating_sub(yield_index_for_parallel.get());
             if items.len() > remaining {
                 return Err(runtime_error(format!(
                     "parallel() exceeds the remaining yield budget (need {}, have {remaining})",
@@ -439,7 +434,8 @@ fn build_engine(
                     Some(&map),
                     spawn,
                     &index_for_parallel,
-                    &replies_for_parallel,
+                    &yield_index_for_parallel,
+                    &journal_for_parallel,
                     &pending_for_parallel,
                 )?);
             }
@@ -472,14 +468,23 @@ fn build_engine(
         },
     );
 
-    let pause_index = Rc::new(Cell::new(0u32));
-    let pause_for_pause = Rc::clone(&pause_index);
+    let journal_for_pause = Rc::clone(&journal);
+    let index_for_pause = Rc::clone(&index);
     engine.register_fn("pause", move || -> Result<(), Box<EvalAltResult>> {
-        take_served_or_pause(&pause_for_pause, served_pauses)
+        take_control(
+            &index_for_pause,
+            &journal_for_pause,
+            ContinuationKind::Pause,
+        )
     });
-    let pause_for_await = Rc::clone(&pause_index);
+    let journal_for_await = Rc::clone(&journal);
+    let index_for_await = Rc::clone(&index);
     engine.register_fn("await_user", move || -> Result<(), Box<EvalAltResult>> {
-        take_served_or_pause(&pause_for_await, served_pauses)
+        take_control(
+            &index_for_await,
+            &journal_for_await,
+            ContinuationKind::AwaitUser,
+        )
     });
 
     for name in FORBIDDEN_GOAL_BINDINGS {
@@ -502,15 +507,37 @@ const GOAL_BINDING_ERROR: &str = "host bindings cannot commit goal complete or b
 
 fn outcome_from_error(
     error: EvalAltResult,
-) -> Result<(WorkflowEval, serde_json::Value), WorkflowSourceError> {
+) -> Result<
+    (
+        WorkflowEval,
+        serde_json::Value,
+        Option<ContinuationKind>,
+        Option<String>,
+    ),
+    WorkflowSourceError,
+> {
     if let Some(token) = find_control_token(&error) {
         return match token {
-            ControlToken::Complete(value) => Ok((WorkflowEval::Completed, value)),
-            ControlToken::Yield(instruction) => Ok((
+            ControlToken::Complete(value) => Ok((WorkflowEval::Completed, value, None, None)),
+            ControlToken::Yield {
+                instruction,
+                kind,
+                request_digest,
+            } => Ok((
                 WorkflowEval::Yielded { instruction },
                 serde_json::Value::Null,
+                Some(kind),
+                Some(request_digest),
             )),
-            ControlToken::Pause => Ok((WorkflowEval::Paused, serde_json::Value::Null)),
+            ControlToken::Pause {
+                kind,
+                request_digest,
+            } => Ok((
+                WorkflowEval::Paused,
+                serde_json::Value::Null,
+                Some(kind),
+                Some(request_digest),
+            )),
         };
     }
     Err(WorkflowSourceError::Invalid {
@@ -597,33 +624,57 @@ fn dynamic_to_json(value: Dynamic) -> Result<serde_json::Value, Box<EvalAltResul
     )))
 }
 
-fn take_served_or_yield(
+fn take_journal_or_yield(
     index: &Rc<Cell<usize>>,
-    replies: &Rc<Vec<String>>,
+    yield_index: &Rc<Cell<usize>>,
+    journal: &Rc<Vec<ContinuationRecord>>,
+    kind: ContinuationKind,
+    request: &serde_json::Value,
     instruction: &str,
     empty_error: &str,
 ) -> Result<String, Box<EvalAltResult>> {
-    let i = index.get();
-    if i < replies.len() {
-        index.set(i.saturating_add(1));
-        return Ok(replies[i].clone());
+    let digest = request_digest(kind, request);
+    match lookup(journal, index.get(), kind, &digest) {
+        JournalLookup::Replay(reply) => {
+            bump(index);
+            bump(yield_index);
+            Ok(reply)
+        }
+        JournalLookup::NeedWork => {
+            if instruction.trim().is_empty() {
+                return Err(runtime_error(empty_error));
+            }
+            Err(terminated(ControlToken::Yield {
+                instruction: instruction.to_string(),
+                kind,
+                request_digest: digest,
+            }))
+        }
+        JournalLookup::Diverged => Err(runtime_error(REPLAY_DIVERGENCE)),
     }
-    if instruction.trim().is_empty() {
-        return Err(runtime_error(empty_error));
-    }
-    Err(terminated(ControlToken::Yield(instruction.to_string())))
 }
 
-fn take_served_or_pause(
-    index: &Rc<Cell<u32>>,
-    served_pauses: u32,
+fn take_control(
+    index: &Rc<Cell<usize>>,
+    journal: &Rc<Vec<ContinuationRecord>>,
+    kind: ContinuationKind,
 ) -> Result<(), Box<EvalAltResult>> {
-    let i = index.get();
-    if i < served_pauses {
-        index.set(i.saturating_add(1));
-        return Ok(());
+    let digest = request_digest(kind, &control_request());
+    match lookup(journal, index.get(), kind, &digest) {
+        JournalLookup::Replay(_) => {
+            bump(index);
+            Ok(())
+        }
+        JournalLookup::NeedWork => Err(terminated(ControlToken::Pause {
+            kind,
+            request_digest: digest,
+        })),
+        JournalLookup::Diverged => Err(runtime_error(REPLAY_DIVERGENCE)),
     }
-    Err(terminated(ControlToken::Pause))
+}
+
+fn bump(index: &Rc<Cell<usize>>) {
+    index.set(index.get().saturating_add(1));
 }
 
 fn agent_result_from_reply(reply: &str) -> Dynamic {
@@ -638,7 +689,8 @@ fn take_agent_call(
     opts: Option<&Map>,
     spawn: SpawnBinding,
     index: &Rc<Cell<usize>>,
-    replies: &Rc<Vec<String>>,
+    yield_index: &Rc<Cell<usize>>,
+    journal: &Rc<Vec<ContinuationRecord>>,
     pending_spawn: &Rc<RefCell<Option<String>>>,
 ) -> Result<Dynamic, Box<EvalAltResult>> {
     let spawn_task_name = spawn_task_name_from_opts(opts)?;
@@ -646,19 +698,40 @@ fn take_agent_call(
         if spawn != SpawnBinding::Available {
             return Err(runtime_error("stock spawn_agent is unavailable"));
         }
-        let i = index.get();
-        if i < replies.len() {
-            index.set(i.saturating_add(1));
-            return Ok(agent_result_from_reply(&replies[i]));
+        let digest = request_digest(
+            ContinuationKind::SpawnAgent,
+            &spawn_request(prompt, &task_name),
+        );
+        match lookup(journal, index.get(), ContinuationKind::SpawnAgent, &digest) {
+            JournalLookup::Replay(reply) => {
+                bump(index);
+                bump(yield_index);
+                return Ok(agent_result_from_reply(&reply));
+            }
+            JournalLookup::NeedWork => {
+                if prompt.trim().is_empty() {
+                    return Err(runtime_error("agent() requires a nonempty prompt"));
+                }
+                *pending_spawn.borrow_mut() = Some(task_name);
+                return Err(terminated(ControlToken::Yield {
+                    instruction: prompt.to_string(),
+                    kind: ContinuationKind::SpawnAgent,
+                    request_digest: digest,
+                }));
+            }
+            JournalLookup::Diverged => return Err(runtime_error(REPLAY_DIVERGENCE)),
         }
-        if prompt.trim().is_empty() {
-            return Err(runtime_error("agent() requires a nonempty prompt"));
-        }
-        *pending_spawn.borrow_mut() = Some(task_name);
-        return Err(terminated(ControlToken::Yield(prompt.to_string())));
     }
-    take_served_or_yield(index, replies, prompt, "agent() requires a nonempty prompt")
-        .map(|reply| agent_result_from_reply(&reply))
+    take_journal_or_yield(
+        index,
+        yield_index,
+        journal,
+        ContinuationKind::Agent,
+        &agent_request(prompt),
+        prompt,
+        "agent() requires a nonempty prompt",
+    )
+    .map(|reply| agent_result_from_reply(&reply))
 }
 
 /// A spawn request is `opts["spawn"] == true` (boolean). Rhai reserves the

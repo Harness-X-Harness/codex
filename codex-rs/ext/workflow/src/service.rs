@@ -582,7 +582,8 @@ async fn load_run(
             let mut run: WorkflowRun = serde_json::from_slice(&bytes).map_err(|err| {
                 WorkflowServiceError::Internal(format!("failed to parse workflow: {err}"))
             })?;
-            run.normalize_served_replies();
+            run.prepare_restored()
+                .map_err(WorkflowServiceError::InvalidRequest)?;
             Ok(Some(run))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),

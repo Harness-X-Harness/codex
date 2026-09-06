@@ -2,11 +2,26 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use codex_protocol::ThreadId;
+use codex_workflow_extension::ContinuationKind;
+use codex_workflow_extension::LEGACY_RESUME_REQUIRED;
 use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowAdvance;
 use codex_workflow_extension::WorkflowRun;
 use codex_workflow_extension::WorkflowService;
 use codex_workflow_extension::WorkflowStatus;
+
+fn result_replies(run: &WorkflowRun) -> Vec<String> {
+    run.continuations
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.kind,
+                ContinuationKind::Ask | ContinuationKind::Agent | ContinuationKind::SpawnAgent
+            )
+        })
+        .map(|record| record.result.clone())
+        .collect()
+}
 
 fn yield_then_complete() -> &'static str {
     r#"ask("Compile the crate."); complete();"#
@@ -97,7 +112,7 @@ fn log_survives_pause_and_resume_without_a_yield() {
     assert_eq!(run.status, WorkflowStatus::Paused);
     assert_eq!(run.log.as_deref(), Some("note"));
     assert_eq!(run.served_asks, 0);
-    assert!(run.served_replies.is_empty());
+    assert!(run.continuations.is_empty());
     run.resume().expect("resume");
     assert_eq!(run.status, WorkflowStatus::Complete);
     assert_eq!(run.log.as_deref(), Some("note"));
@@ -154,18 +169,18 @@ fn parallel_stop_after_first_item_replays_without_a_second_turn() {
         Ok(WorkflowAdvance::Yielded)
     );
     assert_eq!(run.pending_instruction.as_deref(), Some("second"));
-    assert_eq!(run.served_replies, vec!["one".to_string()]);
+    assert_eq!(result_replies(&run), vec!["one".to_string()]);
     run.stop().expect("stop");
     run.resume().expect("resume");
     assert_eq!(run.status, WorkflowStatus::Active);
     assert_eq!(run.pending_instruction.as_deref(), Some("second"));
-    assert_eq!(run.served_replies, vec!["one".to_string()]);
+    assert_eq!(result_replies(&run), vec!["one".to_string()]);
     assert_eq!(
         run.advance_with_reply("two".to_string()),
         Ok(WorkflowAdvance::Completed)
     );
     assert_eq!(
-        run.served_replies,
+        result_replies(&run),
         vec!["one".to_string(), "two".to_string()]
     );
 }
@@ -185,11 +200,15 @@ fn agent_then_pause_resumes_without_a_second_host_turn() {
         Ok(WorkflowAdvance::Paused)
     );
     assert_eq!(run.status, WorkflowStatus::Paused);
-    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    assert_eq!(result_replies(&run), vec!["ok".to_string()]);
     run.resume().expect("resume");
     assert_eq!(run.status, WorkflowStatus::Complete);
-    assert_eq!(run.served_pauses, 1);
-    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    assert!(
+        run.continuations
+            .iter()
+            .any(|record| record.kind == ContinuationKind::Pause)
+    );
+    assert_eq!(result_replies(&run), vec!["ok".to_string()]);
 }
 
 #[test]
@@ -208,7 +227,7 @@ fn advance_resumes_after_ask_then_completes() {
         Ok(WorkflowAdvance::Completed)
     );
     assert_eq!(run.status, WorkflowStatus::Complete);
-    assert_eq!(run.served_replies, vec!["compiled".to_string()]);
+    assert_eq!(result_replies(&run), vec!["compiled".to_string()]);
     assert!(!run.occupies_idle());
 }
 
@@ -308,6 +327,30 @@ async fn service_scratch_lives_under_the_thread_dir() {
     )
     .expect("scratch file");
     assert_eq!(stored, "hello");
+}
+
+#[tokio::test]
+async fn service_rejects_legacy_positional_active_resume() {
+    let dir = TempDir::new().expect("tempdir");
+    let thread_id = ThreadId::from_u128(23);
+    let first = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    first
+        .start_run(thread_id, yield_then_complete())
+        .await
+        .expect("start");
+    let path = dir.path().join(format!("{thread_id}.json"));
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+    stored["continuations"] = serde_json::json!([]);
+    stored["served_replies"] = serde_json::json!(["ok"]);
+    stored["format_version"] = serde_json::json!(1);
+    std::fs::write(&path, serde_json::to_vec_pretty(&stored).expect("encode")).expect("write");
+    let second = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let error = second.get_run(thread_id).await.expect_err("legacy");
+    assert!(
+        error.to_string().contains(LEGACY_RESUME_REQUIRED),
+        "unexpected error: {error}"
+    );
 }
 
 #[tokio::test]
@@ -419,11 +462,11 @@ fn spawn_stop_then_resume_replays_journaled_result() {
         run.advance_with_reply("ok".to_string()),
         Ok(WorkflowAdvance::Paused)
     );
-    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    assert_eq!(result_replies(&run), vec!["ok".to_string()]);
     assert_eq!(run.pending_spawn_task_name, None);
     run.resume().expect("resume journaled spawn");
     assert_eq!(run.status, WorkflowStatus::Complete);
-    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    assert_eq!(result_replies(&run), vec!["ok".to_string()]);
     assert_eq!(run.pending_instruction, None);
 }
 

@@ -17,6 +17,13 @@ use crate::engine::eval_source_with_scratch_and_spawn;
 use crate::engine::eval_source_with_spawn;
 use crate::engine::truncate_workflow_reply;
 use crate::engine::validate_source;
+use crate::journal::ContinuationKind;
+use crate::journal::ContinuationRecord;
+use crate::journal::LEGACY_RESUME_REQUIRED;
+use crate::journal::WORKFLOW_PERSIST_VERSION;
+use crate::journal::bounded;
+use crate::journal::next_seq;
+use crate::journal::result_bearing_count;
 
 /// Lifecycle of one thread's workflow run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -41,6 +48,14 @@ pub struct WorkflowRun {
     pub served_replies: Vec<String>,
     #[serde(default)]
     pub served_pauses: u32,
+    #[serde(default)]
+    pub format_version: u32,
+    #[serde(default)]
+    pub continuations: Vec<ContinuationRecord>,
+    #[serde(default)]
+    pub pending_kind: Option<ContinuationKind>,
+    #[serde(default)]
+    pub pending_request_digest: Option<String>,
     #[serde(default)]
     pub args: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
@@ -91,6 +106,10 @@ impl WorkflowRun {
             served_asks: 0,
             served_replies: Vec::new(),
             served_pauses: 0,
+            format_version: WORKFLOW_PERSIST_VERSION,
+            continuations: Vec::new(),
+            pending_kind: None,
+            pending_request_digest: None,
             args: serde_json::Map::new(),
             phase: None,
             log: None,
@@ -124,6 +143,10 @@ impl WorkflowRun {
             served_asks: 0,
             served_replies: Vec::new(),
             served_pauses: 0,
+            format_version: WORKFLOW_PERSIST_VERSION,
+            continuations: Vec::new(),
+            pending_kind: None,
+            pending_request_digest: None,
             args,
             phase: None,
             log: None,
@@ -163,6 +186,10 @@ impl WorkflowRun {
             served_asks: 0,
             served_replies: Vec::new(),
             served_pauses: 0,
+            format_version: WORKFLOW_PERSIST_VERSION,
+            continuations: Vec::new(),
+            pending_kind: None,
+            pending_request_digest: None,
             args,
             phase: None,
             log: None,
@@ -227,6 +254,10 @@ impl WorkflowRun {
             served_asks: 0,
             served_replies: Vec::new(),
             served_pauses: 0,
+            format_version: WORKFLOW_PERSIST_VERSION,
+            continuations: Vec::new(),
+            pending_kind: None,
+            pending_request_digest: None,
             args,
             phase: None,
             log: None,
@@ -283,23 +314,32 @@ impl WorkflowRun {
         let pending = self.pending_instruction.clone();
         let pending_spawn_task_name = self.pending_spawn_task_name.clone();
         let pending_yield_started = self.pending_yield_started;
+        let pending_kind = self.pending_kind;
+        let pending_request_digest = self.pending_request_digest.clone();
         let previous_asks = self.served_asks;
-        let previous_replies = self.served_replies.clone();
-        let previous_pauses = self.served_pauses;
-        self.served_replies.push(truncate_workflow_reply(&reply));
-        self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
+        let previous_continuations = self.continuations.clone();
+        let Some(kind) = pending_kind else {
+            return Err("workflow has no pending yield identity".to_string());
+        };
+        let Some(digest) = pending_request_digest.clone() else {
+            return Err("workflow has no pending yield identity".to_string());
+        };
+        self.push_continuation(kind, digest, truncate_workflow_reply(&reply));
         self.pending_instruction = None;
         self.pending_spawn_task_name = None;
         self.pending_yield_started = false;
+        self.pending_kind = None;
+        self.pending_request_digest = None;
         match self.eval_current() {
             Ok(outcome) => self.apply_outcome(outcome),
             Err(error) => {
                 self.served_asks = previous_asks;
-                self.served_replies = previous_replies;
-                self.served_pauses = previous_pauses;
+                self.continuations = previous_continuations;
                 self.pending_instruction = pending;
                 self.pending_spawn_task_name = pending_spawn_task_name;
                 self.pending_yield_started = pending_yield_started;
+                self.pending_kind = pending_kind;
+                self.pending_request_digest = pending_request_digest;
                 Err(error.to_string())
             }
         }
@@ -309,12 +349,19 @@ impl WorkflowRun {
         self.status == WorkflowStatus::Active
     }
 
-    pub fn normalize_served_replies(&mut self) {
-        let expected = usize::try_from(self.served_asks).unwrap_or(usize::MAX);
-        if self.served_replies.len() < expected {
-            self.served_replies.resize(expected, String::new());
+    pub fn prepare_restored(&mut self) -> Result<(), String> {
+        bounded(&self.continuations)?;
+        let has_legacy = !self.served_replies.is_empty() || self.served_pauses > 0;
+        if !self.continuations.is_empty() {
+            self.format_version = WORKFLOW_PERSIST_VERSION;
+            self.served_asks = result_bearing_count(&self.continuations);
+            return Ok(());
         }
-        self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
+        if matches!(self.status, WorkflowStatus::Complete) || !has_legacy {
+            self.format_version = WORKFLOW_PERSIST_VERSION;
+            return Ok(());
+        }
+        Err(LEGACY_RESUME_REQUIRED.to_string())
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -340,12 +387,22 @@ impl WorkflowRun {
         if self.pending_instruction.is_some() {
             return Ok(());
         }
-        let previous = self.served_pauses;
-        self.served_pauses = self.served_pauses.saturating_add(1);
+        let previous = self.continuations.clone();
+        let previous_asks = self.served_asks;
+        let pending_kind = self.pending_kind;
+        let pending_request_digest = self.pending_request_digest.clone();
+        if let (Some(kind), Some(digest)) = (pending_kind, pending_request_digest.clone()) {
+            self.push_continuation(kind, digest, String::new());
+            self.pending_kind = None;
+            self.pending_request_digest = None;
+        }
         match self.eval_current() {
             Ok(outcome) => self.apply_outcome(outcome).map(|_| ()),
             Err(error) => {
-                self.served_pauses = previous;
+                self.continuations = previous;
+                self.served_asks = previous_asks;
+                self.pending_kind = pending_kind;
+                self.pending_request_digest = pending_request_digest;
                 self.status = WorkflowStatus::Paused;
                 Err(error.to_string())
             }
@@ -369,25 +426,15 @@ impl WorkflowRun {
         match self.scratch_dir.as_deref() {
             Some(dir) => eval_source_with_scratch_and_spawn(
                 &self.source,
-                &self.served_replies,
-                self.served_pauses,
+                &self.continuations,
                 &args,
                 dir,
                 spawn,
             ),
-            None if self.spawn_available => eval_source_with_spawn(
-                &self.source,
-                &self.served_replies,
-                self.served_pauses,
-                &args,
-                spawn,
-            ),
-            None => eval_source_with_env(
-                &self.source,
-                &self.served_replies,
-                self.served_pauses,
-                &args,
-            ),
+            None if self.spawn_available => {
+                eval_source_with_spawn(&self.source, &self.continuations, &args, spawn)
+            }
+            None => eval_source_with_env(&self.source, &self.continuations, &args),
         }
     }
 
@@ -401,6 +448,8 @@ impl WorkflowRun {
             WorkflowEval::Yielded { .. } => outcome.spawn_task_name,
             WorkflowEval::Completed | WorkflowEval::Paused => None,
         };
+        self.pending_kind = outcome.yield_kind;
+        self.pending_request_digest = outcome.yield_request_digest;
         match outcome.eval {
             WorkflowEval::Completed => {
                 self.status = WorkflowStatus::Complete;
@@ -425,6 +474,22 @@ impl WorkflowRun {
                 Ok(WorkflowAdvance::Paused)
             }
         }
+    }
+
+    fn push_continuation(
+        &mut self,
+        kind: ContinuationKind,
+        request_digest: String,
+        result: String,
+    ) {
+        self.continuations.push(ContinuationRecord {
+            seq: next_seq(&self.continuations),
+            kind,
+            request_digest,
+            result,
+        });
+        self.served_asks = result_bearing_count(&self.continuations);
+        self.format_version = WORKFLOW_PERSIST_VERSION;
     }
 }
 
