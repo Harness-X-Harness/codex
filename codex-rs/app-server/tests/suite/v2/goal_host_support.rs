@@ -41,6 +41,19 @@ pub(super) const AGENT_REQUIRES_OK_RESULT: &str = r#"
     let r = agent("Say ok.");
     if r.ok && r.text == "ok" { complete(); } else { ask("wrong reply"); }
 "#;
+pub(super) const PARALLEL_REQUIRES_OK_RESULTS: &str = r#"
+    let results = parallel([
+        #{ prompt: "Say ok." },
+        #{ prompt: "Say ok." },
+    ]);
+    if results[0].ok && results[0].text == "ok"
+        && results[1].ok && results[1].text == "ok"
+    {
+        complete();
+    } else {
+        ask("wrong reply");
+    }
+"#;
 
 pub(super) async fn app_with_features(
     features: &[Feature],

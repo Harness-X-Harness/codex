@@ -33,6 +33,7 @@ use super::goal_host_support::ASK_REQUIRES_OK_REPLY;
 use super::goal_host_support::ASK_THEN_COMPLETE;
 use super::goal_host_support::COMPLETE_ONLY;
 use super::goal_host_support::INVALID_RHAI;
+use super::goal_host_support::PARALLEL_REQUIRES_OK_RESULTS;
 use super::goal_host_support::READ_TIMEOUT;
 use super::goal_host_support::ScriptedHostResponder;
 use super::goal_host_support::app_with_features;
@@ -420,6 +421,37 @@ async fn workflow_agent_branches_on_structured_host_result() -> Result<()> {
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
             params: start_params(thread.id.clone(), AGENT_REQUIRES_OK_RESULT),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(get_goal.goal, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_parallel_branches_on_ordered_host_results() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker: "ok",
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(thread.id.clone(), PARALLEL_REQUIRES_OK_RESULTS),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
