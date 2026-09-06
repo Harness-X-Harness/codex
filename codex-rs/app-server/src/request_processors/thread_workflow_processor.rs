@@ -166,6 +166,7 @@ pub(crate) fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
             WorkflowStatus::Waiting => ThreadWorkflowStatus::Waiting,
         },
         pending_instruction: run.pending_instruction,
+        result: run.result,
         created_at: run.created_at,
         updated_at: run.updated_at,
     }

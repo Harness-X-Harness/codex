@@ -21960,6 +21960,7 @@
             "null"
           ]
         },
+        "result": true,
         "runId": {
           "type": "string"
         },
@@ -21977,6 +21978,7 @@
       "required": [
         "createdAt",
         "name",
+        "result",
         "runId",
         "status",
         "threadId",

@@ -27,7 +27,7 @@ pub enum WorkflowStatus {
 }
 
 /// Persisted run for one thread.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowRun {
     pub thread_id: ThreadId,
     pub run_id: String,
@@ -45,6 +45,8 @@ pub struct WorkflowRun {
     pub phase: Option<String>,
     #[serde(default)]
     pub log: Option<String>,
+    #[serde(default)]
+    pub result: serde_json::Value,
     pub pending_instruction: Option<String>,
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
@@ -87,6 +89,7 @@ impl WorkflowRun {
             args,
             phase: None,
             log: None,
+            result: serde_json::Value::Null,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -94,9 +97,7 @@ impl WorkflowRun {
             scratch_dir: None,
         };
         let outcome = run.eval_current().map_err(|error| error.to_string())?;
-        run.phase = outcome.phase;
-        run.log = outcome.log;
-        run.apply_eval(outcome.eval)?;
+        run.apply_outcome(outcome)?;
         Ok(run)
     }
 
@@ -125,6 +126,7 @@ impl WorkflowRun {
             args,
             phase: None,
             log: None,
+            result: serde_json::Value::Null,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -168,6 +170,7 @@ impl WorkflowRun {
             args,
             phase: None,
             log: None,
+            result: serde_json::Value::Null,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -175,9 +178,7 @@ impl WorkflowRun {
             scratch_dir: Some(scratch_dir),
         };
         let outcome = run.eval_current().map_err(|error| error.to_string())?;
-        run.phase = outcome.phase;
-        run.log = outcome.log;
-        run.apply_eval(outcome.eval)?;
+        run.apply_outcome(outcome)?;
         Ok(run)
     }
 
@@ -190,9 +191,7 @@ impl WorkflowRun {
             return Err("workflow is not waiting".to_string());
         }
         let outcome = self.eval_current().map_err(|error| error.to_string())?;
-        self.phase = outcome.phase;
-        self.log = outcome.log;
-        self.apply_eval(outcome.eval)
+        self.apply_outcome(outcome)
     }
 
     pub fn park(&mut self) -> Result<(), String> {
@@ -225,11 +224,7 @@ impl WorkflowRun {
         self.pending_instruction = None;
         self.pending_yield_started = false;
         match self.eval_current() {
-            Ok(outcome) => {
-                self.phase = outcome.phase;
-                self.log = outcome.log;
-                self.apply_eval(outcome.eval)
-            }
+            Ok(outcome) => self.apply_outcome(outcome),
             Err(error) => {
                 self.served_asks = previous_asks;
                 self.served_replies = previous_replies;
@@ -279,11 +274,7 @@ impl WorkflowRun {
         let previous = self.served_pauses;
         self.served_pauses = self.served_pauses.saturating_add(1);
         match self.eval_current() {
-            Ok(outcome) => {
-                self.phase = outcome.phase;
-                self.log = outcome.log;
-                self.apply_eval(outcome.eval).map(|_| ())
-            }
+            Ok(outcome) => self.apply_outcome(outcome).map(|_| ()),
             Err(error) => {
                 self.served_pauses = previous;
                 self.status = WorkflowStatus::Paused;
@@ -318,10 +309,16 @@ impl WorkflowRun {
         }
     }
 
-    fn apply_eval(&mut self, outcome: WorkflowEval) -> Result<WorkflowAdvance, String> {
-        match outcome {
+    fn apply_outcome(
+        &mut self,
+        outcome: crate::engine::WorkflowEvalOutcome,
+    ) -> Result<WorkflowAdvance, String> {
+        self.phase = outcome.phase;
+        self.log = outcome.log;
+        match outcome.eval {
             WorkflowEval::Completed => {
                 self.status = WorkflowStatus::Complete;
+                self.result = outcome.result;
                 self.pending_instruction = None;
                 self.pending_yield_started = false;
                 self.updated_at = unix_seconds();

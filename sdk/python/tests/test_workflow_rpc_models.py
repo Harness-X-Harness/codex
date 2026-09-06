@@ -9,6 +9,7 @@ def test_workflow_models_accept_camel_case_wire_payload() -> None:
             "name": "workflow",
             "status": "active",
             "pendingInstruction": "Compile the crate.",
+            "result": None,
             "createdAt": 1,
             "updatedAt": 2,
         }
@@ -17,6 +18,7 @@ def test_workflow_models_accept_camel_case_wire_payload() -> None:
     assert workflow.run_id == "run-1"
     assert workflow.status == ThreadWorkflowStatus.active
     assert workflow.pending_instruction == "Compile the crate."
+    assert workflow.result is None
 
     get = ThreadWorkflowGetResponse.model_validate({"workflow": None})
     assert get.workflow is None

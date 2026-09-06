@@ -885,6 +885,7 @@ pub struct ThreadWorkflow {
     pub name: String,
     pub status: ThreadWorkflowStatus,
     pub pending_instruction: Option<String>,
+    pub result: JsonValue,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]

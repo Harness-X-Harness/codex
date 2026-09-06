@@ -16,6 +16,24 @@ fn start_complete_without_yield() {
     let run = WorkflowRun::start(ThreadId::from_u128(1), "complete();").expect("start");
     assert_eq!(run.status, WorkflowStatus::Complete);
     assert_eq!(run.pending_instruction, None);
+    assert_eq!(run.result, serde_json::Value::Null);
+}
+
+#[test]
+fn complete_value_persists_on_the_run() {
+    let run = WorkflowRun::start(ThreadId::from_u128(21), r#"complete("done");"#).expect("start");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.result, serde_json::json!("done"));
+}
+
+#[test]
+fn rejected_complete_value_does_not_create_a_run() {
+    let error = WorkflowRun::start(ThreadId::from_u128(22), r#"complete('x');"#)
+        .expect_err("rejected complete");
+    assert!(
+        error.contains("does not accept"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -309,6 +327,7 @@ async fn service_persists_across_instances() {
     assert_eq!(loaded.status, WorkflowStatus::Active);
     let advanced = second.advance_run(thread_id).await.expect("advance");
     assert_eq!(advanced.status, WorkflowStatus::Complete);
+    assert_eq!(advanced.result, serde_json::Value::Null);
 }
 
 #[tokio::test]

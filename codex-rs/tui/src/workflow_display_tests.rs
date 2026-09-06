@@ -12,6 +12,7 @@ fn workflow(status: ThreadWorkflowStatus, instruction: Option<&str>) -> ThreadWo
         name: "workflow".to_string(),
         status,
         pending_instruction: instruction.map(str::to_string),
+        result: serde_json::Value::Null,
         created_at: 1,
         updated_at: 1,
     }

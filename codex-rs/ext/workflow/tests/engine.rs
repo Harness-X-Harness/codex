@@ -24,6 +24,50 @@ fn complete_ends_the_run() {
 }
 
 #[test]
+fn complete_stores_this_run_json_result() {
+    let none = eval_source_with_env("complete();", &[], 0, &Map::new()).expect("eval");
+    assert_eq!(none.eval, WorkflowEval::Completed);
+    assert_eq!(none.result, serde_json::Value::Null);
+
+    let done = eval_source_with_env(r#"complete("done");"#, &[], 0, &Map::new()).expect("eval");
+    assert_eq!(done.eval, WorkflowEval::Completed);
+    assert_eq!(done.result, serde_json::json!("done"));
+
+    let object =
+        eval_source_with_env(r#"complete(#{ ok: true });"#, &[], 0, &Map::new()).expect("eval");
+    assert_eq!(object.eval, WorkflowEval::Completed);
+    assert_eq!(object.result, serde_json::json!({ "ok": true }));
+}
+
+#[test]
+fn complete_rejects_other_types_and_oversize_without_completing() {
+    let error = eval_source(r#"complete('x');"#, &[]).expect_err("char");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("does not accept"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    let mut oversized = Map::new();
+    oversized.insert(
+        "big".into(),
+        rhai::Dynamic::from("x".repeat(MAX_WORKFLOW_SOURCE_CHARS)),
+    );
+    let error = eval_source_with_env("complete(args.big);", &[], 0, &oversized)
+        .expect_err("oversize complete");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(reason.contains("exceeds"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
 fn falling_off_the_end_completes_the_run() {
     assert_eq!(
         eval_source("let x = 1 + 1;", &[]).expect("eval"),
@@ -671,6 +715,7 @@ fn named_program_reads_args_and_records_phase() {
             eval: WorkflowEval::Completed,
             phase: Some("Scan".to_string()),
             log: None,
+            result: serde_json::Value::Null,
         }
     );
 }
@@ -690,6 +735,7 @@ fn log_records_last_nonempty_message_and_rejects_empty() {
             eval: WorkflowEval::Completed,
             phase: None,
             log: Some("note".to_string()),
+            result: serde_json::Value::Null,
         }
     );
 

@@ -293,6 +293,97 @@ async fn workflow_start_accepts_rhai_and_rejects_invalid_source() -> Result<()> 
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Complete);
+    assert_eq!(started.workflow.result, json!(null));
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_complete_persists_this_run_result_without_writing_goal() -> Result<()> {
+    let (mut app, _codex_home, _server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(start_params(
+                thread.id.clone(),
+                r#"complete('x');"#,
+            ))?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("does not accept"),
+        "unexpected error: {}",
+        error.error.message
+    );
+
+    let none: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(none.workflow, None);
+
+    let empty_thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let empty: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(empty_thread.id, COMPLETE_ONLY),
+        })
+        .await?;
+    assert_eq!(empty.workflow.status, ThreadWorkflowStatus::Complete);
+    assert_eq!(empty.workflow.result, json!(null));
+
+    let done_thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let done: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(done_thread.id.clone(), r#"complete("done");"#),
+        })
+        .await?;
+    assert_eq!(done.workflow.status, ThreadWorkflowStatus::Complete);
+    assert_eq!(done.workflow.result, json!("done"));
+
+    let get: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: done_thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get.workflow.map(|workflow| workflow.result),
+        Some(json!("done"))
+    );
+
+    let goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: done_thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(goal.goal, None);
+
+    let object_thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let object: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(object_thread.id, r#"complete(#{ ok: true });"#),
+        })
+        .await?;
+    assert_eq!(object.workflow.status, ThreadWorkflowStatus::Complete);
+    assert_eq!(object.workflow.result, json!({ "ok": true }));
     Ok(())
 }
 
