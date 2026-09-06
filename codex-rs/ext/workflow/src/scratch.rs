@@ -4,6 +4,8 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use uuid::Uuid;
+
 use crate::engine::MAX_WORKFLOW_SOURCE_CHARS;
 
 pub(crate) fn write_scratch_file(dir: &Path, name: &str, content: &str) -> Result<String, String> {
@@ -13,12 +15,13 @@ pub(crate) fn write_scratch_file(dir: &Path, name: &str, content: &str) -> Resul
             "scratch file exceeds {MAX_WORKFLOW_SOURCE_CHARS} characters"
         ));
     }
-    reject_symlink(dir, "scratch directory")?;
+    reject_local_symlinks(dir)?;
     fs::create_dir_all(dir).map_err(|error| format!("scratch dir: {error}"))?;
-    reject_symlink(dir, "scratch directory")?;
+    reject_local_symlinks(dir)?;
     let path = dir.join(name);
+    let tmp = dir.join(format!(".{}.tmp", Uuid::now_v7()));
     reject_symlink(&path, "scratch file")?;
-    let tmp = dir.join(format!(".{name}.tmp"));
+    reject_symlink(&tmp, "scratch staging file")?;
     let mut file = fs::File::create(&tmp).map_err(|error| format!("scratch write: {error}"))?;
     file.write_all(content.as_bytes())
         .map_err(|error| format!("scratch write: {error}"))?;
@@ -30,7 +33,7 @@ pub(crate) fn write_scratch_file(dir: &Path, name: &str, content: &str) -> Resul
 pub(crate) fn read_scratch_file(dir: &Path, name: &str) -> Result<String, String> {
     let name = validated_scratch_name(name)?;
     let path = dir.join(name);
-    reject_symlink(dir, "scratch directory")?;
+    reject_local_symlinks(dir)?;
     reject_symlink(&path, "scratch file")?;
     let content = fs::read_to_string(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -55,6 +58,14 @@ fn validated_scratch_name(name: &str) -> Result<&str, String> {
         return Err("scratch file name must be a single path component".to_string());
     }
     Ok(name)
+}
+
+fn reject_local_symlinks(dir: &Path) -> Result<(), String> {
+    reject_symlink(dir, "scratch directory")?;
+    if let Some(parent) = dir.parent() {
+        reject_symlink(parent, "scratch parent")?;
+    }
+    Ok(())
 }
 
 fn reject_symlink(path: &Path, what: &str) -> Result<(), String> {

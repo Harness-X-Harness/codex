@@ -83,7 +83,7 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
     if actual > MAX_WORKFLOW_SOURCE_CHARS {
         return Err(WorkflowSourceError::TooLarge { actual });
     }
-    let engine = build_engine(&[], 0, None);
+    let engine = build_engine(&[], 0, ScratchBinding::Unavailable);
     engine
         .compile(source)
         .map(|_| ())
@@ -118,7 +118,13 @@ pub fn eval_source_with_env(
     served_pauses: u32,
     args: &Map,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
-    eval_source_inner(source, served_replies, served_pauses, args, None)
+    eval_source_inner(
+        source,
+        served_replies,
+        served_pauses,
+        args,
+        ScratchBinding::Unavailable,
+    )
 }
 
 /// Resume a program with a thread-local scratch directory.
@@ -134,8 +140,13 @@ pub fn eval_source_with_scratch(
         served_replies,
         served_pauses,
         args,
-        Some(scratch_dir),
+        ScratchBinding::Directory(scratch_dir),
     )
+}
+
+enum ScratchBinding<'a> {
+    Unavailable,
+    Directory(&'a Path),
 }
 
 fn eval_source_inner(
@@ -143,7 +154,7 @@ fn eval_source_inner(
     served_replies: &[String],
     served_pauses: u32,
     args: &Map,
-    scratch_dir: Option<&Path>,
+    scratch: ScratchBinding<'_>,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     validate_source(source)?;
     if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
@@ -157,7 +168,7 @@ fn eval_source_inner(
         });
     }
     let phase = Rc::new(RefCell::new(None));
-    let mut engine = build_engine(served_replies, served_pauses, scratch_dir);
+    let mut engine = build_engine(served_replies, served_pauses, scratch);
     let phase_for_fn = Rc::clone(&phase);
     engine.register_fn(
         "phase",
@@ -208,7 +219,7 @@ pub fn truncate_workflow_reply(reply: &str) -> String {
 fn build_engine(
     served_replies: &[String],
     served_pauses: u32,
-    scratch_dir: Option<&Path>,
+    scratch: ScratchBinding<'_>,
 ) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_WORKFLOW_OPERATIONS);
@@ -272,7 +283,10 @@ fn build_engine(
         },
     );
 
-    let scratch_dir = scratch_dir.map(Path::to_path_buf);
+    let scratch_dir = match scratch {
+        ScratchBinding::Unavailable => None,
+        ScratchBinding::Directory(dir) => Some(dir.to_path_buf()),
+    };
     let scratch_for_write = scratch_dir.clone();
     engine.register_fn(
         "write_scratch_file",

@@ -160,6 +160,56 @@ fn scratch_rejects_path_components_empty_name_and_missing_file() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn scratch_write_rejects_symlink_file() {
+    let dir = TempDir::new().expect("tempdir");
+    let target = dir.path().join("target");
+    std::fs::write(&target, "secret").expect("target");
+    std::os::unix::fs::symlink(&target, dir.path().join("note.txt")).expect("symlink");
+    let error = eval_source_with_scratch(
+        r#"write_scratch_file("note.txt", "hello");"#,
+        &[],
+        0,
+        &Map::new(),
+        dir.path(),
+    )
+    .expect_err("symlink");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(reason.contains("symlink"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    assert_eq!(std::fs::read_to_string(&target).expect("target"), "secret");
+}
+
+#[cfg(unix)]
+#[test]
+fn scratch_does_not_follow_parent_symlink() {
+    let root = TempDir::new().expect("root");
+    let grok = root.path().join("grok");
+    std::fs::create_dir_all(&grok).expect("grok");
+    let thread = root.path().join("thread");
+    std::os::unix::fs::symlink(&grok, &thread).expect("symlink");
+    let scratch = thread.join("scratch");
+    let error = eval_source_with_scratch(
+        r#"write_scratch_file("note.txt", "hello");"#,
+        &[],
+        0,
+        &Map::new(),
+        &scratch,
+    )
+    .expect_err("parent symlink");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(reason.contains("symlink"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    assert!(!grok.join("scratch").join("note.txt").exists());
+}
+
 #[test]
 fn scratch_read_rejects_oversized_file() {
     let dir = TempDir::new().expect("tempdir");

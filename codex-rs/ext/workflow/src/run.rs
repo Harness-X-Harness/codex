@@ -143,7 +143,7 @@ impl WorkflowRun {
         )
     }
 
-    pub fn start_named_with_scratch(
+    pub(crate) fn start_named_with_scratch(
         thread_id: ThreadId,
         name: impl Into<String>,
         source: &str,
@@ -174,7 +174,7 @@ impl WorkflowRun {
         Ok(run)
     }
 
-    pub fn bind_scratch_dir(&mut self, scratch_dir: PathBuf) {
+    pub(crate) fn bind_scratch_dir(&mut self, scratch_dir: PathBuf) {
         self.scratch_dir = Some(scratch_dir);
     }
 

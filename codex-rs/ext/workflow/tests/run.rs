@@ -59,7 +59,43 @@ fn scratch_survives_pause_and_resume() {
         WorkflowRun::start_with_scratch(ThreadId::from_u128(15), source, dir.path().to_path_buf())
             .expect("start");
     assert_eq!(run.status, WorkflowStatus::Paused);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("note.txt")).expect("persisted"),
+        "hello"
+    );
     run.resume().expect("resume");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+}
+
+#[test]
+fn scratch_survives_stop_and_resume() {
+    let dir = TempDir::new().expect("tempdir");
+    let source = r#"
+        write_scratch_file("note.txt", "hello");
+        ask("continue");
+        if read_scratch_file("note.txt") == "hello" {
+            complete();
+        }
+    "#;
+    let mut run =
+        WorkflowRun::start_with_scratch(ThreadId::from_u128(17), source, dir.path().to_path_buf())
+            .expect("start");
+    assert_eq!(run.status, WorkflowStatus::Active);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("note.txt")).expect("persisted"),
+        "hello"
+    );
+    run.stop().expect("stop");
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("note.txt")).expect("after stop"),
+        "hello"
+    );
+    run.resume().expect("resume");
+    assert_eq!(
+        run.advance_with_reply("ok".to_string()),
+        Ok(WorkflowAdvance::Completed)
+    );
     assert_eq!(run.status, WorkflowStatus::Complete);
 }
 
