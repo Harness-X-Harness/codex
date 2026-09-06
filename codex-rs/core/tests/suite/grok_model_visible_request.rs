@@ -49,6 +49,7 @@ full-history fork. Tell the child: Generate a fresh UUID v4 and reply with exact
 text and no other text. Wait for that child to complete, then reply with exactly the UUID returned by the \
 child and no other text.";
 const IMAGE_PROMPT: &str = "Generate an image of a blue circle on a plain white background.";
+const APPLY_PATCH_PROMPT: &str = "Replace the exact contents of hello.txt from HELLO to WORLD using apply_patch. Do not use a shell or exec_command. When the file contains WORLD, reply with exactly GROKEX_APPLY_PATCH_OK and no other text.";
 
 /// The packaged Grokex registers the image-generation extension, so the tool
 /// inventory the model sees includes it; core tests must install it explicitly.
@@ -228,6 +229,18 @@ fn assert_grok_request(request: &ResponsesRequest) -> Result<()> {
         body["model"] == "grok-4.6",
         "request model should be grok-4.6"
     );
+    let tools = body["tools"].as_array().cloned().unwrap_or_default();
+    let apply_patch = tools.iter().find(|tool| {
+        tool["type"] == "function"
+            && tool["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("canonical `apply_patch` tool"))
+            && tool["parameters"]["properties"].get("patch").is_some()
+    });
+    anyhow::ensure!(
+        apply_patch.is_some(),
+        "projected apply_patch function with a patch property is missing"
+    );
     Ok(())
 }
 
@@ -281,6 +294,35 @@ async fn snapshot_grok_model_visible_request_image() -> Result<()> {
     insta::assert_snapshot!(
         "grok_model_visible_request_image",
         render_model_visible_request("image-generation-history-edit first Turn", &request)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_grok_model_visible_request_apply_patch() -> Result<()> {
+    let builder = grok_builder().with_config(|config| {
+        config
+            .features
+            .disable(Feature::ShellTool)
+            .expect("test config should allow feature update");
+    });
+    let request = capture_first_request(builder, APPLY_PATCH_PROMPT).await?;
+    assert_grok_request(&request)?;
+    let tools = request.body_json()["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(
+        tools.iter().all(|tool| {
+            let description = tool["description"].as_str().unwrap_or_default();
+            !description.contains("canonical `exec_command` tool")
+                && !description.contains("canonical `write_stdin` tool")
+        }),
+        "apply_patch proof Turn must not offer UnifiedExec shell tools"
+    );
+    insta::assert_snapshot!(
+        "grok_model_visible_request_apply_patch",
+        render_model_visible_request("custom-apply-patch first Turn", &request)
     );
     Ok(())
 }
