@@ -9,11 +9,17 @@ use codex_app_server_protocol::ThreadGoalSetParams;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadWorkflowAdvanceParams;
+use codex_app_server_protocol::ThreadWorkflowAdvanceResponse;
 use codex_app_server_protocol::ThreadWorkflowGetParams;
 use codex_app_server_protocol::ThreadWorkflowGetResponse;
+use codex_app_server_protocol::ThreadWorkflowResumeParams;
+use codex_app_server_protocol::ThreadWorkflowResumeResponse;
 use codex_app_server_protocol::ThreadWorkflowStartParams;
 use codex_app_server_protocol::ThreadWorkflowStartResponse;
 use codex_app_server_protocol::ThreadWorkflowStatus;
+use codex_app_server_protocol::ThreadWorkflowStopParams;
+use codex_app_server_protocol::ThreadWorkflowStopResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_features::Feature;
 use core_test_support::responses;
@@ -575,5 +581,106 @@ async fn active_workflow_hold_blocks_goal_idle() -> Result<()> {
         }
         sleep(std::time::Duration::from_millis(25)).await;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_stop_pauses_and_resume_returns_to_active() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker_delay: std::time::Duration::from_millis(400),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: ASK_THEN_COMPLETE.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+
+    let stopped: ThreadWorkflowStopResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStop {
+            request_id,
+            params: ThreadWorkflowStopParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
+
+    let paused: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        paused.workflow.map(|workflow| workflow.status),
+        Some(ThreadWorkflowStatus::Paused)
+    );
+
+    let resumed: ThreadWorkflowResumeResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowResume {
+            request_id,
+            params: ThreadWorkflowResumeParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(resumed.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_advance_is_optional_override() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker_delay: std::time::Duration::from_millis(400),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: ASK_THEN_COMPLETE.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+
+    let advanced: ThreadWorkflowAdvanceResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowAdvance {
+            request_id,
+            params: ThreadWorkflowAdvanceParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(advanced.workflow.status, ThreadWorkflowStatus::Complete);
+
+    let get: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(
+        get.workflow.map(|workflow| workflow.status),
+        Some(ThreadWorkflowStatus::Complete)
+    );
     Ok(())
 }

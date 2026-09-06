@@ -115,6 +115,8 @@ impl WorkflowRun {
             return Err("workflow is not active".to_string());
         }
         self.status = WorkflowStatus::Paused;
+        // Drop the in-flight yield claim so resume can kick a new host turn.
+        self.pending_yield_started = false;
         self.updated_at = unix_seconds();
         Ok(())
     }

@@ -98,6 +98,7 @@ pub(super) struct ScriptedHostResponder {
     pub worker: &'static str,
     pub evaluator: &'static str,
     pub skeptic: &'static str,
+    pub worker_delay: Duration,
 }
 
 impl Default for ScriptedHostResponder {
@@ -106,6 +107,7 @@ impl Default for ScriptedHostResponder {
             worker: "Done",
             evaluator: CONTINUE_VERDICT,
             skeptic: SKEPTIC_PASS,
+            worker_delay: Duration::ZERO,
         }
     }
 }
@@ -118,6 +120,9 @@ impl Respond for ScriptedHostResponder {
         } else if body.contains("candidate_complete") {
             self.evaluator
         } else {
+            if !self.worker_delay.is_zero() {
+                std::thread::sleep(self.worker_delay);
+            }
             self.worker
         };
         responses::sse_response(responses::sse(vec![

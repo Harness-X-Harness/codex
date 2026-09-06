@@ -48,8 +48,10 @@ fn active_run_occupies_idle() {
 #[test]
 fn stop_and_resume_are_host_owned() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(3), yield_then_complete()).expect("start");
+    run.mark_pending_yield_started();
     run.stop().expect("stop");
     assert_eq!(run.status, WorkflowStatus::Paused);
+    assert!(!run.pending_yield_started);
     run.resume().expect("resume");
     assert_eq!(run.status, WorkflowStatus::Active);
     assert_eq!(
