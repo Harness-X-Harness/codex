@@ -332,19 +332,21 @@ async fn workflow_complete_persists_this_run_result_without_writing_goal() -> Re
         .await?;
     assert_eq!(none.workflow, None);
 
+    let empty_thread = app.start_thread(ThreadStartParams::default()).await?.thread;
     let empty: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: start_params(thread.id.clone(), COMPLETE_ONLY),
+            params: start_params(empty_thread.id, COMPLETE_ONLY),
         })
         .await?;
     assert_eq!(empty.workflow.status, ThreadWorkflowStatus::Complete);
     assert_eq!(empty.workflow.result, json!(null));
 
+    let done_thread = app.start_thread(ThreadStartParams::default()).await?.thread;
     let done: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: start_params(thread.id.clone(), r#"complete("done");"#),
+            params: start_params(done_thread.id.clone(), r#"complete("done");"#),
         })
         .await?;
     assert_eq!(done.workflow.status, ThreadWorkflowStatus::Complete);
@@ -354,7 +356,7 @@ async fn workflow_complete_persists_this_run_result_without_writing_goal() -> Re
         .request(|request_id| ClientRequest::ThreadWorkflowGet {
             request_id,
             params: ThreadWorkflowGetParams {
-                thread_id: thread.id.clone(),
+                thread_id: done_thread.id.clone(),
             },
         })
         .await?;
@@ -367,16 +369,17 @@ async fn workflow_complete_persists_this_run_result_without_writing_goal() -> Re
         .request(|request_id| ClientRequest::ThreadGoalGet {
             request_id,
             params: ThreadGoalGetParams {
-                thread_id: thread.id.clone(),
+                thread_id: done_thread.id,
             },
         })
         .await?;
     assert_eq!(goal.goal, None);
 
+    let object_thread = app.start_thread(ThreadStartParams::default()).await?.thread;
     let object: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: start_params(thread.id, r#"complete(#{ ok: true });"#),
+            params: start_params(object_thread.id, r#"complete(#{ ok: true });"#),
         })
         .await?;
     assert_eq!(object.workflow.status, ThreadWorkflowStatus::Complete);
