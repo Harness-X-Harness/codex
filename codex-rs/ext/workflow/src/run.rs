@@ -10,9 +10,11 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::catalog::json_args_to_map;
+use crate::engine::SpawnBinding;
 use crate::engine::WorkflowEval;
 use crate::engine::eval_source_with_env;
-use crate::engine::eval_source_with_scratch;
+use crate::engine::eval_source_with_scratch_and_spawn;
+use crate::engine::eval_source_with_spawn;
 use crate::engine::truncate_workflow_reply;
 use crate::engine::validate_source;
 
@@ -47,6 +49,10 @@ pub struct WorkflowRun {
     pub log: Option<String>,
     #[serde(default)]
     pub result: serde_json::Value,
+    #[serde(default)]
+    pub spawn_available: bool,
+    #[serde(default)]
+    pub pending_spawn_task_name: Option<String>,
     pub pending_instruction: Option<String>,
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
@@ -70,6 +76,38 @@ impl WorkflowRun {
         Self::start_named(thread_id, "workflow", source, serde_json::Map::new())
     }
 
+    pub fn start_with_spawn(
+        thread_id: ThreadId,
+        source: &str,
+        spawn: SpawnBinding,
+    ) -> Result<Self, String> {
+        let now = unix_seconds();
+        let mut run = Self {
+            thread_id,
+            run_id: Uuid::now_v7().to_string(),
+            name: "workflow".to_string(),
+            status: WorkflowStatus::Active,
+            source: source.trim().to_string(),
+            served_asks: 0,
+            served_replies: Vec::new(),
+            served_pauses: 0,
+            args: serde_json::Map::new(),
+            phase: None,
+            log: None,
+            result: serde_json::Value::Null,
+            spawn_available: matches!(spawn, SpawnBinding::Available),
+            pending_spawn_task_name: None,
+            pending_instruction: None,
+            pending_yield_started: false,
+            created_at: now,
+            updated_at: now,
+            scratch_dir: None,
+        };
+        let outcome = run.eval_current().map_err(|error| error.to_string())?;
+        run.apply_outcome(outcome)?;
+        Ok(run)
+    }
+
     pub fn start_named(
         thread_id: ThreadId,
         name: impl Into<String>,
@@ -90,6 +128,8 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            spawn_available: false,
+            pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -127,6 +167,8 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            spawn_available: false,
+            pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -157,6 +199,24 @@ impl WorkflowRun {
         args: serde_json::Map<String, serde_json::Value>,
         scratch_dir: PathBuf,
     ) -> Result<Self, String> {
+        Self::start_named_with_scratch_and_spawn(
+            thread_id,
+            name,
+            source,
+            args,
+            scratch_dir,
+            SpawnBinding::Unavailable,
+        )
+    }
+
+    pub(crate) fn start_named_with_scratch_and_spawn(
+        thread_id: ThreadId,
+        name: impl Into<String>,
+        source: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+        scratch_dir: PathBuf,
+        spawn: SpawnBinding,
+    ) -> Result<Self, String> {
         let now = unix_seconds();
         let mut run = Self {
             thread_id,
@@ -171,6 +231,8 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            spawn_available: matches!(spawn, SpawnBinding::Available),
+            pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -184,6 +246,10 @@ impl WorkflowRun {
 
     pub(crate) fn bind_scratch_dir(&mut self, scratch_dir: PathBuf) {
         self.scratch_dir = Some(scratch_dir);
+    }
+
+    pub(crate) fn bind_spawn(&mut self, spawn: SpawnBinding) {
+        self.spawn_available = matches!(spawn, SpawnBinding::Available);
     }
 
     pub fn activate(&mut self) -> Result<WorkflowAdvance, String> {
@@ -215,6 +281,7 @@ impl WorkflowRun {
             return Err("workflow has no pending yield".to_string());
         };
         let pending = self.pending_instruction.clone();
+        let pending_spawn_task_name = self.pending_spawn_task_name.clone();
         let pending_yield_started = self.pending_yield_started;
         let previous_asks = self.served_asks;
         let previous_replies = self.served_replies.clone();
@@ -222,6 +289,7 @@ impl WorkflowRun {
         self.served_replies.push(truncate_workflow_reply(&reply));
         self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
         self.pending_instruction = None;
+        self.pending_spawn_task_name = None;
         self.pending_yield_started = false;
         match self.eval_current() {
             Ok(outcome) => self.apply_outcome(outcome),
@@ -230,6 +298,7 @@ impl WorkflowRun {
                 self.served_replies = previous_replies;
                 self.served_pauses = previous_pauses;
                 self.pending_instruction = pending;
+                self.pending_spawn_task_name = pending_spawn_task_name;
                 self.pending_yield_started = pending_yield_started;
                 Err(error.to_string())
             }
@@ -292,13 +361,26 @@ impl WorkflowRun {
         &self,
     ) -> Result<crate::engine::WorkflowEvalOutcome, crate::engine::WorkflowSourceError> {
         let args = json_args_to_map(&self.args);
+        let spawn = if self.spawn_available {
+            SpawnBinding::Available
+        } else {
+            SpawnBinding::Unavailable
+        };
         match self.scratch_dir.as_deref() {
-            Some(dir) => eval_source_with_scratch(
+            Some(dir) => eval_source_with_scratch_and_spawn(
                 &self.source,
                 &self.served_replies,
                 self.served_pauses,
                 &args,
                 dir,
+                spawn,
+            ),
+            None if self.spawn_available => eval_source_with_spawn(
+                &self.source,
+                &self.served_replies,
+                self.served_pauses,
+                &args,
+                spawn,
             ),
             None => eval_source_with_env(
                 &self.source,
@@ -315,6 +397,10 @@ impl WorkflowRun {
     ) -> Result<WorkflowAdvance, String> {
         self.phase = outcome.phase;
         self.log = outcome.log;
+        self.pending_spawn_task_name = match &outcome.eval {
+            WorkflowEval::Yielded { .. } => outcome.spawn_task_name,
+            WorkflowEval::Completed | WorkflowEval::Paused => None,
+        };
         match outcome.eval {
             WorkflowEval::Completed => {
                 self.status = WorkflowStatus::Complete;

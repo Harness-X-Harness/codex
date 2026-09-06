@@ -2,6 +2,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use codex_protocol::ThreadId;
+use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowAdvance;
 use codex_workflow_extension::WorkflowRun;
 use codex_workflow_extension::WorkflowService;
@@ -398,6 +399,42 @@ async fn named_catalog_start_injects_args_and_phase() {
     assert_eq!(run.name, "demo");
     assert_eq!(run.status, WorkflowStatus::Complete);
     assert_eq!(run.phase.as_deref(), Some("Scan"));
+}
+
+#[test]
+fn spawn_stop_then_resume_replays_journaled_result() {
+    let source = r#"
+        let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+        pause();
+        if r.ok && r.text == "ok" {
+            complete();
+        }
+    "#;
+    let mut run =
+        WorkflowRun::start_with_spawn(ThreadId::from_u128(18), source, SpawnBinding::Available)
+            .expect("start");
+    assert_eq!(run.pending_instruction.as_deref(), Some("Say ok."));
+    assert_eq!(run.pending_spawn_task_name.as_deref(), Some("review"));
+    assert_eq!(
+        run.advance_with_reply("ok".to_string()),
+        Ok(WorkflowAdvance::Paused)
+    );
+    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    assert_eq!(run.pending_spawn_task_name, None);
+    run.resume().expect("resume journaled spawn");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.served_replies, vec!["ok".to_string()]);
+    assert_eq!(run.pending_instruction, None);
+}
+
+#[test]
+fn unavailable_spawn_start_is_rejected() {
+    let err = WorkflowRun::start(
+        ThreadId::from_u128(22),
+        r#"agent("Say ok.", #{ "spawn": true, task_name: "review" });"#,
+    )
+    .expect_err("unavailable");
+    assert!(err.contains("unavailable"), "unexpected error: {err}");
 }
 
 #[tokio::test]

@@ -5,6 +5,7 @@ use tempfile::TempDir;
 use codex_workflow_extension::MAX_WORKFLOW_REPLY_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_YIELDS;
+use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowEvalOutcome;
 use codex_workflow_extension::WorkflowSourceError;
@@ -12,6 +13,7 @@ use codex_workflow_extension::eval_source;
 use codex_workflow_extension::eval_source_with_env;
 use codex_workflow_extension::eval_source_with_pauses;
 use codex_workflow_extension::eval_source_with_scratch;
+use codex_workflow_extension::eval_source_with_spawn;
 use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
 
@@ -716,6 +718,7 @@ fn named_program_reads_args_and_records_phase() {
             phase: Some("Scan".to_string()),
             log: None,
             result: serde_json::Value::Null,
+            spawn_task_name: None,
         }
     );
 }
@@ -736,6 +739,7 @@ fn log_records_last_nonempty_message_and_rejects_empty() {
             phase: None,
             log: Some("note".to_string()),
             result: serde_json::Value::Null,
+            spawn_task_name: None,
         }
     );
 
@@ -751,6 +755,131 @@ fn log_records_last_nonempty_message_and_rejects_empty() {
             other => panic!("{source} expected Invalid, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn spawn_request_without_task_name_is_rejected_before_a_yield() {
+    for source in [
+        r#"agent("Say ok.", #{ "spawn": true });"#,
+        r#"agent("Say ok.", #{ "spawn": true, task_name: "" });"#,
+        r#"agent("Say ok.", #{ "spawn": true, task_name: "   " });"#,
+        r#"parallel([#{ prompt: "Say ok.", "spawn": true }]);"#,
+    ] {
+        let error = eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available)
+            .expect_err(source);
+        match error {
+            WorkflowSourceError::Invalid { reason } => {
+                assert!(
+                    reason.contains("task_name"),
+                    "{source} unexpected reason: {reason}"
+                );
+            }
+            other => panic!("{source} expected Invalid, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn unavailable_spawn_is_rejected_before_a_yield() {
+    let source = r#"agent("Say ok.", #{ "spawn": true, task_name: "review" });"#;
+    let error = eval_source(source, &[]).expect_err("unavailable spawn");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("unavailable"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn spawn_string_or_false_stays_same_thread() {
+    for source in [
+        r#"let r = agent("Say ok.", #{ "spawn": "true", task_name: "review" }); if r.ok { complete(); }"#,
+        r#"let r = agent("Say ok.", #{ "spawn": false, task_name: "review" }); if r.ok { complete(); }"#,
+        r#"let r = agent("Say ok.", #{ label: "unused" }); if r.ok { complete(); }"#,
+    ] {
+        let outcome = eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available)
+            .expect(source);
+        assert_eq!(
+            outcome.eval,
+            WorkflowEval::Yielded {
+                instruction: "Say ok.".to_string(),
+            },
+            "{source}"
+        );
+        assert_eq!(outcome.spawn_task_name, None, "{source}");
+    }
+}
+
+#[test]
+fn available_spawn_yields_then_replays_without_a_second_child() {
+    let source = r#"
+        let r = agent("Say ok.", #{ "spawn": true, task_name: "review", extra: "unused" });
+        if r.ok && r.text == "ok" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    let first =
+        eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available).expect("eval");
+    assert_eq!(
+        first.eval,
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(first.spawn_task_name.as_deref(), Some("review"));
+    let replayed = eval_source_with_spawn(
+        source,
+        &["ok".to_string()],
+        0,
+        &Map::new(),
+        SpawnBinding::Available,
+    )
+    .expect("replay");
+    assert_eq!(replayed.eval, WorkflowEval::Completed);
+    assert_eq!(replayed.spawn_task_name, None);
+}
+
+#[test]
+fn parallel_items_can_request_spawn_independently() {
+    let source = r#"
+        let results = parallel([
+            #{ prompt: "first" },
+            #{ prompt: "second", "spawn": true, task_name: "review" },
+        ]);
+        if results[0].text == "one" && results[1].text == "two" {
+            complete();
+        }
+    "#;
+    let first =
+        eval_source_with_spawn(source, &[], 0, &Map::new(), SpawnBinding::Available).expect("eval");
+    assert_eq!(
+        first.eval,
+        WorkflowEval::Yielded {
+            instruction: "first".to_string(),
+        }
+    );
+    assert_eq!(first.spawn_task_name, None);
+    let second = eval_source_with_spawn(
+        source,
+        &["one".to_string()],
+        0,
+        &Map::new(),
+        SpawnBinding::Available,
+    )
+    .expect("second");
+    assert_eq!(
+        second.eval,
+        WorkflowEval::Yielded {
+            instruction: "second".to_string(),
+        }
+    );
+    assert_eq!(second.spawn_task_name.as_deref(), Some("review"));
 }
 
 #[test]

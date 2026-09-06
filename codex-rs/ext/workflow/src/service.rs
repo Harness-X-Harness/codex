@@ -28,6 +28,7 @@ use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
 use crate::catalog::resolve_named;
+use crate::engine::SpawnBinding;
 use crate::engine::WorkflowSourceError;
 use crate::engine::truncate_workflow_reply;
 use crate::run::WorkflowRun;
@@ -109,12 +110,21 @@ impl WorkflowService {
         source: &str,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
         let scratch_dir = self.scratch_dir_for(thread_id);
+        let spawn = self.spawn_binding_for(thread_id).await;
         self.start_prepared(thread_id, |thread_id, claimed| {
             if claimed {
-                WorkflowRun::start_with_scratch(thread_id, source, scratch_dir.clone())
+                WorkflowRun::start_named_with_scratch_and_spawn(
+                    thread_id,
+                    "workflow",
+                    source,
+                    serde_json::Map::new(),
+                    scratch_dir.clone(),
+                    spawn,
+                )
             } else {
                 let mut run = WorkflowRun::queue(thread_id, source)?;
                 run.bind_scratch_dir(scratch_dir);
+                run.bind_spawn(spawn);
                 Ok(run)
             }
         })
@@ -131,23 +141,37 @@ impl WorkflowService {
         let script = resolve_named(name, &roots)
             .map_err(|error| WorkflowServiceError::InvalidRequest(error.to_string()))?;
         let scratch_dir = self.scratch_dir_for(thread_id);
+        let spawn = self.spawn_binding_for(thread_id).await;
         self.start_prepared(thread_id, |thread_id, claimed| {
             if claimed {
-                WorkflowRun::start_named_with_scratch(
+                WorkflowRun::start_named_with_scratch_and_spawn(
                     thread_id,
                     script.name,
                     &script.source,
                     args,
                     scratch_dir.clone(),
+                    spawn,
                 )
             } else {
                 let mut run =
                     WorkflowRun::queue_named(thread_id, script.name, &script.source, args)?;
                 run.bind_scratch_dir(scratch_dir);
+                run.bind_spawn(spawn);
                 Ok(run)
             }
         })
         .await
+    }
+
+    async fn spawn_binding_for(&self, thread_id: ThreadId) -> SpawnBinding {
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return SpawnBinding::Unavailable;
+        };
+        if thread.stock_spawn_agent_available().await {
+            SpawnBinding::Available
+        } else {
+            SpawnBinding::Unavailable
+        }
     }
 
     fn scratch_dir_for(&self, thread_id: ThreadId) -> PathBuf {
@@ -213,13 +237,19 @@ impl WorkflowService {
         let Some(existing) = self.get_run(thread_id).await? else {
             return Ok(None);
         };
-        if existing.status != WorkflowStatus::Active || !existing.pending_yield_started {
+        if existing.status != WorkflowStatus::Active
+            || !existing.pending_yield_started
+            || existing.pending_spawn_task_name.is_some()
+        {
             return Ok(Some(existing));
         }
         let reply = self.latest_assistant_reply(thread_id).await;
         let run = self
             .mutate_run(thread_id, move |run| {
-                if run.status != WorkflowStatus::Active || !run.pending_yield_started {
+                if run.status != WorkflowStatus::Active
+                    || !run.pending_yield_started
+                    || run.pending_spawn_task_name.is_some()
+                {
                     return Ok(());
                 }
                 run.advance_with_reply(reply).map(|_| ())
@@ -285,9 +315,6 @@ impl WorkflowService {
         if run.pending_yield_started {
             return Ok(());
         }
-        let Some(instruction) = run.pending_instruction.as_deref() else {
-            return Ok(());
-        };
         let Some(thread_manager) = self.thread_manager.upgrade() else {
             tracing::debug!("skipping workflow continuation because thread manager is unavailable");
             return Ok(());
@@ -296,22 +323,15 @@ impl WorkflowService {
             tracing::debug!("skipping workflow continuation because live thread is unavailable");
             return Ok(());
         };
-        let start_options = thread
-            .thread_extension_data()
-            .get::<TurnStartOptions>()
-            .map(|options| options.as_ref().clone())
-            .unwrap_or_default();
-        let item = yield_steering_item(&run, instruction);
-        match thread
-            .start_turn_if_idle(
-                TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
-                    turn_trigger: Some("workflow".to_string()),
-                    ..start_options
-                }),
-            )
-            .await
-        {
-            Ok(StartIfIdleSubmission::Started { .. }) => {
+        let mut run = run;
+        loop {
+            if run.status != WorkflowStatus::Active || run.pending_yield_started {
+                return Ok(());
+            }
+            let Some(instruction) = run.pending_instruction.clone() else {
+                return Ok(());
+            };
+            if let Some(task_name) = run.pending_spawn_task_name.clone() {
                 if let Err(err) = self
                     .mutate_run(thread_id, |run| {
                         run.mark_pending_yield_started();
@@ -319,23 +339,95 @@ impl WorkflowService {
                     })
                     .await
                 {
-                    tracing::debug!("failed to mark workflow yield started for {thread_id}: {err}");
+                    tracing::debug!("failed to mark workflow spawn started for {thread_id}: {err}");
+                    return Ok(());
+                }
+                match thread
+                    .spawn_stock_agent_and_wait_text(&instruction, &task_name)
+                    .await
+                {
+                    Ok(reply) => match self
+                        .mutate_run(thread_id, move |run| {
+                            run.advance_with_reply(reply).map(|_| ())
+                        })
+                        .await
+                    {
+                        Ok(updated) => {
+                            run = updated;
+                            continue;
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                "failed to host-resume workflow after spawn for {thread_id}: {err}"
+                            );
+                            return Ok(());
+                        }
+                    },
+                    Err(error) => {
+                        tracing::debug!(
+                            %error,
+                            "skipping workflow spawn because stock spawn_agent failed"
+                        );
+                        if let Err(err) = self
+                            .mutate_run(thread_id, |run| {
+                                run.pending_yield_started = false;
+                                Ok(())
+                            })
+                            .await
+                        {
+                            tracing::debug!(
+                                "failed to clear workflow spawn claim for {thread_id}: {err}"
+                            );
+                        }
+                        return Ok(());
+                    }
                 }
             }
-            Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
-                tracing::debug!(
-                    ?reason,
-                    "skipping workflow continuation because automatic idle work was rejected"
-                );
+            let start_options = thread
+                .thread_extension_data()
+                .get::<TurnStartOptions>()
+                .map(|options| options.as_ref().clone())
+                .unwrap_or_default();
+            let item = yield_steering_item(&run, &instruction);
+            match thread
+                .start_turn_if_idle(
+                    TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(
+                        TurnStartOptions {
+                            turn_trigger: Some("workflow".to_string()),
+                            ..start_options
+                        },
+                    ),
+                )
+                .await
+            {
+                Ok(StartIfIdleSubmission::Started { .. }) => {
+                    if let Err(err) = self
+                        .mutate_run(thread_id, |run| {
+                            run.mark_pending_yield_started();
+                            Ok(())
+                        })
+                        .await
+                    {
+                        tracing::debug!(
+                            "failed to mark workflow yield started for {thread_id}: {err}"
+                        );
+                    }
+                }
+                Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
+                    tracing::debug!(
+                        ?reason,
+                        "skipping workflow continuation because automatic idle work was rejected"
+                    );
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        "skipping workflow continuation because turn input submission failed"
+                    );
+                }
             }
-            Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "skipping workflow continuation because turn input submission failed"
-                );
-            }
+            return Ok(());
         }
-        Ok(())
     }
 
     async fn mutate_run(
