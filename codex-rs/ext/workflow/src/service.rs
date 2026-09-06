@@ -19,6 +19,7 @@ use codex_core::TurnStartOptions;
 use codex_core::content_items_to_text;
 use codex_extension_api::EngineOccupant;
 use codex_extension_api::HostIdleHold;
+use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
@@ -109,9 +110,6 @@ impl WorkflowService {
         } else {
             WorkflowRun::queue(thread_id, source).map_err(WorkflowServiceError::InvalidRequest)?
         };
-        if claimed && !run.occupies_idle() {
-            self.release_workflow(thread_id).await;
-        }
         persist_run(&self.persist_root, &run).await?;
         self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
@@ -303,7 +301,7 @@ impl WorkflowService {
     }
 
     async fn after_run_changed(&self, run: &WorkflowRun) {
-        self.refresh_idle_hold(run).await;
+        let released = self.refresh_idle_hold(run).await;
         let sink = self
             .update_sink
             .lock()
@@ -312,20 +310,34 @@ impl WorkflowService {
         if let Some(sink) = sink {
             sink(run.clone()).await;
         }
+        if released {
+            self.kick_waiting_goal(run.thread_id).await;
+        }
     }
 
-    async fn refresh_idle_hold(&self, run: &WorkflowRun) {
+    async fn refresh_idle_hold(&self, run: &WorkflowRun) -> bool {
         let Some(thread) = self.live_thread(run.thread_id).await else {
-            return;
+            return false;
         };
         let slot = engine_slot(thread.thread_extension_data());
         if run.occupies_idle() {
             let _ = slot.try_claim(EngineOccupant::Workflow);
             thread.thread_extension_data().insert(HostIdleHold);
+            false
         } else {
-            slot.release(EngineOccupant::Workflow);
+            let released = slot.release(EngineOccupant::Workflow);
             thread.thread_extension_data().remove::<HostIdleHold>();
+            released
         }
+    }
+
+    async fn kick_waiting_goal(&self, thread_id: ThreadId) {
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return;
+        };
+        thread
+            .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
+            .await;
     }
 
     async fn try_claim_workflow(&self, thread_id: ThreadId) -> bool {
@@ -333,14 +345,6 @@ impl WorkflowService {
             return true;
         };
         engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::Workflow)
-    }
-
-    async fn release_workflow(&self, thread_id: ThreadId) {
-        let Some(thread) = self.live_thread(thread_id).await else {
-            return;
-        };
-        engine_slot(thread.thread_extension_data()).release(EngineOccupant::Workflow);
-        thread.thread_extension_data().remove::<HostIdleHold>();
     }
 
     async fn live_thread(&self, thread_id: ThreadId) -> Option<Arc<codex_core::CodexThread>> {

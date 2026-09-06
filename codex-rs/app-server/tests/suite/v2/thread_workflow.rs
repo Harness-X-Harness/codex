@@ -563,13 +563,136 @@ async fn active_workflow_hold_blocks_goal_idle() -> Result<()> {
         .request(|request_id| ClientRequest::ThreadGoalGet {
             request_id,
             params: ThreadGoalGetParams {
-                thread_id: thread.id,
+                thread_id: thread.id.clone(),
             },
         })
         .await?;
     assert_eq!(
         get_goal.goal.map(|goal| goal.status),
         Some(ThreadGoalStatus::Active)
+    );
+    wait_until_turn_trigger(&server, "goal").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn paused_workflow_frees_the_slot_for_waiting_goal_how() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker_delay: std::time::Duration::from_millis(400),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: ASK_THEN_COMPLETE.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("paused workflow frees the engine slot".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+
+    let stopped: ThreadWorkflowStopResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStop {
+            request_id,
+            params: ThreadWorkflowStopParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
+
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_goal.goal.map(|goal| goal.status),
+        Some(ThreadGoalStatus::Active)
+    );
+    wait_until_turn_trigger(&server, "goal").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn waiting_workflow_rejects_a_second_start() -> Result<()> {
+    let (mut app, _codex_home, _server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![text("materialize this thread")],
+        ..Default::default()
+    })
+    .await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("one waiting workflow at a time".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: ASK_THEN_COMPLETE.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Waiting);
+
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(ThreadWorkflowStartParams {
+                thread_id: thread.id,
+                source: COMPLETE_ONLY.to_string(),
+            })?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("already active"),
+        "unexpected error: {}",
+        error.error.message
     );
     Ok(())
 }
