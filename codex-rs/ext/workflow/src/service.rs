@@ -196,17 +196,16 @@ impl WorkflowService {
         else {
             return Ok(());
         };
-        if run.status == WorkflowStatus::Waiting {
+        let run = if run.status == WorkflowStatus::Waiting {
             if !self.try_claim_workflow(thread_id).await {
                 return Ok(());
             }
-            let run = self
-                .mutate_run(thread_id, |run| run.activate().map(|_| ()))
+            self.mutate_run(thread_id, |run| run.activate().map(|_| ()))
                 .await
-                .map_err(|err| err.to_string())?;
-            self.kick_if_active(&run).await;
-            return Ok(());
-        }
+                .map_err(|err| err.to_string())?
+        } else {
+            run
+        };
         if run.status != WorkflowStatus::Active {
             return Ok(());
         }
