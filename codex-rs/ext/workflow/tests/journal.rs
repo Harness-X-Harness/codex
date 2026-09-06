@@ -5,7 +5,7 @@ use tempfile::TempDir;
 use codex_protocol::ThreadId;
 use codex_workflow_extension::ContinuationKind;
 use codex_workflow_extension::ContinuationRecord;
-use codex_workflow_extension::LEGACY_RESUME_REQUIRED;
+use codex_workflow_extension::HostCallResult;
 use codex_workflow_extension::REPLAY_DIVERGENCE;
 use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowAdvance;
@@ -77,12 +77,10 @@ fn scratch_changing_completed_agent_prompt_fails_closed() {
         Ok(WorkflowAdvance::Paused)
     );
     std::fs::write(dir.path().join("p.txt"), "two").expect("change");
-    let error = run.resume().expect_err("diverged");
-    assert!(
-        error.contains(REPLAY_DIVERGENCE),
-        "unexpected error: {error}"
-    );
-    assert_eq!(run.status, WorkflowStatus::Paused);
+    run.resume().expect("failed closed");
+    assert_eq!(run.status, WorkflowStatus::Failed);
+    assert_eq!(run.error.as_deref(), Some("replay_diverged"));
+    assert!(!run.occupies_idle());
     assert_eq!(run.pending_instruction, None);
     assert_eq!(run.continuations.len(), 1);
 }
@@ -143,8 +141,10 @@ fn legacy_positional_active_run_is_rejected() {
     run.format_version = 1;
     run.served_replies = vec!["ok".to_string()];
     run.continuations.clear();
-    let error = run.prepare_restored().expect_err("legacy");
-    assert_eq!(error, LEGACY_RESUME_REQUIRED);
+    run.prepare_restored().expect("legacy");
+    assert_eq!(run.status, WorkflowStatus::Failed);
+    assert_eq!(run.error.as_deref(), Some("legacy_resume_required"));
+    assert!(!run.occupies_idle());
 }
 
 #[test]
@@ -180,8 +180,22 @@ fn malformed_journal_sequence_is_rejected() {
         seq: 9,
         kind: ContinuationKind::Ask,
         request_digest: "nonzero".to_string(),
-        result: "y".to_string(),
+        result: HostCallResult::success("y"),
     });
-    let error = run.prepare_restored().expect_err("seq");
-    assert!(error.contains("sequence"), "unexpected error: {error}");
+    run.prepare_restored().expect("seq");
+    assert_eq!(run.status, WorkflowStatus::Failed);
+    assert_eq!(run.error.as_deref(), Some("unsafe_journal"));
+    assert!(!run.occupies_idle());
+}
+
+#[test]
+fn persisted_string_result_replays_as_successful_text() {
+    let record: ContinuationRecord = serde_json::from_value(serde_json::json!({
+        "seq": 1,
+        "kind": "agent",
+        "request_digest": "abc",
+        "result": "ok"
+    }))
+    .expect("legacy string");
+    assert_eq!(record.result, HostCallResult::success("ok"));
 }

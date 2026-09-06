@@ -13,6 +13,7 @@ fn workflow(status: ThreadWorkflowStatus, instruction: Option<&str>) -> ThreadWo
         status,
         pending_instruction: instruction.map(str::to_string),
         result: serde_json::Value::Null,
+        error: None,
         created_at: 1,
         updated_at: 1,
     }
@@ -78,5 +79,9 @@ fn workflow_indicator_formats_each_status() {
     insta::assert_snapshot!(
         line_text(WorkflowStatusIndicator::Waiting),
         @"Workflow waiting"
+    );
+    insta::assert_snapshot!(
+        line_text(WorkflowStatusIndicator::Failed),
+        @"Workflow failed"
     );
 }

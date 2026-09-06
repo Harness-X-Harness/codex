@@ -9,11 +9,17 @@ use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::TurnAbortInput;
+use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStopInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnAbortReason;
 
+use crate::journal::HOST_ERROR_TURN_CANCELLED;
+use crate::journal::HOST_ERROR_TURN_ERRORED;
+use crate::journal::HostCallResult;
 use crate::service::WorkflowService;
 
 /// Host `goal_host` gate for the independent `/workflow` layer.
@@ -86,28 +92,79 @@ where
 {
     fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let enabled = input
-                .thread_store
-                .get::<WorkflowExtensionConfig>()
-                .is_some_and(|config| config.enabled);
-            if !enabled {
-                return;
-            }
-            let is_workflow_turn = input
-                .turn_store
-                .get::<TurnStartOptions>()
-                .is_some_and(|options| options.turn_trigger.as_deref() == Some("workflow"));
-            if !is_workflow_turn {
+            if !workflow_how_enabled(input.thread_store) || !workflow_how_turn(input.turn_store) {
                 return;
             }
             let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
                 return;
             };
-            if let Err(err) = self.service.finish_yield_turn(thread_id).await {
+            let outcome = if input.turn_store.get::<WorkflowTurnFailure>().is_some() {
+                self.service
+                    .finish_yield_turn_with_result(
+                        thread_id,
+                        HostCallResult::failure(HOST_ERROR_TURN_ERRORED),
+                    )
+                    .await
+            } else {
+                self.service.finish_yield_turn(thread_id).await
+            };
+            if let Err(err) = outcome {
                 tracing::warn!("failed to host-resume workflow after yield for {thread_id}: {err}");
             }
         })
     }
+
+    fn on_turn_abort<'a>(&'a self, input: TurnAbortInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if !workflow_how_enabled(input.thread_store) || !workflow_how_turn(input.turn_store) {
+                return;
+            }
+            let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+                return;
+            };
+            let outcome = match input.reason {
+                TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited => self
+                    .service
+                    .finish_yield_turn_with_result(
+                        thread_id,
+                        HostCallResult::failure(HOST_ERROR_TURN_CANCELLED),
+                    )
+                    .await
+                    .map(|_| ()),
+                // Another turn replaced this yield. Pause so the run does not
+                // stay active with a started yield that can never finish.
+                TurnAbortReason::Replaced | TurnAbortReason::ReviewEnded => {
+                    self.service.stop_run(thread_id).await.map(|_| ())
+                }
+            };
+            if let Err(err) = outcome {
+                tracing::warn!("failed to host-resume workflow after abort for {thread_id}: {err}");
+            }
+        })
+    }
+
+    fn on_turn_error<'a>(&'a self, input: TurnErrorInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if !workflow_how_enabled(input.thread_store) || !workflow_how_turn(input.turn_store) {
+                return;
+            }
+            input.turn_store.insert(WorkflowTurnFailure);
+        })
+    }
+}
+
+struct WorkflowTurnFailure;
+
+fn workflow_how_enabled(thread_store: &ExtensionData) -> bool {
+    thread_store
+        .get::<WorkflowExtensionConfig>()
+        .is_some_and(|config| config.enabled)
+}
+
+fn workflow_how_turn(turn_store: &ExtensionData) -> bool {
+    turn_store
+        .get::<TurnStartOptions>()
+        .is_some_and(|options| options.turn_trigger.as_deref() == Some("workflow"))
 }
 
 impl<C> ConfigContributor<C> for WorkflowExtension<C>

@@ -4,4 +4,4 @@
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ThreadWorkflowStatus } from "./ThreadWorkflowStatus";
 
-export type ThreadWorkflow = { threadId: string, runId: string, name: string, status: ThreadWorkflowStatus, pendingInstruction: string | null, result: JsonValue, createdAt: number, updatedAt: number, };
+export type ThreadWorkflow = { threadId: string, runId: string, name: string, status: ThreadWorkflowStatus, pendingInstruction: string | null, result: JsonValue, error: string | null, createdAt: number, updatedAt: number, };

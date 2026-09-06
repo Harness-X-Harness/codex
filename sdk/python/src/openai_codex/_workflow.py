@@ -11,6 +11,7 @@ class ThreadWorkflowStatus(str, Enum):
     paused = "paused"
     complete = "complete"
     waiting = "waiting"
+    failed = "failed"
 
 
 class ThreadWorkflow(BaseModel):
@@ -21,6 +22,7 @@ class ThreadWorkflow(BaseModel):
     status: ThreadWorkflowStatus
     pending_instruction: Annotated[str | None, Field(alias="pendingInstruction")]
     result: Any
+    error: str | None
     created_at: Annotated[int, Field(alias="createdAt")]
     updated_at: Annotated[int, Field(alias="updatedAt")]
 

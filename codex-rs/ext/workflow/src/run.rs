@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::catalog::json_args_to_map;
 use crate::engine::SpawnBinding;
 use crate::engine::WorkflowEval;
+use crate::engine::WorkflowSourceError;
 use crate::engine::eval_source_with_env;
 use crate::engine::eval_source_with_scratch_and_spawn;
 use crate::engine::eval_source_with_spawn;
@@ -19,7 +20,12 @@ use crate::engine::truncate_workflow_reply;
 use crate::engine::validate_source;
 use crate::journal::ContinuationKind;
 use crate::journal::ContinuationRecord;
-use crate::journal::LEGACY_RESUME_REQUIRED;
+use crate::journal::HostCallResult;
+use crate::journal::REPLAY_DIVERGENCE;
+use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
+use crate::journal::WORKFLOW_ERROR_LEGACY_RESUME;
+use crate::journal::WORKFLOW_ERROR_REPLAY_DIVERGED;
+use crate::journal::WORKFLOW_ERROR_UNSAFE_JOURNAL;
 use crate::journal::WORKFLOW_PERSIST_VERSION;
 use crate::journal::bounded;
 use crate::journal::result_bearing_count;
@@ -32,6 +38,7 @@ pub enum WorkflowStatus {
     Paused,
     Complete,
     Waiting,
+    Failed,
 }
 
 /// Persisted run for one thread.
@@ -64,6 +71,8 @@ pub struct WorkflowRun {
     #[serde(default)]
     pub result: serde_json::Value,
     #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
     pub spawn_available: bool,
     #[serde(default)]
     pub pending_spawn_task_name: Option<String>,
@@ -83,6 +92,7 @@ pub enum WorkflowAdvance {
     Yielded,
     Completed,
     Paused,
+    Failed,
 }
 
 impl WorkflowRun {
@@ -113,6 +123,7 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            error: None,
             spawn_available: matches!(spawn, SpawnBinding::Available),
             pending_spawn_task_name: None,
             pending_instruction: None,
@@ -150,6 +161,7 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            error: None,
             spawn_available: false,
             pending_spawn_task_name: None,
             pending_instruction: None,
@@ -193,6 +205,7 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            error: None,
             spawn_available: false,
             pending_spawn_task_name: None,
             pending_instruction: None,
@@ -261,6 +274,7 @@ impl WorkflowRun {
             phase: None,
             log: None,
             result: serde_json::Value::Null,
+            error: None,
             spawn_available: matches!(spawn, SpawnBinding::Available),
             pending_spawn_task_name: None,
             pending_instruction: None,
@@ -286,8 +300,13 @@ impl WorkflowRun {
         if self.status != WorkflowStatus::Waiting {
             return Err("workflow is not waiting".to_string());
         }
-        let outcome = self.eval_current().map_err(|error| error.to_string())?;
-        self.apply_outcome(outcome)
+        match self.eval_current() {
+            Ok(outcome) => self.apply_outcome(outcome),
+            Err(error) => {
+                self.fail(unrecoverable_error_code(&error));
+                Ok(WorkflowAdvance::Failed)
+            }
+        }
     }
 
     pub fn park(&mut self) -> Result<(), String> {
@@ -304,26 +323,27 @@ impl WorkflowRun {
     }
 
     pub fn advance_with_reply(&mut self, reply: String) -> Result<WorkflowAdvance, String> {
+        self.advance_with_outcome(HostCallResult::success(truncate_workflow_reply(&reply)))
+    }
+
+    pub fn advance_with_outcome(
+        &mut self,
+        mut result: HostCallResult,
+    ) -> Result<WorkflowAdvance, String> {
         if self.status != WorkflowStatus::Active {
             return Err("workflow is not active".to_string());
         }
         let Some(_) = self.pending_instruction.as_ref() else {
             return Err("workflow has no pending yield".to_string());
         };
-        let pending = self.pending_instruction.clone();
-        let pending_spawn_task_name = self.pending_spawn_task_name.clone();
-        let pending_yield_started = self.pending_yield_started;
-        let pending_kind = self.pending_kind;
-        let pending_request_digest = self.pending_request_digest.clone();
-        let previous_asks = self.served_asks;
-        let previous_continuations = self.continuations.clone();
-        let Some(kind) = pending_kind else {
+        let Some(kind) = self.pending_kind else {
             return Err("workflow has no pending yield identity".to_string());
         };
-        let Some(digest) = pending_request_digest.clone() else {
+        let Some(digest) = self.pending_request_digest.clone() else {
             return Err("workflow has no pending yield identity".to_string());
         };
-        self.push_continuation(kind, digest, truncate_workflow_reply(&reply));
+        result.text = truncate_workflow_reply(&result.text);
+        self.push_continuation(kind, digest, result);
         self.pending_instruction = None;
         self.pending_spawn_task_name = None;
         self.pending_yield_started = false;
@@ -332,14 +352,8 @@ impl WorkflowRun {
         match self.eval_current() {
             Ok(outcome) => self.apply_outcome(outcome),
             Err(error) => {
-                self.served_asks = previous_asks;
-                self.continuations = previous_continuations;
-                self.pending_instruction = pending;
-                self.pending_spawn_task_name = pending_spawn_task_name;
-                self.pending_yield_started = pending_yield_started;
-                self.pending_kind = pending_kind;
-                self.pending_request_digest = pending_request_digest;
-                Err(error.to_string())
+                self.fail(unrecoverable_error_code(&error));
+                Ok(WorkflowAdvance::Failed)
             }
         }
     }
@@ -349,18 +363,67 @@ impl WorkflowRun {
     }
 
     pub fn prepare_restored(&mut self) -> Result<(), String> {
-        bounded(&self.continuations)?;
+        if bounded(&self.continuations).is_err() {
+            self.fail(WORKFLOW_ERROR_UNSAFE_JOURNAL);
+            return Ok(());
+        }
         let has_legacy = !self.served_replies.is_empty() || self.served_pauses > 0;
         if !self.continuations.is_empty() {
             self.format_version = WORKFLOW_PERSIST_VERSION;
             self.served_asks = result_bearing_count(&self.continuations);
             return Ok(());
         }
-        if matches!(self.status, WorkflowStatus::Complete) || !has_legacy {
+        if matches!(
+            self.status,
+            WorkflowStatus::Complete | WorkflowStatus::Failed
+        ) || !has_legacy
+        {
             self.format_version = WORKFLOW_PERSIST_VERSION;
             return Ok(());
         }
-        Err(LEGACY_RESUME_REQUIRED.to_string())
+        self.fail(WORKFLOW_ERROR_LEGACY_RESUME);
+        Ok(())
+    }
+
+    pub(crate) fn unreadable(thread_id: ThreadId) -> Self {
+        let now = unix_seconds();
+        Self {
+            thread_id,
+            run_id: Uuid::now_v7().to_string(),
+            name: "workflow".to_string(),
+            status: WorkflowStatus::Failed,
+            source: String::new(),
+            served_asks: 0,
+            served_replies: Vec::new(),
+            served_pauses: 0,
+            format_version: WORKFLOW_PERSIST_VERSION,
+            continuations: Vec::new(),
+            pending_kind: None,
+            pending_request_digest: None,
+            args: serde_json::Map::new(),
+            phase: None,
+            log: None,
+            result: serde_json::Value::Null,
+            error: Some(WORKFLOW_ERROR_UNSAFE_JOURNAL.to_string()),
+            spawn_available: false,
+            pending_spawn_task_name: None,
+            pending_instruction: None,
+            pending_yield_started: false,
+            created_at: now,
+            updated_at: now,
+            scratch_dir: None,
+        }
+    }
+
+    pub fn fail(&mut self, error: impl Into<String>) {
+        self.status = WorkflowStatus::Failed;
+        self.error = Some(error.into());
+        self.pending_instruction = None;
+        self.pending_spawn_task_name = None;
+        self.pending_yield_started = false;
+        self.pending_kind = None;
+        self.pending_request_digest = None;
+        self.updated_at = unix_seconds();
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -391,7 +454,7 @@ impl WorkflowRun {
         let pending_kind = self.pending_kind;
         let pending_request_digest = self.pending_request_digest.clone();
         if let (Some(kind), Some(digest)) = (pending_kind, pending_request_digest.clone()) {
-            self.push_continuation(kind, digest, String::new());
+            self.push_continuation(kind, digest, HostCallResult::success(String::new()));
             self.pending_kind = None;
             self.pending_request_digest = None;
         }
@@ -400,10 +463,8 @@ impl WorkflowRun {
             Err(error) => {
                 self.continuations = previous;
                 self.served_asks = previous_asks;
-                self.pending_kind = pending_kind;
-                self.pending_request_digest = pending_request_digest;
-                self.status = WorkflowStatus::Paused;
-                Err(error.to_string())
+                self.fail(unrecoverable_error_code(&error));
+                Ok(())
             }
         }
     }
@@ -479,7 +540,7 @@ impl WorkflowRun {
         &mut self,
         kind: ContinuationKind,
         request_digest: String,
-        result: String,
+        result: HostCallResult,
     ) {
         self.continuations.push(ContinuationRecord {
             seq: u32::try_from(self.continuations.len().saturating_add(1)).unwrap_or(u32::MAX),
@@ -489,6 +550,17 @@ impl WorkflowRun {
         });
         self.served_asks = result_bearing_count(&self.continuations);
         self.format_version = WORKFLOW_PERSIST_VERSION;
+    }
+}
+
+fn unrecoverable_error_code(error: &WorkflowSourceError) -> &'static str {
+    match error {
+        WorkflowSourceError::Invalid { reason } if reason.contains(REPLAY_DIVERGENCE) => {
+            WORKFLOW_ERROR_REPLAY_DIVERGED
+        }
+        WorkflowSourceError::Invalid { .. }
+        | WorkflowSourceError::Empty
+        | WorkflowSourceError::TooLarge { .. } => WORKFLOW_ERROR_HOST_RUNTIME,
     }
 }
 

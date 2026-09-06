@@ -18,6 +18,7 @@ use sha2::Sha256;
 
 use crate::journal::ContinuationKind;
 use crate::journal::ContinuationRecord;
+use crate::journal::HostCallResult;
 use crate::journal::JournalLookup;
 use crate::journal::REPLAY_DIVERGENCE;
 use crate::journal::agent_request;
@@ -347,6 +348,7 @@ fn build_engine(
                 instruction,
                 "ask() requires a nonempty instruction",
             )
+            .map(|result| result.text)
         },
     );
 
@@ -632,13 +634,13 @@ fn take_journal_or_yield(
     request: &serde_json::Value,
     instruction: &str,
     empty_error: &str,
-) -> Result<String, Box<EvalAltResult>> {
+) -> Result<HostCallResult, Box<EvalAltResult>> {
     let digest = request_digest(kind, request);
     match lookup(journal, index.get(), kind, &digest) {
-        JournalLookup::Replay(reply) => {
+        JournalLookup::Replay(result) => {
             bump(index);
             bump(yield_index);
-            Ok(reply)
+            Ok(result)
         }
         JournalLookup::NeedWork => {
             if instruction.trim().is_empty() {
@@ -677,10 +679,11 @@ fn bump(index: &Rc<Cell<usize>>) {
     index.set(index.get().saturating_add(1));
 }
 
-fn agent_result_from_reply(reply: &str) -> Dynamic {
+fn host_call_dynamic(result: &HostCallResult) -> Dynamic {
     let mut map = Map::new();
-    map.insert("ok".into(), Dynamic::from(!reply.trim().is_empty()));
-    map.insert("text".into(), Dynamic::from(reply.to_string()));
+    map.insert("ok".into(), Dynamic::from(result.ok));
+    map.insert("text".into(), Dynamic::from(result.text.clone()));
+    map.insert("error".into(), Dynamic::from(result.error.clone()));
     Dynamic::from(map)
 }
 
@@ -703,10 +706,10 @@ fn take_agent_call(
             &spawn_request(prompt, &task_name),
         );
         match lookup(journal, index.get(), ContinuationKind::SpawnAgent, &digest) {
-            JournalLookup::Replay(reply) => {
+            JournalLookup::Replay(result) => {
                 bump(index);
                 bump(yield_index);
-                return Ok(agent_result_from_reply(&reply));
+                return Ok(host_call_dynamic(&result));
             }
             JournalLookup::NeedWork => {
                 if prompt.trim().is_empty() {
@@ -731,7 +734,7 @@ fn take_agent_call(
         prompt,
         "agent() requires a nonempty prompt",
     )
-    .map(|reply| agent_result_from_reply(&reply))
+    .map(|result| host_call_dynamic(&result))
 }
 
 /// A spawn request is `opts["spawn"] == true` (boolean). Rhai reserves the

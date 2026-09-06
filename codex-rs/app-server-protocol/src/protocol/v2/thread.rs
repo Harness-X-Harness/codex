@@ -874,6 +874,7 @@ pub enum ThreadWorkflowStatus {
     Paused,
     Complete,
     Waiting,
+    Failed,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -886,6 +887,7 @@ pub struct ThreadWorkflow {
     pub status: ThreadWorkflowStatus,
     pub pending_instruction: Option<String>,
     pub result: JsonValue,
+    pub error: Option<String>,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]

@@ -3,7 +3,7 @@ use tempfile::TempDir;
 
 use codex_protocol::ThreadId;
 use codex_workflow_extension::ContinuationKind;
-use codex_workflow_extension::LEGACY_RESUME_REQUIRED;
+use codex_workflow_extension::HostCallResult;
 use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowAdvance;
 use codex_workflow_extension::WorkflowRun;
@@ -19,7 +19,7 @@ fn result_replies(run: &WorkflowRun) -> Vec<String> {
                 ContinuationKind::Ask | ContinuationKind::Agent | ContinuationKind::SpawnAgent
             )
         })
-        .map(|record| record.result.clone())
+        .map(|record| record.result.text.clone())
         .collect()
 }
 
@@ -346,11 +346,161 @@ async fn service_rejects_legacy_positional_active_resume() {
     stored["format_version"] = serde_json::json!(1);
     std::fs::write(&path, serde_json::to_vec_pretty(&stored).expect("encode")).expect("write");
     let second = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
-    let error = second.get_run(thread_id).await.expect_err("legacy");
-    assert!(
-        error.to_string().contains(LEGACY_RESUME_REQUIRED),
-        "unexpected error: {error}"
+    let loaded = second
+        .get_run(thread_id)
+        .await
+        .expect("legacy")
+        .expect("run");
+    assert_eq!(loaded.status, WorkflowStatus::Failed);
+    assert_eq!(loaded.error.as_deref(), Some("legacy_resume_required"));
+    assert!(!loaded.occupies_idle());
+}
+
+#[test]
+fn empty_agent_reply_completes_when_script_checks_ok() {
+    let source = r#"
+        let r = agent("Say ok.");
+        if r.ok { complete(); } else { ask("wrong reply"); }
+    "#;
+    let mut run = WorkflowRun::start(ThreadId::from_u128(24), source).expect("start");
+    assert_eq!(
+        run.advance_with_reply(String::new()),
+        Ok(WorkflowAdvance::Completed)
     );
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.continuations[0].result, HostCallResult::success(""));
+}
+
+#[test]
+fn failed_agent_result_is_journaled_and_not_repeated() {
+    let source = r#"
+        let r = agent("Say ok.");
+        pause();
+        if !r.ok && r.error == "turn_errored" {
+            complete();
+        }
+    "#;
+    let mut run = WorkflowRun::start(ThreadId::from_u128(25), source).expect("start");
+    assert_eq!(
+        run.advance_with_outcome(HostCallResult::failure("turn_errored")),
+        Ok(WorkflowAdvance::Paused)
+    );
+    assert_eq!(
+        run.continuations[0].result,
+        HostCallResult::failure("turn_errored")
+    );
+    run.resume().expect("resume");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.continuations.len(), 2);
+}
+
+#[test]
+fn replay_divergence_fails_the_run_and_releases_occupancy() {
+    let mut run = WorkflowRun::start(
+        ThreadId::from_u128(26),
+        r#"let r = agent("Say ok."); if r.ok { complete(); }"#,
+    )
+    .expect("start");
+    run.stop().expect("stop");
+    run.continuations.clear();
+    let mismatch_kind = ContinuationKind::Ask;
+    let mismatch_request = serde_json::json!({ "instruction": "other" });
+    run.continuations
+        .push(codex_workflow_extension::ContinuationRecord {
+            seq: 1,
+            kind: mismatch_kind,
+            request_digest: codex_workflow_extension::request_digest(
+                mismatch_kind,
+                &mismatch_request,
+            ),
+            result: HostCallResult::success("x"),
+        });
+    run.pending_instruction = None;
+    run.pending_kind = None;
+    run.pending_request_digest = None;
+    run.resume().expect("failed closed");
+    assert_eq!(run.status, WorkflowStatus::Failed);
+    assert_eq!(run.error.as_deref(), Some("replay_diverged"));
+    assert!(!run.occupies_idle());
+}
+
+#[tokio::test]
+async fn starting_after_failed_replaces_the_run() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(27);
+    service
+        .start_run(thread_id, yield_then_complete())
+        .await
+        .expect("start");
+    let failed = service.get_run(thread_id).await.expect("get").expect("run");
+    let mut failed = failed;
+    failed.fail("host_runtime");
+    let path = dir.path().join(format!("{thread_id}.json"));
+    std::fs::write(&path, serde_json::to_vec_pretty(&failed).expect("encode")).expect("write");
+    let second = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let loaded = second.get_run(thread_id).await.expect("get").expect("run");
+    assert_eq!(loaded.status, WorkflowStatus::Failed);
+    assert!(!loaded.occupies_idle());
+    let replaced = second
+        .start_run(thread_id, "complete();")
+        .await
+        .expect("replace");
+    assert_eq!(replaced.status, WorkflowStatus::Complete);
+    assert_ne!(replaced.run_id, loaded.run_id);
+}
+
+#[test]
+fn stop_remains_pause_not_failure() {
+    let mut run =
+        WorkflowRun::start(ThreadId::from_u128(28), yield_then_complete()).expect("start");
+    run.stop().expect("stop");
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    assert_eq!(run.error, None);
+}
+
+#[tokio::test]
+async fn cancelled_ask_pauses_instead_of_failing() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(29);
+    service
+        .start_run(thread_id, yield_then_complete())
+        .await
+        .expect("start");
+    let mut run = service.get_run(thread_id).await.expect("get").expect("run");
+    run.mark_pending_yield_started();
+    std::fs::write(
+        dir.path().join(format!("{thread_id}.json")),
+        serde_json::to_vec_pretty(&run).expect("encode"),
+    )
+    .expect("write");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let paused = service
+        .finish_yield_turn_with_result(thread_id, HostCallResult::failure("turn_cancelled"))
+        .await
+        .expect("cancel")
+        .expect("run");
+    assert_eq!(paused.status, WorkflowStatus::Paused);
+    assert_eq!(paused.error, None);
+    assert!(!paused.occupies_idle());
+}
+
+#[tokio::test]
+async fn unreadable_persist_file_is_terminal_failed() {
+    let dir = TempDir::new().expect("tempdir");
+    let thread_id = ThreadId::from_u128(30);
+    std::fs::write(dir.path().join(format!("{thread_id}.json")), b"{not-json").expect("write");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let loaded = service.get_run(thread_id).await.expect("get").expect("run");
+    assert_eq!(loaded.status, WorkflowStatus::Failed);
+    assert_eq!(loaded.error.as_deref(), Some("unsafe_journal"));
+    assert!(!loaded.occupies_idle());
+    let replaced = service
+        .start_run(thread_id, "complete();")
+        .await
+        .expect("replace");
+    assert_eq!(replaced.status, WorkflowStatus::Complete);
 }
 
 #[tokio::test]

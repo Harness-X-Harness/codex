@@ -108,6 +108,7 @@ pub(crate) enum WorkflowStatusIndicator {
     Paused,
     Complete,
     Waiting,
+    Failed,
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
@@ -566,6 +567,7 @@ pub(crate) fn workflow_status_indicator_line(
         WorkflowStatusIndicator::Paused => "Workflow paused (/workflow resume)",
         WorkflowStatusIndicator::Complete => "Workflow complete",
         WorkflowStatusIndicator::Waiting => "Workflow waiting",
+        WorkflowStatusIndicator::Failed => "Workflow failed",
     };
     Some(Line::from(vec![Span::from(label).cyan()]))
 }

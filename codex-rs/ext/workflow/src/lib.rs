@@ -37,6 +37,7 @@ pub use extension::WorkflowExtensionConfig;
 pub use extension::install;
 pub use journal::ContinuationKind;
 pub use journal::ContinuationRecord;
+pub use journal::HostCallResult;
 pub use journal::LEGACY_RESUME_REQUIRED;
 pub use journal::REPLAY_DIVERGENCE;
 pub use journal::WORKFLOW_PERSIST_VERSION;

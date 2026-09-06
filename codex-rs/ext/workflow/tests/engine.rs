@@ -17,10 +17,12 @@ use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
 
 mod common;
+use common::agent_failure_record;
 use common::agent_record;
 use common::ask_record;
 use common::await_user_record;
 use common::pause_record;
+use common::spawn_failure_record;
 use common::spawn_record;
 
 #[test]
@@ -127,6 +129,111 @@ fn agent_yields_then_branches_on_structured_result() {
             instruction: "wrong reply".to_string(),
         }
     );
+}
+
+#[test]
+fn successful_empty_agent_text_is_ok() {
+    let source = r#"
+        let r = agent("Say ok.");
+        if r.ok && r.text == "" && r.error == "" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[agent_record("Say ok.", "")]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn failed_agent_result_is_not_ok_and_script_can_branch() {
+    let source = r#"
+        let r = agent("Say ok.");
+        if !r.ok && r.text == "" && r.error == "turn_errored" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[agent_failure_record("Say ok.", "turn_errored")]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn nonempty_text_is_not_the_definition_of_success() {
+    let source = r#"
+        let r = agent("Say ok.");
+        if r.ok {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[agent_record("Say ok.", "")]).expect("empty success"),
+        WorkflowEval::Completed
+    );
+    assert_eq!(
+        eval_source(source, &[agent_failure_record("Say ok.", "turn_errored")])
+            .expect("failed nonempty would still be false"),
+        WorkflowEval::Yielded {
+            instruction: "wrong reply".to_string(),
+        }
+    );
+}
+
+#[test]
+fn successful_empty_spawn_text_is_ok() {
+    let source = r#"
+        let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+        if r.ok && r.text == "" && r.error == "" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    let outcome = eval_source_with_spawn(
+        source,
+        &[spawn_record("Say ok.", "review", "")],
+        &Map::new(),
+        SpawnBinding::Available,
+    )
+    .expect("eval");
+    assert_eq!(outcome.eval, WorkflowEval::Completed);
+}
+
+#[test]
+fn failed_spawn_result_replays_without_a_second_child() {
+    let source = r#"
+        let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+        if !r.ok && r.error == "child_errored" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    let first =
+        eval_source_with_spawn(source, &[], &Map::new(), SpawnBinding::Available).expect("eval");
+    assert_eq!(
+        first.eval,
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(first.spawn_task_name.as_deref(), Some("review"));
+    let replayed = eval_source_with_spawn(
+        source,
+        &[spawn_failure_record("Say ok.", "review", "child_errored")],
+        &Map::new(),
+        SpawnBinding::Available,
+    )
+    .expect("replay");
+    assert_eq!(replayed.eval, WorkflowEval::Completed);
+    assert_eq!(replayed.spawn_task_name, None);
 }
 
 #[test]

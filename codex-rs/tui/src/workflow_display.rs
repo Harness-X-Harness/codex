@@ -29,6 +29,7 @@ pub(crate) fn format_workflow_summary(workflow: &ThreadWorkflow) -> String {
         ThreadWorkflowStatus::Paused => "paused",
         ThreadWorkflowStatus::Complete => "complete",
         ThreadWorkflowStatus::Waiting => "waiting",
+        ThreadWorkflowStatus::Failed => "failed",
     };
     match workflow.pending_instruction.as_deref() {
         Some(instruction) if !instruction.is_empty() => format!(
@@ -47,6 +48,7 @@ pub(crate) fn workflow_status_indicator_from_workflow(
         ThreadWorkflowStatus::Paused => WorkflowStatusIndicator::Paused,
         ThreadWorkflowStatus::Complete => WorkflowStatusIndicator::Complete,
         ThreadWorkflowStatus::Waiting => WorkflowStatusIndicator::Waiting,
+        ThreadWorkflowStatus::Failed => WorkflowStatusIndicator::Failed,
     }
 }
 

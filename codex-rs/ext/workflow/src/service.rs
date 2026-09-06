@@ -12,6 +12,7 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 
 use codex_core::StartIfIdleSubmission;
+use codex_core::StockSpawnWait;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
@@ -31,6 +32,13 @@ use crate::catalog::resolve_named;
 use crate::engine::SpawnBinding;
 use crate::engine::WorkflowSourceError;
 use crate::engine::truncate_workflow_reply;
+use crate::journal::ContinuationKind;
+use crate::journal::HOST_ERROR_CHILD_ERRORED;
+use crate::journal::HOST_ERROR_CHILD_UNAVAILABLE;
+use crate::journal::HOST_ERROR_TURN_CANCELLED;
+use crate::journal::HOST_ERROR_TURN_ERRORED;
+use crate::journal::HostCallResult;
+use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
 use crate::steering::yield_steering_item;
@@ -223,7 +231,8 @@ impl WorkflowService {
         };
         let run = self
             .mutate_run(thread_id, move |run| {
-                run.advance_with_reply(reply).map(|_| ())
+                run.advance_with_outcome(HostCallResult::success(reply))
+                    .map(|_| ())
             })
             .await?;
         self.kick_if_active(&run).await;
@@ -234,6 +243,16 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
+        let reply = self.latest_assistant_reply(thread_id).await;
+        self.finish_yield_turn_with_result(thread_id, HostCallResult::success(reply))
+            .await
+    }
+
+    pub async fn finish_yield_turn_with_result(
+        &self,
+        thread_id: ThreadId,
+        result: HostCallResult,
+    ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
         let Some(existing) = self.get_run(thread_id).await? else {
             return Ok(None);
         };
@@ -243,7 +262,6 @@ impl WorkflowService {
         {
             return Ok(Some(existing));
         }
-        let reply = self.latest_assistant_reply(thread_id).await;
         let run = self
             .mutate_run(thread_id, move |run| {
                 if run.status != WorkflowStatus::Active
@@ -252,7 +270,20 @@ impl WorkflowService {
                 {
                     return Ok(());
                 }
-                run.advance_with_reply(reply).map(|_| ())
+                if run.pending_kind == Some(ContinuationKind::Ask) && !result.ok {
+                    if result.error == HOST_ERROR_TURN_CANCELLED {
+                        run.stop()?;
+                    } else {
+                        let error = if result.error.is_empty() {
+                            HOST_ERROR_TURN_ERRORED.to_string()
+                        } else {
+                            result.error.clone()
+                        };
+                        run.fail(error);
+                    }
+                    return Ok(());
+                }
+                run.advance_with_outcome(result).map(|_| ())
             })
             .await?;
         self.kick_if_active(&run).await;
@@ -346,37 +377,77 @@ impl WorkflowService {
                     .spawn_stock_agent_and_wait_text(&instruction, &task_name)
                     .await
                 {
-                    Ok(reply) => match self
-                        .mutate_run(thread_id, move |run| {
-                            run.advance_with_reply(reply).map(|_| ())
-                        })
-                        .await
-                    {
-                        Ok(updated) => {
-                            run = updated;
-                            continue;
+                    Ok(StockSpawnWait::Completed(reply)) => {
+                        match self
+                            .advance_spawn_wait(thread_id, HostCallResult::success(reply))
+                            .await
+                        {
+                            Ok(updated) => {
+                                run = updated;
+                                continue;
+                            }
+                            Err(err) => {
+                                tracing::debug!(
+                                    "failed to host-resume workflow after spawn for {thread_id}: {err}"
+                                );
+                                return Ok(());
+                            }
                         }
-                        Err(err) => {
-                            tracing::debug!(
-                                "failed to host-resume workflow after spawn for {thread_id}: {err}"
-                            );
-                            return Ok(());
+                    }
+                    Ok(StockSpawnWait::ChildErrored) => {
+                        match self
+                            .advance_spawn_wait(
+                                thread_id,
+                                HostCallResult::failure(HOST_ERROR_CHILD_ERRORED),
+                            )
+                            .await
+                        {
+                            Ok(updated) => {
+                                run = updated;
+                                continue;
+                            }
+                            Err(err) => {
+                                tracing::debug!(
+                                    "failed to host-resume workflow after spawn failure for {thread_id}: {err}"
+                                );
+                                return Ok(());
+                            }
                         }
-                    },
+                    }
+                    Ok(StockSpawnWait::ChildUnavailable) => {
+                        match self
+                            .advance_spawn_wait(
+                                thread_id,
+                                HostCallResult::failure(HOST_ERROR_CHILD_UNAVAILABLE),
+                            )
+                            .await
+                        {
+                            Ok(updated) => {
+                                run = updated;
+                                continue;
+                            }
+                            Err(err) => {
+                                tracing::debug!(
+                                    "failed to host-resume workflow after spawn failure for {thread_id}: {err}"
+                                );
+                                return Ok(());
+                            }
+                        }
+                    }
                     Err(error) => {
                         tracing::debug!(
                             %error,
-                            "skipping workflow spawn because stock spawn_agent failed"
+                            "workflow spawn failed with an unrecoverable host/runtime error"
                         );
                         if let Err(err) = self
                             .mutate_run(thread_id, |run| {
-                                run.pending_yield_started = false;
+                                run.fail(WORKFLOW_ERROR_HOST_RUNTIME);
                                 Ok(())
                             })
                             .await
                         {
                             tracing::debug!(
-                                "failed to clear workflow spawn claim for {thread_id}: {err}"
+                                "failed to mark workflow spawn runtime failure for {thread_id}: {err}"
                             );
                         }
                         return Ok(());
@@ -430,6 +501,17 @@ impl WorkflowService {
         }
     }
 
+    async fn advance_spawn_wait(
+        &self,
+        thread_id: ThreadId,
+        result: HostCallResult,
+    ) -> Result<WorkflowRun, WorkflowServiceError> {
+        self.mutate_run(thread_id, move |run| {
+            run.advance_with_outcome(result).map(|_| ())
+        })
+        .await
+    }
+
     async fn mutate_run(
         &self,
         thread_id: ThreadId,
@@ -453,11 +535,14 @@ impl WorkflowService {
         if let Some(run) = self.runs.lock().await.get(key).cloned() {
             return Ok(Some(run));
         }
-        let Some(mut run) = load_run(&self.persist_root, key).await? else {
+        let Some((mut run, notify_failed)) = load_run(&self.persist_root, key).await? else {
             return Ok(None);
         };
         run.bind_scratch_dir(self.scratch_dir_for(run.thread_id));
         self.remember(key.to_string(), run.clone()).await;
+        if notify_failed {
+            self.after_run_changed(&run).await;
+        }
         Ok(Some(run))
     }
 
@@ -575,16 +660,30 @@ async fn persist_run(persist_root: &Path, run: &WorkflowRun) -> Result<(), Workf
 async fn load_run(
     persist_root: &Path,
     thread_id: &str,
-) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
+) -> Result<Option<(WorkflowRun, bool)>, WorkflowServiceError> {
     let path = persist_root.join(format!("{thread_id}.json"));
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
-            let mut run: WorkflowRun = serde_json::from_slice(&bytes).map_err(|err| {
-                WorkflowServiceError::Internal(format!("failed to parse workflow: {err}"))
-            })?;
+            let mut run: WorkflowRun = match serde_json::from_slice(&bytes) {
+                Ok(run) => run,
+                Err(_) => {
+                    let parsed_id = ThreadId::from_string(thread_id).map_err(|err| {
+                        WorkflowServiceError::Internal(format!("invalid workflow thread id: {err}"))
+                    })?;
+                    let run = WorkflowRun::unreadable(parsed_id);
+                    persist_run(persist_root, &run).await?;
+                    return Ok(Some((run, true)));
+                }
+            };
+            let prior_status = run.status;
             run.prepare_restored()
                 .map_err(WorkflowServiceError::InvalidRequest)?;
-            Ok(Some(run))
+            let became_failed =
+                run.status == WorkflowStatus::Failed && prior_status != WorkflowStatus::Failed;
+            if became_failed {
+                persist_run(persist_root, &run).await?;
+            }
+            Ok(Some((run, became_failed)))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(WorkflowServiceError::Internal(format!(

@@ -164,9 +164,11 @@ pub(crate) fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
             WorkflowStatus::Paused => ThreadWorkflowStatus::Paused,
             WorkflowStatus::Complete => ThreadWorkflowStatus::Complete,
             WorkflowStatus::Waiting => ThreadWorkflowStatus::Waiting,
+            WorkflowStatus::Failed => ThreadWorkflowStatus::Failed,
         },
         pending_instruction: run.pending_instruction,
         result: run.result,
+        error: run.error,
         created_at: run.created_at,
         updated_at: run.updated_at,
     }

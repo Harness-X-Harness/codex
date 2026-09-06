@@ -1204,3 +1204,88 @@ async fn workflow_start_by_name_rejects_filename_mismatch() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn workflow_empty_agent_text_is_successful() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker: "",
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(
+                thread.id.clone(),
+                r#"
+                    let r = agent("Say ok.");
+                    if r.ok { complete(); } else { ask("wrong reply"); }
+                "#,
+            ),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_runtime_failure_exposes_failed_and_frees_the_slot() -> Result<()> {
+    let (mut app, _codex_home, server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(
+                thread.id.clone(),
+                r#"ask("Compile the crate."); unknown_fn();"#,
+            ),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+    let failed =
+        wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Failed).await?;
+    let workflow = failed.workflow.expect("failed workflow");
+    assert_eq!(workflow.status, ThreadWorkflowStatus::Failed);
+    assert_eq!(workflow.error.as_deref(), Some("host_runtime"));
+    assert!(
+        workflow
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.contains("provider") && !error.contains("http")),
+        "failure error must stay secret-safe: {:?}",
+        workflow.error
+    );
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("failed workflow frees the engine slot".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    wait_until_turn_trigger(&server, "goal").await?;
+
+    let get: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(
+        get.workflow.as_ref().map(|workflow| workflow.status),
+        Some(ThreadWorkflowStatus::Failed)
+    );
+    Ok(())
+}

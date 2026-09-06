@@ -18,6 +18,24 @@ pub const REPLAY_DIVERGENCE: &str = "workflow replay diverged";
 pub const LEGACY_RESUME_REQUIRED: &str =
     "workflow persistence requires restart: legacy positional replies cannot be identity-checked";
 
+/// Persisted terminal workflow error when resume identity diverges.
+pub const WORKFLOW_ERROR_REPLAY_DIVERGED: &str = "replay_diverged";
+/// Persisted terminal workflow error for unsafe legacy positional resume.
+pub const WORKFLOW_ERROR_LEGACY_RESUME: &str = "legacy_resume_required";
+/// Persisted terminal workflow error for a malformed continuation journal.
+pub const WORKFLOW_ERROR_UNSAFE_JOURNAL: &str = "unsafe_journal";
+/// Persisted terminal workflow error for an unrecoverable host/runtime fault.
+pub const WORKFLOW_ERROR_HOST_RUNTIME: &str = "host_runtime";
+
+/// Secret-safe same-Thread turn failure.
+pub const HOST_ERROR_TURN_ERRORED: &str = "turn_errored";
+/// Secret-safe same-Thread terminal cancel.
+pub const HOST_ERROR_TURN_CANCELLED: &str = "turn_cancelled";
+/// Secret-safe stock child error.
+pub const HOST_ERROR_CHILD_ERRORED: &str = "child_errored";
+/// Secret-safe stock child unavailable/shutdown.
+pub const HOST_ERROR_CHILD_UNAVAILABLE: &str = "child_unavailable";
+
 /// Kind of one host or control continuation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,20 +47,70 @@ pub enum ContinuationKind {
     AwaitUser,
 }
 
+/// Codex-native host-call envelope persisted in the continuation journal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HostCallResult {
+    pub ok: bool,
+    pub text: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+impl Default for HostCallResult {
+    fn default() -> Self {
+        Self::success(String::new())
+    }
+}
+
+impl HostCallResult {
+    pub fn success(text: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            text: text.into(),
+            error: String::new(),
+        }
+    }
+
+    pub fn failure(error: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            text: String::new(),
+            error: error.into(),
+        }
+    }
+}
+
+fn deserialize_host_call_result<'de, D>(deserializer: D) -> Result<HostCallResult, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(HostCallResult::success(String::new())),
+        serde_json::Value::String(text) => Ok(HostCallResult::success(text)),
+        serde_json::Value::Object(map) => {
+            serde_json::from_value(serde_json::Value::Object(map)).map_err(serde::de::Error::custom)
+        }
+        other => Err(serde::de::Error::custom(format!(
+            "unsupported host call result: {other}"
+        ))),
+    }
+}
+
 /// One dense, ordered continuation record.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinuationRecord {
     pub seq: u32,
     pub kind: ContinuationKind,
     pub request_digest: String,
-    #[serde(default)]
-    pub result: String,
+    #[serde(default, deserialize_with = "deserialize_host_call_result")]
+    pub result: HostCallResult,
 }
 
 /// Outcome of looking up the next journal record for a host/control call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JournalLookup {
-    Replay(String),
+    Replay(HostCallResult),
     NeedWork,
     Diverged,
 }

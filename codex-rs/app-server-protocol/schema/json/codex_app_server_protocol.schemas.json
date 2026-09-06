@@ -24237,6 +24237,12 @@
             "format": "int64",
             "type": "integer"
           },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -24277,7 +24283,8 @@
           "active",
           "paused",
           "complete",
-          "waiting"
+          "waiting",
+          "failed"
         ],
         "type": "string"
       },
