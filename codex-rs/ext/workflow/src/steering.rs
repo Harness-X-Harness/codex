@@ -8,12 +8,13 @@ use codex_utils_template::Template;
 
 use crate::run::WorkflowRun;
 
-static YIELD_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    match Template::parse(include_str!("../templates/workflow/current_step.md")) {
-        Ok(template) => template,
-        Err(err) => panic!("embedded template workflow/current_step.md is invalid: {err}"),
-    }
-});
+static YIELD_TEMPLATE: LazyLock<Template> =
+    LazyLock::new(
+        || match Template::parse(include_str!("../templates/workflow/yield.md")) {
+            Ok(template) => template,
+            Err(err) => panic!("embedded template workflow/yield.md is invalid: {err}"),
+        },
+    );
 
 pub(crate) fn yield_steering_item(run: &WorkflowRun, instruction: &str) -> ResponseItem {
     let name = escape_xml_text(&run.name);
@@ -24,7 +25,7 @@ pub(crate) fn yield_steering_item(run: &WorkflowRun, instruction: &str) -> Respo
             ("instruction", instruction.as_str()),
         ])
         .unwrap_or_else(|err| {
-            panic!("embedded workflow/current_step.md template failed to render: {err}")
+            panic!("embedded workflow/yield.md template failed to render: {err}")
         });
     ContextualUserFragment::into(InternalModelContextFragment::new(
         InternalContextSource::from_static("workflow"),

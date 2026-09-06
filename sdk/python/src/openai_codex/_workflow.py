@@ -12,21 +12,13 @@ class ThreadWorkflowStatus(str, Enum):
     complete = "complete"
 
 
-class ThreadWorkflowStep(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-    id: str
-    title: str
-    instruction: str
-
-
 class ThreadWorkflow(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     thread_id: Annotated[str, Field(alias="threadId")]
     run_id: Annotated[str, Field(alias="runId")]
     name: str
     status: ThreadWorkflowStatus
-    current_step_index: Annotated[int, Field(alias="currentStepIndex")]
-    steps: list[ThreadWorkflowStep]
+    pending_instruction: Annotated[str | None, Field(alias="pendingInstruction")]
     created_at: Annotated[int, Field(alias="createdAt")]
     updated_at: Annotated[int, Field(alias="updatedAt")]
 

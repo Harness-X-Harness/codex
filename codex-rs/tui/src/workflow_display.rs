@@ -11,12 +11,12 @@ pub(crate) fn format_workflow_summary(workflow: &ThreadWorkflow) -> String {
         ThreadWorkflowStatus::Paused => "paused",
         ThreadWorkflowStatus::Complete => "complete",
     };
-    match workflow.steps.first() {
-        Some(step) => format!(
-            "Workflow: {} ({status})\nYield: {}",
-            workflow.name, step.instruction
+    match workflow.pending_instruction.as_deref() {
+        Some(instruction) if !instruction.is_empty() => format!(
+            "Workflow: {} ({status})\nYield: {instruction}",
+            workflow.name
         ),
-        None => format!("Workflow: {} ({status})", workflow.name),
+        _ => format!("Workflow: {} ({status})", workflow.name),
     }
 }
 

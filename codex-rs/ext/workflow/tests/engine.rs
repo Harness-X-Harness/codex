@@ -75,8 +75,8 @@ fn rhai_control_flow_is_evaluated() {
 }
 
 #[test]
-fn markdown_step_table_is_rejected() {
-    let error = validate_source("# Ship\n\n## Build\nCompile the crate.\n").expect_err("markdown");
+fn invalid_rhai_source_is_rejected() {
+    let error = validate_source("???").expect_err("invalid rhai");
     match error {
         WorkflowSourceError::Invalid { reason } => {
             assert!(

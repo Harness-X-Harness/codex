@@ -18,12 +18,7 @@ async fn thread_workflow_updated_sets_footer_indicator() {
                     run_id: "run".to_string(),
                     name: "workflow".to_string(),
                     status: codex_app_server_protocol::ThreadWorkflowStatus::Active,
-                    current_step_index: 0,
-                    steps: vec![codex_app_server_protocol::ThreadWorkflowStep {
-                        id: "ask".to_string(),
-                        title: "ask".to_string(),
-                        instruction: "Compile the crate.".to_string(),
-                    }],
+                    pending_instruction: Some("Compile the crate.".to_string()),
                     created_at: 1,
                     updated_at: 1,
                 },

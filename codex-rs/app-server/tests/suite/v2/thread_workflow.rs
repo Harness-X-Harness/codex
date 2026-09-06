@@ -25,7 +25,7 @@ use tokio::time::timeout;
 use super::goal_host_support::ASK_REQUIRES_OK_REPLY;
 use super::goal_host_support::ASK_THEN_COMPLETE;
 use super::goal_host_support::COMPLETE_ONLY;
-use super::goal_host_support::MARKDOWN_STEP_TABLE;
+use super::goal_host_support::INVALID_RHAI;
 use super::goal_host_support::READ_TIMEOUT;
 use super::goal_host_support::ScriptedHostResponder;
 use super::goal_host_support::app_with_features;
@@ -243,7 +243,7 @@ async fn goal_host_set_starts_pursuit_without_update_goal() -> Result<()> {
 }
 
 #[tokio::test]
-async fn workflow_start_accepts_rhai_and_rejects_markdown() -> Result<()> {
+async fn workflow_start_accepts_rhai_and_rejects_invalid_source() -> Result<()> {
     let (mut app, _codex_home, _server) = app_with_features(&goal_host_features()).await?;
     let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
     let request_id = app
@@ -251,7 +251,7 @@ async fn workflow_start_accepts_rhai_and_rejects_markdown() -> Result<()> {
             "thread/workflow/start",
             Some(serde_json::to_value(ThreadWorkflowStartParams {
                 thread_id: thread.id.clone(),
-                source: MARKDOWN_STEP_TABLE.to_string(),
+                source: INVALID_RHAI.to_string(),
             })?),
         )
         .await?;

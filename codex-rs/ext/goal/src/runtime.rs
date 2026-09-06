@@ -23,7 +23,6 @@ use crate::host_evaluate::HostEvaluateRoundState;
 use crate::host_evaluate::HostGoalStatus;
 use crate::metrics::GoalMetrics;
 use crate::policy::GoalCompletionAuthority;
-use crate::policy::GoalHow;
 use crate::policy::GoalPolicy;
 use crate::steering::GoalContinuationOwner;
 use crate::steering::continuation_steering_item;
@@ -140,7 +139,7 @@ impl GoalRuntimeHandle {
         self.inner.enabled.load(Ordering::Relaxed)
     }
 
-    /// Current completion, verification, and how-work policy for this thread.
+    /// Current completion and verification policy for this thread.
     pub fn policy(&self) -> GoalPolicy {
         *self
             .inner
@@ -521,9 +520,6 @@ impl GoalRuntimeHandle {
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
         if !self.tools_visible() {
             self.inner.accounting_state.clear_active_goal();
-            return Ok(());
-        }
-        if self.policy().how == GoalHow::Workflow {
             return Ok(());
         }
         // Hold this through the read/start window so external set/clear cannot

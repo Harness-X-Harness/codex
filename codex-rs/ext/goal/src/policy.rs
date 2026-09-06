@@ -1,4 +1,4 @@
-//! Completion, verification, and how-work policy for persisted thread goals.
+//! Completion and verification policy for persisted thread goals.
 //!
 //! These axes are harness concerns. The policy type is independent of
 //! `model_provider`.
@@ -45,24 +45,14 @@ pub enum GoalVerification {
     HostSkeptics { count: u8 },
 }
 
-/// How an active goal makes progress.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GoalHow {
-    /// Ordinary agent turns plus idle continuation. Stock Goals and `goal_host`.
-    AgentTurns,
-    /// Skip goal idle continuation. Not the App Server `goal_host` policy.
-    ///
-    /// `/workflow` is an independent Rhai HOW VM. Completing that program is
-    /// not goal pursuit and is not a host evaluator verdict.
-    Workflow,
-}
-
-/// Independent completion, verification, and how-work choices for one thread.
+/// Independent completion and verification choices for one thread.
+///
+/// Goal pursuit is always ordinary agent turns plus idle continuation.
+/// `/workflow` is a separate Rhai HOW VM and is not a Goal policy axis.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GoalPolicy {
     pub completion: GoalCompletionAuthority,
     pub verification: GoalVerification,
-    pub how: GoalHow,
 }
 
 impl GoalPolicy {
@@ -71,7 +61,6 @@ impl GoalPolicy {
         Self {
             completion: GoalCompletionAuthority::ModelCommit,
             verification: GoalVerification::None,
-            how: GoalHow::AgentTurns,
         }
     }
 
@@ -80,7 +69,6 @@ impl GoalPolicy {
         Self {
             completion: GoalCompletionAuthority::HostEvaluate,
             verification: GoalVerification::None,
-            how: GoalHow::AgentTurns,
         }
     }
 
@@ -92,7 +80,6 @@ impl GoalPolicy {
             verification: GoalVerification::HostSkeptics {
                 count: HOST_SKEPTIC_DEFAULT_COUNT,
             },
-            how: GoalHow::AgentTurns,
         }
     }
 }

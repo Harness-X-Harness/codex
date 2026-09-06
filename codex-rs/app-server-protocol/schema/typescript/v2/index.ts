@@ -574,7 +574,6 @@ export type { ThreadUsage } from "./ThreadUsage";
 export type { ThreadUsageBreakdownGroup } from "./ThreadUsageBreakdownGroup";
 export type { ThreadWorkflow } from "./ThreadWorkflow";
 export type { ThreadWorkflowStatus } from "./ThreadWorkflowStatus";
-export type { ThreadWorkflowStep } from "./ThreadWorkflowStep";
 export type { ThreadWorkflowUpdatedNotification } from "./ThreadWorkflowUpdatedNotification";
 export type { TokenUsageBreakdown } from "./TokenUsageBreakdown";
 export type { ToolRequestUserInputAnswer } from "./ToolRequestUserInputAnswer";

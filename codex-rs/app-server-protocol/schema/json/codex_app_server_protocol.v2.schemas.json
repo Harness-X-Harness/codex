@@ -21951,25 +21951,20 @@
           "format": "int64",
           "type": "integer"
         },
-        "currentStepIndex": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
         "name": {
           "type": "string"
+        },
+        "pendingInstruction": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "runId": {
           "type": "string"
         },
         "status": {
           "$ref": "#/definitions/ThreadWorkflowStatus"
-        },
-        "steps": {
-          "items": {
-            "$ref": "#/definitions/ThreadWorkflowStep"
-          },
-          "type": "array"
         },
         "threadId": {
           "type": "string"
@@ -21981,11 +21976,9 @@
       },
       "required": [
         "createdAt",
-        "currentStepIndex",
         "name",
         "runId",
         "status",
-        "steps",
         "threadId",
         "updatedAt"
       ],
@@ -21998,25 +21991,6 @@
         "complete"
       ],
       "type": "string"
-    },
-    "ThreadWorkflowStep": {
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "instruction": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "instruction",
-        "title"
-      ],
-      "type": "object"
     },
     "ThreadWorkflowUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",

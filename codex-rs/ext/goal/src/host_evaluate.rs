@@ -5,7 +5,6 @@
 //! crate applies it:
 //!
 //! - `continue` keeps the goal `Active` and stores a next step for idle continuation
-//!   when [`crate::GoalHow::AgentTurns`] is set
 //! - `candidate_complete` with [`GoalVerification::None`] marks the goal `Complete`
 //! - `candidate_complete` with [`GoalVerification::HostSkeptics`] runs the panel;
 //!   all not-refuted votes mark `Complete`; refute or a missing panel pauses

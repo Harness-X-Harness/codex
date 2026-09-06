@@ -16,7 +16,6 @@ fn start_complete_without_yield() {
     let run = WorkflowRun::start(ThreadId::from_u128(1), "complete();").expect("start");
     assert_eq!(run.status, WorkflowStatus::Complete);
     assert_eq!(run.pending_instruction, None);
-    assert!(run.display_steps().is_empty());
 }
 
 #[test]
@@ -113,16 +112,13 @@ async fn starting_after_complete_replaces_the_run() {
 }
 
 #[tokio::test]
-async fn markdown_source_is_rejected_by_the_service() {
+async fn invalid_rhai_source_is_rejected_by_the_service() {
     let dir = TempDir::new().expect("tempdir");
     let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
     let err = service
-        .start_run(
-            ThreadId::from_u128(7),
-            "# Ship\n\n## Build\nCompile the crate.\n",
-        )
+        .start_run(ThreadId::from_u128(7), "???")
         .await
-        .expect_err("markdown");
+        .expect_err("invalid rhai");
     assert!(
         err.to_string().contains("not valid Rhai"),
         "unexpected error: {err}"

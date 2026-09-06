@@ -878,23 +878,12 @@ pub enum ThreadWorkflowStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadWorkflowStep {
-    pub id: String,
-    pub title: String,
-    pub instruction: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct ThreadWorkflow {
     pub thread_id: String,
     pub run_id: String,
     pub name: String,
     pub status: ThreadWorkflowStatus,
-    #[ts(type = "number")]
-    pub current_step_index: u32,
-    pub steps: Vec<ThreadWorkflowStep>,
+    pub pending_instruction: Option<String>,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]

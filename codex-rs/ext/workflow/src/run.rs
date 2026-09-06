@@ -21,14 +21,6 @@ pub enum WorkflowStatus {
     Complete,
 }
 
-/// Display projection of the current yield, if any.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkflowStep {
-    pub id: String,
-    pub title: String,
-    pub instruction: String,
-}
-
 /// Persisted run for one thread.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowRun {
@@ -73,25 +65,6 @@ impl WorkflowRun {
         };
         run.apply_eval(eval_source(&run.source, &[]).map_err(|error| error.to_string())?)?;
         Ok(run)
-    }
-
-    pub fn current_step(&self) -> Option<WorkflowStep> {
-        self.display_steps().into_iter().next()
-    }
-
-    pub fn current_step_index(&self) -> usize {
-        0
-    }
-
-    pub fn display_steps(&self) -> Vec<WorkflowStep> {
-        match &self.pending_instruction {
-            Some(instruction) => vec![WorkflowStep {
-                id: "ask".to_string(),
-                title: "ask".to_string(),
-                instruction: instruction.clone(),
-            }],
-            None => Vec::new(),
-        }
     }
 
     pub fn advance(&mut self) -> Result<WorkflowAdvance, String> {

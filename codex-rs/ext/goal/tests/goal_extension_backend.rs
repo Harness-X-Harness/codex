@@ -29,13 +29,11 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
-use codex_goal_extension::GoalCompletionAuthority;
 use codex_goal_extension::GoalEvaluatorDecision;
 use codex_goal_extension::GoalEvaluatorError;
 use codex_goal_extension::GoalEvaluatorVerdict;
 use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalHostCapabilities;
-use codex_goal_extension::GoalHow;
 use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalRoundEvaluationFuture;
@@ -50,7 +48,6 @@ use codex_goal_extension::GoalSkepticPanelFuture;
 use codex_goal_extension::GoalSkepticPanelInput;
 use codex_goal_extension::GoalSkepticPanelVerdict;
 use codex_goal_extension::GoalTokenBudgetUpdate;
-use codex_goal_extension::GoalVerification;
 use codex_goal_extension::install_with_backend;
 use codex_goal_extension::install_with_host_capabilities;
 use codex_goal_extension::parse_goal_evaluator_verdict;
@@ -398,11 +395,7 @@ async fn workflow_how_turn_skips_host_evaluation() -> anyhow::Result<()> {
         GoalExtensionConfig {
             enabled: true,
             max_goal_token_budget: None,
-            policy: GoalPolicy {
-                completion: GoalCompletionAuthority::HostEvaluate,
-                verification: GoalVerification::None,
-                how: GoalHow::Workflow,
-            },
+            policy: GoalPolicy::host_evaluate(),
         },
         Some(evaluator),
     )

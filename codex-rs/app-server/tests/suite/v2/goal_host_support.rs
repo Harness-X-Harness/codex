@@ -26,7 +26,7 @@ use wiremock::matchers::path_regex;
 pub(super) const READ_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 pub(super) const ASK_THEN_COMPLETE: &str = r#"ask("Compile the crate."); complete();"#;
 pub(super) const COMPLETE_ONLY: &str = "complete();";
-pub(super) const MARKDOWN_STEP_TABLE: &str = "# Ship\n\n## Build\nCompile the crate.\n";
+pub(super) const INVALID_RHAI: &str = "???";
 pub(super) const CONTINUE_VERDICT: &str = r#"{"decision":"continue","evidence":"objective still open","next_step":"keep working","blocker_key":""}"#;
 pub(super) const CANDIDATE_COMPLETE_VERDICT: &str = r#"{"decision":"candidate_complete","evidence":"deliverable exists","next_step":"stop","blocker_key":""}"#;
 pub(super) const BLOCKED_VERDICT: &str = r#"{"decision":"blocked","evidence":"same blocker persists","next_step":"retry the blocked work","blocker_key":"missing_tests"}"#;

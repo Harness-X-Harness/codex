@@ -15,7 +15,6 @@ use codex_app_server_protocol::ThreadWorkflowResumeResponse;
 use codex_app_server_protocol::ThreadWorkflowStartParams;
 use codex_app_server_protocol::ThreadWorkflowStartResponse;
 use codex_app_server_protocol::ThreadWorkflowStatus;
-use codex_app_server_protocol::ThreadWorkflowStep;
 use codex_app_server_protocol::ThreadWorkflowStopParams;
 use codex_app_server_protocol::ThreadWorkflowStopResponse;
 use codex_app_server_protocol::ThreadWorkflowUpdatedNotification;
@@ -144,16 +143,6 @@ pub(crate) fn workflow_update_sink(outgoing: Arc<OutgoingMessageSender>) -> Work
 }
 
 pub(crate) fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
-    let current_step_index = u32::try_from(run.current_step_index()).unwrap_or(u32::MAX);
-    let steps = run
-        .display_steps()
-        .into_iter()
-        .map(|step| ThreadWorkflowStep {
-            id: step.id,
-            title: step.title,
-            instruction: step.instruction,
-        })
-        .collect();
     ThreadWorkflow {
         thread_id: run.thread_id.to_string(),
         run_id: run.run_id,
@@ -163,8 +152,7 @@ pub(crate) fn api_workflow(run: WorkflowRun) -> ThreadWorkflow {
             WorkflowStatus::Paused => ThreadWorkflowStatus::Paused,
             WorkflowStatus::Complete => ThreadWorkflowStatus::Complete,
         },
-        current_step_index,
-        steps,
+        pending_instruction: run.pending_instruction,
         created_at: run.created_at,
         updated_at: run.updated_at,
     }

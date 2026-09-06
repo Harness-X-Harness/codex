@@ -23,7 +23,6 @@ pub use extension::install;
 pub use run::WorkflowAdvance;
 pub use run::WorkflowRun;
 pub use run::WorkflowStatus;
-pub use run::WorkflowStep;
 pub use service::SharedWorkflowService;
 pub use service::WorkflowService;
 pub use service::WorkflowServiceError;

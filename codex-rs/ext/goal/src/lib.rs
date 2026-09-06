@@ -56,7 +56,6 @@ pub use host_verify::aggregate_skeptic_votes;
 pub use host_verify::parse_goal_skeptic_vote;
 pub use model_evaluator::ModelGoalRoundEvaluator;
 pub use policy::GoalCompletionAuthority;
-pub use policy::GoalHow;
 pub use policy::GoalPolicy;
 pub use policy::GoalVerification;
 pub use policy::HOST_SKEPTIC_DEFAULT_COUNT;

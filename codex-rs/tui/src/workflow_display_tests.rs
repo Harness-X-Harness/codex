@@ -4,7 +4,6 @@ use crate::bottom_pane::WorkflowStatusIndicator;
 use crate::bottom_pane::workflow_status_indicator_line;
 use codex_app_server_protocol::ThreadWorkflow;
 use codex_app_server_protocol::ThreadWorkflowStatus;
-use codex_app_server_protocol::ThreadWorkflowStep;
 
 fn workflow(status: ThreadWorkflowStatus, instruction: Option<&str>) -> ThreadWorkflow {
     ThreadWorkflow {
@@ -12,16 +11,7 @@ fn workflow(status: ThreadWorkflowStatus, instruction: Option<&str>) -> ThreadWo
         run_id: "run".to_string(),
         name: "workflow".to_string(),
         status,
-        current_step_index: 0,
-        steps: instruction
-            .map(|instruction| {
-                vec![ThreadWorkflowStep {
-                    id: "ask".to_string(),
-                    title: "ask".to_string(),
-                    instruction: instruction.to_string(),
-                }]
-            })
-            .unwrap_or_default(),
+        pending_instruction: instruction.map(str::to_string),
         created_at: 1,
         updated_at: 1,
     }
