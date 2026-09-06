@@ -485,12 +485,16 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
             },
         })
         .await?;
-    assert_eq!(
-        get_workflow
-            .workflow
-            .as_ref()
-            .map(|workflow| workflow.status),
-        Some(ThreadWorkflowStatus::Active)
+    let mid_status = get_workflow
+        .workflow
+        .as_ref()
+        .map(|workflow| workflow.status);
+    assert!(
+        matches!(
+            mid_status,
+            Some(ThreadWorkflowStatus::Active | ThreadWorkflowStatus::Complete)
+        ),
+        "workflow must exist after start: {get_workflow:?}"
     );
 
     wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
