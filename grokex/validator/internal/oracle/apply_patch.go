@@ -29,12 +29,21 @@ func SeedApplyPatchWorkspace(workspace string) error {
 	return os.WriteFile(filepath.Join(workspace, applyPatchFile), []byte(applyPatchSeed), 0o644)
 }
 
+// ApplyPatchFacts are runner-owned Story evidence the Model DTO cannot
+// expose: the harness disabled shell_tool, and the release catalog advertises
+// free-form apply_patch. The runner passes what it did and selected; the
+// oracle records those facts only when both hold.
+type ApplyPatchFacts struct {
+	ShellToolDisabled                   bool
+	CatalogAdvertisesFreeformApplyPatch bool
+}
+
 // ApplyPatch proves grokex-custom-apply-patch from the session graph, the
 // delivered reply, and the workspace file: the packaged Grokex bound one
 // Thread to grok/grok-4.6, completed one Turn, persisted custom apply_patch
 // or an equivalent file_change, left no shell edit path, and the workspace
 // file shows the expected result.
-func ApplyPatch(graph *rollout.Graph, run driver.TurnRun, workspace string) Verdict {
+func ApplyPatch(graph *rollout.Graph, run driver.TurnRun, workspace string, facts ApplyPatchFacts) Verdict {
 	verdict, stage := newVerdict()
 	verdict.Assertions["evidence_source"] = EvidenceSource
 	verdict.Assertions["runner_turn_submission_count"] = 1
@@ -42,6 +51,15 @@ func ApplyPatch(graph *rollout.Graph, run driver.TurnRun, workspace string) Verd
 	verdict.Diagnostics["turn_durations_seconds"] = []float64{seconds(run.Duration)}
 	verdict.Diagnostics["delivered_turn_status"] = run.Status
 	verdict.Diagnostics["final_response_source"] = run.FinalResponseSource
+
+	if !stage.require("shell_tool_disabled", facts.ShellToolDisabled, "harness did not disable shell_tool", "semantic_contract") {
+		return *verdict
+	}
+	verdict.Assertions["shell_tool_disabled"] = true
+	if !stage.require("catalog_advertises_freeform_apply_patch", facts.CatalogAdvertisesFreeformApplyPatch, "release catalog does not advertise free-form apply_patch", "semantic_contract") {
+		return *verdict
+	}
+	verdict.Assertions["catalog_advertises_freeform_apply_patch"] = true
 
 	root, ok := graph.Session(run.ThreadID)
 	if !stage.require("root_session_found", ok && root.ModelProvider == driver.Provider, "root session missing or not bound to grok", "semantic_contract") {

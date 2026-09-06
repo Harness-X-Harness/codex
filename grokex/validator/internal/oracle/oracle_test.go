@@ -445,26 +445,36 @@ func seedWorkspace(t *testing.T, contents string) string {
 	return dir
 }
 
+func provenApplyPatchFacts() ApplyPatchFacts {
+	return ApplyPatchFacts{
+		ShellToolDisabled:                   true,
+		CatalogAdvertisesFreeformApplyPatch: true,
+	}
+}
+
 func TestApplyPatchProvesFileResultAndCustomTool(t *testing.T) {
 	workspace := seedWorkspace(t, "WORLD\n")
 	verdict := ApplyPatch(
 		applyPatchGraph(false, []rollout.FunctionCall{{Name: "apply_patch", CallID: "c1"}}, 0),
 		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
 		workspace,
+		provenApplyPatchFacts(),
 	)
 	if !verdict.OK() {
 		t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
 	}
 	want := map[string]any{
-		"apply_patch_path":             "custom_apply_patch",
-		"evidence_source":              "canonical_session",
-		"provider_binding":             "grok/grok-4.6",
-		"response_assertion":           "nonempty_agent_message",
-		"result_delivery_verified":     true,
-		"runner_turn_submission_count": 1,
-		"shell_edit_absent":            true,
-		"status":                       "completed",
-		"workspace_file_result":        applyPatchExpected,
+		"apply_patch_path":                        "custom_apply_patch",
+		"catalog_advertises_freeform_apply_patch": true,
+		"evidence_source":                         "canonical_session",
+		"provider_binding":                        "grok/grok-4.6",
+		"response_assertion":                      "nonempty_agent_message",
+		"result_delivery_verified":                true,
+		"runner_turn_submission_count":            1,
+		"shell_edit_absent":                       true,
+		"shell_tool_disabled":                     true,
+		"status":                                  "completed",
+		"workspace_file_result":                   applyPatchExpected,
 	}
 	if !reflect.DeepEqual(verdict.Assertions, want) {
 		t.Fatalf("assertions = %#v", verdict.Assertions)
@@ -480,6 +490,7 @@ func TestApplyPatchAcceptsHashedWireNameAndFileChange(t *testing.T) {
 		applyPatchGraph(true, []rollout.FunctionCall{{Name: "local__apply_patch__abc123def456", CallID: "c1"}}, 0),
 		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
 		workspace,
+		provenApplyPatchFacts(),
 	)
 	if !verdict.OK() {
 		t.Fatalf("verdict failed: %s (%s) at %s", verdict.Failure, verdict.FailureCategory, verdict.LastProvenStage)
@@ -492,6 +503,7 @@ func TestApplyPatchAcceptsFileChangeWithoutCallName(t *testing.T) {
 		applyPatchGraph(true, nil, 0),
 		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
 		workspace,
+		provenApplyPatchFacts(),
 	)
 	if !verdict.OK() {
 		t.Fatalf("file_change without a named call should prove the edit path: %+v", verdict)
@@ -507,6 +519,7 @@ func TestApplyPatchRejectsShellEdit(t *testing.T) {
 		}, 0),
 		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
 		workspace,
+		provenApplyPatchFacts(),
 	)
 	if verdict.OK() || verdict.FailureCategory != "semantic_contract" || verdict.LastProvenStage != "apply_patch_path_verified" {
 		t.Fatalf("verdict = %+v", verdict)
@@ -522,9 +535,42 @@ func TestApplyPatchRejectsWrongFile(t *testing.T) {
 		applyPatchGraph(false, []rollout.FunctionCall{{Name: "apply_patch", CallID: "c1"}}, 0),
 		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
 		workspace,
+		provenApplyPatchFacts(),
 	)
 	if verdict.OK() || verdict.LastProvenStage != "shell_edit_absent" {
 		t.Fatalf("verdict = %+v", verdict)
+	}
+}
+
+func TestApplyPatchRejectsWhenHarnessDidNotDisableShell(t *testing.T) {
+	workspace := seedWorkspace(t, "WORLD\n")
+	verdict := ApplyPatch(
+		applyPatchGraph(false, []rollout.FunctionCall{{Name: "apply_patch", CallID: "c1"}}, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+		ApplyPatchFacts{CatalogAdvertisesFreeformApplyPatch: true},
+	)
+	if verdict.OK() || verdict.FailureCategory != "semantic_contract" || verdict.LastProvenStage != "" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	if _, ok := verdict.Assertions["shell_tool_disabled"]; ok {
+		t.Fatal("failed contract must not be asserted")
+	}
+}
+
+func TestApplyPatchRejectsWhenCatalogDoesNotAdvertiseFreeform(t *testing.T) {
+	workspace := seedWorkspace(t, "WORLD\n")
+	verdict := ApplyPatch(
+		applyPatchGraph(false, []rollout.FunctionCall{{Name: "apply_patch", CallID: "c1"}}, 0),
+		completedRun("thread-apply", "turn-apply", ApplyPatchMarker, 4),
+		workspace,
+		ApplyPatchFacts{ShellToolDisabled: true},
+	)
+	if verdict.OK() || verdict.FailureCategory != "semantic_contract" || verdict.LastProvenStage != "shell_tool_disabled" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	if _, ok := verdict.Assertions["catalog_advertises_freeform_apply_patch"]; ok {
+		t.Fatal("failed contract must not be asserted")
 	}
 }
 

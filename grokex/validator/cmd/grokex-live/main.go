@@ -287,7 +287,12 @@ func execute(opts options, scenario contract.Scenario, identity *evidence.Identi
 		}
 		clock.Mark(terminalStage("turn", run))
 		lastRun = run
-		verdictFor = func(graph *rollout.Graph) oracle.Verdict { return oracle.ApplyPatch(graph, run, workspace) }
+		verdictFor = func(graph *rollout.Graph) oracle.Verdict {
+			return oracle.ApplyPatch(graph, run, workspace, oracle.ApplyPatchFacts{
+				ShellToolDisabled:                   true,
+				CatalogAdvertisesFreeformApplyPatch: true,
+			})
+		}
 	default:
 		return evidence.Document{}, fmt.Errorf("scenario %s has no canonical-session oracle", opts.scenario)
 	}
