@@ -58,11 +58,23 @@ impl ThreadWorkflowRequestProcessor {
     ) -> Result<ThreadWorkflowStartResponse, JSONRPCErrorError> {
         self.require_goal_host()?;
         let thread_id = parse_thread_id(&params.thread_id)?;
-        let run = self
-            .service
-            .start_run(thread_id, &params.source)
-            .await
-            .map_err(workflow_service_error)?;
+        let run = if let Some(name) = params
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            self.service
+                .start_named_run(
+                    thread_id,
+                    name,
+                    params.args.unwrap_or_default().into_iter().collect(),
+                )
+                .await
+        } else {
+            self.service.start_run(thread_id, &params.source).await
+        }
+        .map_err(workflow_service_error)?;
         Ok(ThreadWorkflowStartResponse {
             workflow: api_workflow(run),
         })

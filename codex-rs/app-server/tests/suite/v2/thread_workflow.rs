@@ -47,6 +47,18 @@ use super::goal_host_support::text;
 use super::goal_host_support::wait_until_turn_trigger;
 use super::goal_host_support::wait_until_workflow_status;
 
+fn start_params(
+    thread_id: impl Into<String>,
+    source: impl Into<String>,
+) -> ThreadWorkflowStartParams {
+    ThreadWorkflowStartParams {
+        thread_id: thread_id.into(),
+        source: source.into(),
+        name: None,
+        args: None,
+    }
+}
+
 #[tokio::test]
 async fn workflow_rpc_requires_goal_host() -> Result<()> {
     let (mut app, _codex_home, _server) = app_with_features(&[Feature::Goals]).await?;
@@ -256,10 +268,10 @@ async fn workflow_start_accepts_rhai_and_rejects_invalid_source() -> Result<()> 
     let request_id = app
         .send_raw_request(
             "thread/workflow/start",
-            Some(serde_json::to_value(ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: INVALID_RHAI.to_string(),
-            })?),
+            Some(serde_json::to_value(start_params(
+                thread.id.clone(),
+                INVALID_RHAI,
+            ))?),
         )
         .await?;
     let error: JSONRPCError = timeout(
@@ -276,10 +288,7 @@ async fn workflow_start_accepts_rhai_and_rejects_invalid_source() -> Result<()> 
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id,
-                source: COMPLETE_ONLY.to_string(),
-            },
+            params: start_params(thread.id, COMPLETE_ONLY),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Complete);
@@ -293,10 +302,10 @@ async fn workflow_rhai_bindings_cannot_commit_goal_state() -> Result<()> {
     let request_id = app
         .send_raw_request(
             "thread/workflow/start",
-            Some(serde_json::to_value(ThreadWorkflowStartParams {
-                thread_id: thread.id,
-                source: "update_goal();".to_string(),
-            })?),
+            Some(serde_json::to_value(start_params(
+                thread.id,
+                "update_goal();",
+            ))?),
         )
         .await?;
     let error: JSONRPCError = timeout(
@@ -319,10 +328,7 @@ async fn workflow_start_continues_with_workflow_trigger_and_does_not_create_a_go
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_THEN_COMPLETE.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -371,10 +377,7 @@ async fn workflow_yield_turn_auto_advances_to_complete() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_THEN_COMPLETE.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -395,10 +398,7 @@ async fn workflow_auto_advance_injects_assistant_reply() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_REQUIRES_OK_REPLY.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_REQUIRES_OK_REPLY),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -419,10 +419,7 @@ async fn workflow_agent_branches_on_structured_host_result() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: AGENT_REQUIRES_OK_RESULT.to_string(),
-            },
+            params: start_params(thread.id.clone(), AGENT_REQUIRES_OK_RESULT),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -489,10 +486,7 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_THEN_COMPLETE.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -569,10 +563,7 @@ async fn active_workflow_hold_blocks_goal_idle() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_THEN_COMPLETE.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -635,10 +626,7 @@ async fn workflow_stop_pauses_and_resume_returns_to_active() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_THEN_COMPLETE.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -691,10 +679,7 @@ async fn workflow_advance_is_optional_override() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: ThreadWorkflowStartParams {
-                thread_id: thread.id.clone(),
-                source: ASK_THEN_COMPLETE.to_string(),
-            },
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -720,6 +705,82 @@ async fn workflow_advance_is_optional_override() -> Result<()> {
     assert_eq!(
         get.workflow.map(|workflow| workflow.status),
         Some(ThreadWorkflowStatus::Complete)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_start_by_name_loads_user_library() -> Result<()> {
+    let (mut app, codex_home, _server) = app_with_features(&goal_host_features()).await?;
+    let library = codex_home.path().join("workflows");
+    std::fs::create_dir_all(&library)?;
+    std::fs::write(
+        library.join("demo.rhai"),
+        r#"
+            let meta = #{
+                name: "demo",
+                description: "named",
+            };
+            phase("Scan");
+            if args.topic == "rust" {
+                complete();
+            } else {
+                ask("wrong args");
+            }
+        "#,
+    )?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let mut args = std::collections::HashMap::new();
+    args.insert(
+        "topic".to_string(),
+        serde_json::Value::String("rust".to_string()),
+    );
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id,
+                source: String::new(),
+                name: Some("demo".to_string()),
+                args: Some(args),
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.name, "demo");
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Complete);
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_start_by_name_rejects_filename_mismatch() -> Result<()> {
+    let (mut app, codex_home, _server) = app_with_features(&goal_host_features()).await?;
+    let library = codex_home.path().join("workflows");
+    std::fs::create_dir_all(&library)?;
+    std::fs::write(
+        library.join("demo.rhai"),
+        r#"let meta = #{ name: "other", description: "mismatch" }; complete();"#,
+    )?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(ThreadWorkflowStartParams {
+                thread_id: thread.id,
+                source: String::new(),
+                name: Some("demo".to_string()),
+                args: None,
+            })?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("must match meta.name"),
+        "unexpected error: {}",
+        error.error.message
     );
     Ok(())
 }

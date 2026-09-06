@@ -119,6 +119,7 @@ async fn service_persists_across_instances() {
         .await
         .expect("start");
     assert_eq!(started.name, "workflow");
+    assert_eq!(started.phase, None);
     assert_eq!(started.status, WorkflowStatus::Active);
     let second = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
     let loaded = second.get_run(thread_id).await.expect("get").expect("run");
@@ -160,6 +161,42 @@ async fn starting_after_complete_replaces_the_run() {
         .expect("restart");
     assert_eq!(replaced.status, WorkflowStatus::Active);
     assert_ne!(replaced.run_id, completed.run_id);
+}
+
+#[tokio::test]
+async fn named_catalog_start_injects_args_and_phase() {
+    let dir = TempDir::new().expect("tempdir");
+    let project = TempDir::new().expect("project");
+    std::fs::write(
+        dir.path().join("demo.rhai"),
+        r#"
+            let meta = #{
+                name: "demo",
+                description: "named",
+            };
+            phase("Scan");
+            if args.topic == "rust" {
+                complete();
+            } else {
+                ask("wrong args");
+            }
+        "#,
+    )
+    .expect("write catalog script");
+    let service = WorkflowService::with_project_root(
+        dir.path().to_path_buf(),
+        project.path().to_path_buf(),
+        std::sync::Weak::new(),
+    );
+    let mut args = serde_json::Map::new();
+    args.insert("topic".into(), serde_json::Value::String("rust".into()));
+    let run = service
+        .start_named_run(ThreadId::from_u128(12), "demo", args)
+        .await
+        .expect("start named");
+    assert_eq!(run.name, "demo");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.phase.as_deref(), Some("Scan"));
 }
 
 #[tokio::test]

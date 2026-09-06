@@ -27,6 +27,14 @@ fn line_text(indicator: WorkflowStatusIndicator) -> String {
 }
 
 #[test]
+fn catalog_name_tokens_are_kebab_case() {
+    assert!(super::looks_like_workflow_name("demo"));
+    assert!(super::looks_like_workflow_name("deep-research.rhai"));
+    assert!(!super::looks_like_workflow_name(r#"ask("x"); complete();"#));
+    assert!(!super::looks_like_workflow_name("Upper"));
+}
+
+#[test]
 fn workflow_summary_includes_yield_when_active() {
     insta::assert_snapshot!(
         format_workflow_summary(&workflow(

@@ -23,6 +23,8 @@ use codex_protocol::models::ResponseItem;
 use codex_rollout::RolloutItem;
 use tokio::sync::Mutex;
 
+use crate::catalog::CatalogRoots;
+use crate::catalog::resolve_named;
 use crate::engine::WorkflowSourceError;
 use crate::engine::truncate_workflow_reply;
 use crate::run::WorkflowRun;
@@ -59,6 +61,7 @@ pub type WorkflowUpdateSink =
 /// Process-scoped workflow runs, persisted as JSON under `persist_root`.
 pub struct WorkflowService {
     persist_root: PathBuf,
+    project_root: PathBuf,
     runs: Mutex<HashMap<String, WorkflowRun>>,
     thread_manager: Weak<ThreadManager>,
     update_sink: StdMutex<Option<WorkflowUpdateSink>>,
@@ -66,8 +69,17 @@ pub struct WorkflowService {
 
 impl WorkflowService {
     pub fn new(persist_root: impl Into<PathBuf>, thread_manager: Weak<ThreadManager>) -> Self {
+        Self::with_project_root(persist_root, PathBuf::new(), thread_manager)
+    }
+
+    pub fn with_project_root(
+        persist_root: impl Into<PathBuf>,
+        project_root: impl Into<PathBuf>,
+        thread_manager: Weak<ThreadManager>,
+    ) -> Self {
         Self {
             persist_root: persist_root.into(),
+            project_root: project_root.into(),
             runs: Mutex::new(HashMap::new()),
             thread_manager,
             update_sink: StdMutex::new(None),
@@ -105,6 +117,49 @@ impl WorkflowService {
         }
         let run =
             WorkflowRun::start(thread_id, source).map_err(WorkflowServiceError::InvalidRequest)?;
+        self.persist_and_kick(key, run).await
+    }
+
+    pub async fn start_named_run(
+        &self,
+        thread_id: ThreadId,
+        name: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<WorkflowRun, WorkflowServiceError> {
+        let key = thread_id.to_string();
+        if self
+            .load_cached_or_disk(&key)
+            .await?
+            .is_some_and(|run| run.status == WorkflowStatus::Active)
+        {
+            return Err(WorkflowServiceError::InvalidRequest(
+                "a workflow is already active; /workflow stop first".to_string(),
+            ));
+        }
+        let roots = self.catalog_roots();
+        let script = resolve_named(name, &roots)
+            .map_err(|error| WorkflowServiceError::InvalidRequest(error.to_string()))?;
+        let run = WorkflowRun::start_named(thread_id, script.name, &script.source, args)
+            .map_err(WorkflowServiceError::InvalidRequest)?;
+        self.persist_and_kick(key, run).await
+    }
+
+    fn catalog_roots(&self) -> CatalogRoots {
+        if self.project_root.as_os_str().is_empty() {
+            CatalogRoots {
+                user_dir: self.persist_root.clone(),
+                project_dir: self.persist_root.join("__no_project__"),
+            }
+        } else {
+            CatalogRoots::from_persist_and_cwd(&self.persist_root, &self.project_root)
+        }
+    }
+
+    async fn persist_and_kick(
+        &self,
+        key: String,
+        run: WorkflowRun,
+    ) -> Result<WorkflowRun, WorkflowServiceError> {
         persist_run(&self.persist_root, &run).await?;
         self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;

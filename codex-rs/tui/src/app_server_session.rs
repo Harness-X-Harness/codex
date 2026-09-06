@@ -1434,6 +1434,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         source: String,
+        name: Option<String>,
     ) -> Result<ThreadWorkflow> {
         let request_id = self.next_request_id();
         let response: ThreadWorkflowStartResponse = self
@@ -1443,6 +1444,8 @@ impl AppServerSession {
                 params: ThreadWorkflowStartParams {
                     thread_id: thread_id.to_string(),
                     source,
+                    name,
+                    args: None,
                 },
             })
             .await

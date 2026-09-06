@@ -1,6 +1,7 @@
 //! Bounded Rhai HOW VM. Completing a program ends this run only.
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -103,6 +104,17 @@ pub fn eval_source_with_pauses(
     served_replies: &[String],
     served_pauses: u32,
 ) -> Result<WorkflowEval, WorkflowSourceError> {
+    eval_source_with_env(source, served_replies, served_pauses, &Map::new())
+        .map(|outcome| outcome.eval)
+}
+
+/// Resume a program with replayed host replies, consumed pauses, and `args`.
+pub fn eval_source_with_env(
+    source: &str,
+    served_replies: &[String],
+    served_pauses: u32,
+    args: &Map,
+) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     validate_source(source)?;
     if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
         return Err(WorkflowSourceError::Invalid {
@@ -114,17 +126,41 @@ pub fn eval_source_with_pauses(
             reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} pauses"),
         });
     }
-    let engine = build_engine(served_replies, served_pauses);
+    let phase = Rc::new(RefCell::new(None));
+    let mut engine = build_engine(served_replies, served_pauses);
+    let phase_for_fn = Rc::clone(&phase);
+    engine.register_fn(
+        "phase",
+        move |title: &str| -> Result<(), Box<EvalAltResult>> {
+            if title.trim().is_empty() {
+                return Err(runtime_error("phase() requires a nonempty title"));
+            }
+            *phase_for_fn.borrow_mut() = Some(title.to_string());
+            Ok(())
+        },
+    );
     let ast = engine
         .compile(source)
         .map_err(|error| WorkflowSourceError::Invalid {
             reason: format!("workflow program is not valid Rhai: {error}"),
         })?;
     let mut scope = Scope::new();
-    match engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
-        Ok(_) => Ok(WorkflowEval::Completed),
-        Err(error) => outcome_from_error(*error),
-    }
+    scope.push_dynamic("args", Dynamic::from(args.clone()));
+    let eval = match engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
+        Ok(_) => WorkflowEval::Completed,
+        Err(error) => outcome_from_error(*error)?,
+    };
+    Ok(WorkflowEvalOutcome {
+        eval,
+        phase: phase.borrow().clone(),
+    })
+}
+
+/// Result of one VM resume, including the last `phase` title.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowEvalOutcome {
+    pub eval: WorkflowEval,
+    pub phase: Option<String>,
 }
 
 /// Bound a model reply before it re-enters the VM.

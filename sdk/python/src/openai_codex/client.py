@@ -532,11 +532,22 @@ class CodexClient:
             response_model=ThreadWorkflowGetResponse,
         )
 
-    def thread_workflow_start(self, thread_id: str, source: str) -> ThreadWorkflowStartResponse:
+    def thread_workflow_start(
+        self,
+        thread_id: str,
+        source: str = "",
+        name: str | None = None,
+        args: dict[str, object] | None = None,
+    ) -> ThreadWorkflowStartResponse:
         """Start a host-owned Rhai `/workflow` run on a thread."""
+        params: dict[str, object] = {"threadId": thread_id, "source": source}
+        if name is not None:
+            params["name"] = name
+        if args is not None:
+            params["args"] = args
         return self.request(
             "thread/workflow/start",
-            {"threadId": thread_id, "source": source},
+            params,
             response_model=ThreadWorkflowStartResponse,
         )
 

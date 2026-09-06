@@ -237,10 +237,20 @@ class AsyncCodexClient:
         return await self._call_sync(self._sync.thread_workflow_get, thread_id)
 
     async def thread_workflow_start(
-        self, thread_id: str, source: str
+        self,
+        thread_id: str,
+        source: str = "",
+        name: str | None = None,
+        args: dict[str, object] | None = None,
     ) -> ThreadWorkflowStartResponse:
         """Start a host-owned Rhai `/workflow` run through the wrapped sync client."""
-        return await self._call_sync(self._sync.thread_workflow_start, thread_id, source)
+        return await self._call_sync(
+            self._sync.thread_workflow_start,
+            thread_id,
+            source,
+            name,
+            args,
+        )
 
     async def thread_workflow_advance(self, thread_id: str) -> ThreadWorkflowAdvanceResponse:
         """Optionally resume a yielded `/workflow` run through the wrapped sync client."""

@@ -910,6 +910,12 @@ pub struct ThreadWorkflowGetResponse {
 pub struct ThreadWorkflowStartParams {
     pub thread_id: String,
     pub source: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub name: Option<String>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub args: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

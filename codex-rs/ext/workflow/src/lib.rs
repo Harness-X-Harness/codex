@@ -3,19 +3,28 @@
 //! This crate is the HOW layer. Completing a program ends the run only. It
 //! does not write Goal state.
 
+mod catalog;
 mod engine;
 mod extension;
 mod run;
 mod service;
 mod steering;
 
+pub use catalog::CatalogError;
+pub use catalog::CatalogRoots;
+pub use catalog::CatalogScript;
+pub use catalog::looks_like_catalog_name;
+pub use catalog::normalize_catalog_name;
+pub use catalog::resolve_named;
 pub use engine::MAX_WORKFLOW_OPERATIONS;
 pub use engine::MAX_WORKFLOW_REPLY_CHARS;
 pub use engine::MAX_WORKFLOW_SOURCE_CHARS;
 pub use engine::MAX_WORKFLOW_YIELDS;
 pub use engine::WorkflowEval;
+pub use engine::WorkflowEvalOutcome;
 pub use engine::WorkflowSourceError;
 pub use engine::eval_source;
+pub use engine::eval_source_with_env;
 pub use engine::eval_source_with_pauses;
 pub use engine::truncate_workflow_reply;
 pub use engine::validate_source;

@@ -936,12 +936,14 @@ async fn workflow_start_slash_command_sends_rhai_source() {
     let AppEvent::StartThreadWorkflow {
         thread_id: actual_thread_id,
         source: actual_source,
+        name,
     } = event
     else {
         panic!("expected StartThreadWorkflow, got {event:?}");
     };
     assert_eq!(actual_thread_id, thread_id);
     assert_eq!(actual_source, source);
+    assert_eq!(name, None);
 }
 
 #[tokio::test]
@@ -960,12 +962,36 @@ async fn workflow_start_slash_command_reads_existing_file() {
     let event = rx.try_recv().expect("expected start workflow event");
     let AppEvent::StartThreadWorkflow {
         source: actual_source,
+        name,
         ..
     } = event
     else {
         panic!("expected StartThreadWorkflow, got {event:?}");
     };
     assert_eq!(actual_source, source);
+    assert_eq!(name, None);
+}
+
+#[tokio::test]
+async fn workflow_start_slash_command_sends_catalog_name() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    submit_composer_text(&mut chat, "/workflow start demo");
+
+    let event = rx.try_recv().expect("expected start workflow event");
+    let AppEvent::StartThreadWorkflow {
+        source: actual_source,
+        name,
+        ..
+    } = event
+    else {
+        panic!("expected StartThreadWorkflow, got {event:?}");
+    };
+    assert_eq!(actual_source, "");
+    assert_eq!(name.as_deref(), Some("demo"));
 }
 
 #[tokio::test]

@@ -5,9 +5,11 @@ use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowSourceError;
 use codex_workflow_extension::eval_source;
+use codex_workflow_extension::eval_source_with_env;
 use codex_workflow_extension::eval_source_with_pauses;
 use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
+use rhai::Map;
 
 #[test]
 fn complete_ends_the_run() {
@@ -222,6 +224,27 @@ fn truncate_workflow_reply_caps_injected_text() {
         truncate_workflow_reply(&reply).chars().count(),
         MAX_WORKFLOW_REPLY_CHARS
     );
+}
+
+#[test]
+fn named_program_reads_args_and_records_phase() {
+    let source = r#"
+        let meta = #{
+            name: "demo",
+            description: "named",
+        };
+        phase("Scan");
+        if args.topic == "rust" {
+            complete();
+        } else {
+            ask("wrong args");
+        }
+    "#;
+    let mut args = Map::new();
+    args.insert("topic".into(), rhai::Dynamic::from("rust"));
+    let outcome = eval_source_with_env(source, &[], 0, &args).expect("eval");
+    assert_eq!(outcome.eval, WorkflowEval::Completed);
+    assert_eq!(outcome.phase.as_deref(), Some("Scan"));
 }
 
 #[test]

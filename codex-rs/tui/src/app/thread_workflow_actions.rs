@@ -41,8 +41,11 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
         source: String,
+        name: Option<String>,
     ) {
-        let result = app_server.thread_workflow_start(thread_id, source).await;
+        let result = app_server
+            .thread_workflow_start(thread_id, source, name)
+            .await;
         self.show_workflow_mutation_result(thread_id, "start", result);
     }
 

@@ -8,8 +8,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::catalog::json_args_to_map;
 use crate::engine::WorkflowEval;
-use crate::engine::eval_source_with_pauses;
+use crate::engine::eval_source_with_env;
 use crate::engine::truncate_workflow_reply;
 
 /// Lifecycle of one thread's workflow run.
@@ -34,6 +35,10 @@ pub struct WorkflowRun {
     pub served_replies: Vec<String>,
     #[serde(default)]
     pub served_pauses: u32,
+    #[serde(default)]
+    pub args: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub phase: Option<String>,
     pub pending_instruction: Option<String>,
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
@@ -52,24 +57,35 @@ pub enum WorkflowAdvance {
 
 impl WorkflowRun {
     pub fn start(thread_id: ThreadId, source: &str) -> Result<Self, String> {
+        Self::start_named(thread_id, "workflow", source, serde_json::Map::new())
+    }
+
+    pub fn start_named(
+        thread_id: ThreadId,
+        name: impl Into<String>,
+        source: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Self, String> {
         let now = unix_seconds();
         let mut run = Self {
             thread_id,
             run_id: Uuid::now_v7().to_string(),
-            name: "workflow".to_string(),
+            name: name.into(),
             status: WorkflowStatus::Active,
             source: source.trim().to_string(),
             served_asks: 0,
             served_replies: Vec::new(),
             served_pauses: 0,
+            args,
+            phase: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
             updated_at: now,
         };
-        run.apply_eval(
-            eval_source_with_pauses(&run.source, &[], 0).map_err(|error| error.to_string())?,
-        )?;
+        let outcome = run.eval_current().map_err(|error| error.to_string())?;
+        run.phase = outcome.phase;
+        run.apply_eval(outcome.eval)?;
         Ok(run)
     }
 
@@ -93,8 +109,11 @@ impl WorkflowRun {
         self.served_asks = u32::try_from(self.served_replies.len()).unwrap_or(u32::MAX);
         self.pending_instruction = None;
         self.pending_yield_started = false;
-        match eval_source_with_pauses(&self.source, &self.served_replies, self.served_pauses) {
-            Ok(outcome) => self.apply_eval(outcome),
+        match self.eval_current() {
+            Ok(outcome) => {
+                self.phase = outcome.phase;
+                self.apply_eval(outcome.eval)
+            }
             Err(error) => {
                 self.served_asks = previous_asks;
                 self.served_replies = previous_replies;
@@ -140,8 +159,11 @@ impl WorkflowRun {
         }
         let previous = self.served_pauses;
         self.served_pauses = self.served_pauses.saturating_add(1);
-        match eval_source_with_pauses(&self.source, &self.served_replies, self.served_pauses) {
-            Ok(outcome) => self.apply_eval(outcome).map(|_| ()),
+        match self.eval_current() {
+            Ok(outcome) => {
+                self.phase = outcome.phase;
+                self.apply_eval(outcome.eval).map(|_| ())
+            }
             Err(error) => {
                 self.served_pauses = previous;
                 self.status = WorkflowStatus::Paused;
@@ -153,6 +175,17 @@ impl WorkflowRun {
     pub fn mark_pending_yield_started(&mut self) {
         self.pending_yield_started = true;
         self.updated_at = unix_seconds();
+    }
+
+    fn eval_current(
+        &self,
+    ) -> Result<crate::engine::WorkflowEvalOutcome, crate::engine::WorkflowSourceError> {
+        eval_source_with_env(
+            &self.source,
+            &self.served_replies,
+            self.served_pauses,
+            &json_args_to_map(&self.args),
+        )
     }
 
     fn apply_eval(&mut self, outcome: WorkflowEval) -> Result<WorkflowAdvance, String> {

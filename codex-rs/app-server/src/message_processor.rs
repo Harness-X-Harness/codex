@@ -326,8 +326,9 @@ impl MessageProcessor {
                     Arc::clone(&extension_event_sink),
                 ))
             });
-            let workflows = Arc::new(WorkflowService::new(
+            let workflows = Arc::new(WorkflowService::with_project_root(
                 config.codex_home.join("workflows"),
+                config.cwd.to_path_buf(),
                 thread_manager.clone(),
             ));
             workflow_service = Some(Arc::clone(&workflows));
@@ -496,8 +497,9 @@ impl MessageProcessor {
         );
         let workflow_service = match workflow_service {
             Some(service) => service,
-            None => Arc::new(WorkflowService::new(
+            None => Arc::new(WorkflowService::with_project_root(
                 config.codex_home.join("workflows"),
+                config.cwd.to_path_buf(),
                 Arc::downgrade(&thread_manager),
             )),
         };

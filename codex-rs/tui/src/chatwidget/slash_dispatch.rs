@@ -15,6 +15,7 @@ use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 use crate::workflow_display::WORKFLOW_USAGE;
+use crate::workflow_display::looks_like_workflow_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -990,9 +991,15 @@ impl ChatWidget {
                     }
                     "start" if !rest.is_empty() => {
                         let source_path = self.config.cwd.join(rest);
-                        let source = if source_path.is_file() {
+                        if source_path.is_file() {
                             match std::fs::read_to_string(&source_path) {
-                                Ok(contents) => contents,
+                                Ok(source) => {
+                                    self.app_event_tx.send(AppEvent::StartThreadWorkflow {
+                                        thread_id,
+                                        source,
+                                        name: None,
+                                    });
+                                }
                                 Err(err) => {
                                     self.add_error_message(format!(
                                         "Failed to read workflow file {rest}: {err}"
@@ -1000,11 +1007,19 @@ impl ChatWidget {
                                     return;
                                 }
                             }
+                        } else if looks_like_workflow_name(rest) {
+                            self.app_event_tx.send(AppEvent::StartThreadWorkflow {
+                                thread_id,
+                                source: String::new(),
+                                name: Some(rest.trim().to_string()),
+                            });
                         } else {
-                            rest.to_string()
-                        };
-                        self.app_event_tx
-                            .send(AppEvent::StartThreadWorkflow { thread_id, source });
+                            self.app_event_tx.send(AppEvent::StartThreadWorkflow {
+                                thread_id,
+                                source: rest.to_string(),
+                                name: None,
+                            });
+                        }
                     }
                     _ => {
                         self.add_info_message(

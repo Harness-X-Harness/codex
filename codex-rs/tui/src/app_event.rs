@@ -539,6 +539,7 @@ pub(crate) enum AppEvent {
     StartThreadWorkflow {
         thread_id: ThreadId,
         source: String,
+        name: Option<String>,
     },
 
     /// Host-resume the current Rhai workflow run.

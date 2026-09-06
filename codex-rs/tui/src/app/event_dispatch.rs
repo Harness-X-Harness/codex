@@ -1258,8 +1258,12 @@ impl App {
                 self.open_thread_workflow_status(app_server, thread_id)
                     .await;
             }
-            AppEvent::StartThreadWorkflow { thread_id, source } => {
-                self.start_thread_workflow(app_server, thread_id, source)
+            AppEvent::StartThreadWorkflow {
+                thread_id,
+                source,
+                name,
+            } => {
+                self.start_thread_workflow(app_server, thread_id, source, name)
                     .await;
             }
             AppEvent::AdvanceThreadWorkflow { thread_id } => {

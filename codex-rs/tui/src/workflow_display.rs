@@ -3,7 +3,25 @@ use codex_app_server_protocol::ThreadWorkflowStatus;
 
 use crate::bottom_pane::WorkflowStatusIndicator;
 
-pub(crate) const WORKFLOW_USAGE: &str = "Usage: /workflow [start <rhai-or-path>|next|stop|resume]";
+pub(crate) const WORKFLOW_USAGE: &str =
+    "Usage: /workflow [start <name|rhai-or-path>|next|stop|resume]";
+
+pub(crate) fn looks_like_workflow_name(token: &str) -> bool {
+    let stem = token.trim().strip_suffix(".rhai").unwrap_or(token.trim());
+    let bytes = stem.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes
+            .first()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && bytes
+            .last()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+        && !bytes.windows(2).any(|pair| pair == b"--")
+}
 
 pub(crate) fn format_workflow_summary(workflow: &ThreadWorkflow) -> String {
     let status = match workflow.status {
