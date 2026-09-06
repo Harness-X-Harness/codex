@@ -43,6 +43,8 @@ pub struct WorkflowRun {
     pub args: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
     pub phase: Option<String>,
+    #[serde(default)]
+    pub log: Option<String>,
     pub pending_instruction: Option<String>,
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
@@ -84,6 +86,7 @@ impl WorkflowRun {
             served_pauses: 0,
             args,
             phase: None,
+            log: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -92,6 +95,7 @@ impl WorkflowRun {
         };
         let outcome = run.eval_current().map_err(|error| error.to_string())?;
         run.phase = outcome.phase;
+        run.log = outcome.log;
         run.apply_eval(outcome.eval)?;
         Ok(run)
     }
@@ -120,6 +124,7 @@ impl WorkflowRun {
             served_pauses: 0,
             args,
             phase: None,
+            log: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -162,6 +167,7 @@ impl WorkflowRun {
             served_pauses: 0,
             args,
             phase: None,
+            log: None,
             pending_instruction: None,
             pending_yield_started: false,
             created_at: now,
@@ -170,6 +176,7 @@ impl WorkflowRun {
         };
         let outcome = run.eval_current().map_err(|error| error.to_string())?;
         run.phase = outcome.phase;
+        run.log = outcome.log;
         run.apply_eval(outcome.eval)?;
         Ok(run)
     }
@@ -184,6 +191,7 @@ impl WorkflowRun {
         }
         let outcome = self.eval_current().map_err(|error| error.to_string())?;
         self.phase = outcome.phase;
+        self.log = outcome.log;
         self.apply_eval(outcome.eval)
     }
 
@@ -219,6 +227,7 @@ impl WorkflowRun {
         match self.eval_current() {
             Ok(outcome) => {
                 self.phase = outcome.phase;
+                self.log = outcome.log;
                 self.apply_eval(outcome.eval)
             }
             Err(error) => {
@@ -272,6 +281,7 @@ impl WorkflowRun {
         match self.eval_current() {
             Ok(outcome) => {
                 self.phase = outcome.phase;
+                self.log = outcome.log;
                 self.apply_eval(outcome.eval).map(|_| ())
             }
             Err(error) => {

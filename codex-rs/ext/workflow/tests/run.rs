@@ -68,6 +68,24 @@ fn scratch_survives_pause_and_resume() {
 }
 
 #[test]
+fn log_survives_pause_and_resume_without_a_yield() {
+    let source = r#"
+        log("note");
+        pause();
+        complete();
+    "#;
+    let mut run = WorkflowRun::start(ThreadId::from_u128(18), source).expect("start");
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    assert_eq!(run.log.as_deref(), Some("note"));
+    assert_eq!(run.served_asks, 0);
+    assert!(run.served_replies.is_empty());
+    run.resume().expect("resume");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.log.as_deref(), Some("note"));
+    assert_eq!(run.served_asks, 0);
+}
+
+#[test]
 fn scratch_survives_stop_and_resume() {
     let dir = TempDir::new().expect("tempdir");
     let source = r#"

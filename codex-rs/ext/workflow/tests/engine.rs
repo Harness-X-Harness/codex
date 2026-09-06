@@ -6,6 +6,7 @@ use codex_workflow_extension::MAX_WORKFLOW_REPLY_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_YIELDS;
 use codex_workflow_extension::WorkflowEval;
+use codex_workflow_extension::WorkflowEvalOutcome;
 use codex_workflow_extension::WorkflowSourceError;
 use codex_workflow_extension::eval_source;
 use codex_workflow_extension::eval_source_with_env;
@@ -539,8 +540,46 @@ fn named_program_reads_args_and_records_phase() {
     let mut args = Map::new();
     args.insert("topic".into(), rhai::Dynamic::from("rust"));
     let outcome = eval_source_with_env(source, &[], 0, &args).expect("eval");
-    assert_eq!(outcome.eval, WorkflowEval::Completed);
-    assert_eq!(outcome.phase.as_deref(), Some("Scan"));
+    assert_eq!(
+        outcome,
+        WorkflowEvalOutcome {
+            eval: WorkflowEval::Completed,
+            phase: Some("Scan".to_string()),
+            log: None,
+        }
+    );
+}
+
+#[test]
+fn log_records_last_nonempty_message_and_rejects_empty() {
+    let outcome = eval_source_with_env(
+        r#"log("first"); log("note"); complete();"#,
+        &[],
+        0,
+        &Map::new(),
+    )
+    .expect("eval");
+    assert_eq!(
+        outcome,
+        WorkflowEvalOutcome {
+            eval: WorkflowEval::Completed,
+            phase: None,
+            log: Some("note".to_string()),
+        }
+    );
+
+    for source in [r#"log("");"#, r#"log("   ");"#] {
+        let error = eval_source(source, &[]).expect_err(source);
+        match error {
+            WorkflowSourceError::Invalid { reason } => {
+                assert!(
+                    reason.contains("nonempty message"),
+                    "{source} unexpected reason: {reason}"
+                );
+            }
+            other => panic!("{source} expected Invalid, got {other:?}"),
+        }
+    }
 }
 
 #[test]

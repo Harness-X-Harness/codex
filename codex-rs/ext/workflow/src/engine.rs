@@ -169,6 +169,7 @@ fn eval_source_inner(
         });
     }
     let phase = Rc::new(RefCell::new(None));
+    let log = Rc::new(RefCell::new(None));
     let mut engine = build_engine(served_replies, served_pauses, scratch);
     let phase_for_fn = Rc::clone(&phase);
     engine.register_fn(
@@ -178,6 +179,17 @@ fn eval_source_inner(
                 return Err(runtime_error("phase() requires a nonempty title"));
             }
             *phase_for_fn.borrow_mut() = Some(title.to_string());
+            Ok(())
+        },
+    );
+    let log_for_fn = Rc::clone(&log);
+    engine.register_fn(
+        "log",
+        move |message: &str| -> Result<(), Box<EvalAltResult>> {
+            if message.trim().is_empty() {
+                return Err(runtime_error("log() requires a nonempty message"));
+            }
+            *log_for_fn.borrow_mut() = Some(message.to_string());
             Ok(())
         },
     );
@@ -195,14 +207,16 @@ fn eval_source_inner(
     Ok(WorkflowEvalOutcome {
         eval,
         phase: phase.borrow().clone(),
+        log: log.borrow().clone(),
     })
 }
 
-/// Result of one VM resume, including the last `phase` title.
+/// Result of one VM resume, including the last `phase` title and `log` message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowEvalOutcome {
     pub eval: WorkflowEval,
     pub phase: Option<String>,
+    pub log: Option<String>,
 }
 
 /// Bound a model reply before it re-enters the VM.
