@@ -300,6 +300,7 @@ jobs:
           run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_replays_custom_call_with_matching_output --lib
           run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_declares_plain_apply_patch_as_function_with_patch --lib
           run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_replays_plain_apply_patch_custom_call --lib
+          run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_restores_plain_apply_patch_function_to_custom_call --lib
           run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_keeps_apply_patch_and_unified_exec_names_distinct --lib
           run_exact codex-core tools::router::grok_tests::flat_projection::flat_projection_marks_only_plaintext_collaboration_calls --lib
           run_exact codex-core tools::spec_plan::tests::grok::grok_catalog_shape_exposes_apply_patch_with_unified_exec --lib

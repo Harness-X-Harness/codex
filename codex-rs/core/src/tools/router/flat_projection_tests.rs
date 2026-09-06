@@ -388,6 +388,48 @@ fn flat_projection_replays_plain_apply_patch_custom_call() -> anyhow::Result<()>
 }
 
 #[test]
+fn flat_projection_restores_plain_apply_patch_function_to_custom_call() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Freeform(apply_patch_freeform())],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let specs = router.model_visible_specs();
+    let declared_name = match &specs[0] {
+        ToolSpec::Function(tool) => tool.name.clone(),
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let mut item = ResponseItem::FunctionCall {
+        id: None,
+        name: declared_name,
+        namespace: None,
+        arguments: json!({"patch": "*** Begin Patch"}).to_string(),
+        encrypted_function_args: None,
+        call_id: "call-restore-apply-patch".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    router.restore_tool_call(&mut item)?;
+    assert_eq!(
+        item,
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-restore-apply-patch".to_string(),
+            name: "apply_patch".to_string(),
+            namespace: None,
+            input: "*** Begin Patch".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn flat_projection_keeps_apply_patch_and_unified_exec_names_distinct() -> anyhow::Result<()> {
     let router = ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
