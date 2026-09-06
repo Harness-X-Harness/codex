@@ -684,6 +684,23 @@ impl CodexThread {
         live_thread.load_history(include_archived).await
     }
 
+    /// Latest model-visible rollout items. Works for paginated threads.
+    pub async fn load_latest_model_context_items(
+        &self,
+        include_archived: bool,
+    ) -> ThreadStoreResult<Vec<codex_rollout::RolloutItem>> {
+        let live_thread = self
+            .session
+            .live_thread_for_persistence("load model context")
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
+        Ok(live_thread
+            .load_latest_model_context(include_archived)
+            .await?
+            .items)
+    }
+
     pub async fn read_thread(
         &self,
         include_archived: bool,

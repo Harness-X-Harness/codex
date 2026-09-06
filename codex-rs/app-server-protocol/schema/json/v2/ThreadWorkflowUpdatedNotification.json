@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadWorkflow": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pendingInstruction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadWorkflowStatus"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "name",
+        "runId",
+        "status",
+        "threadId",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadWorkflowStatus": {
+      "enum": [
+        "active",
+        "paused",
+        "complete"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "threadId": {
+      "type": "string"
+    },
+    "workflow": {
+      "$ref": "#/definitions/ThreadWorkflow"
+    }
+  },
+  "required": [
+    "threadId",
+    "workflow"
+  ],
+  "title": "ThreadWorkflowUpdatedNotification",
+  "type": "object"
+}
