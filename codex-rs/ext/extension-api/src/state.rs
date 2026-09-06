@@ -9,6 +9,8 @@ type ErasedData = Arc<dyn Any + Send + Sync>;
 
 /// Present on a thread store while an independent `/workflow` run is Active.
 /// Host goal idle continuation must not start while this hold is attached.
+/// [`crate::EngineSlot`] is the occupancy authority; this hold mirrors a
+/// Workflow occupant for existing readers.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HostIdleHold;
 

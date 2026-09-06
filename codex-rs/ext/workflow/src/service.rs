@@ -17,7 +17,10 @@ use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::content_items_to_text;
+use codex_extension_api::EngineOccupant;
 use codex_extension_api::HostIdleHold;
+use codex_extension_api::ThreadIdleCause;
+use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::RolloutItem;
@@ -105,19 +108,14 @@ impl WorkflowService {
         thread_id: ThreadId,
         source: &str,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let key = thread_id.to_string();
-        if self
-            .load_cached_or_disk(&key)
-            .await?
-            .is_some_and(|run| run.status == WorkflowStatus::Active)
-        {
-            return Err(WorkflowServiceError::InvalidRequest(
-                "a workflow is already active; /workflow stop first".to_string(),
-            ));
-        }
-        let run =
-            WorkflowRun::start(thread_id, source).map_err(WorkflowServiceError::InvalidRequest)?;
-        self.persist_and_kick(key, run).await
+        self.start_prepared(thread_id, |thread_id, claimed| {
+            if claimed {
+                WorkflowRun::start(thread_id, source)
+            } else {
+                WorkflowRun::queue(thread_id, source)
+            }
+        })
+        .await
     }
 
     pub async fn start_named_run(
@@ -126,22 +124,17 @@ impl WorkflowService {
         name: &str,
         args: serde_json::Map<String, serde_json::Value>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let key = thread_id.to_string();
-        if self
-            .load_cached_or_disk(&key)
-            .await?
-            .is_some_and(|run| run.status == WorkflowStatus::Active)
-        {
-            return Err(WorkflowServiceError::InvalidRequest(
-                "a workflow is already active; /workflow stop first".to_string(),
-            ));
-        }
         let roots = self.catalog_roots();
         let script = resolve_named(name, &roots)
             .map_err(|error| WorkflowServiceError::InvalidRequest(error.to_string()))?;
-        let run = WorkflowRun::start_named(thread_id, script.name, &script.source, args)
-            .map_err(WorkflowServiceError::InvalidRequest)?;
-        self.persist_and_kick(key, run).await
+        self.start_prepared(thread_id, |thread_id, claimed| {
+            if claimed {
+                WorkflowRun::start_named(thread_id, script.name, &script.source, args)
+            } else {
+                WorkflowRun::queue_named(thread_id, script.name, &script.source, args)
+            }
+        })
+        .await
     }
 
     fn catalog_roots(&self) -> CatalogRoots {
@@ -155,11 +148,21 @@ impl WorkflowService {
         }
     }
 
-    async fn persist_and_kick(
+    async fn start_prepared(
         &self,
-        key: String,
-        run: WorkflowRun,
+        thread_id: ThreadId,
+        build: impl FnOnce(ThreadId, bool) -> Result<WorkflowRun, String>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
+        let key = thread_id.to_string();
+        if self.load_cached_or_disk(&key).await?.is_some_and(|run| {
+            matches!(run.status, WorkflowStatus::Active | WorkflowStatus::Waiting)
+        }) {
+            return Err(WorkflowServiceError::InvalidRequest(
+                "a workflow is already active; /workflow stop first".to_string(),
+            ));
+        }
+        let claimed = self.try_claim_workflow(thread_id).await;
+        let run = build(thread_id, claimed).map_err(WorkflowServiceError::InvalidRequest)?;
         persist_run(&self.persist_root, &run).await?;
         self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
@@ -215,9 +218,25 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let run = self.mutate_run(thread_id, WorkflowRun::resume).await?;
+        let run = if self.try_claim_workflow(thread_id).await {
+            self.mutate_run(thread_id, WorkflowRun::resume).await?
+        } else {
+            self.mutate_run(thread_id, WorkflowRun::park).await?
+        };
         self.kick_if_active(&run).await;
         Ok(run)
+    }
+
+    pub async fn restore_occupancy(&self, thread_id: ThreadId) -> Result<(), String> {
+        let Some(run) = self
+            .get_run(thread_id)
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            return Ok(());
+        };
+        self.refresh_idle_hold(&run).await;
+        Ok(())
     }
 
     pub async fn continue_if_idle(&self, thread_id: ThreadId) -> Result<(), String> {
@@ -228,7 +247,20 @@ impl WorkflowService {
         else {
             return Ok(());
         };
+        let run = if run.status == WorkflowStatus::Waiting {
+            if !self.try_claim_workflow(thread_id).await {
+                return Ok(());
+            }
+            self.mutate_run(thread_id, |run| run.activate().map(|_| ()))
+                .await
+                .map_err(|err| err.to_string())?
+        } else {
+            run
+        };
         if run.status != WorkflowStatus::Active {
+            return Ok(());
+        }
+        if !self.try_claim_workflow(thread_id).await {
             return Ok(());
         }
         if run.pending_yield_started {
@@ -322,7 +354,7 @@ impl WorkflowService {
     }
 
     async fn after_run_changed(&self, run: &WorkflowRun) {
-        self.refresh_idle_hold(run).await;
+        let released = self.refresh_idle_hold(run).await;
         let sink = self
             .update_sink
             .lock()
@@ -331,20 +363,46 @@ impl WorkflowService {
         if let Some(sink) = sink {
             sink(run.clone()).await;
         }
+        if released {
+            self.kick_waiting_goal(run.thread_id).await;
+        }
     }
 
-    async fn refresh_idle_hold(&self, run: &WorkflowRun) {
-        let Some(thread_manager) = self.thread_manager.upgrade() else {
-            return;
+    async fn refresh_idle_hold(&self, run: &WorkflowRun) -> bool {
+        let Some(thread) = self.live_thread(run.thread_id).await else {
+            return false;
         };
-        let Ok(thread) = thread_manager.get_thread(run.thread_id).await else {
-            return;
-        };
+        let slot = engine_slot(thread.thread_extension_data());
         if run.occupies_idle() {
+            let _ = slot.try_claim(EngineOccupant::Workflow);
             thread.thread_extension_data().insert(HostIdleHold);
+            false
         } else {
+            let released = slot.release(EngineOccupant::Workflow);
             thread.thread_extension_data().remove::<HostIdleHold>();
+            released
         }
+    }
+
+    async fn kick_waiting_goal(&self, thread_id: ThreadId) {
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return;
+        };
+        thread
+            .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
+            .await;
+    }
+
+    async fn try_claim_workflow(&self, thread_id: ThreadId) -> bool {
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return true;
+        };
+        engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::Workflow)
+    }
+
+    async fn live_thread(&self, thread_id: ThreadId) -> Option<Arc<codex_core::CodexThread>> {
+        let thread_manager = self.thread_manager.upgrade()?;
+        thread_manager.get_thread(thread_id).await.ok()
     }
 
     async fn latest_assistant_reply(&self, thread_id: ThreadId) -> String {

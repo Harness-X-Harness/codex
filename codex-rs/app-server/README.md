@@ -198,7 +198,7 @@ Example with notification opt-out:
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/workflow/get` — experimental; fetch the independent `/workflow` run for a thread. Requires `goal_host`. Returns `workflow: null` when none exists. Distinct from `/goal`.
-- `thread/workflow/start` — experimental; start an independent Rhai `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active`. `source` is inline Rhai. `name` loads `$CODEX_HOME/workflows/<name>.rhai` or `<root>/.codex/workflows/<name>.rhai` (filename must match `meta.name`). `args` is injected as the script `args` map. The host auto-resumes the VM after each yield until the program completes or the user stops it.
+- `thread/workflow/start` — experimental; start an independent Rhai `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active` or `waiting`. `source` is inline Rhai. `name` loads `$CODEX_HOME/workflows/<name>.rhai` or `<root>/.codex/workflows/<name>.rhai` (filename must match `meta.name`). `args` is injected as the script `args` map. When Goal HOW occupies the engine, the start persists as `waiting` until the occupant is no longer `active`. The host auto-resumes the VM after each yield until the program completes or the user stops it.
 - `thread/workflow/advance` — experimental; optional client override to host-resume the current Rhai workflow run after a yield. Not required for ordinary completion.
 - `thread/workflow/stop` — experimental; pause an active workflow run.
 - `thread/workflow/resume` — experimental; resume a paused workflow run.

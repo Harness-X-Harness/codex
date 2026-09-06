@@ -873,6 +873,7 @@ pub enum ThreadWorkflowStatus {
     Active,
     Paused,
     Complete,
+    Waiting,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

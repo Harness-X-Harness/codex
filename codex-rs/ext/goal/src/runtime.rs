@@ -10,6 +10,8 @@ use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
+use codex_extension_api::EngineOccupant;
+use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -240,6 +242,7 @@ impl GoalRuntimeHandle {
         );
         self.inner.accounting_state.clear_active_goal();
         *self.host_evaluate_state() = HostEvaluateRoundState::default();
+        self.release_goal_how().await;
         let goal = protocol_goal_from_state(goal);
         self.inner.event_emitter.thread_goal_updated(
             format!("{turn_id}:{}", status.event_name()),
@@ -273,6 +276,26 @@ impl GoalRuntimeHandle {
             return;
         };
         thread.thread_extension_data().remove::<TurnStartOptions>();
+    }
+
+    async fn claim_goal_how(&self) {
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            return;
+        };
+        let _ = engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::GoalHow);
+    }
+
+    async fn release_goal_how(&self) {
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            return;
+        };
+        engine_slot(thread.thread_extension_data()).release(EngineOccupant::GoalHow);
     }
 
     pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {
@@ -360,18 +383,21 @@ impl GoalRuntimeHandle {
                     );
                     self.inject_active_turn_steering(item).await;
                 }
+                self.claim_goal_how().await;
                 self.continue_if_idle().await?;
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
                 if self.inner.accounting_state.current_turn_id().is_none() {
                     self.inner.accounting_state.clear_active_goal();
                 }
+                self.release_goal_how().await;
             }
             codex_state::ThreadGoalStatus::Paused
             | codex_state::ThreadGoalStatus::Blocked
             | codex_state::ThreadGoalStatus::UsageLimited
             | codex_state::ThreadGoalStatus::Complete => {
                 self.inner.accounting_state.clear_active_goal();
+                self.release_goal_how().await;
             }
         }
         Ok(())
@@ -387,6 +413,7 @@ impl GoalRuntimeHandle {
 
         self.inner.analytics.cleared(&goal);
         self.inner.accounting_state.clear_active_goal();
+        self.release_goal_how().await;
         Ok(())
     }
 
@@ -496,6 +523,7 @@ impl GoalRuntimeHandle {
             GoalEventAttribution::Turn(turn_id),
         );
         self.inner.accounting_state.clear_active_goal();
+        self.release_goal_how().await;
         let goal = protocol_goal_from_state(goal);
         self.inner.event_emitter.thread_goal_updated(
             format!("{turn_id}:{event_name}"),
@@ -523,8 +551,12 @@ impl GoalRuntimeHandle {
                     .accounting_state
                     .mark_idle_goal_active(goal.goal_id);
                 self.inner.metrics.record_resumed();
+                self.claim_goal_how().await;
             }
-            Some(_) | None => self.inner.accounting_state.clear_active_goal(),
+            Some(_) | None => {
+                self.inner.accounting_state.clear_active_goal();
+                self.release_goal_how().await;
+            }
         }
         Ok(())
     }
@@ -561,8 +593,9 @@ impl GoalRuntimeHandle {
             .thread_extension_data()
             .get::<codex_extension_api::HostIdleHold>()
             .is_some()
+            || !engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::GoalHow)
         {
-            tracing::debug!("skipping goal continuation because workflow occupies idle");
+            tracing::debug!("skipping goal continuation because the engine slot is occupied");
             return Ok(());
         }
 

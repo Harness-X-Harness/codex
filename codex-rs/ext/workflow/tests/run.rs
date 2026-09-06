@@ -95,6 +95,54 @@ fn active_run_occupies_idle() {
 }
 
 #[test]
+fn queued_run_does_not_occupy_until_activated() {
+    let mut run =
+        WorkflowRun::queue(ThreadId::from_u128(11), yield_then_complete()).expect("queue");
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+    assert!(!run.occupies_idle());
+    assert_eq!(run.activate(), Ok(WorkflowAdvance::Yielded));
+    assert_eq!(run.status, WorkflowStatus::Active);
+    assert!(run.occupies_idle());
+}
+
+#[test]
+fn queued_named_run_keeps_args_until_activated() {
+    let source = r#"
+        let meta = #{
+            name: "demo",
+            description: "named",
+        };
+        phase("Scan");
+        if args.topic == "rust" {
+            complete();
+        } else {
+            ask("wrong args");
+        }
+    "#;
+    let mut args = serde_json::Map::new();
+    args.insert("topic".into(), serde_json::Value::String("rust".into()));
+    let mut run = WorkflowRun::queue_named(ThreadId::from_u128(13), "demo", source, args)
+        .expect("queue named");
+    assert_eq!(run.name, "demo");
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+    assert_eq!(run.phase, None);
+    assert!(!run.occupies_idle());
+    assert_eq!(run.activate(), Ok(WorkflowAdvance::Completed));
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.phase.as_deref(), Some("Scan"));
+}
+
+#[test]
+fn stop_can_cancel_a_waiting_run() {
+    let mut run =
+        WorkflowRun::queue(ThreadId::from_u128(12), yield_then_complete()).expect("queue");
+    run.stop().expect("stop");
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    run.park().expect("park");
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+}
+
+#[test]
 fn stop_and_resume_are_host_owned() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(3), yield_then_complete()).expect("start");
     run.mark_pending_yield_started();

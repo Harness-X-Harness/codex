@@ -74,4 +74,8 @@ fn workflow_indicator_formats_each_status() {
         line_text(WorkflowStatusIndicator::Complete),
         @"Workflow complete"
     );
+    insta::assert_snapshot!(
+        line_text(WorkflowStatusIndicator::Waiting),
+        @"Workflow waiting"
+    );
 }

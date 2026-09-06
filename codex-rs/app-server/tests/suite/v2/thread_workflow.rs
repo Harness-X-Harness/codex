@@ -489,9 +489,7 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
             params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
-    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
-
-    let _triggers = wait_until_turn_trigger(&server, "workflow").await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Waiting);
 
     let get_goal: ThreadGoalGetResponse = app
         .request(|request_id| ClientRequest::ThreadGoalGet {
@@ -506,53 +504,27 @@ async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<
         Some(ThreadGoalStatus::Active)
     );
 
-    let get_workflow: ThreadWorkflowGetResponse = app
-        .request(|request_id| ClientRequest::ThreadWorkflowGet {
-            request_id,
-            params: ThreadWorkflowGetParams {
-                thread_id: thread.id.clone(),
-            },
-        })
-        .await?;
-    let mid_status = get_workflow
-        .workflow
-        .as_ref()
-        .map(|workflow| workflow.status);
+    let triggers = response_turn_triggers(&server).await?;
     assert!(
-        matches!(
-            mid_status,
-            Some(ThreadWorkflowStatus::Active | ThreadWorkflowStatus::Complete)
-        ),
-        "workflow must exist after start: {get_workflow:?}"
+        triggers
+            .iter()
+            .all(|trigger| trigger.as_deref() != Some("workflow")),
+        "waiting workflow must not start a workflow turn: {triggers:?}"
     );
 
-    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
-
-    let get_goal_after: ThreadGoalGetResponse = app
-        .request(|request_id| ClientRequest::ThreadGoalGet {
+    let paused: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
             request_id,
-            params: ThreadGoalGetParams {
+            params: ThreadGoalSetParams {
                 thread_id: thread.id.clone(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
             },
         })
         .await?;
-    assert_eq!(
-        get_goal_after.goal.map(|goal| goal.status),
-        Some(ThreadGoalStatus::Active)
-    );
-
-    let get_workflow_after: ThreadWorkflowGetResponse = app
-        .request(|request_id| ClientRequest::ThreadWorkflowGet {
-            request_id,
-            params: ThreadWorkflowGetParams {
-                thread_id: thread.id,
-            },
-        })
-        .await?;
-    assert_eq!(
-        get_workflow_after.workflow.map(|workflow| workflow.status),
-        Some(ThreadWorkflowStatus::Complete)
-    );
+    assert_eq!(paused.goal.status, ThreadGoalStatus::Paused);
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
     Ok(())
 }
 
@@ -611,6 +583,137 @@ async fn active_workflow_hold_blocks_goal_idle() -> Result<()> {
         }
         sleep(std::time::Duration::from_millis(25)).await;
     }
+
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_goal.goal.map(|goal| goal.status),
+        Some(ThreadGoalStatus::Active)
+    );
+    wait_until_turn_trigger(&server, "goal").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn paused_workflow_frees_the_slot_for_waiting_goal_how() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker_delay: std::time::Duration::from_millis(400),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("paused workflow frees the engine slot".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+
+    let stopped: ThreadWorkflowStopResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStop {
+            request_id,
+            params: ThreadWorkflowStopParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
+
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get_goal.goal.map(|goal| goal.status),
+        Some(ThreadGoalStatus::Active)
+    );
+    wait_until_turn_trigger(&server, "goal").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn waiting_workflow_rejects_a_second_start() -> Result<()> {
+    let (mut app, _codex_home, _server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![text("materialize this thread")],
+        ..Default::default()
+    })
+    .await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("one waiting workflow at a time".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Waiting);
+
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(start_params(
+                thread.id,
+                COMPLETE_ONLY,
+            ))?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("already active"),
+        "unexpected error: {}",
+        error.error.message
+    );
     Ok(())
 }
 
@@ -748,6 +851,85 @@ async fn workflow_start_by_name_loads_user_library() -> Result<()> {
         .await?;
     assert_eq!(started.workflow.name, "demo");
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Complete);
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_workflow_waits_when_goal_occupies() -> Result<()> {
+    let (mut app, codex_home, server) = app_with_features(&goal_host_features()).await?;
+    let library = codex_home.path().join("workflows");
+    std::fs::create_dir_all(&library)?;
+    std::fs::write(
+        library.join("demo.rhai"),
+        r#"
+            let meta = #{
+                name: "demo",
+                description: "named",
+            };
+            complete();
+        "#,
+    )?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![text("materialize this thread")],
+        ..Default::default()
+    })
+    .await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("named catalog waits for occupancy".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: String::new(),
+                name: Some("demo".to_string()),
+                args: None,
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.name, "demo");
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Waiting);
+
+    let triggers = response_turn_triggers(&server).await?;
+    assert!(
+        triggers
+            .iter()
+            .all(|trigger| trigger.as_deref() != Some("workflow")),
+        "waiting named workflow must not start a workflow turn: {triggers:?}"
+    );
+
+    let paused: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(paused.goal.status, ThreadGoalStatus::Paused);
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
     Ok(())
 }
 

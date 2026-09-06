@@ -7,6 +7,7 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStopInput;
@@ -37,6 +38,24 @@ where
                 config.enabled = false;
             }
             input.thread_store.insert(config);
+        })
+    }
+
+    fn on_thread_resume<'a>(&'a self, input: ThreadResumeInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let enabled = input
+                .thread_store
+                .get::<WorkflowExtensionConfig>()
+                .is_some_and(|config| config.enabled);
+            if !enabled {
+                return;
+            }
+            let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+                return;
+            };
+            if let Err(err) = self.service.restore_occupancy(thread_id).await {
+                tracing::warn!("failed to restore workflow occupancy for {thread_id}: {err}");
+            }
         })
     }
 

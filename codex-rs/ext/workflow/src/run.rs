@@ -12,6 +12,7 @@ use crate::catalog::json_args_to_map;
 use crate::engine::WorkflowEval;
 use crate::engine::eval_source_with_env;
 use crate::engine::truncate_workflow_reply;
+use crate::engine::validate_source;
 
 /// Lifecycle of one thread's workflow run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,7 @@ pub enum WorkflowStatus {
     Active,
     Paused,
     Complete,
+    Waiting,
 }
 
 /// Persisted run for one thread.
@@ -89,6 +91,55 @@ impl WorkflowRun {
         Ok(run)
     }
 
+    /// Persist a run that cannot occupy the engine yet.
+    pub fn queue(thread_id: ThreadId, source: &str) -> Result<Self, String> {
+        Self::queue_named(thread_id, "workflow", source, serde_json::Map::new())
+    }
+
+    pub fn queue_named(
+        thread_id: ThreadId,
+        name: impl Into<String>,
+        source: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Self, String> {
+        validate_source(source).map_err(|error| error.to_string())?;
+        let now = unix_seconds();
+        Ok(Self {
+            thread_id,
+            run_id: Uuid::now_v7().to_string(),
+            name: name.into(),
+            status: WorkflowStatus::Waiting,
+            source: source.trim().to_string(),
+            served_asks: 0,
+            served_replies: Vec::new(),
+            served_pauses: 0,
+            args,
+            phase: None,
+            pending_instruction: None,
+            pending_yield_started: false,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn activate(&mut self) -> Result<WorkflowAdvance, String> {
+        if self.status != WorkflowStatus::Waiting {
+            return Err("workflow is not waiting".to_string());
+        }
+        let outcome = self.eval_current().map_err(|error| error.to_string())?;
+        self.phase = outcome.phase;
+        self.apply_eval(outcome.eval)
+    }
+
+    pub fn park(&mut self) -> Result<(), String> {
+        if self.status != WorkflowStatus::Paused {
+            return Err("workflow is not paused".to_string());
+        }
+        self.status = WorkflowStatus::Waiting;
+        self.updated_at = unix_seconds();
+        Ok(())
+    }
+
     pub fn advance(&mut self) -> Result<WorkflowAdvance, String> {
         self.advance_with_reply(String::new())
     }
@@ -138,7 +189,10 @@ impl WorkflowRun {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        if self.status != WorkflowStatus::Active {
+        if !matches!(
+            self.status,
+            WorkflowStatus::Active | WorkflowStatus::Waiting
+        ) {
             return Err("workflow is not active".to_string());
         }
         self.status = WorkflowStatus::Paused;

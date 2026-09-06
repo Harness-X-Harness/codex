@@ -481,20 +481,6 @@ impl MessageProcessor {
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
-        let thread_goal_processor = ThreadGoalRequestProcessor::new(
-            Arc::clone(&thread_manager),
-            outgoing.clone(),
-            Arc::clone(&config),
-            thread_state_manager.clone(),
-            state_db.clone(),
-            Arc::clone(&goal_service),
-        );
-        let thread_queue_processor = ThreadQueueRequestProcessor::new(
-            Arc::clone(&thread_manager),
-            Arc::clone(&thread_store),
-            outgoing.clone(),
-            queue_service,
-        );
         let workflow_service = match workflow_service {
             Some(service) => service,
             None => Arc::new(WorkflowService::with_project_root(
@@ -504,6 +490,21 @@ impl MessageProcessor {
             )),
         };
         workflow_service.set_update_sink(workflow_update_sink(outgoing.clone()));
+        let thread_goal_processor = ThreadGoalRequestProcessor::new(
+            Arc::clone(&thread_manager),
+            outgoing.clone(),
+            Arc::clone(&config),
+            thread_state_manager.clone(),
+            state_db.clone(),
+            Arc::clone(&goal_service),
+            Arc::clone(&workflow_service),
+        );
+        let thread_queue_processor = ThreadQueueRequestProcessor::new(
+            Arc::clone(&thread_manager),
+            Arc::clone(&thread_store),
+            outgoing.clone(),
+            queue_service,
+        );
         let thread_workflow_processor =
             ThreadWorkflowRequestProcessor::new(Arc::clone(&config), workflow_service);
         let project_processor = ProjectRequestProcessor::new(

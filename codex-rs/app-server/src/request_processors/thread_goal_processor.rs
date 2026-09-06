@@ -26,6 +26,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
     goal_service: Arc<GoalService>,
+    workflow_service: Arc<codex_workflow_extension::WorkflowService>,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -36,6 +37,7 @@ impl ThreadGoalRequestProcessor {
         thread_state_manager: ThreadStateManager,
         state_db: Option<StateDbHandle>,
         goal_service: Arc<GoalService>,
+        workflow_service: Arc<codex_workflow_extension::WorkflowService>,
     ) -> Self {
         Self {
             thread_manager,
@@ -44,6 +46,7 @@ impl ThreadGoalRequestProcessor {
             thread_state_manager,
             state_db,
             goal_service,
+            workflow_service,
         }
     }
 
@@ -218,6 +221,7 @@ impl ThreadGoalRequestProcessor {
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
         outcome.apply_runtime_effects(&self.goal_service).await;
+        self.kick_waiting_workflow(thread_id).await;
         Ok(())
     }
 
@@ -275,6 +279,7 @@ impl ThreadGoalRequestProcessor {
         if cleared {
             self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)
                 .await;
+            self.kick_waiting_workflow(thread_id).await;
         }
         Ok(())
     }
@@ -393,6 +398,14 @@ impl ThreadGoalRequestProcessor {
         )
         .await;
         Ok(())
+    }
+
+    async fn kick_waiting_workflow(&self, thread_id: ThreadId) {
+        if let Err(err) = self.workflow_service.continue_if_idle(thread_id).await {
+            tracing::debug!(
+                "failed to resume waiting workflow after goal occupancy change for {thread_id}: {err}"
+            );
+        }
     }
 
     pub(crate) async fn emit_thread_goal_snapshot(&self, thread_id: ThreadId) {
