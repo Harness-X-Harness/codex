@@ -316,7 +316,8 @@ fn flat_projection_declares_plain_apply_patch_as_function_with_patch() -> anyhow
         true,
     )
     .map_err(anyhow::Error::msg)?;
-    let tool = match &router.model_visible_specs()[0] {
+    let specs = router.model_visible_specs();
+    let tool = match &specs[0] {
         ToolSpec::Function(tool) => tool,
         spec => panic!("expected projected function, got {spec:?}"),
     };
