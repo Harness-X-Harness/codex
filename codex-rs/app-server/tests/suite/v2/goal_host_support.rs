@@ -37,6 +37,10 @@ pub(super) const SKEPTIC_REFUTE: &str =
     r#"{"refuted":true,"evidence":"missing proof","next_step":"add tests"}"#;
 pub(super) const ASK_REQUIRES_OK_REPLY: &str =
     r#"let x = ask("Say ok."); if x == "ok" { complete(); } else { ask("wrong reply"); }"#;
+pub(super) const AGENT_REQUIRES_OK_RESULT: &str = r#"
+    let r = agent("Say ok.");
+    if r.ok && r.text == "ok" { complete(); } else { ask("wrong reply"); }
+"#;
 
 pub(super) async fn app_with_features(
     features: &[Feature],

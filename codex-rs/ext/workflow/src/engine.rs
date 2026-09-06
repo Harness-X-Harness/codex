@@ -7,6 +7,7 @@ use std::rc::Rc;
 use rhai::Dynamic;
 use rhai::Engine;
 use rhai::EvalAltResult;
+use rhai::Map;
 use rhai::Position;
 use rhai::Scope;
 
@@ -86,7 +87,7 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
 }
 
 /// Run or resume a Rhai program. `served_replies` are host answers for
-/// already-served `ask` calls, in program order.
+/// already-served `ask` and `agent` yields, in program order.
 pub fn eval_source(
     source: &str,
     served_replies: &[String],
@@ -147,15 +148,41 @@ fn build_engine(served_replies: &[String]) -> Engine {
     engine.register_fn(
         "ask",
         move |instruction: &str| -> Result<String, Box<EvalAltResult>> {
-            let i = index_for_ask.get();
-            if i < replies_for_ask.len() {
-                index_for_ask.set(i.saturating_add(1));
-                return Ok(replies_for_ask[i].clone());
-            }
-            if instruction.trim().is_empty() {
-                return Err(runtime_error("ask() requires a nonempty instruction"));
-            }
-            Err(terminated(ControlToken::Yield(instruction.to_string())))
+            take_served_or_yield(
+                &index_for_ask,
+                &replies_for_ask,
+                instruction,
+                "ask() requires a nonempty instruction",
+            )
+        },
+    );
+
+    let replies_for_agent = Rc::clone(&replies);
+    let index_for_agent = Rc::clone(&index);
+    engine.register_fn(
+        "agent",
+        move |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
+            take_served_or_yield(
+                &index_for_agent,
+                &replies_for_agent,
+                prompt,
+                "agent() requires a nonempty prompt",
+            )
+            .map(|reply| agent_result_from_reply(&reply))
+        },
+    );
+    let replies_for_agent_opts = Rc::clone(&replies);
+    let index_for_agent_opts = Rc::clone(&index);
+    engine.register_fn(
+        "agent",
+        move |prompt: &str, _opts: Map| -> Result<Dynamic, Box<EvalAltResult>> {
+            take_served_or_yield(
+                &index_for_agent_opts,
+                &replies_for_agent_opts,
+                prompt,
+                "agent() requires a nonempty prompt",
+            )
+            .map(|reply| agent_result_from_reply(&reply))
         },
     );
 
@@ -210,4 +237,28 @@ fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
         Dynamic::from(message.into()),
         Position::NONE,
     ))
+}
+
+fn take_served_or_yield(
+    index: &Rc<Cell<usize>>,
+    replies: &Rc<Vec<String>>,
+    instruction: &str,
+    empty_error: &str,
+) -> Result<String, Box<EvalAltResult>> {
+    let i = index.get();
+    if i < replies.len() {
+        index.set(i.saturating_add(1));
+        return Ok(replies[i].clone());
+    }
+    if instruction.trim().is_empty() {
+        return Err(runtime_error(empty_error));
+    }
+    Err(terminated(ControlToken::Yield(instruction.to_string())))
+}
+
+fn agent_result_from_reply(reply: &str) -> Dynamic {
+    let mut map = Map::new();
+    map.insert("ok".into(), Dynamic::from(!reply.trim().is_empty()));
+    map.insert("text".into(), Dynamic::from(reply.to_string()));
+    Dynamic::from(map)
 }

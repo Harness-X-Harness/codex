@@ -19,6 +19,33 @@ fn start_complete_without_yield() {
 }
 
 #[test]
+fn advance_resumes_after_agent_then_branches() {
+    let source = r#"
+        let r = agent("Say ok.");
+        if r.ok && r.text == "ok" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    let mut run = WorkflowRun::start(ThreadId::from_u128(9), source).expect("start");
+    assert_eq!(run.status, WorkflowStatus::Active);
+    assert_eq!(run.pending_instruction.as_deref(), Some("Say ok."));
+    assert_eq!(
+        run.advance_with_reply("ok".to_string()),
+        Ok(WorkflowAdvance::Completed)
+    );
+    assert_eq!(run.status, WorkflowStatus::Complete);
+
+    let mut missed = WorkflowRun::start(ThreadId::from_u128(10), source).expect("start");
+    assert_eq!(
+        missed.advance_with_reply("no".to_string()),
+        Ok(WorkflowAdvance::Yielded)
+    );
+    assert_eq!(missed.pending_instruction.as_deref(), Some("wrong reply"));
+}
+
+#[test]
 fn advance_resumes_after_ask_then_completes() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(2), yield_then_complete()).expect("start");
     assert_eq!(run.status, WorkflowStatus::Active);

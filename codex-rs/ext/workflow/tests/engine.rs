@@ -43,6 +43,62 @@ fn ask_yields_then_complete_after_host_resume() {
 }
 
 #[test]
+fn agent_yields_then_branches_on_structured_result() {
+    let source = r#"
+        let r = agent("Say ok.");
+        if r.ok && r.text == "ok" {
+            complete();
+        } else {
+            ask("wrong reply");
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &[]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "Say ok.".to_string(),
+        }
+    );
+    assert_eq!(
+        eval_source(source, &["ok".to_string()]).expect("eval"),
+        WorkflowEval::Completed
+    );
+    assert_eq!(
+        eval_source(source, &["no".to_string()]).expect("eval"),
+        WorkflowEval::Yielded {
+            instruction: "wrong reply".to_string(),
+        }
+    );
+}
+
+#[test]
+fn agent_opts_map_is_accepted() {
+    let source = r#"
+        let r = agent("Say ok.", #{ label: "w1" });
+        if r.ok && r.text == "ok" {
+            complete();
+        }
+    "#;
+    assert_eq!(
+        eval_source(source, &["ok".to_string()]).expect("eval"),
+        WorkflowEval::Completed
+    );
+}
+
+#[test]
+fn empty_agent_prompt_is_rejected() {
+    let error = eval_source(r#"agent("");"#, &[]).expect_err("empty agent");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(
+                reason.contains("nonempty prompt"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
 fn ask_returns_the_host_reply() {
     let source = r#"let x = ask("Say ok."); if x == "ok" { complete(); }"#;
     assert_eq!(
