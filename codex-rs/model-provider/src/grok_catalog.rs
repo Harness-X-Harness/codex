@@ -1,4 +1,5 @@
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -48,7 +49,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             default_reasoning_summary: ReasoningSummary::None,
             support_verbosity: false,
             default_verbosity: None,
-            apply_patch_tool_type: None,
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             web_search_tool_type: WebSearchToolType::Text,
             truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_image_detail_original: false,

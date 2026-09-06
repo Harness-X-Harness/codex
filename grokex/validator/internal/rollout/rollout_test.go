@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -146,6 +147,47 @@ func TestScanDynamicToolContinuation(t *testing.T) {
 	history, ok := root.Turn(probeTurnHist)
 	if !ok || !history.Completed || history.LastAgentMessage != "GROKEX_LIVE_TOOL_OK" || len(history.FunctionCalls) != 0 {
 		t.Fatalf("history turn = %+v", history)
+	}
+}
+
+func TestReadSessionRecordsCustomToolCall(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rollout.jsonl")
+	lines := []string{
+		`{"timestamp":"t","type":"session_meta","payload":{"id":"thread-1","model_provider":"grok","history_mode":"paginated"}}`,
+		`{"timestamp":"t","type":"turn_context","payload":{"turn_id":"turn-1","model":"grok-4.6"}}`,
+		`{"timestamp":"t","type":"response_item","payload":{"type":"custom_tool_call","call_id":"c1","name":"apply_patch","input":"*** Begin Patch"}}`,
+		`{"timestamp":"t","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"Success"}}`,
+		`{"timestamp":"t","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-1","item":{"type":"FileChange"}}}`,
+		`{"timestamp":"t","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"ok"}}`,
+	}
+	if err := os.WriteFile(path, []byte(lines[0]+"\n"+lines[1]+"\n"+lines[2]+"\n"+lines[3]+"\n"+lines[4]+"\n"+lines[5]+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session, err := ReadSession(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ID != "thread-1" || session.ModelProvider != "grok" {
+		t.Fatalf("session = %+v", *session)
+	}
+	turn, ok := session.Turn("turn-1")
+	if !ok || !turn.Completed || turn.LastAgentMessage != "ok" {
+		t.Fatalf("turn = %+v ok=%v", turn, ok)
+	}
+	if got := turn.FunctionCallCounts(); !reflect.DeepEqual(got, map[string]int{"apply_patch": 1}) {
+		t.Fatalf("calls = %v", got)
+	}
+	call, ok := turn.FunctionCall("c1")
+	if !ok || call.Arguments != "*** Begin Patch" {
+		t.Fatalf("call = %+v ok=%v", call, ok)
+	}
+	output, ok := turn.FunctionCallOutput("c1")
+	if !ok || output.Text != "Success" {
+		t.Fatalf("output = %+v ok=%v", output, ok)
+	}
+	if turn.FileChangeCount != 1 {
+		t.Fatalf("file_change_count = %d", turn.FileChangeCount)
 	}
 }
 

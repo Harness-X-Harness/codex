@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/grok_model_visible_request.rs
-expression: "render_model_visible_request(\"ultra-full-history-collaboration first Turn\",\n&request)"
+expression: "render_model_visible_request(\"custom-apply-patch first Turn\", &request)"
 ---
-Scenario: ultra-full-history-collaboration first Turn
+Scenario: custom-apply-patch first Turn
 
 ## Request
 client_metadata: keys=[root_turn_id,session_id,thread_id,turn_id,x-codex-installation-id,x-codex-turn-metadata,x-codex-window-id]
@@ -10,16 +10,12 @@ include: ["reasoning.encrypted_content"]
 model: "grok-4.6"
 parallel_tool_calls: true
 prompt_cache_key: <thread id>
-reasoning: {"effort":"xhigh"}
+reasoning: {"effort":"high"}
 store: false
 stream: true
 tool_choice: "auto"
 
-## Tools (14)
-- function local__exec_command__a70c06930ea0 description=sha1:3544717dc7749d6f/372chars params=sha1:bd3335a047b43441 props=[cmd,justification,login,max_output_tokens,prefix_rule,sandbox_permissions,shell,tty,workdir,yield_time_ms] strict=false
-  "This flat Provider function directly invokes the canonical `exec_command` tool. Call this functi…"
-- function local__write_stdin__2f14658fb101 description=sha1:18065cc092b0da4d/369chars params=sha1:9742360936a9a00a props=[chars,max_output_tokens,session_id,yield_time_ms] strict=false
-  "This flat Provider function directly invokes the canonical `write_stdin` tool. Call this functio…"
+## Tools (12)
 - function local__request_user_input__e2efd87c90e0 description=sha1:84fd5d2686b59d1a/416chars params=sha1:73346c988ebde984 props=[questions] strict=false
   "This flat Provider function directly invokes the canonical `request_user_input` tool. Call this …"
 - function local__apply_patch__55462583fbb1 description=sha1:789e890d004996a3/977chars params=sha1:2aa876cc616ab19e props=[patch] strict=true
@@ -48,6 +44,6 @@ tool_choice: "auto"
 ## Input
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/developer:You are `/root`, the primary agent in a team of agents collaborating to ...
-02:message/developer:<multi_agent_mode>Proactive multi-agent delegation is active. Any earlie...
+02:message/developer:<multi_agent_mode>Any earlier instruction enabling proactive multi-agent...
 03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/user:Delegate one bounded task to a child named live_child using the default ...
+04:message/user:Replace the exact contents of hello.txt from HELLO to WORLD using apply_...

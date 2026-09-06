@@ -16,6 +16,36 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+fn plain_function(name: &str) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: name.to_string(),
+        description: format!("Call {name}."),
+        strict: true,
+        parameters: codex_extension_api::parse_tool_input_schema(&json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"],
+            "additionalProperties": false,
+        }))
+        .expect("test schema should parse"),
+        output_schema: None,
+        defer_loading: None,
+    }
+}
+
+fn apply_patch_freeform() -> FreeformTool {
+    FreeformTool {
+        name: "apply_patch".to_string(),
+        description: "Apply a patch.".to_string(),
+        defer_loading: None,
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: /.+/".to_string(),
+        },
+    }
+}
+
 fn function(name: &str) -> ResponsesApiNamespaceTool {
     ResponsesApiNamespaceTool::Function(ResponsesApiTool {
         name: name.to_string(),
@@ -271,6 +301,173 @@ fn flat_projection_replays_custom_call_with_matching_output() -> anyhow::Result<
             ..
         } if call_id == "call-custom" && projected_output == &output
     ));
+    Ok(())
+}
+
+#[test]
+fn flat_projection_declares_plain_apply_patch_as_function_with_patch() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Freeform(apply_patch_freeform())],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let specs = router.model_visible_specs();
+    let tool = match &specs[0] {
+        ToolSpec::Function(tool) => tool,
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("projected apply_patch should declare properties");
+    assert!(tool.description.contains("canonical `apply_patch` tool"));
+    assert!(tool.description.contains("Call this function itself."));
+    assert!(properties.contains_key("patch"));
+    assert_eq!(tool.parameters.required, Some(vec!["patch".to_string()]));
+    Ok(())
+}
+
+#[test]
+fn flat_projection_replays_plain_apply_patch_custom_call() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Freeform(apply_patch_freeform())],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let declared_name = match &router.model_visible_specs()[0] {
+        ToolSpec::Function(tool) => tool.name.clone(),
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let output = FunctionCallOutputPayload::from_text("done".to_string());
+    let projected = router.project_tool_wire(vec![
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-plain-apply-patch".to_string(),
+            name: "apply_patch".to_string(),
+            namespace: None,
+            input: "*** Begin Patch".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::CustomToolCallOutput {
+            id: None,
+            call_id: "call-plain-apply-patch".to_string(),
+            name: Some("apply_patch".to_string()),
+            output: output.clone(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]);
+
+    assert!(matches!(
+        &projected[0],
+        ResponseItem::FunctionCall { name, call_id, arguments, .. }
+            if name == &declared_name
+                && call_id == "call-plain-apply-patch"
+                && arguments.contains("\"patch\"")
+    ));
+    assert!(matches!(
+        &projected[1],
+        ResponseItem::FunctionCallOutput {
+            call_id: Some(call_id),
+            output: projected_output,
+            ..
+        } if call_id == "call-plain-apply-patch" && projected_output == &output
+    ));
+    Ok(())
+}
+
+#[test]
+fn flat_projection_restores_plain_apply_patch_function_to_custom_call() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![ToolSpec::Freeform(apply_patch_freeform())],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let specs = router.model_visible_specs();
+    let declared_name = match &specs[0] {
+        ToolSpec::Function(tool) => tool.name.clone(),
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let mut item = ResponseItem::FunctionCall {
+        id: None,
+        name: declared_name,
+        namespace: None,
+        arguments: json!({"patch": "*** Begin Patch"}).to_string(),
+        encrypted_function_args: None,
+        call_id: "call-restore-apply-patch".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    router.restore_tool_call(&mut item)?;
+    assert_eq!(
+        item,
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-restore-apply-patch".to_string(),
+            name: "apply_patch".to_string(),
+            namespace: None,
+            input: "*** Begin Patch".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn flat_projection_keeps_apply_patch_and_unified_exec_names_distinct() -> anyhow::Result<()> {
+    let router = ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![
+            ToolSpec::Function(plain_function("exec_command")),
+            ToolSpec::Function(plain_function("write_stdin")),
+            ToolSpec::Freeform(apply_patch_freeform()),
+        ],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let names = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.name.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
+    let descriptions = router
+        .model_visible_specs()
+        .iter()
+        .map(|spec| match spec {
+            ToolSpec::Function(tool) => tool.description.clone(),
+            spec => panic!("expected projected function, got {spec:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 3);
+    assert_ne!(names[0], names[1]);
+    assert_ne!(names[0], names[2]);
+    assert_ne!(names[1], names[2]);
+    assert!(descriptions[0].contains("canonical `exec_command` tool"));
+    assert!(descriptions[1].contains("canonical `write_stdin` tool"));
+    assert!(descriptions[2].contains("canonical `apply_patch` tool"));
     Ok(())
 }
 
