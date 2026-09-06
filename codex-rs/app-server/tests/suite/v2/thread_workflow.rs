@@ -471,6 +471,121 @@ async fn workflow_parallel_branches_on_ordered_host_results() -> Result<()> {
 }
 
 #[tokio::test]
+async fn workflow_unavailable_spawn_is_rejected_before_a_host_turn() -> Result<()> {
+    let (mut app, _codex_home, server) = app_with_features(&goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(start_params(
+                thread.id,
+                r#"agent("Say ok.", #{ "spawn": true, task_name: "review" });"#,
+            ))?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("unavailable"),
+        "unexpected error: {}",
+        error.error.message
+    );
+    let triggers = response_turn_triggers(&server).await?;
+    assert!(
+        triggers
+            .iter()
+            .all(|trigger| trigger.as_deref() != Some("workflow")),
+        "rejected spawn must not start a host turn: {triggers:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_spawn_without_task_name_is_rejected_before_a_host_turn() -> Result<()> {
+    let (mut app, _codex_home, _server) =
+        app_with_features(&[Feature::Goals, Feature::GoalHost, Feature::MultiAgentV2]).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/start",
+            Some(serde_json::to_value(start_params(
+                thread.id,
+                r#"agent("Say ok.", #{ "spawn": true, extra: "unused" });"#,
+            ))?),
+        )
+        .await?;
+    let error: JSONRPCError = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert!(
+        error.error.message.contains("task_name"),
+        "unexpected error: {}",
+        error.error.message
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_spawn_uses_stock_spawn_agent_and_does_not_write_goal() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker: "ok",
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(
+        &server,
+        &[Feature::Goals, Feature::GoalHost, Feature::MultiAgentV2],
+    )
+    .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(
+                thread.id.clone(),
+                r#"
+                    let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+                    if r.ok && r.text == "ok" { complete(); } else { ask("wrong reply"); }
+                "#,
+            ),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+
+    let requests = response_requests(&server).await?;
+    assert!(
+        requests
+            .iter()
+            .all(|(trigger, _)| trigger.as_deref() != Some("workflow")),
+        "spawn must not start a same-Thread workflow turn: {requests:?}"
+    );
+    assert!(
+        requests.iter().any(|(_, body)| {
+            let body = body.to_string();
+            body.contains("Say ok.") && !body.contains("Active workflow:")
+        }),
+        "stock spawn_agent must send the prompt to the child: {requests:?}"
+    );
+
+    let get_goal: ThreadGoalGetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalGet {
+            request_id,
+            params: ThreadGoalGetParams {
+                thread_id: thread.id,
+            },
+        })
+        .await?;
+    assert_eq!(get_goal.goal, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn goal_host_set_then_independent_workflow_leaves_goal_active() -> Result<()> {
     let (mut app, _codex_home, server) = app_with_features(&goal_host_features()).await?;
     let thread = app.start_thread(ThreadStartParams::default()).await?.thread;

@@ -84,7 +84,13 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
     if actual > MAX_WORKFLOW_SOURCE_CHARS {
         return Err(WorkflowSourceError::TooLarge { actual });
     }
-    let engine = build_engine(&[], 0, ScratchBinding::Unavailable);
+    let engine = build_engine(
+        &[],
+        0,
+        ScratchBinding::Unavailable,
+        SpawnBinding::Unavailable,
+        Rc::new(RefCell::new(None)),
+    );
     engine
         .compile(source)
         .map(|_| ())
@@ -125,6 +131,7 @@ pub fn eval_source_with_env(
         served_pauses,
         args,
         ScratchBinding::Unavailable,
+        SpawnBinding::Unavailable,
     )
 }
 
@@ -142,6 +149,7 @@ pub fn eval_source_with_scratch(
         served_pauses,
         args,
         ScratchBinding::Directory(scratch_dir),
+        SpawnBinding::Unavailable,
     )
 }
 
@@ -150,12 +158,57 @@ enum ScratchBinding<'a> {
     Directory(&'a Path),
 }
 
+/// Whether stock Multi-Agent V2 `spawn_agent` can be requested.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpawnBinding {
+    Unavailable,
+    Available,
+}
+
+/// Resume a program with an explicit spawn-agent binding.
+pub fn eval_source_with_spawn(
+    source: &str,
+    served_replies: &[String],
+    served_pauses: u32,
+    args: &Map,
+    spawn: SpawnBinding,
+) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
+    eval_source_inner(
+        source,
+        served_replies,
+        served_pauses,
+        args,
+        ScratchBinding::Unavailable,
+        spawn,
+    )
+}
+
+/// Resume a program with scratch files and an explicit spawn-agent binding.
+pub fn eval_source_with_scratch_and_spawn(
+    source: &str,
+    served_replies: &[String],
+    served_pauses: u32,
+    args: &Map,
+    scratch_dir: &Path,
+    spawn: SpawnBinding,
+) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
+    eval_source_inner(
+        source,
+        served_replies,
+        served_pauses,
+        args,
+        ScratchBinding::Directory(scratch_dir),
+        spawn,
+    )
+}
+
 fn eval_source_inner(
     source: &str,
     served_replies: &[String],
     served_pauses: u32,
     args: &Map,
     scratch: ScratchBinding<'_>,
+    spawn: SpawnBinding,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     validate_source(source)?;
     if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
@@ -169,7 +222,14 @@ fn eval_source_inner(
         });
     }
     let phase = Rc::new(RefCell::new(None));
-    let mut engine = build_engine(served_replies, served_pauses, scratch);
+    let spawn_task_name = Rc::new(RefCell::new(None));
+    let mut engine = build_engine(
+        served_replies,
+        served_pauses,
+        scratch,
+        spawn,
+        Rc::clone(&spawn_task_name),
+    );
     let phase_for_fn = Rc::clone(&phase);
     engine.register_fn(
         "phase",
@@ -195,6 +255,7 @@ fn eval_source_inner(
     Ok(WorkflowEvalOutcome {
         eval,
         phase: phase.borrow().clone(),
+        spawn_task_name: spawn_task_name.borrow().clone(),
     })
 }
 
@@ -203,6 +264,7 @@ fn eval_source_inner(
 pub struct WorkflowEvalOutcome {
     pub eval: WorkflowEval,
     pub phase: Option<String>,
+    pub spawn_task_name: Option<String>,
 }
 
 /// Bound a model reply before it re-enters the VM.
@@ -221,6 +283,8 @@ fn build_engine(
     served_replies: &[String],
     served_pauses: u32,
     scratch: ScratchBinding<'_>,
+    spawn: SpawnBinding,
+    pending_spawn: Rc<RefCell<Option<String>>>,
 ) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_WORKFLOW_OPERATIONS);
@@ -257,30 +321,34 @@ fn build_engine(
 
     let replies_for_agent = Rc::clone(&replies);
     let index_for_agent = Rc::clone(&index);
+    let pending_for_agent = Rc::clone(&pending_spawn);
     engine.register_fn(
         "agent",
         move |prompt: &str| -> Result<Dynamic, Box<EvalAltResult>> {
-            take_served_or_yield(
+            take_agent_call(
+                prompt,
+                None,
+                spawn,
                 &index_for_agent,
                 &replies_for_agent,
-                prompt,
-                "agent() requires a nonempty prompt",
+                &pending_for_agent,
             )
-            .map(|reply| agent_result_from_reply(&reply))
         },
     );
     let replies_for_agent_opts = Rc::clone(&replies);
     let index_for_agent_opts = Rc::clone(&index);
+    let pending_for_agent_opts = Rc::clone(&pending_spawn);
     engine.register_fn(
         "agent",
-        move |prompt: &str, _opts: Map| -> Result<Dynamic, Box<EvalAltResult>> {
-            take_served_or_yield(
+        move |prompt: &str, opts: Map| -> Result<Dynamic, Box<EvalAltResult>> {
+            take_agent_call(
+                prompt,
+                Some(&opts),
+                spawn,
                 &index_for_agent_opts,
                 &replies_for_agent_opts,
-                prompt,
-                "agent() requires a nonempty prompt",
+                &pending_for_agent_opts,
             )
-            .map(|reply| agent_result_from_reply(&reply))
         },
     );
 
@@ -299,6 +367,7 @@ fn build_engine(
 
     let replies_for_parallel = Rc::clone(&replies);
     let index_for_parallel = Rc::clone(&index);
+    let pending_for_parallel = Rc::clone(&pending_spawn);
     engine.register_fn(
         "parallel",
         move |items: Array| -> Result<Array, Box<EvalAltResult>> {
@@ -323,13 +392,14 @@ fn build_engine(
                         return Err(runtime_error("parallel() requires a nonempty prompt"));
                     }
                 };
-                let reply = take_served_or_yield(
+                results.push(take_agent_call(
+                    &prompt,
+                    Some(&map),
+                    spawn,
                     &index_for_parallel,
                     &replies_for_parallel,
-                    &prompt,
-                    "parallel() requires a nonempty prompt",
-                )?;
-                results.push(agent_result_from_reply(&reply));
+                    &pending_for_parallel,
+                )?);
             }
             Ok(results)
         },
@@ -458,4 +528,57 @@ fn agent_result_from_reply(reply: &str) -> Dynamic {
     map.insert("ok".into(), Dynamic::from(!reply.trim().is_empty()));
     map.insert("text".into(), Dynamic::from(reply.to_string()));
     Dynamic::from(map)
+}
+
+fn take_agent_call(
+    prompt: &str,
+    opts: Option<&Map>,
+    spawn: SpawnBinding,
+    index: &Rc<Cell<usize>>,
+    replies: &Rc<Vec<String>>,
+    pending_spawn: &Rc<RefCell<Option<String>>>,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let spawn_task_name = spawn_task_name_from_opts(opts)?;
+    if let Some(task_name) = spawn_task_name {
+        if spawn != SpawnBinding::Available {
+            return Err(runtime_error("stock spawn_agent is unavailable"));
+        }
+        let i = index.get();
+        if i < replies.len() {
+            index.set(i.saturating_add(1));
+            return Ok(agent_result_from_reply(&replies[i]));
+        }
+        if prompt.trim().is_empty() {
+            return Err(runtime_error("agent() requires a nonempty prompt"));
+        }
+        *pending_spawn.borrow_mut() = Some(task_name);
+        return Err(terminated(ControlToken::Yield(prompt.to_string())));
+    }
+    take_served_or_yield(index, replies, prompt, "agent() requires a nonempty prompt")
+        .map(|reply| agent_result_from_reply(&reply))
+}
+
+/// A spawn request is `opts["spawn"] == true` (boolean). Rhai reserves the
+/// identifier `spawn`, so scripts write the key as `"spawn"`.
+fn spawn_task_name_from_opts(opts: Option<&Map>) -> Result<Option<String>, Box<EvalAltResult>> {
+    let Some(opts) = opts else {
+        return Ok(None);
+    };
+    let Some(spawn) = opts.get("spawn") else {
+        return Ok(None);
+    };
+    let Some(true) = spawn.clone().try_cast::<bool>() else {
+        return Ok(None);
+    };
+    let task_name = match opts.get("task_name") {
+        Some(value) => value
+            .clone()
+            .into_string()
+            .map_err(|_| runtime_error("spawn requires a nonempty task_name"))?,
+        None => return Err(runtime_error("spawn requires a nonempty task_name")),
+    };
+    if task_name.trim().is_empty() {
+        return Err(runtime_error("spawn requires a nonempty task_name"));
+    }
+    Ok(Some(task_name))
 }
