@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadWorkflowStartResponse;
 use codex_app_server_protocol::ThreadWorkflowStatus;
 use codex_app_server_protocol::ThreadWorkflowStopParams;
 use codex_app_server_protocol::ThreadWorkflowStopResponse;
+use codex_app_server_protocol::ThreadWorkflowUpdatedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_features::Feature;
 use core_test_support::responses;
@@ -1247,6 +1248,22 @@ async fn workflow_runtime_failure_exposes_failed_and_frees_the_slot() -> Result<
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
     wait_until_turn_trigger(&server, "workflow").await?;
+    let updated = timeout(READ_TIMEOUT, async {
+        loop {
+            let notification = app
+                .read_stream_until_notification_message("thread/workflow/updated")
+                .await?;
+            let params = notification
+                .params
+                .ok_or_else(|| anyhow::anyhow!("updated notification missing params"))?;
+            let updated: ThreadWorkflowUpdatedNotification = serde_json::from_value(params)?;
+            if updated.workflow.status == ThreadWorkflowStatus::Failed {
+                return Ok::<_, anyhow::Error>(updated);
+            }
+        }
+    })
+    .await??;
+    assert_eq!(updated.workflow.error.as_deref(), Some("host_runtime"));
     let failed =
         wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Failed).await?;
     let workflow = failed.workflow.expect("failed workflow");

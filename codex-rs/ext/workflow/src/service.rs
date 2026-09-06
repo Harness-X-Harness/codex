@@ -625,9 +625,11 @@ impl WorkflowService {
             if role != "assistant" {
                 continue;
             }
-            if let Some(text) = content_items_to_text(content) {
-                return truncate_workflow_reply(&text);
-            }
+            // Empty successful text is legal. Do not walk past this message
+            // to a previous assistant reply.
+            return content_items_to_text(content)
+                .map(|text| truncate_workflow_reply(&text))
+                .unwrap_or_default();
         }
         String::new()
     }
