@@ -7,6 +7,7 @@ mod catalog;
 mod engine;
 mod extension;
 mod run;
+mod scratch;
 mod service;
 mod steering;
 
@@ -26,6 +27,7 @@ pub use engine::WorkflowSourceError;
 pub use engine::eval_source;
 pub use engine::eval_source_with_env;
 pub use engine::eval_source_with_pauses;
+pub use engine::eval_source_with_scratch;
 pub use engine::truncate_workflow_reply;
 pub use engine::validate_source;
 pub use extension::WorkflowExtensionConfig;

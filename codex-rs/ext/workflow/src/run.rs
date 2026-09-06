@@ -1,5 +1,6 @@
 //! Host-owned workflow run state.
 
+use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -11,6 +12,7 @@ use uuid::Uuid;
 use crate::catalog::json_args_to_map;
 use crate::engine::WorkflowEval;
 use crate::engine::eval_source_with_env;
+use crate::engine::eval_source_with_scratch;
 use crate::engine::truncate_workflow_reply;
 use crate::engine::validate_source;
 
@@ -47,6 +49,8 @@ pub struct WorkflowRun {
     pub pending_yield_started: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(skip)]
+    scratch_dir: Option<PathBuf>,
 }
 
 /// Result of a host resume.
@@ -84,6 +88,7 @@ impl WorkflowRun {
             pending_yield_started: false,
             created_at: now,
             updated_at: now,
+            scratch_dir: None,
         };
         let outcome = run.eval_current().map_err(|error| error.to_string())?;
         run.phase = outcome.phase;
@@ -119,7 +124,58 @@ impl WorkflowRun {
             pending_yield_started: false,
             created_at: now,
             updated_at: now,
+            scratch_dir: None,
         })
+    }
+
+    /// Start a run that can read and write thread-local scratch files.
+    pub fn start_with_scratch(
+        thread_id: ThreadId,
+        source: &str,
+        scratch_dir: PathBuf,
+    ) -> Result<Self, String> {
+        Self::start_named_with_scratch(
+            thread_id,
+            "workflow",
+            source,
+            serde_json::Map::new(),
+            scratch_dir,
+        )
+    }
+
+    pub fn start_named_with_scratch(
+        thread_id: ThreadId,
+        name: impl Into<String>,
+        source: &str,
+        args: serde_json::Map<String, serde_json::Value>,
+        scratch_dir: PathBuf,
+    ) -> Result<Self, String> {
+        let now = unix_seconds();
+        let mut run = Self {
+            thread_id,
+            run_id: Uuid::now_v7().to_string(),
+            name: name.into(),
+            status: WorkflowStatus::Active,
+            source: source.trim().to_string(),
+            served_asks: 0,
+            served_replies: Vec::new(),
+            served_pauses: 0,
+            args,
+            phase: None,
+            pending_instruction: None,
+            pending_yield_started: false,
+            created_at: now,
+            updated_at: now,
+            scratch_dir: Some(scratch_dir),
+        };
+        let outcome = run.eval_current().map_err(|error| error.to_string())?;
+        run.phase = outcome.phase;
+        run.apply_eval(outcome.eval)?;
+        Ok(run)
+    }
+
+    pub fn bind_scratch_dir(&mut self, scratch_dir: PathBuf) {
+        self.scratch_dir = Some(scratch_dir);
     }
 
     pub fn activate(&mut self) -> Result<WorkflowAdvance, String> {
@@ -234,12 +290,22 @@ impl WorkflowRun {
     fn eval_current(
         &self,
     ) -> Result<crate::engine::WorkflowEvalOutcome, crate::engine::WorkflowSourceError> {
-        eval_source_with_env(
-            &self.source,
-            &self.served_replies,
-            self.served_pauses,
-            &json_args_to_map(&self.args),
-        )
+        let args = json_args_to_map(&self.args);
+        match self.scratch_dir.as_deref() {
+            Some(dir) => eval_source_with_scratch(
+                &self.source,
+                &self.served_replies,
+                self.served_pauses,
+                &args,
+                dir,
+            ),
+            None => eval_source_with_env(
+                &self.source,
+                &self.served_replies,
+                self.served_pauses,
+                &args,
+            ),
+        }
     }
 
     fn apply_eval(&mut self, outcome: WorkflowEval) -> Result<WorkflowAdvance, String> {

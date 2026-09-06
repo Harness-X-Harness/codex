@@ -108,11 +108,14 @@ impl WorkflowService {
         thread_id: ThreadId,
         source: &str,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
+        let scratch_dir = self.scratch_dir_for(thread_id);
         self.start_prepared(thread_id, |thread_id, claimed| {
             if claimed {
-                WorkflowRun::start(thread_id, source)
+                WorkflowRun::start_with_scratch(thread_id, source, scratch_dir.clone())
             } else {
-                WorkflowRun::queue(thread_id, source)
+                let mut run = WorkflowRun::queue(thread_id, source)?;
+                run.bind_scratch_dir(scratch_dir);
+                Ok(run)
             }
         })
         .await
@@ -127,14 +130,30 @@ impl WorkflowService {
         let roots = self.catalog_roots();
         let script = resolve_named(name, &roots)
             .map_err(|error| WorkflowServiceError::InvalidRequest(error.to_string()))?;
+        let scratch_dir = self.scratch_dir_for(thread_id);
         self.start_prepared(thread_id, |thread_id, claimed| {
             if claimed {
-                WorkflowRun::start_named(thread_id, script.name, &script.source, args)
+                WorkflowRun::start_named_with_scratch(
+                    thread_id,
+                    script.name,
+                    &script.source,
+                    args,
+                    scratch_dir.clone(),
+                )
             } else {
-                WorkflowRun::queue_named(thread_id, script.name, &script.source, args)
+                let mut run =
+                    WorkflowRun::queue_named(thread_id, script.name, &script.source, args)?;
+                run.bind_scratch_dir(scratch_dir);
+                Ok(run)
             }
         })
         .await
+    }
+
+    fn scratch_dir_for(&self, thread_id: ThreadId) -> PathBuf {
+        self.persist_root
+            .join(thread_id.to_string())
+            .join("scratch")
     }
 
     fn catalog_roots(&self) -> CatalogRoots {
@@ -342,9 +361,10 @@ impl WorkflowService {
         if let Some(run) = self.runs.lock().await.get(key).cloned() {
             return Ok(Some(run));
         }
-        let Some(run) = load_run(&self.persist_root, key).await? else {
+        let Some(mut run) = load_run(&self.persist_root, key).await? else {
             return Ok(None);
         };
+        run.bind_scratch_dir(self.scratch_dir_for(run.thread_id));
         self.remember(key.to_string(), run.clone()).await;
         Ok(Some(run))
     }

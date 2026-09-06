@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::fmt;
+use std::path::Path;
 use std::rc::Rc;
 
 use rhai::Dynamic;
@@ -11,6 +12,8 @@ use rhai::EvalAltResult;
 use rhai::Map;
 use rhai::Position;
 use rhai::Scope;
+
+use crate::scratch;
 
 /// Inclusive cap on the source document.
 pub const MAX_WORKFLOW_SOURCE_CHARS: usize = 32_000;
@@ -80,7 +83,7 @@ pub fn validate_source(source: &str) -> Result<(), WorkflowSourceError> {
     if actual > MAX_WORKFLOW_SOURCE_CHARS {
         return Err(WorkflowSourceError::TooLarge { actual });
     }
-    let engine = build_engine(&[], 0);
+    let engine = build_engine(&[], 0, None);
     engine
         .compile(source)
         .map(|_| ())
@@ -115,6 +118,33 @@ pub fn eval_source_with_env(
     served_pauses: u32,
     args: &Map,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
+    eval_source_inner(source, served_replies, served_pauses, args, None)
+}
+
+/// Resume a program with a thread-local scratch directory.
+pub fn eval_source_with_scratch(
+    source: &str,
+    served_replies: &[String],
+    served_pauses: u32,
+    args: &Map,
+    scratch_dir: &Path,
+) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
+    eval_source_inner(
+        source,
+        served_replies,
+        served_pauses,
+        args,
+        Some(scratch_dir),
+    )
+}
+
+fn eval_source_inner(
+    source: &str,
+    served_replies: &[String],
+    served_pauses: u32,
+    args: &Map,
+    scratch_dir: Option<&Path>,
+) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     validate_source(source)?;
     if served_replies.len() > MAX_WORKFLOW_YIELDS as usize {
         return Err(WorkflowSourceError::Invalid {
@@ -127,7 +157,7 @@ pub fn eval_source_with_env(
         });
     }
     let phase = Rc::new(RefCell::new(None));
-    let mut engine = build_engine(served_replies, served_pauses);
+    let mut engine = build_engine(served_replies, served_pauses, scratch_dir);
     let phase_for_fn = Rc::clone(&phase);
     engine.register_fn(
         "phase",
@@ -175,7 +205,11 @@ pub fn truncate_workflow_reply(reply: &str) -> String {
     out
 }
 
-fn build_engine(served_replies: &[String], served_pauses: u32) -> Engine {
+fn build_engine(
+    served_replies: &[String],
+    served_pauses: u32,
+    scratch_dir: Option<&Path>,
+) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_WORKFLOW_OPERATIONS);
     engine.set_max_call_levels(MAX_CALL_LEVELS);
@@ -235,6 +269,28 @@ fn build_engine(served_replies: &[String], served_pauses: u32) -> Engine {
                 "agent() requires a nonempty prompt",
             )
             .map(|reply| agent_result_from_reply(&reply))
+        },
+    );
+
+    let scratch_dir = scratch_dir.map(Path::to_path_buf);
+    let scratch_for_write = scratch_dir.clone();
+    engine.register_fn(
+        "write_scratch_file",
+        move |name: &str, content: &str| -> Result<String, Box<EvalAltResult>> {
+            let Some(dir) = scratch_for_write.as_ref() else {
+                return Err(runtime_error("scratch is unavailable"));
+            };
+            scratch::write_scratch_file(dir, name, content).map_err(runtime_error)
+        },
+    );
+    let scratch_for_read = scratch_dir;
+    engine.register_fn(
+        "read_scratch_file",
+        move |name: &str| -> Result<String, Box<EvalAltResult>> {
+            let Some(dir) = scratch_for_read.as_ref() else {
+                return Err(runtime_error("scratch is unavailable"));
+            };
+            scratch::read_scratch_file(dir, name).map_err(runtime_error)
         },
     );
 

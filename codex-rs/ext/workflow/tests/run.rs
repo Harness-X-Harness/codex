@@ -46,6 +46,24 @@ fn advance_resumes_after_agent_then_branches() {
 }
 
 #[test]
+fn scratch_survives_pause_and_resume() {
+    let dir = TempDir::new().expect("tempdir");
+    let source = r#"
+        write_scratch_file("note.txt", "hello");
+        pause();
+        if read_scratch_file("note.txt") == "hello" {
+            complete();
+        }
+    "#;
+    let mut run =
+        WorkflowRun::start_with_scratch(ThreadId::from_u128(15), source, dir.path().to_path_buf())
+            .expect("start");
+    assert_eq!(run.status, WorkflowStatus::Paused);
+    run.resume().expect("resume");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+}
+
+#[test]
 fn agent_then_pause_resumes_without_a_second_host_turn() {
     let source = r#"
         let r = agent("Say ok.");
@@ -155,6 +173,34 @@ fn stop_and_resume_are_host_owned() {
         run.pending_instruction.as_deref(),
         Some("Compile the crate.")
     );
+}
+
+#[tokio::test]
+async fn service_scratch_lives_under_the_thread_dir() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(16);
+    let started = service
+        .start_run(
+            thread_id,
+            r#"
+                write_scratch_file("note.txt", "hello");
+                if read_scratch_file("note.txt") == "hello" {
+                    complete();
+                }
+            "#,
+        )
+        .await
+        .expect("start");
+    assert_eq!(started.status, WorkflowStatus::Complete);
+    let stored = std::fs::read_to_string(
+        dir.path()
+            .join(thread_id.to_string())
+            .join("scratch")
+            .join("note.txt"),
+    )
+    .expect("scratch file");
+    assert_eq!(stored, "hello");
 }
 
 #[tokio::test]

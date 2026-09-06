@@ -1,4 +1,6 @@
 use pretty_assertions::assert_eq;
+use rhai::Map;
+use tempfile::TempDir;
 
 use codex_workflow_extension::MAX_WORKFLOW_REPLY_CHARS;
 use codex_workflow_extension::MAX_WORKFLOW_SOURCE_CHARS;
@@ -7,9 +9,9 @@ use codex_workflow_extension::WorkflowSourceError;
 use codex_workflow_extension::eval_source;
 use codex_workflow_extension::eval_source_with_env;
 use codex_workflow_extension::eval_source_with_pauses;
+use codex_workflow_extension::eval_source_with_scratch;
 use codex_workflow_extension::truncate_workflow_reply;
 use codex_workflow_extension::validate_source;
-use rhai::Map;
 
 #[test]
 fn complete_ends_the_run() {
@@ -116,6 +118,70 @@ fn await_user_is_a_this_run_pause() {
         eval_source_with_pauses("await_user(); complete();", &[], 1).expect("eval"),
         WorkflowEval::Completed
     );
+}
+
+#[test]
+fn write_then_read_scratch_file_completes() {
+    let dir = TempDir::new().expect("tempdir");
+    let source = r#"
+        let name = write_scratch_file("note.txt", "hello");
+        if name == "note.txt" && read_scratch_file("note.txt") == "hello" {
+            complete();
+        }
+    "#;
+    let outcome = eval_source_with_scratch(source, &[], 0, &Map::new(), dir.path()).expect("eval");
+    assert_eq!(outcome.eval, WorkflowEval::Completed);
+}
+
+#[test]
+fn scratch_rejects_path_components_empty_name_and_missing_file() {
+    let dir = TempDir::new().expect("tempdir");
+    for source in [
+        r#"write_scratch_file("../x", "no");"#,
+        r#"write_scratch_file("..", "no");"#,
+        r#"write_scratch_file("a/b", "no");"#,
+        r#"write_scratch_file("a\\b", "no");"#,
+        r#"write_scratch_file("", "no");"#,
+        r#"read_scratch_file("missing.txt");"#,
+    ] {
+        let error =
+            eval_source_with_scratch(source, &[], 0, &Map::new(), dir.path()).expect_err(source);
+        match error {
+            WorkflowSourceError::Invalid { reason } => {
+                assert!(
+                    reason.contains("path component")
+                        || reason.contains("must not be empty")
+                        || reason.contains("not found"),
+                    "{source} unexpected reason: {reason}"
+                );
+            }
+            other => panic!("{source} expected Invalid, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn scratch_read_rejects_oversized_file() {
+    let dir = TempDir::new().expect("tempdir");
+    std::fs::write(
+        dir.path().join("big.txt"),
+        "x".repeat(MAX_WORKFLOW_SOURCE_CHARS + 1),
+    )
+    .expect("seed");
+    let error = eval_source_with_scratch(
+        r#"read_scratch_file("big.txt");"#,
+        &[],
+        0,
+        &Map::new(),
+        dir.path(),
+    )
+    .expect_err("oversize");
+    match error {
+        WorkflowSourceError::Invalid { reason } => {
+            assert!(reason.contains("exceeds"), "unexpected reason: {reason}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
 }
 
 #[test]
