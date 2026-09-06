@@ -60,7 +60,7 @@ pub enum WorkflowEval {
 
 #[derive(Clone, Debug)]
 enum ControlToken {
-    Complete,
+    Complete(serde_json::Value),
     Yield(String),
     Pause,
 }
@@ -188,21 +188,23 @@ fn eval_source_inner(
         })?;
     let mut scope = Scope::new();
     scope.push_dynamic("args", Dynamic::from(args.clone()));
-    let eval = match engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
-        Ok(_) => WorkflowEval::Completed,
+    let (eval, result) = match engine.eval_ast_with_scope::<Dynamic>(&mut scope, &ast) {
+        Ok(_) => (WorkflowEval::Completed, serde_json::Value::Null),
         Err(error) => outcome_from_error(*error)?,
     };
     Ok(WorkflowEvalOutcome {
         eval,
         phase: phase.borrow().clone(),
+        result,
     })
 }
 
-/// Result of one VM resume, including the last `phase` title.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Result of one VM resume, including the last `phase` title and this-run result.
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorkflowEvalOutcome {
     pub eval: WorkflowEval,
     pub phase: Option<String>,
+    pub result: serde_json::Value,
 }
 
 /// Bound a model reply before it re-enters the VM.
@@ -230,12 +232,20 @@ fn build_engine(
     engine.disable_symbol("import");
 
     engine.register_fn("complete", || -> Result<(), Box<EvalAltResult>> {
-        Err(terminated(ControlToken::Complete))
+        Err(terminated(ControlToken::Complete(serde_json::Value::Null)))
     });
     engine.register_fn(
         "complete",
-        |_value: Dynamic| -> Result<(), Box<EvalAltResult>> {
-            Err(terminated(ControlToken::Complete))
+        |value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let json = dynamic_to_json(value)?;
+            let encoded = serde_json::to_string(&json)
+                .map_err(|error| runtime_error(format!("complete() failed: {error}")))?;
+            if encoded.chars().count() > MAX_WORKFLOW_SOURCE_CHARS {
+                return Err(runtime_error(format!(
+                    "complete() exceeds {MAX_WORKFLOW_SOURCE_CHARS} characters"
+                )));
+            }
+            Err(terminated(ControlToken::Complete(json)))
         },
     );
 
@@ -388,12 +398,17 @@ fn build_engine(
 
 const GOAL_BINDING_ERROR: &str = "host bindings cannot commit goal complete or blocked";
 
-fn outcome_from_error(error: EvalAltResult) -> Result<WorkflowEval, WorkflowSourceError> {
+fn outcome_from_error(
+    error: EvalAltResult,
+) -> Result<(WorkflowEval, serde_json::Value), WorkflowSourceError> {
     if let Some(token) = find_control_token(&error) {
         return match token {
-            ControlToken::Complete => Ok(WorkflowEval::Completed),
-            ControlToken::Yield(instruction) => Ok(WorkflowEval::Yielded { instruction }),
-            ControlToken::Pause => Ok(WorkflowEval::Paused),
+            ControlToken::Complete(value) => Ok((WorkflowEval::Completed, value)),
+            ControlToken::Yield(instruction) => Ok((
+                WorkflowEval::Yielded { instruction },
+                serde_json::Value::Null,
+            )),
+            ControlToken::Pause => Ok((WorkflowEval::Paused, serde_json::Value::Null)),
         };
     }
     Err(WorkflowSourceError::Invalid {
@@ -422,6 +437,62 @@ fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
         Dynamic::from(message.into()),
         Position::NONE,
     ))
+}
+
+fn dynamic_to_json(value: Dynamic) -> Result<serde_json::Value, Box<EvalAltResult>> {
+    if value.is_unit() {
+        return Ok(serde_json::Value::Null);
+    }
+    if value.is_bool() {
+        let flag = value
+            .as_bool()
+            .map_err(|_| runtime_error("complete() requires a bool"))?;
+        return Ok(serde_json::Value::Bool(flag));
+    }
+    if value.is_int() {
+        let number = value
+            .as_int()
+            .map_err(|_| runtime_error("complete() requires an integer"))?;
+        return Ok(serde_json::Value::Number(number.into()));
+    }
+    if value.is_float() {
+        let number = value
+            .as_float()
+            .map_err(|_| runtime_error("complete() requires a float"))?;
+        let encoded = serde_json::Number::from_f64(number)
+            .ok_or_else(|| runtime_error("complete() requires a finite float"))?;
+        return Ok(serde_json::Value::Number(encoded));
+    }
+    if value.is_string() {
+        let text = value
+            .into_string()
+            .map_err(|_| runtime_error("complete() requires a string"))?;
+        return Ok(serde_json::Value::String(text));
+    }
+    if value.is_array() {
+        let items = value
+            .into_array()
+            .map_err(|_| runtime_error("complete() requires an array"))?;
+        let mut encoded = Vec::with_capacity(items.len());
+        for item in items {
+            encoded.push(dynamic_to_json(item)?);
+        }
+        return Ok(serde_json::Value::Array(encoded));
+    }
+    if value.is_map() {
+        let map = value
+            .try_cast::<Map>()
+            .ok_or_else(|| runtime_error("complete() requires a map"))?;
+        let mut object = serde_json::Map::new();
+        for (key, item) in map {
+            object.insert(key.to_string(), dynamic_to_json(item)?);
+        }
+        return Ok(serde_json::Value::Object(object));
+    }
+    Err(runtime_error(format!(
+        "complete() does not accept {}",
+        value.type_name()
+    )))
 }
 
 fn take_served_or_yield(

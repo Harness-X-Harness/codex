@@ -19,6 +19,7 @@ async fn thread_workflow_updated_sets_footer_indicator() {
                     name: "workflow".to_string(),
                     status: codex_app_server_protocol::ThreadWorkflowStatus::Active,
                     pending_instruction: Some("Compile the crate.".to_string()),
+                    result: serde_json::Value::Null,
                     created_at: 1,
                     updated_at: 1,
                 },
