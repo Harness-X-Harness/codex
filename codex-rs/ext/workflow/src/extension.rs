@@ -110,11 +110,13 @@ where
                     )
                     .await
             } else {
+                let reply = input
+                    .turn_store
+                    .get::<WorkflowTurnReply>()
+                    .map(|reply| reply.0.clone())
+                    .unwrap_or_default();
                 self.service
-                    .finish_yield_turn_with_result(
-                        thread_id,
-                        HostCallResult::success(captured_workflow_turn_reply(input.turn_store)),
-                    )
+                    .finish_yield_turn_with_result(thread_id, HostCallResult::success(reply))
                     .await
             };
             if let Err(err) = outcome {
@@ -178,30 +180,6 @@ fn workflow_how_turn(turn_store: &ExtensionData) -> bool {
 
 struct WorkflowTurnReply(String);
 
-fn capture_workflow_turn_reply(turn_store: &ExtensionData, item: &TurnItem) {
-    if !workflow_how_turn(turn_store) {
-        return;
-    }
-    let TurnItem::AgentMessage(message) = item else {
-        return;
-    };
-    let text: String = message
-        .content
-        .iter()
-        .map(|entry| match entry {
-            AgentMessageContent::Text { text } => text.as_str(),
-        })
-        .collect();
-    turn_store.insert(WorkflowTurnReply(truncate_workflow_reply(&text)));
-}
-
-fn captured_workflow_turn_reply(turn_store: &ExtensionData) -> String {
-    turn_store
-        .get::<WorkflowTurnReply>()
-        .map(|reply| reply.0.clone())
-        .unwrap_or_default()
-}
-
 impl<C> TurnItemContributor for WorkflowExtension<C>
 where
     C: Send + Sync + 'static,
@@ -213,7 +191,18 @@ where
         item: &'a mut TurnItem,
     ) -> ExtensionFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            capture_workflow_turn_reply(turn_store, item);
+            if workflow_how_turn(turn_store)
+                && let TurnItem::AgentMessage(message) = &*item
+            {
+                let text: String = message
+                    .content
+                    .iter()
+                    .map(|entry| match entry {
+                        AgentMessageContent::Text { text } => text.as_str(),
+                    })
+                    .collect();
+                turn_store.insert(WorkflowTurnReply(truncate_workflow_reply(&text)));
+            }
             Ok(())
         })
     }

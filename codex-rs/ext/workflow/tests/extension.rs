@@ -16,19 +16,6 @@ use codex_workflow_extension::WorkflowService;
 use codex_workflow_extension::WorkflowStatus;
 use codex_workflow_extension::install;
 
-fn agent_message(text: &str) -> TurnItem {
-    TurnItem::AgentMessage(AgentMessageItem {
-        id: "msg-1".to_string(),
-        content: vec![AgentMessageContent::Text {
-            text: text.to_string(),
-        }],
-        phase: None,
-        memory_citation: None,
-        delivery: None,
-        questions: None,
-    })
-}
-
 async fn persist_started_yield(
     dir: &TempDir,
     thread_id: ThreadId,
@@ -95,7 +82,16 @@ async fn successful_workflow_turn_uses_turn_local_assistant_text() {
     });
     let registry = builder.build();
     let turn_store = workflow_turn_store();
-    let mut item = agent_message("ok");
+    let mut item = TurnItem::AgentMessage(AgentMessageItem {
+        id: "msg-1".to_string(),
+        content: vec![AgentMessageContent::Text {
+            text: "ok".to_string(),
+        }],
+        phase: None,
+        memory_citation: None,
+        delivery: None,
+        questions: None,
+    });
     for contributor in registry.turn_item_contributors() {
         contributor
             .contribute(&ExtensionData::new("thread"), &turn_store, &mut item)

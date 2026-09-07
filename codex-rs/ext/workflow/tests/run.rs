@@ -566,7 +566,7 @@ async fn advance_run_cannot_resume_a_pause() {
 async fn advance_run_cannot_bypass_a_pending_spawn() {
     let dir = TempDir::new().expect("tempdir");
     let thread_id = ThreadId::from_u128(36);
-    let started = WorkflowRun::start_with_spawn(
+    let mut started = WorkflowRun::start_with_spawn(
         thread_id,
         r#"
             let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
@@ -575,6 +575,7 @@ async fn advance_run_cannot_bypass_a_pending_spawn() {
         SpawnBinding::Available,
     )
     .expect("start");
+    started.mark_pending_yield_started();
     std::fs::write(
         dir.path().join(format!("{thread_id}.json")),
         serde_json::to_vec_pretty(&started).expect("encode"),

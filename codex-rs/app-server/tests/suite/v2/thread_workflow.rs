@@ -1080,7 +1080,10 @@ async fn workflow_advance_is_optional_override() -> Result<()> {
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
-            params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
+            params: start_params(
+                thread.id.clone(),
+                r#"agent("Compile the crate."); complete();"#,
+            ),
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
@@ -1295,8 +1298,8 @@ async fn workflow_successful_turn_does_not_reuse_previous_assistant_text() -> Re
                 thread.id.clone(),
                 r#"
                     let r = agent("Say ok.");
-                    if r.text == "PREVIOUS_SECRET" { ask("reused previous"); }
-                    else if r.ok { complete(); }
+                    if r.ok && r.text == "" { complete(); }
+                    else if r.text == "PREVIOUS_SECRET" { ask("reused previous"); }
                     else { ask("wrong reply"); }
                 "#,
             ),
