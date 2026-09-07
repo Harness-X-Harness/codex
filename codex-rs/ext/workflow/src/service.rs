@@ -149,7 +149,16 @@ impl WorkflowService {
         name: &str,
         args: serde_json::Map<String, serde_json::Value>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        reject_oversized_args(&args)?;
+        let args_body = serde_json::to_vec(&args).map_err(|error| {
+            WorkflowServiceError::InvalidRequest(format!(
+                "failed to serialize workflow args: {error}"
+            ))
+        })?;
+        if args_body.len() > MAX_WORKFLOW_PERSIST_BYTES {
+            return Err(WorkflowServiceError::InvalidRequest(format!(
+                "workflow args exceed {MAX_WORKFLOW_PERSIST_BYTES} bytes"
+            )));
+        }
         let roots = self.catalog_roots();
         let script = resolve_named(name, &roots)
             .map_err(|error| WorkflowServiceError::InvalidRequest(error.to_string()))?;
@@ -664,20 +673,6 @@ impl WorkflowService {
             tracing::debug!("workflow idle kick failed for {}: {err}", run.thread_id);
         }
     }
-}
-
-fn reject_oversized_args(
-    args: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), WorkflowServiceError> {
-    let body = serde_json::to_vec(args).map_err(|error| {
-        WorkflowServiceError::InvalidRequest(format!("failed to serialize workflow args: {error}"))
-    })?;
-    if body.len() > MAX_WORKFLOW_PERSIST_BYTES {
-        return Err(WorkflowServiceError::InvalidRequest(format!(
-            "workflow args exceed {MAX_WORKFLOW_PERSIST_BYTES} bytes"
-        )));
-    }
-    Ok(())
 }
 
 fn persist_run(persist_root: &Path, run: &WorkflowRun) -> Result<(), WorkflowServiceError> {
