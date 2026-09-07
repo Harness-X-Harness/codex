@@ -119,8 +119,8 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(entry) = project.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
     }
-    if catalog_candidate_exists(&roots.project_dir, &name) {
-        return load_library_file(&roots.project_dir.join(format!("{name}.rhai")));
+    if let Some(result) = load_regular_named_file(&roots.project_dir, &name) {
+        return result;
     }
     let user = scan_directory(&roots.user_dir, "user", &mut duplicates)?;
     if let Some(scope) = duplicates.get(&name) {
@@ -129,8 +129,8 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(entry) = user.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
     }
-    if catalog_candidate_exists(&roots.user_dir, &name) {
-        return load_library_file(&roots.user_dir.join(format!("{name}.rhai")));
+    if let Some(result) = load_regular_named_file(&roots.user_dir, &name) {
+        return result;
     }
     Err(CatalogError::UnknownName(name))
 }
@@ -209,8 +209,21 @@ fn scan_directory(
     Ok(entries)
 }
 
-fn catalog_candidate_exists(dir: &Path, name: &str) -> bool {
-    std::fs::symlink_metadata(dir.join(format!("{name}.rhai"))).is_ok()
+/// Reload a regular `{name}.rhai` after scan skipped it. Oversized regular
+/// files keep scope ownership; symlink/non-regular/invalid scripts stay ignored.
+fn load_regular_named_file(dir: &Path, name: &str) -> Option<Result<CatalogScript, CatalogError>> {
+    let path = dir.join(format!("{name}.rhai"));
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return None;
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return None;
+    }
+    match load_library_file(&path) {
+        Ok(entry) => Some(Ok(entry)),
+        Err(error @ CatalogError::SourceLimit(_)) => Some(Err(error)),
+        Err(_) => None,
+    }
 }
 
 fn load_library_file(path: &Path) -> Result<CatalogScript, CatalogError> {

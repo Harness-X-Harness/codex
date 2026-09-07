@@ -194,6 +194,30 @@ fn persist_json_and_scratch_dirs_are_not_catalog_entries() {
 
 #[cfg(unix)]
 #[test]
+fn project_symlink_does_not_block_user_library() {
+    let home = TempDir::new().expect("home");
+    let project = TempDir::new().expect("project");
+    let project_dir = project.path().join(".codex").join("workflows");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    let target = project.path().join("outside.rhai");
+    std::fs::write(&target, demo_source("demo")).expect("target");
+    std::os::unix::fs::symlink(&target, project_dir.join("demo.rhai")).expect("symlink");
+    write_script(
+        &home.path().join("workflows"),
+        "demo",
+        &demo_source("demo").replace("complete();", r#"ask("user"); complete();"#),
+    );
+    let roots = CatalogRoots::new(home.path(), project.path());
+    let script = resolve_named("demo", &roots).expect("user wins");
+    assert!(
+        script.source.contains(r#"ask("user")"#),
+        "symlink project file should stay ignored: {}",
+        script.source
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn catalog_rejects_symlink_library_files() {
     let home = TempDir::new().expect("home");
     let project = TempDir::new().expect("project");
