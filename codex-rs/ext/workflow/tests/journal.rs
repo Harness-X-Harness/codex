@@ -223,7 +223,7 @@ fn restore_rejects_too_many_result_bearing_records() {
 fn restore_rejects_too_many_control_resumes() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(12), "complete();").expect("start");
     let records = (0..=MAX_WORKFLOW_CONTROL_RESUMES)
-        .map(|_| pause_record())
+        .map(|index| pause_record(&format!("{}:1", index.saturating_add(1))))
         .collect();
     run.continuations = with_dense_seq(records);
     run.prepare_restored().expect("restore");
@@ -236,7 +236,10 @@ fn restore_rejects_too_many_control_resumes() {
 fn restore_accepts_full_mixed_host_and_control_allowance() {
     let mut run = WorkflowRun::start(ThreadId::from_u128(13), "complete();").expect("start");
     let mut records = Vec::new();
-    records.extend((0..MAX_WORKFLOW_CONTROL_RESUMES).map(|_| pause_record()));
+    records.extend(
+        (0..MAX_WORKFLOW_CONTROL_RESUMES)
+            .map(|index| pause_record(&format!("{}:1", index.saturating_add(1)))),
+    );
     records.extend((0..MAX_WORKFLOW_YIELDS).map(|index| agent_record(&format!("p{index}"), "ok")));
     run.continuations = with_dense_seq(records);
     run.prepare_restored().expect("restore");

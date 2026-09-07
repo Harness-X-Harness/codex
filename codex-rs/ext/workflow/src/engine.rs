@@ -11,6 +11,7 @@ use rhai::Dynamic;
 use rhai::Engine;
 use rhai::EvalAltResult;
 use rhai::Map;
+use rhai::NativeCallContext;
 use rhai::Position;
 use rhai::Scope;
 use sha2::Digest;
@@ -491,25 +492,33 @@ fn build_engine(
     let journal_for_pause = Rc::clone(&journal);
     let index_for_pause = Rc::clone(&index);
     let control_index_for_pause = Rc::clone(&control_index);
-    engine.register_fn("pause", move || -> Result<(), Box<EvalAltResult>> {
-        take_control(
-            &index_for_pause,
-            &control_index_for_pause,
-            &journal_for_pause,
-            ContinuationKind::Pause,
-        )
-    });
+    engine.register_fn(
+        "pause",
+        move |context: NativeCallContext| -> Result<(), Box<EvalAltResult>> {
+            take_control(
+                &index_for_pause,
+                &control_index_for_pause,
+                &journal_for_pause,
+                ContinuationKind::Pause,
+                context.call_position(),
+            )
+        },
+    );
     let journal_for_await = Rc::clone(&journal);
     let index_for_await = Rc::clone(&index);
     let control_index_for_await = Rc::clone(&control_index);
-    engine.register_fn("await_user", move || -> Result<(), Box<EvalAltResult>> {
-        take_control(
-            &index_for_await,
-            &control_index_for_await,
-            &journal_for_await,
-            ContinuationKind::AwaitUser,
-        )
-    });
+    engine.register_fn(
+        "await_user",
+        move |context: NativeCallContext| -> Result<(), Box<EvalAltResult>> {
+            take_control(
+                &index_for_await,
+                &control_index_for_await,
+                &journal_for_await,
+                ContinuationKind::AwaitUser,
+                context.call_position(),
+            )
+        },
+    );
 
     for name in FORBIDDEN_GOAL_BINDINGS {
         let binding = (*name).to_string();
@@ -688,8 +697,13 @@ fn take_control(
     control_index: &Rc<Cell<usize>>,
     journal: &Rc<Vec<ContinuationRecord>>,
     kind: ContinuationKind,
+    position: Position,
 ) -> Result<(), Box<EvalAltResult>> {
-    let digest = request_digest(kind, &control_request());
+    let Some(line) = position.line() else {
+        return Err(runtime_error("workflow control callsite is missing"));
+    };
+    let callsite = format!("{line}:{}", position.position().unwrap_or(0));
+    let digest = request_digest(kind, &control_request(&callsite));
     match lookup(journal, index.get(), kind, &digest) {
         JournalLookup::Replay(_) => {
             bump(index);

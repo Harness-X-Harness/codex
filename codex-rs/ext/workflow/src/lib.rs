@@ -51,6 +51,7 @@ pub use journal::HostCallResult;
 pub use journal::LEGACY_RESUME_REQUIRED;
 pub use journal::REPLAY_DIVERGENCE;
 pub use journal::WORKFLOW_PERSIST_VERSION;
+pub use journal::control_request;
 pub use journal::request_digest;
 pub use persist::MAX_WORKFLOW_PERSIST_BYTES;
 pub use persist::PersistError;

@@ -149,8 +149,8 @@ pub fn spawn_request(prompt: &str, task_name: &str) -> serde_json::Value {
     })
 }
 
-pub fn control_request() -> serde_json::Value {
-    serde_json::json!({})
+pub fn control_request(callsite: &str) -> serde_json::Value {
+    serde_json::json!({ "callsite": callsite })
 }
 
 pub fn lookup(

@@ -17,6 +17,7 @@ mod common;
 use common::agent_record;
 use common::await_user_record;
 use common::pause_record;
+use common::source_callsite;
 
 #[test]
 fn yield_budget_ignores_completed_control_resumes() {
@@ -24,7 +25,11 @@ fn yield_budget_ignores_completed_control_resumes() {
     let mut journal = Vec::new();
     for _ in 0..MAX_WORKFLOW_CONTROL_RESUMES {
         source.push_str("pause();\n");
-        journal.push(pause_record());
+        journal.push(pause_record(&source_callsite(
+            &source,
+            "pause",
+            source.matches("pause(").count() - 1,
+        )));
     }
     source.push_str(
         r#"
@@ -70,9 +75,17 @@ fn mixed_pause_and_await_user_fill_the_control_allowance() {
     let mut journal = Vec::new();
     for _ in 0..(MAX_WORKFLOW_CONTROL_RESUMES / 2) {
         source.push_str("pause();\n");
-        journal.push(pause_record());
+        journal.push(pause_record(&source_callsite(
+            &source,
+            "pause",
+            source.matches("pause(").count() - 1,
+        )));
         source.push_str("await_user();\n");
-        journal.push(await_user_record());
+        journal.push(await_user_record(&source_callsite(
+            &source,
+            "await_user",
+            source.matches("await_user(").count() - 1,
+        )));
     }
     for index in 0..MAX_WORKFLOW_YIELDS {
         let prompt = format!("p{index}");
@@ -172,7 +185,11 @@ fn extra_await_user_fails_at_the_control_boundary() {
     journal.push(agent_record("one", "ok"));
     for _ in 0..MAX_WORKFLOW_CONTROL_RESUMES {
         source.push_str("await_user();\n");
-        journal.push(await_user_record());
+        journal.push(await_user_record(&source_callsite(
+            &source,
+            "await_user",
+            source.matches("await_user(").count() - 1,
+        )));
     }
     source.push_str("await_user(); complete();");
     let error = eval_source(&source, &journal).expect_err("over await_user");
@@ -193,7 +210,11 @@ fn batch_agent_uses_result_bearing_remaining_after_controls() {
     let mut journal = Vec::new();
     for _ in 0..MAX_WORKFLOW_CONTROL_RESUMES {
         source.push_str("pause();\n");
-        journal.push(pause_record());
+        journal.push(pause_record(&source_callsite(
+            &source,
+            "pause",
+            source.matches("pause(").count() - 1,
+        )));
     }
     for index in 0..(MAX_WORKFLOW_YIELDS - 1) {
         let prompt = format!("p{index}");
@@ -228,7 +249,11 @@ fn mixed_pause_and_agent_program(
     let mut journal = Vec::new();
     for _ in 0..pauses {
         source.push_str("pause();\n");
-        journal.push(pause_record());
+        journal.push(pause_record(&source_callsite(
+            &source,
+            "pause",
+            source.matches("pause(").count() - 1,
+        )));
     }
     for index in 0..agents {
         let prompt = format!("p{index}");

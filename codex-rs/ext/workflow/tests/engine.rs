@@ -22,6 +22,7 @@ use common::agent_record;
 use common::ask_record;
 use common::await_user_record;
 use common::pause_record;
+use common::source_callsite;
 use common::spawn_failure_record;
 use common::spawn_record;
 
@@ -264,7 +265,14 @@ fn pause_replays_completed_agent_and_then_completes() {
         WorkflowEval::Paused
     );
     assert_eq!(
-        eval_source(source, &[agent_record("Say ok.", "ok"), pause_record()]).expect("eval"),
+        eval_source(
+            source,
+            &[
+                agent_record("Say ok.", "ok"),
+                pause_record(&source_callsite(source, "pause", 0)),
+            ],
+        )
+        .expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -276,7 +284,15 @@ fn await_user_is_a_this_run_pause() {
         WorkflowEval::Paused
     );
     assert_eq!(
-        eval_source("await_user(); complete();", &[await_user_record()]).expect("eval"),
+        eval_source(
+            "await_user(); complete();",
+            &[await_user_record(&source_callsite(
+                "await_user(); complete();",
+                "await_user",
+                0,
+            ))],
+        )
+        .expect("eval"),
         WorkflowEval::Completed
     );
 }
@@ -597,7 +613,7 @@ fn batch_agent_pause_replays_the_first_item_without_a_second_turn() {
             &[
                 agent_record("first", "one"),
                 agent_record("second", "two"),
-                pause_record()
+                pause_record(&source_callsite(source, "pause", 0)),
             ]
         )
         .expect("eval"),
