@@ -23,7 +23,6 @@ use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::Op;
 use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
@@ -316,36 +315,19 @@ impl WorkflowService {
         if run.occupies_idle() {
             self.kick_if_active(&run).await;
         } else {
-            // Stop interrupts an in-flight yield. The owned terminal is
-            // applied inside abort_all_tasks before mailbox teardown, so the
-            // first idle notify can be rejected as PendingTriggerTurn and no
-            // later stock idle is emitted. Re-notify now and again after that
-            // teardown yields so a waiting Goal HOW can claim the slot.
+            // Occupancy is already released. Stock idle after a natural
+            // terminal starts a waiting Goal HOW; notify again in case the
+            // first idle raced the owned-result apply.
             self.kick_waiting_goal(run.thread_id).await;
-            if let Some(thread) = self.live_thread(run.thread_id).await {
-                tokio::spawn(async move {
-                    for _ in 0..4 {
-                        tokio::task::yield_now().await;
-                        thread
-                            .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
-                            .await;
-                    }
-                });
-            }
         }
         Ok(Some(run))
     }
 
     pub async fn stop_run(&self, thread_id: ThreadId) -> Result<WorkflowRun, WorkflowServiceError> {
-        let run = self.mutate_run(thread_id, WorkflowRun::stop).await?;
-        if run.pending_yield_started || self.in_flight.has(thread_id) {
-            if let Some(thread) = self.live_thread(thread_id).await
-                && let Err(err) = thread.submit(Op::Interrupt).await
-            {
-                tracing::debug!("workflow stop interrupt failed for {thread_id}: {err}");
-            }
-        }
-        Ok(run)
+        // Quarantine a started same-Thread yield. Do not Interrupt: stock
+        // abort applies the owned terminal before mailbox teardown and never
+        // emits a later idle, so a waiting Goal HOW would never start.
+        self.mutate_run(thread_id, WorkflowRun::stop).await
     }
 
     pub async fn resume_run(
