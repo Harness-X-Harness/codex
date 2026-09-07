@@ -39,6 +39,10 @@ use crate::journal::HOST_ERROR_TURN_CANCELLED;
 use crate::journal::HOST_ERROR_TURN_ERRORED;
 use crate::journal::HostCallResult;
 use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
+use crate::persist::MAX_WORKFLOW_PERSIST_BYTES;
+use crate::persist::PersistError;
+use crate::persist::load_workflow_document;
+use crate::persist::persist_workflow_document;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
 use crate::steering::yield_steering_item;
@@ -145,6 +149,7 @@ impl WorkflowService {
         name: &str,
         args: serde_json::Map<String, serde_json::Value>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
+        reject_oversized_args(&args)?;
         let roots = self.catalog_roots();
         let script = resolve_named(name, &roots)
             .map_err(|error| WorkflowServiceError::InvalidRequest(error.to_string()))?;
@@ -214,7 +219,12 @@ impl WorkflowService {
         }
         let claimed = self.try_claim_workflow(thread_id).await;
         let run = build(thread_id, claimed).map_err(WorkflowServiceError::InvalidRequest)?;
-        persist_run(&self.persist_root, &run).await?;
+        if let Err(error) = persist_run(&self.persist_root, &run) {
+            if claimed {
+                self.release_workflow_claim(thread_id).await;
+            }
+            return Err(error);
+        }
         self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
         self.kick_if_active(&run).await;
@@ -522,7 +532,12 @@ impl WorkflowService {
             WorkflowServiceError::InvalidRequest("no workflow is set for this thread".to_string())
         })?;
         mutate(&mut run).map_err(WorkflowServiceError::InvalidRequest)?;
-        persist_run(&self.persist_root, &run).await?;
+        if let Err(error) = persist_run(&self.persist_root, &run) {
+            run.fail(WORKFLOW_ERROR_HOST_RUNTIME);
+            self.remember(key, run.clone()).await;
+            self.after_run_changed(&run).await;
+            return Err(error);
+        }
         self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
         Ok(run)
@@ -535,7 +550,7 @@ impl WorkflowService {
         if let Some(run) = self.runs.lock().await.get(key).cloned() {
             return Ok(Some(run));
         }
-        let Some((mut run, notify_failed)) = load_run(&self.persist_root, key).await? else {
+        let Some((mut run, notify_failed)) = load_run(&self.persist_root, key)? else {
             return Ok(None);
         };
         run.bind_scratch_dir(self.scratch_dir_for(run.thread_id));
@@ -597,6 +612,13 @@ impl WorkflowService {
         engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::Workflow)
     }
 
+    async fn release_workflow_claim(&self, thread_id: ThreadId) {
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return;
+        };
+        let _ = engine_slot(thread.thread_extension_data()).release(EngineOccupant::Workflow);
+    }
+
     async fn live_thread(&self, thread_id: ThreadId) -> Option<Arc<codex_core::CodexThread>> {
         let thread_manager = self.thread_manager.upgrade()?;
         thread_manager.get_thread(thread_id).await.ok()
@@ -644,54 +666,65 @@ impl WorkflowService {
     }
 }
 
-async fn persist_run(persist_root: &Path, run: &WorkflowRun) -> Result<(), WorkflowServiceError> {
-    tokio::fs::create_dir_all(persist_root)
-        .await
-        .map_err(|err| {
-            WorkflowServiceError::Internal(format!("failed to create workflow dir: {err}"))
-        })?;
-    let path = persist_root.join(format!("{}.json", run.thread_id));
-    let body = serde_json::to_vec_pretty(run).map_err(|err| {
-        WorkflowServiceError::Internal(format!("failed to serialize workflow: {err}"))
+fn reject_oversized_args(
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), WorkflowServiceError> {
+    let body = serde_json::to_vec(args).map_err(|error| {
+        WorkflowServiceError::InvalidRequest(format!("failed to serialize workflow args: {error}"))
     })?;
-    tokio::fs::write(&path, body)
-        .await
-        .map_err(|err| WorkflowServiceError::Internal(format!("failed to write workflow: {err}")))
+    if body.len() > MAX_WORKFLOW_PERSIST_BYTES {
+        return Err(WorkflowServiceError::InvalidRequest(format!(
+            "workflow args exceed {MAX_WORKFLOW_PERSIST_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
-async fn load_run(
+fn persist_run(persist_root: &Path, run: &WorkflowRun) -> Result<(), WorkflowServiceError> {
+    let body = serde_json::to_vec_pretty(run).map_err(|error| {
+        WorkflowServiceError::Internal(format!("failed to serialize workflow: {error}"))
+    })?;
+    persist_workflow_document(persist_root, &run.thread_id.to_string(), &body).map_err(|error| {
+        match error {
+            PersistError::TooLarge { .. } => {
+                WorkflowServiceError::InvalidRequest(error.to_string())
+            }
+            PersistError::UnsafePath(_) | PersistError::Io(_) => {
+                WorkflowServiceError::Internal(error.to_string())
+            }
+        }
+    })
+}
+
+fn load_run(
     persist_root: &Path,
     thread_id: &str,
 ) -> Result<Option<(WorkflowRun, bool)>, WorkflowServiceError> {
-    let path = persist_root.join(format!("{thread_id}.json"));
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
-            let mut run: WorkflowRun = match serde_json::from_slice(&bytes) {
-                Ok(run) => run,
-                Err(_) => {
-                    let parsed_id = ThreadId::from_string(thread_id).map_err(|err| {
-                        WorkflowServiceError::Internal(format!("invalid workflow thread id: {err}"))
-                    })?;
-                    let run = WorkflowRun::unreadable(parsed_id);
-                    persist_run(persist_root, &run).await?;
-                    return Ok(Some((run, true)));
-                }
-            };
-            let prior_status = run.status;
-            run.prepare_restored()
-                .map_err(WorkflowServiceError::InvalidRequest)?;
-            let became_failed =
-                run.status == WorkflowStatus::Failed && prior_status != WorkflowStatus::Failed;
-            if became_failed {
-                persist_run(persist_root, &run).await?;
-            }
-            Ok(Some((run, became_failed)))
+    let bytes = match load_workflow_document(persist_root, thread_id) {
+        Ok(bytes) => bytes,
+        Err(error) => return Err(WorkflowServiceError::Internal(error.to_string())),
+    };
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let mut run: WorkflowRun = match serde_json::from_slice(&bytes) {
+        Ok(run) => run,
+        Err(_) => {
+            let parsed_id = ThreadId::from_string(thread_id).map_err(|err| {
+                WorkflowServiceError::Internal(format!("invalid workflow thread id: {err}"))
+            })?;
+            return Ok(Some((WorkflowRun::unreadable(parsed_id), true)));
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(WorkflowServiceError::Internal(format!(
-            "failed to read workflow: {err}"
-        ))),
+    };
+    let prior_status = run.status;
+    run.prepare_restored()
+        .map_err(WorkflowServiceError::InvalidRequest)?;
+    let became_failed =
+        run.status == WorkflowStatus::Failed && prior_status != WorkflowStatus::Failed;
+    if became_failed {
+        persist_run(persist_root, &run)?;
     }
+    Ok(Some((run, became_failed)))
 }
 
 /// Shared handle used by App Server and the extension install path.
