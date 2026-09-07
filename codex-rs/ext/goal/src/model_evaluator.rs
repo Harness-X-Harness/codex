@@ -44,6 +44,7 @@ use crate::host_evaluate::GoalRoundEvaluationFuture;
 use crate::host_evaluate::GoalRoundEvaluationInput;
 use crate::host_evaluate::GoalRoundEvaluator;
 use crate::host_evaluate::parse_goal_evaluator_verdict;
+use crate::verdict_bounds::append_evaluator_output_text;
 
 /// Host-owned round-end evaluator backed by the thread's current model.
 pub struct ModelGoalRoundEvaluator {
@@ -243,13 +244,15 @@ async fn sample_evaluator_completion(
         .map_err(|error| GoalEvaluatorError::Failed(error.to_string()))?
     {
         match message {
-            ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
+            ResponseEvent::OutputTextDelta(delta) => {
+                append_evaluator_output_text(&mut result, &delta)?;
+            }
             ResponseEvent::OutputItemDone(item) => {
                 if result.is_empty()
                     && let ResponseItem::Message { content, .. } = item
                     && let Some(text) = content_items_to_text(&content)
                 {
-                    result.push_str(&text);
+                    append_evaluator_output_text(&mut result, &text)?;
                 }
             }
             ResponseEvent::Completed { .. } => break,

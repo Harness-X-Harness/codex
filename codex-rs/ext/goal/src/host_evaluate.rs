@@ -30,6 +30,11 @@ use crate::host_verify::apply_skeptic_panel;
 use crate::policy::GoalCompletionAuthority;
 use crate::policy::GoalVerification;
 use crate::runtime::GoalRuntimeHandle;
+use crate::verdict_bounds::EvaluatorOutputLimit;
+use crate::verdict_bounds::GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS;
+use crate::verdict_bounds::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use crate::verdict_bounds::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
+use crate::verdict_bounds::field_exceeds_char_cap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HostGoalStatus {
@@ -84,10 +89,28 @@ impl GoalEvaluatorVerdict {
         if self.evidence.trim().is_empty() {
             return Err(GoalEvaluatorParseError::EmptyField("evidence"));
         }
+        if field_exceeds_char_cap(&self.evidence, GOAL_VERDICT_EVIDENCE_MAX_CHARS) {
+            return Err(GoalEvaluatorParseError::FieldTooLong {
+                field: "evidence",
+                max_chars: GOAL_VERDICT_EVIDENCE_MAX_CHARS,
+            });
+        }
         if self.next_step.trim().is_empty() {
             return Err(GoalEvaluatorParseError::EmptyField("next_step"));
         }
+        if field_exceeds_char_cap(&self.next_step, GOAL_VERDICT_NEXT_STEP_MAX_CHARS) {
+            return Err(GoalEvaluatorParseError::FieldTooLong {
+                field: "next_step",
+                max_chars: GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
+            });
+        }
         let key = self.blocker_key.trim();
+        if field_exceeds_char_cap(key, GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS) {
+            return Err(GoalEvaluatorParseError::FieldTooLong {
+                field: "blocker_key",
+                max_chars: GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS,
+            });
+        }
         match self.decision {
             GoalEvaluatorDecision::Blocked if key.is_empty() => {
                 return Err(GoalEvaluatorParseError::EmptyField("blocker_key"));
@@ -122,6 +145,10 @@ impl GoalEvaluatorVerdict {
 pub enum GoalEvaluatorParseError {
     InvalidJson(String),
     EmptyField(&'static str),
+    FieldTooLong {
+        field: &'static str,
+        max_chars: usize,
+    },
     InvalidBlockerKey,
     UnexpectedBlockerKey,
 }
@@ -134,6 +161,12 @@ impl std::fmt::Display for GoalEvaluatorParseError {
             }
             Self::EmptyField(field) => {
                 write!(f, "goal evaluator field `{field}` must not be empty")
+            }
+            Self::FieldTooLong { field, max_chars } => {
+                write!(
+                    f,
+                    "goal evaluator field `{field}` exceeds {max_chars} characters"
+                )
             }
             Self::InvalidBlockerKey => {
                 write!(
@@ -160,6 +193,12 @@ pub enum GoalEvaluatorError {
 impl From<GoalEvaluatorParseError> for GoalEvaluatorError {
     fn from(error: GoalEvaluatorParseError) -> Self {
         Self::Failed(error.to_string())
+    }
+}
+
+impl From<EvaluatorOutputLimit> for GoalEvaluatorError {
+    fn from(limit: EvaluatorOutputLimit) -> Self {
+        Self::Failed(limit.message().to_string())
     }
 }
 

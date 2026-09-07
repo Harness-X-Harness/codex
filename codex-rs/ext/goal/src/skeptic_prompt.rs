@@ -5,6 +5,8 @@ use serde_json::json;
 
 use crate::policy::HOST_SKEPTIC_MAX_COUNT;
 use crate::policy::HOST_SKEPTIC_MIN_COUNT;
+use crate::verdict_bounds::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use crate::verdict_bounds::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
 
 const SKEPTIC_SYSTEM_PROMPT: &str = include_str!("../templates/goals/skeptic_system.md");
 
@@ -29,11 +31,13 @@ pub fn goal_skeptic_output_schema() -> Value {
             "evidence": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": GOAL_VERDICT_EVIDENCE_MAX_CHARS,
                 "description": "Concrete evidence for the vote"
             },
             "next_step": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
                 "description": "Actionable fix when refuted; none when confirmed"
             }
         }

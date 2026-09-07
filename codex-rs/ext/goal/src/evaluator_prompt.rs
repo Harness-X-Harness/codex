@@ -19,6 +19,9 @@ use serde_json::json;
 use crate::host_evaluate::GoalEvaluatorError;
 use crate::host_evaluate::GoalEvaluatorVerdict;
 use crate::host_evaluate::parse_goal_evaluator_verdict;
+use crate::verdict_bounds::GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS;
+use crate::verdict_bounds::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use crate::verdict_bounds::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
 
 pub const EVALUATOR_SAMPLE_ATTEMPTS: usize = 2;
 
@@ -45,15 +48,18 @@ pub fn goal_evaluator_output_schema() -> Value {
             "evidence": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": GOAL_VERDICT_EVIDENCE_MAX_CHARS,
                 "description": "Concrete transcript evidence supporting the decision"
             },
             "next_step": {
                 "type": "string",
                 "minLength": 1,
+                "maxLength": GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
                 "description": "One actionable next step for the agent or user"
             },
             "blocker_key": {
                 "type": "string",
+                "maxLength": GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS,
                 "description": "Stable lowercase snake_case blocker identity for blocked; empty otherwise"
             }
         }

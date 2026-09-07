@@ -17,6 +17,7 @@ mod skeptic_prompt;
 mod spec;
 mod steering;
 mod tool;
+mod verdict_bounds;
 
 pub use api::GoalObjectiveUpdate;
 pub use api::GoalService;
@@ -69,3 +70,9 @@ pub use spec::CREATE_GOAL_TOOL_NAME;
 pub use spec::GET_GOAL_TOOL_NAME;
 pub use spec::UPDATE_GOAL_TOOL_NAME;
 pub use tool::CreateGoalRequest;
+pub use verdict_bounds::EVALUATOR_OUTPUT_MAX_BYTES;
+pub use verdict_bounds::EvaluatorOutputLimit;
+pub use verdict_bounds::GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS;
+pub use verdict_bounds::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+pub use verdict_bounds::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
+pub use verdict_bounds::append_evaluator_output_text;

@@ -1,12 +1,18 @@
 //! Host evaluator prompt bounding, schema, and retry/parse behavior.
 #![allow(clippy::expect_used)]
 
+use codex_goal_extension::EVALUATOR_OUTPUT_MAX_BYTES;
 use codex_goal_extension::EVALUATOR_SAMPLE_ATTEMPTS;
+use codex_goal_extension::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use codex_goal_extension::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
 use codex_goal_extension::GoalEvaluatorDecision;
 use codex_goal_extension::GoalEvaluatorError;
+use codex_goal_extension::GoalEvaluatorParseError;
+use codex_goal_extension::append_evaluator_output_text;
 use codex_goal_extension::build_goal_evaluator_user_payload;
 use codex_goal_extension::goal_evaluator_evidence;
 use codex_goal_extension::goal_evaluator_output_schema;
+use codex_goal_extension::parse_goal_evaluator_verdict;
 use codex_goal_extension::verdict_from_sample_attempts;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -172,6 +178,72 @@ async fn sample_attempts_retry_invalid_json_then_succeed() {
     .await
     .expect("verdict");
     assert_eq!(verdict.decision, GoalEvaluatorDecision::CandidateComplete);
+    assert_eq!(calls, EVALUATOR_SAMPLE_ATTEMPTS);
+}
+
+#[test]
+fn streamed_evaluator_output_rejects_and_clears_oversize() {
+    let mut acc = String::new();
+    append_evaluator_output_text(&mut acc, r#"{"decision":"continue","evidence":""#)
+        .expect("prefix");
+    let oversize = "x".repeat(EVALUATOR_OUTPUT_MAX_BYTES);
+    let error = append_evaluator_output_text(&mut acc, &oversize).expect_err("cap");
+    assert_eq!(acc, "");
+    assert_eq!(
+        error.message(),
+        "goal evaluator output exceeded the local byte cap"
+    );
+    assert!(!error.message().contains('x'));
+}
+
+#[test]
+fn parse_goal_evaluator_verdict_rejects_oversize_fields() {
+    let evidence = "e".repeat(GOAL_VERDICT_EVIDENCE_MAX_CHARS + 1);
+    let error = parse_goal_evaluator_verdict(&format!(
+        r#"{{"decision":"continue","evidence":"{evidence}","next_step":"run tests","blocker_key":""}}"#
+    ))
+    .expect_err("evidence cap");
+    assert_eq!(
+        error,
+        GoalEvaluatorParseError::FieldTooLong {
+            field: "evidence",
+            max_chars: GOAL_VERDICT_EVIDENCE_MAX_CHARS,
+        }
+    );
+    assert!(!error.to_string().contains(&evidence));
+
+    let next_step = "n".repeat(GOAL_VERDICT_NEXT_STEP_MAX_CHARS + 1);
+    let error = parse_goal_evaluator_verdict(&format!(
+        r#"{{"decision":"continue","evidence":"tests remain","next_step":"{next_step}","blocker_key":""}}"#
+    ))
+    .expect_err("next_step cap");
+    assert_eq!(
+        error,
+        GoalEvaluatorParseError::FieldTooLong {
+            field: "next_step",
+            max_chars: GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
+        }
+    );
+}
+
+#[tokio::test]
+async fn sample_attempts_retry_oversize_output_then_succeed() {
+    let mut calls = 0usize;
+    let verdict = verdict_from_sample_attempts(|_| {
+        calls += 1;
+        async move {
+            if calls == 1 {
+                Err(GoalEvaluatorError::Failed(
+                    "goal evaluator output exceeded the local byte cap".into(),
+                ))
+            } else {
+                Ok(r#"{"decision":"continue","evidence":"tests remain","next_step":"run tests","blocker_key":""}"#.to_string())
+            }
+        }
+    })
+    .await
+    .expect("verdict");
+    assert_eq!(verdict.decision, GoalEvaluatorDecision::Continue);
     assert_eq!(calls, EVALUATOR_SAMPLE_ATTEMPTS);
 }
 
