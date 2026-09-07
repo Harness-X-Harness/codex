@@ -7,6 +7,7 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 
+use crate::engine::MAX_WORKFLOW_CONTROL_RESUMES;
 use crate::engine::MAX_WORKFLOW_REPLY_CHARS;
 use crate::engine::MAX_WORKFLOW_SOURCE_CHARS;
 use crate::engine::MAX_WORKFLOW_YIELDS;
@@ -16,11 +17,9 @@ use crate::engine::MAX_WORKFLOW_YIELDS;
 pub const MAX_WORKFLOW_PERSIST_BYTES: usize = MAX_WORKFLOW_SOURCE_CHARS
     .saturating_mul(4)
     .saturating_mul(3)
-    .saturating_add(
-        MAX_WORKFLOW_REPLY_CHARS
-            .saturating_mul(4)
-            .saturating_mul(MAX_WORKFLOW_YIELDS as usize),
-    )
+    .saturating_add(MAX_WORKFLOW_REPLY_CHARS.saturating_mul(4).saturating_mul(
+        (MAX_WORKFLOW_YIELDS as usize).saturating_add(MAX_WORKFLOW_CONTROL_RESUMES as usize),
+    ))
     .saturating_add(64 * 1024);
 
 /// Why a Workflow persist read or atomic replace failed.

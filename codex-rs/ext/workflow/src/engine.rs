@@ -24,6 +24,7 @@ use crate::journal::JournalLookup;
 use crate::journal::REPLAY_DIVERGENCE;
 use crate::journal::agent_request;
 use crate::journal::ask_request;
+use crate::journal::bounded_counts;
 use crate::journal::control_request;
 use crate::journal::lookup;
 use crate::journal::request_digest;
@@ -37,8 +38,11 @@ pub const MAX_WORKFLOW_SOURCE_CHARS: usize = 32_000;
 pub const MAX_WORKFLOW_SOURCE_BYTES: usize = MAX_WORKFLOW_SOURCE_CHARS * 4 + 4;
 /// Inclusive cap on VM operations for one host resume.
 pub const MAX_WORKFLOW_OPERATIONS: u64 = 50_000;
-/// Inclusive cap on `ask` yields in one run.
+/// Inclusive cap on result-bearing host yields (`ask` / `agent` /
+/// `spawn_agent`) in one run.
 pub const MAX_WORKFLOW_YIELDS: u32 = 32;
+/// Inclusive cap on `pause` / `await_user` control resumes in one run.
+pub const MAX_WORKFLOW_CONTROL_RESUMES: u32 = 32;
 /// Inclusive cap on one `ask()` reply injected back into the VM.
 pub const MAX_WORKFLOW_REPLY_CHARS: usize = 4_096;
 /// Inclusive cap on Rhai call depth.
@@ -209,10 +213,8 @@ fn eval_source_inner(
     spawn: SpawnBinding,
 ) -> Result<WorkflowEvalOutcome, WorkflowSourceError> {
     validate_source(source)?;
-    if journal.len() > MAX_WORKFLOW_YIELDS as usize {
-        return Err(WorkflowSourceError::Invalid {
-            reason: format!("workflow exceeded {MAX_WORKFLOW_YIELDS} yields"),
-        });
+    if let Err(reason) = bounded_counts(journal) {
+        return Err(WorkflowSourceError::Invalid { reason });
     }
     let phase = Rc::new(RefCell::new(None));
     let log = Rc::new(RefCell::new(None));
@@ -337,6 +339,7 @@ fn build_engine(
     let journal = Rc::new(journal.to_vec());
     let index = Rc::new(Cell::new(0usize));
     let yield_index = Rc::new(Cell::new(0usize));
+    let control_index = Rc::new(Cell::new(0usize));
     let journal_for_ask = Rc::clone(&journal);
     let index_for_ask = Rc::clone(&index);
     let yield_index_for_ask = Rc::clone(&yield_index);
@@ -487,18 +490,22 @@ fn build_engine(
 
     let journal_for_pause = Rc::clone(&journal);
     let index_for_pause = Rc::clone(&index);
+    let control_index_for_pause = Rc::clone(&control_index);
     engine.register_fn("pause", move || -> Result<(), Box<EvalAltResult>> {
         take_control(
             &index_for_pause,
+            &control_index_for_pause,
             &journal_for_pause,
             ContinuationKind::Pause,
         )
     });
     let journal_for_await = Rc::clone(&journal);
     let index_for_await = Rc::clone(&index);
+    let control_index_for_await = Rc::clone(&control_index);
     engine.register_fn("await_user", move || -> Result<(), Box<EvalAltResult>> {
         take_control(
             &index_for_await,
+            &control_index_for_await,
             &journal_for_await,
             ContinuationKind::AwaitUser,
         )
@@ -658,6 +665,11 @@ fn take_journal_or_yield(
             Ok(result)
         }
         JournalLookup::NeedWork => {
+            if yield_index.get() >= MAX_WORKFLOW_YIELDS as usize {
+                return Err(runtime_error(format!(
+                    "workflow exceeded {MAX_WORKFLOW_YIELDS} yields"
+                )));
+            }
             if instruction.trim().is_empty() {
                 return Err(runtime_error(empty_error));
             }
@@ -673,6 +685,7 @@ fn take_journal_or_yield(
 
 fn take_control(
     index: &Rc<Cell<usize>>,
+    control_index: &Rc<Cell<usize>>,
     journal: &Rc<Vec<ContinuationRecord>>,
     kind: ContinuationKind,
 ) -> Result<(), Box<EvalAltResult>> {
@@ -680,12 +693,20 @@ fn take_control(
     match lookup(journal, index.get(), kind, &digest) {
         JournalLookup::Replay(_) => {
             bump(index);
+            bump(control_index);
             Ok(())
         }
-        JournalLookup::NeedWork => Err(terminated(ControlToken::Pause {
-            kind,
-            request_digest: digest,
-        })),
+        JournalLookup::NeedWork => {
+            if control_index.get() >= MAX_WORKFLOW_CONTROL_RESUMES as usize {
+                return Err(runtime_error(format!(
+                    "workflow exceeded {MAX_WORKFLOW_CONTROL_RESUMES} control resumes"
+                )));
+            }
+            Err(terminated(ControlToken::Pause {
+                kind,
+                request_digest: digest,
+            }))
+        }
         JournalLookup::Diverged => Err(runtime_error(REPLAY_DIVERGENCE)),
     }
 }
@@ -726,6 +747,11 @@ fn take_agent_call(
                 return Ok(host_call_dynamic(&result));
             }
             JournalLookup::NeedWork => {
+                if yield_index.get() >= MAX_WORKFLOW_YIELDS as usize {
+                    return Err(runtime_error(format!(
+                        "workflow exceeded {MAX_WORKFLOW_YIELDS} yields"
+                    )));
+                }
                 if prompt.trim().is_empty() {
                     return Err(runtime_error("agent() requires a nonempty prompt"));
                 }

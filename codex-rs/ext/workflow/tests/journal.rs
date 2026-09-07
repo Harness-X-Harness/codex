@@ -6,6 +6,8 @@ use codex_protocol::ThreadId;
 use codex_workflow_extension::ContinuationKind;
 use codex_workflow_extension::ContinuationRecord;
 use codex_workflow_extension::HostCallResult;
+use codex_workflow_extension::MAX_WORKFLOW_CONTROL_RESUMES;
+use codex_workflow_extension::MAX_WORKFLOW_YIELDS;
 use codex_workflow_extension::REPLAY_DIVERGENCE;
 use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowAdvance;
@@ -13,6 +15,10 @@ use codex_workflow_extension::WorkflowRun;
 use codex_workflow_extension::WorkflowStatus;
 use codex_workflow_extension::eval_source;
 use codex_workflow_extension::eval_source_with_spawn;
+
+mod common;
+use common::agent_record;
+use common::pause_record;
 
 #[test]
 fn same_ask_replays_without_a_second_host_turn() {
@@ -198,4 +204,53 @@ fn persisted_string_result_replays_as_successful_text() {
     }))
     .expect("legacy string");
     assert_eq!(record.result, HostCallResult::success("ok"));
+}
+
+#[test]
+fn restore_rejects_too_many_result_bearing_records() {
+    let mut run = WorkflowRun::start(ThreadId::from_u128(11), "complete();").expect("start");
+    let records = (0..=MAX_WORKFLOW_YIELDS)
+        .map(|index| agent_record(&format!("p{index}"), "ok"))
+        .collect();
+    run.continuations = with_dense_seq(records);
+    run.prepare_restored().expect("restore");
+    assert_eq!(run.status, WorkflowStatus::Failed);
+    assert_eq!(run.error.as_deref(), Some("unsafe_journal"));
+    assert!(!run.occupies_idle());
+}
+
+#[test]
+fn restore_rejects_too_many_control_resumes() {
+    let mut run = WorkflowRun::start(ThreadId::from_u128(12), "complete();").expect("start");
+    let records = (0..=MAX_WORKFLOW_CONTROL_RESUMES)
+        .map(|_| pause_record())
+        .collect();
+    run.continuations = with_dense_seq(records);
+    run.prepare_restored().expect("restore");
+    assert_eq!(run.status, WorkflowStatus::Failed);
+    assert_eq!(run.error.as_deref(), Some("unsafe_journal"));
+    assert!(!run.occupies_idle());
+}
+
+#[test]
+fn restore_accepts_full_mixed_host_and_control_allowance() {
+    let mut run = WorkflowRun::start(ThreadId::from_u128(13), "complete();").expect("start");
+    let mut records = Vec::new();
+    records.extend((0..MAX_WORKFLOW_CONTROL_RESUMES).map(|_| pause_record()));
+    records.extend((0..MAX_WORKFLOW_YIELDS).map(|index| agent_record(&format!("p{index}"), "ok")));
+    run.continuations = with_dense_seq(records);
+    run.prepare_restored().expect("restore");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(run.served_asks, MAX_WORKFLOW_YIELDS);
+    assert_eq!(
+        run.continuations.len(),
+        (MAX_WORKFLOW_YIELDS + MAX_WORKFLOW_CONTROL_RESUMES) as usize
+    );
+}
+
+fn with_dense_seq(mut records: Vec<ContinuationRecord>) -> Vec<ContinuationRecord> {
+    for (index, record) in records.iter_mut().enumerate() {
+        record.seq = u32::try_from(index.saturating_add(1)).expect("seq");
+    }
+    records
 }

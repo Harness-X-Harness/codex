@@ -26,6 +26,7 @@ pub use catalog::resolve_named;
 pub use claim::OwnershipEffect;
 pub use claim::WorkflowClaim;
 pub use claim::reconcile_workflow_ownership;
+pub use engine::MAX_WORKFLOW_CONTROL_RESUMES;
 pub use engine::MAX_WORKFLOW_OPERATIONS;
 pub use engine::MAX_WORKFLOW_REPLY_CHARS;
 pub use engine::MAX_WORKFLOW_SOURCE_BYTES;
