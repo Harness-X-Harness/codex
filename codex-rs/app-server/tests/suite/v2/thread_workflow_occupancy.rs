@@ -127,7 +127,23 @@ async fn restore_of_active_workflow_and_goal_keeps_one_owner() -> Result<()> {
         "goal HOW must wait while the workflow is active: {triggers_before:?}"
     );
 
+    let persist_path = codex_home
+        .path()
+        .join("workflows")
+        .join(format!("{}.json", thread.id));
+    let active_persist = std::fs::read(&persist_path)?;
+    let persisted: serde_json::Value = serde_json::from_slice(&active_persist)?;
+    anyhow::ensure!(
+        persisted.get("status").and_then(serde_json::Value::as_str) == Some("active"),
+        "pre-crash persist must be active so restore can reconcile occupancy"
+    );
+
     drop(app);
+    // Graceful teardown aborts the in-flight Ask and persists paused.
+    // Restore the Active document so resume exercises occupancy
+    // reconcile, not the aborted-yield pause path.
+    std::fs::write(&persist_path, active_persist)?;
+
     let mut app = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_managed_config()
