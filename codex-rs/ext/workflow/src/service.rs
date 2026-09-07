@@ -230,7 +230,10 @@ impl WorkflowService {
         let run = build(thread_id, claimed).map_err(WorkflowServiceError::InvalidRequest)?;
         if let Err(error) = persist_run(&self.persist_root, &run) {
             if claimed {
-                self.release_workflow_claim(thread_id).await;
+                if let Some(thread) = self.live_thread(thread_id).await {
+                    let _ = engine_slot(thread.thread_extension_data())
+                        .release(EngineOccupant::Workflow);
+                }
             }
             return Err(error);
         }
@@ -619,13 +622,6 @@ impl WorkflowService {
             return true;
         };
         engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::Workflow)
-    }
-
-    async fn release_workflow_claim(&self, thread_id: ThreadId) {
-        let Some(thread) = self.live_thread(thread_id).await else {
-            return;
-        };
-        let _ = engine_slot(thread.thread_extension_data()).release(EngineOccupant::Workflow);
     }
 
     async fn live_thread(&self, thread_id: ThreadId) -> Option<Arc<codex_core::CodexThread>> {
