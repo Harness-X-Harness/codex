@@ -70,11 +70,12 @@ impl CodexThread {
         if *cancel.borrow() {
             return Ok(StockSpawnWait::Cancelled);
         }
+        let child_id = spawned.thread_id;
         let status_rx = match self
             .session
             .services
             .agent_control
-            .subscribe_status(spawned.thread_id)
+            .subscribe_status(child_id)
             .await
         {
             Ok(status_rx) => status_rx,
@@ -83,14 +84,15 @@ impl CodexThread {
                     .session
                     .services
                     .agent_control
-                    .get_status(spawned.thread_id)
+                    .get_status(child_id)
                     .await;
-                return Ok(
-                    classify_stock_status(status).unwrap_or(StockSpawnWait::ChildUnavailable)
-                );
+                return Ok(classify_stock_status(status).unwrap_or(StockSpawnWait::Cancelled));
             }
         };
-        Ok(wait_classified_stock_status(status_rx, cancel).await)
+        Ok(wait_classified_stock_status(status_rx, cancel, || {
+            self.session.services.agent_control.get_status(child_id)
+        })
+        .await)
     }
 }
 
@@ -103,10 +105,15 @@ fn classify_stock_status(status: AgentStatus) -> Option<StockSpawnWait> {
     }
 }
 
-async fn wait_classified_stock_status(
+async fn wait_classified_stock_status<F, Fut>(
     mut status_rx: watch::Receiver<AgentStatus>,
     mut cancel: watch::Receiver<bool>,
-) -> StockSpawnWait {
+    mut refresh_status: F,
+) -> StockSpawnWait
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = AgentStatus>,
+{
     loop {
         if *cancel.borrow() {
             return StockSpawnWait::Cancelled;
@@ -122,8 +129,8 @@ async fn wait_classified_stock_status(
             }
             changed = status_rx.changed() => {
                 if changed.is_err() {
-                    return classify_stock_status(status_rx.borrow().clone())
-                        .unwrap_or(StockSpawnWait::ChildUnavailable);
+                    return classify_stock_status(refresh_status().await)
+                        .unwrap_or(StockSpawnWait::Cancelled);
                 }
             }
         }
