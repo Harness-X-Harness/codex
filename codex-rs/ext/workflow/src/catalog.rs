@@ -132,6 +132,12 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(result) = load_regular_named_file(&roots.user_dir, &name) {
         return result;
     }
+    if let Some(result) = load_named_symlink(&roots.project_dir, &name) {
+        return result;
+    }
+    if let Some(result) = load_named_symlink(&roots.user_dir, &name) {
+        return result;
+    }
     Err(CatalogError::UnknownName(name))
 }
 
@@ -209,8 +215,10 @@ fn scan_directory(
     Ok(entries)
 }
 
-/// Reload a regular `{name}.rhai` after scan skipped it. Oversized regular
-/// files keep scope ownership; symlink/non-regular/invalid scripts stay ignored.
+/// Reload a regular `{name}.rhai` after scan skipped it. Regular files keep
+/// their load error so filename mismatch, meta, oversize, and I/O stay
+/// visible. Symlinks are not scope owners, so a later valid regular file
+/// can still win.
 fn load_regular_named_file(dir: &Path, name: &str) -> Option<Result<CatalogScript, CatalogError>> {
     let path = dir.join(format!("{name}.rhai"));
     let Ok(meta) = std::fs::symlink_metadata(&path) else {
@@ -219,11 +227,19 @@ fn load_regular_named_file(dir: &Path, name: &str) -> Option<Result<CatalogScrip
     if meta.file_type().is_symlink() || !meta.is_file() {
         return None;
     }
-    match load_library_file(&path) {
-        Ok(entry) => Some(Ok(entry)),
-        Err(error @ CatalogError::SourceLimit(_)) => Some(Err(error)),
-        Err(_) => None,
+    Some(load_library_file(&path))
+}
+
+/// Leftover `{name}.rhai` symlink after both scopes had no regular named file.
+fn load_named_symlink(dir: &Path, name: &str) -> Option<Result<CatalogScript, CatalogError>> {
+    let path = dir.join(format!("{name}.rhai"));
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return None;
+    };
+    if !meta.file_type().is_symlink() {
+        return None;
     }
+    Some(load_library_file(&path))
 }
 
 fn load_library_file(path: &Path) -> Result<CatalogScript, CatalogError> {
