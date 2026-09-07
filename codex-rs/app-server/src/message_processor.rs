@@ -326,11 +326,11 @@ impl MessageProcessor {
                     Arc::clone(&extension_event_sink),
                 ))
             });
-            let workflows = Arc::new(WorkflowService::with_project_root(
+            let workflows = WorkflowService::shared_with_project_root(
                 config.codex_home.join("workflows"),
                 config.cwd.to_path_buf(),
                 thread_manager.clone(),
-            ));
+            );
             workflow_service = Some(Arc::clone(&workflows));
             let manager = ThreadManager::new(
                 config.as_ref(),
@@ -483,11 +483,11 @@ impl MessageProcessor {
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
         let workflow_service = match workflow_service {
             Some(service) => service,
-            None => Arc::new(WorkflowService::with_project_root(
+            None => WorkflowService::shared_with_project_root(
                 config.codex_home.join("workflows"),
                 config.cwd.to_path_buf(),
                 Arc::downgrade(&thread_manager),
-            )),
+            ),
         };
         workflow_service.set_update_sink(workflow_update_sink(outgoing.clone()));
         let thread_goal_processor = ThreadGoalRequestProcessor::new(

@@ -23,6 +23,7 @@ use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
@@ -43,6 +44,7 @@ use crate::persist::load_workflow_document;
 use crate::persist::persist_workflow_document;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
+use crate::spawn_waits::SpawnWait;
 use crate::spawn_waits::SpawnWaits;
 use crate::steering::yield_steering_item;
 
@@ -75,6 +77,7 @@ pub type WorkflowUpdateSink =
 
 /// Process-scoped workflow runs, persisted as JSON under `persist_root`.
 pub struct WorkflowService {
+    this: Weak<Self>,
     persist_root: PathBuf,
     project_root: PathBuf,
     runs: Mutex<HashMap<String, WorkflowRun>>,
@@ -95,6 +98,7 @@ impl WorkflowService {
         thread_manager: Weak<ThreadManager>,
     ) -> Self {
         Self {
+            this: Weak::new(),
             persist_root: persist_root.into(),
             project_root: project_root.into(),
             runs: Mutex::new(HashMap::new()),
@@ -103,6 +107,26 @@ impl WorkflowService {
             thread_manager,
             update_sink: StdMutex::new(None),
         }
+    }
+
+    /// Shared service whose stock-spawn waits can run in the background.
+    pub fn shared_with_project_root(
+        persist_root: impl Into<PathBuf>,
+        project_root: impl Into<PathBuf>,
+        thread_manager: Weak<ThreadManager>,
+    ) -> Arc<Self> {
+        let persist_root = persist_root.into();
+        let project_root = project_root.into();
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            persist_root,
+            project_root,
+            runs: Mutex::new(HashMap::new()),
+            in_flight: InFlightTurns::default(),
+            spawn_waits: SpawnWaits::default(),
+            thread_manager,
+            update_sink: StdMutex::new(None),
+        })
     }
 
     pub fn set_update_sink(&self, sink: WorkflowUpdateSink) {
@@ -453,92 +477,38 @@ impl WorkflowService {
                     tracing::debug!("failed to mark workflow spawn started for {thread_id}: {err}");
                     return Ok(());
                 }
+                if let Some(service) = self.this.upgrade() {
+                    let thread = thread.clone();
+                    let instruction = instruction.clone();
+                    let task_name = task_name.clone();
+                    tokio::spawn(async move {
+                        let outcome = thread
+                            .spawn_stock_agent_and_wait_text(
+                                &instruction,
+                                &task_name,
+                                wait.rx.clone(),
+                            )
+                            .await;
+                        if let Some(updated) = service
+                            .finish_spawn_wait(thread_id, &run_id, wait, outcome)
+                            .await
+                        {
+                            service.kick_if_active(&updated).await;
+                        }
+                    });
+                    return Ok(());
+                }
                 let outcome = thread
                     .spawn_stock_agent_and_wait_text(&instruction, &task_name, wait.rx.clone())
                     .await;
-                self.spawn_waits.forget(&wait);
-                match outcome {
-                    Ok(StockSpawnWait::Cancelled) => {
-                        return Ok(());
-                    }
-                    Ok(StockSpawnWait::Completed(reply)) => {
-                        match self
-                            .advance_spawn_wait(thread_id, &run_id, HostCallResult::success(reply))
-                            .await
-                        {
-                            Ok(updated) => {
-                                run = updated;
-                                continue;
-                            }
-                            Err(err) => {
-                                tracing::debug!(
-                                    "failed to host-resume workflow after spawn for {thread_id}: {err}"
-                                );
-                                return Ok(());
-                            }
-                        }
-                    }
-                    Ok(StockSpawnWait::ChildErrored) => {
-                        match self
-                            .advance_spawn_wait(
-                                thread_id,
-                                &run_id,
-                                HostCallResult::failure(HOST_ERROR_CHILD_ERRORED),
-                            )
-                            .await
-                        {
-                            Ok(updated) => {
-                                run = updated;
-                                continue;
-                            }
-                            Err(err) => {
-                                tracing::debug!(
-                                    "failed to host-resume workflow after spawn failure for {thread_id}: {err}"
-                                );
-                                return Ok(());
-                            }
-                        }
-                    }
-                    Ok(StockSpawnWait::ChildUnavailable) => {
-                        match self
-                            .advance_spawn_wait(
-                                thread_id,
-                                &run_id,
-                                HostCallResult::failure(HOST_ERROR_CHILD_UNAVAILABLE),
-                            )
-                            .await
-                        {
-                            Ok(updated) => {
-                                run = updated;
-                                continue;
-                            }
-                            Err(err) => {
-                                tracing::debug!(
-                                    "failed to host-resume workflow after spawn failure for {thread_id}: {err}"
-                                );
-                                return Ok(());
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        tracing::debug!(
-                            %error,
-                            "workflow spawn failed with an unrecoverable host/runtime error"
-                        );
-                        if let Err(err) = self
-                            .mutate_run(thread_id, |run| {
-                                run.fail(WORKFLOW_ERROR_HOST_RUNTIME);
-                                Ok(())
-                            })
-                            .await
-                        {
-                            tracing::debug!(
-                                "failed to mark workflow spawn runtime failure for {thread_id}: {err}"
-                            );
-                        }
-                        return Ok(());
-                    }
+                if let Some(updated) = self
+                    .finish_spawn_wait(thread_id, &run_id, wait, outcome)
+                    .await
+                {
+                    run = updated;
+                    continue;
                 }
+                return Ok(());
             }
             let start_options = thread
                 .thread_extension_data()
@@ -585,6 +555,72 @@ impl WorkflowService {
                 }
             }
             return Ok(());
+        }
+    }
+
+    async fn finish_spawn_wait(
+        &self,
+        thread_id: ThreadId,
+        run_id: &str,
+        wait: SpawnWait,
+        outcome: Result<StockSpawnWait, CodexErr>,
+    ) -> Option<WorkflowRun> {
+        self.spawn_waits.forget(&wait);
+        match outcome {
+            Ok(StockSpawnWait::Cancelled) => None,
+            Ok(StockSpawnWait::Completed(reply)) => self
+                .advance_spawn_wait(thread_id, run_id, HostCallResult::success(reply))
+                .await
+                .map_err(|err| {
+                    tracing::debug!(
+                        "failed to host-resume workflow after spawn for {thread_id}: {err}"
+                    );
+                })
+                .ok(),
+            Ok(StockSpawnWait::ChildErrored) => self
+                .advance_spawn_wait(
+                    thread_id,
+                    run_id,
+                    HostCallResult::failure(HOST_ERROR_CHILD_ERRORED),
+                )
+                .await
+                .map_err(|err| {
+                    tracing::debug!(
+                        "failed to host-resume workflow after spawn failure for {thread_id}: {err}"
+                    );
+                })
+                .ok(),
+            Ok(StockSpawnWait::ChildUnavailable) => self
+                .advance_spawn_wait(
+                    thread_id,
+                    run_id,
+                    HostCallResult::failure(HOST_ERROR_CHILD_UNAVAILABLE),
+                )
+                .await
+                .map_err(|err| {
+                    tracing::debug!(
+                        "failed to host-resume workflow after spawn failure for {thread_id}: {err}"
+                    );
+                })
+                .ok(),
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    "workflow spawn failed with an unrecoverable host/runtime error"
+                );
+                if let Err(err) = self
+                    .mutate_run(thread_id, |run| {
+                        run.fail(WORKFLOW_ERROR_HOST_RUNTIME);
+                        Ok(())
+                    })
+                    .await
+                {
+                    tracing::debug!(
+                        "failed to mark workflow spawn runtime failure for {thread_id}: {err}"
+                    );
+                }
+                None
+            }
         }
     }
 
