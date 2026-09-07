@@ -56,6 +56,26 @@ fn oversized_persist_file_is_rejected_from_metadata_size() {
     );
 }
 
+#[test]
+fn directory_final_path_is_rejected_without_overwrite() {
+    let dir = TempDir::new().expect("temp");
+    let blocked = dir.path().join("blocked.json");
+    std::fs::create_dir(&blocked).expect("dir");
+    std::fs::write(blocked.join("keep.txt"), b"keep").expect("marker");
+    let error =
+        persist_workflow_document(dir.path(), "blocked", br#"{"n":1}"#).expect_err("directory");
+    assert_eq!(
+        error,
+        PersistError::UnsafePath(
+            "workflow persist file must be a non-symlink regular file".to_string()
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(blocked.join("keep.txt")).expect("intact"),
+        "keep"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_persist_file_is_rejected() {

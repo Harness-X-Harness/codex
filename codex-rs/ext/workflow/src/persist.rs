@@ -62,8 +62,13 @@ pub fn persist_workflow_document(
 
     let final_path = persist_root.join(format!("{thread_id}.json"));
     let staging = persist_root.join(format!("{thread_id}.json.tmp"));
-    reject_symlink(&final_path, "workflow persist file")?;
-    prepare_staging(&staging)?;
+    inspect_regular_file(&final_path, "workflow persist file")?;
+    match inspect_regular_file(&staging, "workflow persist staging file")? {
+        None => {}
+        Some(_) => {
+            fs::remove_file(&staging).map_err(|error| PersistError::Io(error.to_string()))?;
+        }
+    }
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -76,7 +81,7 @@ pub fn persist_workflow_document(
         .map_err(|error| PersistError::Io(error.to_string()))?;
     drop(file);
 
-    reject_symlink(&final_path, "workflow persist file")?;
+    inspect_regular_file(&final_path, "workflow persist file")?;
     if let Err(error) = fs::rename(&staging, &final_path) {
         let _ = fs::remove_file(&staging);
         return Err(PersistError::Io(error.to_string()));
@@ -91,16 +96,9 @@ pub fn load_workflow_document(
     thread_id: &str,
 ) -> Result<Option<Vec<u8>>, PersistError> {
     let path = persist_root.join(format!("{thread_id}.json"));
-    let meta = match fs::symlink_metadata(&path) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(PersistError::Io(error.to_string())),
+    let Some(meta) = inspect_regular_file(&path, "workflow persist file")? else {
+        return Ok(None);
     };
-    if meta.file_type().is_symlink() || !meta.is_file() {
-        return Err(PersistError::UnsafePath(
-            "workflow persist file must be a non-symlink regular file".to_string(),
-        ));
-    }
     if meta.len() > MAX_WORKFLOW_PERSIST_BYTES as u64 {
         return Err(PersistError::TooLarge { actual: meta.len() });
     }
@@ -119,17 +117,14 @@ pub fn load_workflow_document(
     Ok(Some(buf))
 }
 
-fn prepare_staging(staging: &Path) -> Result<(), PersistError> {
-    match fs::symlink_metadata(staging) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+fn inspect_regular_file(path: &Path, what: &str) -> Result<Option<fs::Metadata>, PersistError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(PersistError::Io(error.to_string())),
-        Ok(meta) if meta.file_type().is_symlink() => Err(PersistError::UnsafePath(
-            "workflow persist staging file must not be a symlink".to_string(),
-        )),
-        Ok(_) => {
-            fs::remove_file(staging).map_err(|error| PersistError::Io(error.to_string()))?;
-            Ok(())
-        }
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => Err(
+            PersistError::UnsafePath(format!("{what} must be a non-symlink regular file")),
+        ),
+        Ok(meta) => Ok(Some(meta)),
     }
 }
 
