@@ -119,15 +119,15 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(entry) = project.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
     }
-    if let Some(result) = load_regular_named_file(&roots.project_dir, &name) {
-        return result;
-    }
     let user = scan_directory(&roots.user_dir, "user", &mut duplicates)?;
     if let Some(scope) = duplicates.get(&name) {
         return Err(CatalogError::DuplicateName { name, scope });
     }
     if let Some(entry) = user.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
+    }
+    if let Some(result) = load_regular_named_file(&roots.project_dir, &name) {
+        return result;
     }
     if let Some(result) = load_regular_named_file(&roots.user_dir, &name) {
         return result;
@@ -215,10 +215,9 @@ fn scan_directory(
     Ok(entries)
 }
 
-/// Reload a regular `{name}.rhai` after scan skipped it. Regular files keep
-/// their load error so filename mismatch, meta, oversize, and I/O stay
-/// visible. Symlinks are not scope owners, so a later valid regular file
-/// can still win.
+/// After both scopes miss a valid definition, reload a regular `{name}.rhai`
+/// so filename mismatch, meta, oversize, and I/O stay visible instead of
+/// `UnknownName`.
 fn load_regular_named_file(dir: &Path, name: &str) -> Option<Result<CatalogScript, CatalogError>> {
     let path = dir.join(format!("{name}.rhai"));
     let Ok(meta) = std::fs::symlink_metadata(&path) else {

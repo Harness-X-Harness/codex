@@ -101,7 +101,7 @@ fn unknown_name_is_rejected() {
 }
 
 #[test]
-fn oversized_project_file_is_not_shadowed_by_user_library() {
+fn oversized_project_file_does_not_block_user_library() {
     let home = TempDir::new().expect("home");
     let project = TempDir::new().expect("project");
     let project_dir = project.path().join(".codex").join("workflows");
@@ -112,11 +112,8 @@ fn oversized_project_file_is_not_shadowed_by_user_library() {
     drop(file);
     write_script(&home.path().join("workflows"), "demo", &demo_source("demo"));
     let roots = CatalogRoots::new(home.path(), project.path());
-    let error = resolve_named("demo", &roots).expect_err("project oversize wins");
-    assert!(
-        matches!(error, CatalogError::SourceLimit(_)),
-        "expected SourceLimit, got {error:?}"
-    );
+    let script = resolve_named("demo", &roots).expect("user definition wins");
+    assert_eq!(script.name, "demo");
 }
 
 #[test]
