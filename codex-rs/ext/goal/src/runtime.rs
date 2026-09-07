@@ -607,7 +607,7 @@ impl GoalRuntimeHandle {
             .await
         {
             Ok(Some(goal)) if goal.status == codex_state::ThreadGoalStatus::Active => goal,
-            Ok(_) => {
+            Ok(Some(_)) | Ok(None) => {
                 self.inner.accounting_state.clear_active_goal();
                 self.release_goal_how().await;
                 return Ok(());
@@ -635,7 +635,7 @@ impl GoalRuntimeHandle {
             owner,
         );
 
-        let started = match thread
+        match thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
                     turn_trigger: Some("goal".to_string()),
@@ -644,24 +644,21 @@ impl GoalRuntimeHandle {
             )
             .await
         {
-            Ok(StartIfIdleSubmission::Started { .. }) => true,
+            Ok(StartIfIdleSubmission::Started { .. }) => {}
             Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
                 tracing::debug!(
                     ?reason,
                     "skipping goal continuation because automatic idle work was rejected"
                 );
-                false
+                self.release_goal_how().await;
             }
             Err(error) => {
                 tracing::debug!(
                     %error,
                     "skipping goal continuation because turn input submission failed"
                 );
-                false
+                self.release_goal_how().await;
             }
-        };
-        if !started {
-            self.release_goal_how().await;
         }
 
         let current_turn_is_goal_active = self
