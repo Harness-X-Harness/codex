@@ -493,7 +493,14 @@ impl WorkflowService {
                             .finish_spawn_wait(thread_id, &run_id, wait, outcome)
                             .await
                         {
-                            service.kick_if_active(&updated).await;
+                            // Re-enter through the Send-safe idle notify. The
+                            // parent Thread has no parent turn during spawn, so
+                            // it is idle; `continue_if_idle` is not Send.
+                            if updated.status == WorkflowStatus::Active
+                                && updated.pending_instruction.is_some()
+                            {
+                                service.kick_waiting_goal(updated.thread_id).await;
+                            }
                         }
                     });
                     return Ok(());
