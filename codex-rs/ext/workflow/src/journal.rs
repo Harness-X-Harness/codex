@@ -168,32 +168,16 @@ pub fn lookup(
     }
 }
 
-fn is_result_bearing(kind: ContinuationKind) -> bool {
-    matches!(
-        kind,
-        ContinuationKind::Ask | ContinuationKind::Agent | ContinuationKind::SpawnAgent
-    )
-}
-
-fn is_control_resume(kind: ContinuationKind) -> bool {
-    matches!(kind, ContinuationKind::Pause | ContinuationKind::AwaitUser)
-}
-
 pub fn result_bearing_count(records: &[ContinuationRecord]) -> u32 {
     u32::try_from(
         records
             .iter()
-            .filter(|record| is_result_bearing(record.kind))
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
-}
-
-pub fn control_resume_count(records: &[ContinuationRecord]) -> u32 {
-    u32::try_from(
-        records
-            .iter()
-            .filter(|record| is_control_resume(record.kind))
+            .filter(|record| {
+                matches!(
+                    record.kind,
+                    ContinuationKind::Ask | ContinuationKind::Agent | ContinuationKind::SpawnAgent
+                )
+            })
             .count(),
     )
     .unwrap_or(u32::MAX)
@@ -205,7 +189,19 @@ pub fn bounded_counts(records: &[ContinuationRecord]) -> Result<(), String> {
     if result_bearing_count(records) > MAX_WORKFLOW_YIELDS {
         return Err(format!("workflow exceeded {MAX_WORKFLOW_YIELDS} yields"));
     }
-    if control_resume_count(records) > MAX_WORKFLOW_CONTROL_RESUMES {
+    let controls = u32::try_from(
+        records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.kind,
+                    ContinuationKind::Pause | ContinuationKind::AwaitUser
+                )
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    if controls > MAX_WORKFLOW_CONTROL_RESUMES {
         return Err(format!(
             "workflow exceeded {MAX_WORKFLOW_CONTROL_RESUMES} control resumes"
         ));
