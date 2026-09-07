@@ -7,6 +7,8 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::engine::MAX_WORKFLOW_SOURCE_CHARS;
+use crate::source_read::BoundedSourceError;
+use crate::source_read::read_bounded_workflow_source;
 
 pub(crate) fn write_scratch_file(dir: &Path, name: &str, content: &str) -> Result<String, String> {
     let name = validated_scratch_name(name)?;
@@ -35,18 +37,16 @@ pub(crate) fn read_scratch_file(dir: &Path, name: &str) -> Result<String, String
     let path = dir.join(name);
     reject_local_symlinks(dir)?;
     reject_symlink(&path, "scratch file")?;
-    let content = fs::read_to_string(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
+    let content = read_bounded_workflow_source(&path).map_err(|error| match error {
+        BoundedSourceError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
             "scratch file not found".to_string()
-        } else {
-            format!("scratch read: {error}")
         }
+        BoundedSourceError::Io(error) => format!("scratch read: {error}"),
+        BoundedSourceError::TooManyBytes { .. } | BoundedSourceError::TooManyChars { .. } => {
+            format!("scratch file exceeds {MAX_WORKFLOW_SOURCE_CHARS} characters")
+        }
+        BoundedSourceError::NotUtf8 => "scratch file must be UTF-8".to_string(),
     })?;
-    if content.chars().count() > MAX_WORKFLOW_SOURCE_CHARS {
-        return Err(format!(
-            "scratch file exceeds {MAX_WORKFLOW_SOURCE_CHARS} characters"
-        ));
-    }
     Ok(content)
 }
 
