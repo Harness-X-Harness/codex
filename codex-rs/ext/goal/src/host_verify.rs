@@ -10,6 +10,9 @@ use serde::Deserialize;
 
 use crate::host_evaluate::HostGoalStatus;
 use crate::runtime::GoalRuntimeHandle;
+use crate::verdict_bounds::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use crate::verdict_bounds::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
+use crate::verdict_bounds::field_exceeds_char_cap;
 
 /// Structured vote from one host skeptic.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -25,8 +28,20 @@ impl GoalSkepticVote {
         if self.evidence.trim().is_empty() {
             return Err(GoalSkepticParseError::EmptyField("evidence"));
         }
+        if field_exceeds_char_cap(&self.evidence, GOAL_VERDICT_EVIDENCE_MAX_CHARS) {
+            return Err(GoalSkepticParseError::FieldTooLong {
+                field: "evidence",
+                max_chars: GOAL_VERDICT_EVIDENCE_MAX_CHARS,
+            });
+        }
         if self.next_step.trim().is_empty() {
             return Err(GoalSkepticParseError::EmptyField("next_step"));
+        }
+        if field_exceeds_char_cap(&self.next_step, GOAL_VERDICT_NEXT_STEP_MAX_CHARS) {
+            return Err(GoalSkepticParseError::FieldTooLong {
+                field: "next_step",
+                max_chars: GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
+            });
         }
         Ok(Self {
             refuted: self.refuted,
@@ -41,6 +56,10 @@ impl GoalSkepticVote {
 pub enum GoalSkepticParseError {
     InvalidJson(String),
     EmptyField(&'static str),
+    FieldTooLong {
+        field: &'static str,
+        max_chars: usize,
+    },
 }
 
 impl std::fmt::Display for GoalSkepticParseError {
@@ -51,6 +70,12 @@ impl std::fmt::Display for GoalSkepticParseError {
             }
             Self::EmptyField(field) => {
                 write!(f, "goal skeptic field `{field}` must not be empty")
+            }
+            Self::FieldTooLong { field, max_chars } => {
+                write!(
+                    f,
+                    "goal skeptic field `{field}` exceeds {max_chars} characters"
+                )
             }
         }
     }

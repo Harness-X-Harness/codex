@@ -1,12 +1,19 @@
 //! Host evaluator prompt bounding, schema, and retry/parse behavior.
 #![allow(clippy::expect_used)]
 
+use codex_goal_extension::EVALUATOR_OUTPUT_MAX_BYTES;
 use codex_goal_extension::EVALUATOR_SAMPLE_ATTEMPTS;
+use codex_goal_extension::GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS;
+use codex_goal_extension::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use codex_goal_extension::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
 use codex_goal_extension::GoalEvaluatorDecision;
 use codex_goal_extension::GoalEvaluatorError;
+use codex_goal_extension::GoalEvaluatorParseError;
 use codex_goal_extension::build_goal_evaluator_user_payload;
+use codex_goal_extension::collect_evaluator_output_text;
 use codex_goal_extension::goal_evaluator_evidence;
 use codex_goal_extension::goal_evaluator_output_schema;
+use codex_goal_extension::parse_goal_evaluator_verdict;
 use codex_goal_extension::verdict_from_sample_attempts;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -173,6 +180,71 @@ async fn sample_attempts_retry_invalid_json_then_succeed() {
     .expect("verdict");
     assert_eq!(verdict.decision, GoalEvaluatorDecision::CandidateComplete);
     assert_eq!(calls, EVALUATOR_SAMPLE_ATTEMPTS);
+}
+
+#[test]
+fn streamed_evaluator_output_rejects_and_clears_oversize() {
+    let prefix = r#"{"decision":"continue","evidence":""#;
+    let oversize = "x".repeat(EVALUATOR_OUTPUT_MAX_BYTES);
+    let error = collect_evaluator_output_text([prefix, oversize.as_str()]).expect_err("cap");
+    assert_eq!(
+        error,
+        GoalEvaluatorError::Failed("goal evaluator output exceeded the local byte cap".into())
+    );
+    let at_cap = "a".repeat(EVALUATOR_OUTPUT_MAX_BYTES);
+    assert_eq!(
+        collect_evaluator_output_text([at_cap.as_str()]).expect("bytes at the cap stay accepted"),
+        at_cap
+    );
+}
+
+#[test]
+fn parse_goal_evaluator_verdict_rejects_oversize_fields() {
+    let evidence = "e".repeat(GOAL_VERDICT_EVIDENCE_MAX_CHARS + 1);
+    let error = parse_goal_evaluator_verdict(&format!(
+        r#"{{"decision":"continue","evidence":"{evidence}","next_step":"run tests","blocker_key":""}}"#
+    ))
+    .expect_err("evidence cap");
+    assert_eq!(
+        error,
+        GoalEvaluatorParseError::FieldTooLong {
+            field: "evidence",
+            max_chars: GOAL_VERDICT_EVIDENCE_MAX_CHARS,
+        }
+    );
+    assert!(!error.to_string().contains(&evidence));
+
+    let evidence = "e".repeat(GOAL_VERDICT_EVIDENCE_MAX_CHARS);
+    parse_goal_evaluator_verdict(&format!(
+        r#"{{"decision":"continue","evidence":"{evidence}","next_step":"run tests","blocker_key":""}}"#
+    ))
+    .expect("evidence at cap");
+
+    let next_step = "n".repeat(GOAL_VERDICT_NEXT_STEP_MAX_CHARS + 1);
+    let error = parse_goal_evaluator_verdict(&format!(
+        r#"{{"decision":"continue","evidence":"tests remain","next_step":"{next_step}","blocker_key":""}}"#
+    ))
+    .expect_err("next_step cap");
+    assert_eq!(
+        error,
+        GoalEvaluatorParseError::FieldTooLong {
+            field: "next_step",
+            max_chars: GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
+        }
+    );
+
+    let blocker_key = format!("k{}", "a".repeat(GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS));
+    let error = parse_goal_evaluator_verdict(&format!(
+        r#"{{"decision":"blocked","evidence":"need access","next_step":"ask the user","blocker_key":"{blocker_key}"}}"#
+    ))
+    .expect_err("blocker_key cap");
+    assert_eq!(
+        error,
+        GoalEvaluatorParseError::FieldTooLong {
+            field: "blocker_key",
+            max_chars: GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS,
+        }
+    );
 }
 
 #[tokio::test]
