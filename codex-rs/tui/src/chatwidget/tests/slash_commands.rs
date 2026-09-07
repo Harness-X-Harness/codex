@@ -973,6 +973,26 @@ async fn workflow_start_slash_command_reads_existing_file() {
 }
 
 #[tokio::test]
+async fn workflow_start_slash_command_rejects_oversized_file() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    std::fs::create_dir_all(&chat.config.cwd).expect("cwd");
+    let path = chat.config.cwd.join("huge.rhai");
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len(1_000_000).expect("sparse");
+    drop(file);
+
+    submit_composer_text(&mut chat, "/workflow start huge.rhai");
+
+    assert!(
+        rx.try_recv().is_err(),
+        "oversized path must not start a workflow"
+    );
+}
+
+#[tokio::test]
 async fn workflow_start_slash_command_sends_catalog_name() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);

@@ -101,6 +101,25 @@ fn unknown_name_is_rejected() {
 }
 
 #[test]
+fn oversized_project_file_is_not_shadowed_by_user_library() {
+    let home = TempDir::new().expect("home");
+    let project = TempDir::new().expect("project");
+    let project_dir = project.path().join(".codex").join("workflows");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    let file = File::create(project_dir.join("demo.rhai")).expect("create");
+    file.set_len(MAX_WORKFLOW_SOURCE_BYTES as u64 + 1)
+        .expect("sparse");
+    drop(file);
+    write_script(&home.path().join("workflows"), "demo", &demo_source("demo"));
+    let roots = CatalogRoots::new(home.path(), project.path());
+    let error = resolve_named("demo", &roots).expect_err("project oversize wins");
+    assert!(
+        matches!(error, CatalogError::SourceLimit(_)),
+        "expected SourceLimit, got {error:?}"
+    );
+}
+
+#[test]
 fn oversized_catalog_file_is_rejected_from_metadata_size() {
     let home = TempDir::new().expect("home");
     let project = TempDir::new().expect("project");

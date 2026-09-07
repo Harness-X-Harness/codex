@@ -119,6 +119,9 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(entry) = project.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
     }
+    if catalog_candidate_exists(&roots.project_dir, &name) {
+        return load_library_file(&roots.project_dir.join(format!("{name}.rhai")));
+    }
     let user = scan_directory(&roots.user_dir, "user", &mut duplicates)?;
     if let Some(scope) = duplicates.get(&name) {
         return Err(CatalogError::DuplicateName { name, scope });
@@ -126,11 +129,8 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(entry) = user.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
     }
-    for dir in [&roots.project_dir, &roots.user_dir] {
-        let path = dir.join(format!("{name}.rhai"));
-        if path.exists() {
-            return load_library_file(&path);
-        }
+    if catalog_candidate_exists(&roots.user_dir, &name) {
+        return load_library_file(&roots.user_dir.join(format!("{name}.rhai")));
     }
     Err(CatalogError::UnknownName(name))
 }
@@ -166,12 +166,10 @@ fn scan_directory(
     })?;
     let mut paths = Vec::new();
     for entry in read_dir {
-        let path = entry
-            .map_err(|error| CatalogError::Io {
-                path: dir.display().to_string(),
-                error: error.to_string(),
-            })?
-            .path();
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("rhai") {
             continue;
         }
@@ -209,6 +207,10 @@ fn scan_directory(
         }
     }
     Ok(entries)
+}
+
+fn catalog_candidate_exists(dir: &Path, name: &str) -> bool {
+    std::fs::symlink_metadata(dir.join(format!("{name}.rhai"))).is_ok()
 }
 
 fn load_library_file(path: &Path) -> Result<CatalogScript, CatalogError> {
