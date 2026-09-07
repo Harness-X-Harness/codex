@@ -130,11 +130,8 @@ async fn mutation_persist_failure_does_not_stay_active() {
         .expect("start");
     assert_eq!(started.status, WorkflowStatus::Active);
     let path = dir.path().join(format!("{thread_id}.json"));
-    let before = std::fs::read(&path).expect("durable");
-
-    let mut permissions = std::fs::metadata(dir.path()).expect("meta").permissions();
-    permissions.set_readonly(true);
-    std::fs::set_permissions(dir.path(), permissions).expect("readonly");
+    std::fs::remove_file(&path).expect("remove");
+    std::fs::create_dir(&path).expect("block replace");
 
     let error = service.stop_run(thread_id).await.expect_err("persist fail");
     assert!(
@@ -147,9 +144,8 @@ async fn mutation_persist_failure_does_not_stay_active() {
         .expect("cached")
         .expect("run");
     assert_eq!(live.status, WorkflowStatus::Failed);
-    assert_eq!(std::fs::read(&path).expect("unchanged"), before);
-
-    let mut permissions = std::fs::metadata(dir.path()).expect("meta").permissions();
-    permissions.set_readonly(false);
-    std::fs::set_permissions(dir.path(), permissions).expect("restore");
+    assert!(
+        path.is_dir(),
+        "persist failure must not replace the last durable path"
+    );
 }
