@@ -120,7 +120,10 @@ pub struct GoalEvaluatorEvidence {
     pub plan: Option<String>,
 }
 
-/// Fold synthetic or streamed evaluator text deltas under the local byte cap.
+/// Fold streamed evaluator text deltas under the local byte cap.
+///
+/// This is the crate's stream-cap seam. Lib unit tests are disabled, so
+/// integration tests exercise the same append path used by the model sampler.
 pub fn collect_evaluator_output_text<I, S>(chunks: I) -> Result<String, GoalEvaluatorError>
 where
     I: IntoIterator<Item = S>,

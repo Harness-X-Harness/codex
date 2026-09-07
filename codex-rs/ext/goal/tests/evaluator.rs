@@ -187,10 +187,14 @@ fn streamed_evaluator_output_rejects_and_clears_oversize() {
     let prefix = r#"{"decision":"continue","evidence":""#;
     let oversize = "x".repeat(EVALUATOR_OUTPUT_MAX_BYTES);
     let error = collect_evaluator_output_text([prefix, oversize.as_str()]).expect_err("cap");
-    assert!(!error.to_string().contains('x'));
-    assert!(
-        collect_evaluator_output_text(["a".repeat(EVALUATOR_OUTPUT_MAX_BYTES)]).is_ok(),
-        "bytes at the cap stay accepted"
+    assert_eq!(
+        error,
+        GoalEvaluatorError::Failed("goal evaluator output exceeded the local byte cap".into())
+    );
+    let at_cap = "a".repeat(EVALUATOR_OUTPUT_MAX_BYTES);
+    assert_eq!(
+        collect_evaluator_output_text([at_cap.as_str()]).expect("bytes at the cap stay accepted"),
+        at_cap
     );
 }
 
