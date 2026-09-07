@@ -11,12 +11,16 @@ use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
+use codex_extension_api::TurnItemContributor;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStopInput;
 use codex_protocol::ThreadId;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 
+use crate::engine::truncate_workflow_reply;
 use crate::journal::HOST_ERROR_TURN_CANCELLED;
 use crate::journal::HOST_ERROR_TURN_ERRORED;
 use crate::journal::HostCallResult;
@@ -106,7 +110,12 @@ where
                     )
                     .await
             } else {
-                self.service.finish_yield_turn(thread_id).await
+                self.service
+                    .finish_yield_turn_with_result(
+                        thread_id,
+                        HostCallResult::success(captured_workflow_turn_reply(input.turn_store)),
+                    )
+                    .await
             };
             if let Err(err) = outcome {
                 tracing::warn!("failed to host-resume workflow after yield for {thread_id}: {err}");
@@ -167,6 +176,49 @@ fn workflow_how_turn(turn_store: &ExtensionData) -> bool {
         .is_some_and(|options| options.turn_trigger.as_deref() == Some("workflow"))
 }
 
+struct WorkflowTurnReply(String);
+
+fn capture_workflow_turn_reply(turn_store: &ExtensionData, item: &TurnItem) {
+    if !workflow_how_turn(turn_store) {
+        return;
+    }
+    let TurnItem::AgentMessage(message) = item else {
+        return;
+    };
+    let text: String = message
+        .content
+        .iter()
+        .map(|entry| match entry {
+            AgentMessageContent::Text { text } => text.as_str(),
+        })
+        .collect();
+    turn_store.insert(WorkflowTurnReply(truncate_workflow_reply(&text)));
+}
+
+fn captured_workflow_turn_reply(turn_store: &ExtensionData) -> String {
+    turn_store
+        .get::<WorkflowTurnReply>()
+        .map(|reply| reply.0.clone())
+        .unwrap_or_default()
+}
+
+impl<C> TurnItemContributor for WorkflowExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a mut TurnItem,
+    ) -> ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            capture_workflow_turn_reply(turn_store, item);
+            Ok(())
+        })
+    }
+}
+
 impl<C> ConfigContributor<C> for WorkflowExtension<C>
 where
     C: Send + Sync + 'static,
@@ -196,5 +248,6 @@ pub fn install<C>(
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
+    registry.turn_item_contributor(extension.clone());
     registry.config_contributor(extension);
 }

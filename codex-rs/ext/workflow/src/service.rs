@@ -17,15 +17,12 @@ use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
-use codex_core::content_items_to_text;
 use codex_extension_api::EngineOccupant;
 use codex_extension_api::EngineSlot;
 use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ResponseItem;
-use codex_rollout::RolloutItem;
 use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
@@ -35,7 +32,6 @@ use crate::claim::WorkflowClaim;
 use crate::claim::reconcile_workflow_ownership;
 use crate::engine::SpawnBinding;
 use crate::engine::WorkflowSourceError;
-use crate::engine::truncate_workflow_reply;
 use crate::journal::ContinuationKind;
 use crate::journal::HOST_ERROR_CHILD_ERRORED;
 use crate::journal::HOST_ERROR_CHILD_UNAVAILABLE;
@@ -251,27 +247,27 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let reply = match self.get_run(thread_id).await? {
-            Some(run) if run.pending_yield_started => self.latest_assistant_reply(thread_id).await,
-            _ => String::new(),
+        let Some(run) = self.get_run(thread_id).await? else {
+            return Err(WorkflowServiceError::InvalidRequest(
+                "no workflow is set for this thread".to_string(),
+            ));
         };
-        let run = self
-            .mutate_run(thread_id, move |run| {
-                run.advance_with_outcome(HostCallResult::success(reply))
-                    .map(|_| ())
-            })
-            .await?;
-        self.kick_if_active(&run).await;
-        Ok(run)
-    }
-
-    pub async fn finish_yield_turn(
-        &self,
-        thread_id: ThreadId,
-    ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
-        let reply = self.latest_assistant_reply(thread_id).await;
-        self.finish_yield_turn_with_result(thread_id, HostCallResult::success(reply))
-            .await
+        match run.status {
+            WorkflowStatus::Active => self.kick_if_active(&run).await,
+            WorkflowStatus::Waiting => self
+                .continue_if_idle(thread_id)
+                .await
+                .map_err(WorkflowServiceError::InvalidRequest)?,
+            WorkflowStatus::Paused => {
+                return Err(WorkflowServiceError::InvalidRequest(
+                    "workflow is paused; use thread/workflow/resume".to_string(),
+                ));
+            }
+            WorkflowStatus::Complete | WorkflowStatus::Failed => {}
+        }
+        self.get_run(thread_id).await?.ok_or_else(|| {
+            WorkflowServiceError::InvalidRequest("no workflow is set for this thread".to_string())
+        })
     }
 
     pub async fn finish_yield_turn_with_result(
@@ -670,38 +666,6 @@ impl WorkflowService {
     async fn live_thread(&self, thread_id: ThreadId) -> Option<Arc<codex_core::CodexThread>> {
         let thread_manager = self.thread_manager.upgrade()?;
         thread_manager.get_thread(thread_id).await.ok()
-    }
-
-    async fn latest_assistant_reply(&self, thread_id: ThreadId) -> String {
-        let Some(thread_manager) = self.thread_manager.upgrade() else {
-            return String::new();
-        };
-        let Ok(thread) = thread_manager.get_thread(thread_id).await else {
-            return String::new();
-        };
-        let Ok(items) = thread
-            .load_latest_model_context_items(/*include_archived*/ false)
-            .await
-        else {
-            return String::new();
-        };
-        for item in items.iter().rev() {
-            let RolloutItem::ResponseItem(envelope) = item else {
-                continue;
-            };
-            let ResponseItem::Message { role, content, .. } = &envelope.item else {
-                continue;
-            };
-            if role != "assistant" {
-                continue;
-            }
-            // Empty successful text is legal. Do not walk past this message
-            // to a previous assistant reply.
-            return content_items_to_text(content)
-                .map(|text| truncate_workflow_reply(&text))
-                .unwrap_or_default();
-        }
-        String::new()
     }
 
     async fn kick_if_active(&self, run: &WorkflowRun) {

@@ -520,8 +520,72 @@ async fn service_persists_across_instances() {
     assert_eq!(loaded.run_id, started.run_id);
     assert_eq!(loaded.status, WorkflowStatus::Active);
     let advanced = second.advance_run(thread_id).await.expect("advance");
-    assert_eq!(advanced.status, WorkflowStatus::Complete);
+    assert_eq!(advanced.status, WorkflowStatus::Active);
+    assert_eq!(advanced.continuations, started.continuations);
     assert_eq!(advanced.result, serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn advance_run_does_not_journal_a_fabricated_host_result() {
+    let dir = TempDir::new().expect("tempdir");
+    let thread_id = ThreadId::from_u128(34);
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service
+        .start_run(thread_id, yield_then_complete())
+        .await
+        .expect("start");
+    let advanced = service.advance_run(thread_id).await.expect("advance");
+    assert_eq!(advanced.status, WorkflowStatus::Active);
+    assert!(advanced.continuations.is_empty());
+    assert_eq!(
+        advanced.pending_instruction.as_deref(),
+        Some("Compile the crate.")
+    );
+}
+
+#[tokio::test]
+async fn advance_run_cannot_resume_a_pause() {
+    let dir = TempDir::new().expect("tempdir");
+    let thread_id = ThreadId::from_u128(35);
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service
+        .start_run(thread_id, "pause(); complete();")
+        .await
+        .expect("start");
+    let err = service.advance_run(thread_id).await.expect_err("advance");
+    assert!(
+        err.to_string().contains("paused"),
+        "unexpected error: {err}"
+    );
+    let paused = service.get_run(thread_id).await.expect("get").expect("run");
+    assert_eq!(paused.status, WorkflowStatus::Paused);
+    assert!(paused.continuations.is_empty());
+}
+
+#[tokio::test]
+async fn advance_run_cannot_bypass_a_pending_spawn() {
+    let dir = TempDir::new().expect("tempdir");
+    let thread_id = ThreadId::from_u128(36);
+    let started = WorkflowRun::start_with_spawn(
+        thread_id,
+        r#"
+            let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+            if r.ok { complete(); } else { ask("wrong reply"); }
+        "#,
+        SpawnBinding::Available,
+    )
+    .expect("start");
+    std::fs::write(
+        dir.path().join(format!("{thread_id}.json")),
+        serde_json::to_vec_pretty(&started).expect("encode"),
+    )
+    .expect("write");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let advanced = service.advance_run(thread_id).await.expect("advance");
+    assert_eq!(advanced.status, WorkflowStatus::Active);
+    assert!(advanced.continuations.is_empty());
+    assert_eq!(advanced.pending_instruction.as_deref(), Some("Say ok."));
+    assert_eq!(advanced.pending_spawn_task_name.as_deref(), Some("review"));
 }
 
 #[tokio::test]

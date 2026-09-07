@@ -1093,20 +1093,22 @@ async fn workflow_advance_is_optional_override() -> Result<()> {
             },
         })
         .await?;
-    assert_eq!(advanced.workflow.status, ThreadWorkflowStatus::Complete);
+    assert_eq!(advanced.workflow.status, ThreadWorkflowStatus::Active);
+    assert_eq!(advanced.workflow.result, serde_json::json!(null));
 
     let get: ThreadWorkflowGetResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowGet {
             request_id,
             params: ThreadWorkflowGetParams {
-                thread_id: thread.id,
+                thread_id: thread.id.clone(),
             },
         })
         .await?;
     assert_eq!(
         get.workflow.map(|workflow| workflow.status),
-        Some(ThreadWorkflowStatus::Complete)
+        Some(ThreadWorkflowStatus::Active)
     );
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
     Ok(())
 }
 
@@ -1261,6 +1263,54 @@ async fn workflow_start_by_name_rejects_filename_mismatch() -> Result<()> {
         error.error.message.contains("must match meta.name"),
         "unexpected error: {}",
         error.error.message
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_successful_turn_does_not_reuse_previous_assistant_text() -> Result<()> {
+    let prior = responses::sse(vec![
+        responses::ev_response_created("resp-prior"),
+        responses::ev_assistant_message("msg-prior", "PREVIOUS_SECRET"),
+        responses::ev_completed("resp-prior"),
+    ]);
+    let absent = responses::sse(vec![
+        responses::ev_response_created("resp-absent"),
+        responses::ev_completed("resp-absent"),
+    ]);
+    let server = create_mock_responses_server_sequence_unchecked(vec![prior, absent]).await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![text("seed a prior assistant message")],
+        ..Default::default()
+    })
+    .await?;
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(
+                thread.id.clone(),
+                r#"
+                    let r = agent("Say ok.");
+                    if r.text == "PREVIOUS_SECRET" { ask("reused previous"); }
+                    else if r.ok { complete(); }
+                    else { ask("wrong reply"); }
+                "#,
+            ),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+    let completed =
+        wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
+    assert_eq!(
+        completed
+            .workflow
+            .and_then(|workflow| workflow.pending_instruction),
+        None
     );
     Ok(())
 }
