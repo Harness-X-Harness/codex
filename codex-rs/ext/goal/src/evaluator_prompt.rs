@@ -22,6 +22,7 @@ use crate::host_evaluate::parse_goal_evaluator_verdict;
 use crate::verdict_bounds::GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS;
 use crate::verdict_bounds::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
 use crate::verdict_bounds::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
+use crate::verdict_bounds::append_evaluator_output_text;
 
 pub const EVALUATOR_SAMPLE_ATTEMPTS: usize = 2;
 
@@ -117,6 +118,19 @@ pub fn goal_evaluator_evidence(items: &[RolloutItem]) -> GoalEvaluatorEvidence {
 pub struct GoalEvaluatorEvidence {
     pub transcript: String,
     pub plan: Option<String>,
+}
+
+/// Fold synthetic or streamed evaluator text deltas under the local byte cap.
+pub fn collect_evaluator_output_text<I, S>(chunks: I) -> Result<String, GoalEvaluatorError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut acc = String::new();
+    for chunk in chunks {
+        append_evaluator_output_text(&mut acc, chunk.as_ref())?;
+    }
+    Ok(acc)
 }
 
 pub async fn verdict_from_sample_attempts<F, Fut>(

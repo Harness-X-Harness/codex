@@ -15,7 +15,7 @@ pub const GOAL_VERDICT_BLOCKER_KEY_MAX_CHARS: usize = 64;
 /// Append streamed evaluator text if it stays within the local byte cap.
 ///
 /// On overflow the accumulator is cleared so the oversized stream is not kept.
-pub fn append_evaluator_output_text(
+pub(crate) fn append_evaluator_output_text(
     acc: &mut String,
     text: &str,
 ) -> Result<(), EvaluatorOutputLimit> {
@@ -29,13 +29,7 @@ pub fn append_evaluator_output_text(
 
 /// Streamed evaluator output exceeded [`EVALUATOR_OUTPUT_MAX_BYTES`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EvaluatorOutputLimit;
-
-impl EvaluatorOutputLimit {
-    pub fn message(self) -> &'static str {
-        "goal evaluator output exceeded the local byte cap"
-    }
-}
+pub(crate) struct EvaluatorOutputLimit;
 
 pub(crate) fn field_exceeds_char_cap(value: &str, max_chars: usize) -> bool {
     value.chars().count() > max_chars

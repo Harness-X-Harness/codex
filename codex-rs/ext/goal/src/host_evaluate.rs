@@ -197,8 +197,8 @@ impl From<GoalEvaluatorParseError> for GoalEvaluatorError {
 }
 
 impl From<EvaluatorOutputLimit> for GoalEvaluatorError {
-    fn from(limit: EvaluatorOutputLimit) -> Self {
-        Self::Failed(limit.message().to_string())
+    fn from(_limit: EvaluatorOutputLimit) -> Self {
+        Self::Failed("goal evaluator output exceeded the local byte cap".into())
     }
 }
 

@@ -1,6 +1,7 @@
 //! Host skeptic vote parsing, clamp, and aggregation.
 
 use codex_goal_extension::GOAL_VERDICT_EVIDENCE_MAX_CHARS;
+use codex_goal_extension::GOAL_VERDICT_NEXT_STEP_MAX_CHARS;
 use codex_goal_extension::GoalCompletionAuthority;
 use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalSkepticPanelVerdict;
@@ -69,6 +70,22 @@ fn parse_goal_skeptic_vote_rejects_oversize_evidence() {
         }
     );
     assert!(!error.to_string().contains(&evidence));
+}
+
+#[test]
+fn parse_goal_skeptic_vote_rejects_oversize_next_step() {
+    let next_step = "n".repeat(GOAL_VERDICT_NEXT_STEP_MAX_CHARS + 1);
+    let error = parse_goal_skeptic_vote(&format!(
+        r#"{{"refuted":true,"evidence":"missing proof","next_step":"{next_step}"}}"#
+    ))
+    .expect_err("next_step cap");
+    assert_eq!(
+        error,
+        GoalSkepticParseError::FieldTooLong {
+            field: "next_step",
+            max_chars: GOAL_VERDICT_NEXT_STEP_MAX_CHARS,
+        }
+    );
 }
 
 #[test]
