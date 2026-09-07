@@ -599,21 +599,24 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let Some(goal) = self
+        let goal = match self
             .inner
             .state_dbs
             .thread_goals()
             .get_thread_goal(self.thread_id())
             .await
-            .map_err(|err| err.to_string())?
-        else {
-            self.inner.accounting_state.clear_active_goal();
-            return Ok(());
+        {
+            Ok(Some(goal)) if goal.status == codex_state::ThreadGoalStatus::Active => goal,
+            Ok(_) => {
+                self.inner.accounting_state.clear_active_goal();
+                self.release_goal_how().await;
+                return Ok(());
+            }
+            Err(err) => {
+                self.release_goal_how().await;
+                return Err(err.to_string());
+            }
         };
-        if goal.status != codex_state::ThreadGoalStatus::Active {
-            self.inner.accounting_state.clear_active_goal();
-            return Ok(());
-        }
         let start_options = thread
             .thread_extension_data()
             .get::<TurnStartOptions>()
@@ -632,7 +635,7 @@ impl GoalRuntimeHandle {
             owner,
         );
 
-        match thread
+        let started = match thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
                     turn_trigger: Some("goal".to_string()),
@@ -641,19 +644,24 @@ impl GoalRuntimeHandle {
             )
             .await
         {
-            Ok(StartIfIdleSubmission::Started { .. }) => {}
+            Ok(StartIfIdleSubmission::Started { .. }) => true,
             Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
                 tracing::debug!(
                     ?reason,
                     "skipping goal continuation because automatic idle work was rejected"
                 );
+                false
             }
             Err(error) => {
                 tracing::debug!(
                     %error,
                     "skipping goal continuation because turn input submission failed"
                 );
+                false
             }
+        };
+        if !started {
+            self.release_goal_how().await;
         }
 
         let current_turn_is_goal_active = self
