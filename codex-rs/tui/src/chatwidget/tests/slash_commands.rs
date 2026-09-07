@@ -973,6 +973,37 @@ async fn workflow_start_slash_command_reads_existing_file() {
 }
 
 #[tokio::test]
+async fn workflow_start_slash_command_rejects_oversized_file() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    std::fs::create_dir_all(&chat.config.cwd).expect("cwd");
+    let path = chat.config.cwd.join("huge.rhai");
+    let file = std::fs::File::create(&path).expect("create");
+    file.set_len(1_000_000).expect("sparse");
+    drop(file);
+
+    submit_composer_text(&mut chat, "/workflow start huge.rhai");
+
+    let event = rx.try_recv().expect("expected oversized-file error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains("Failed to read workflow file huge.rhai"),
+                "expected path-read error, got {rendered:?}"
+            );
+        }
+        AppEvent::StartThreadWorkflow { .. } => {
+            panic!("oversized path must not start a workflow")
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+}
+
+#[tokio::test]
 async fn workflow_start_slash_command_sends_catalog_name() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalHost, /*enabled*/ true);

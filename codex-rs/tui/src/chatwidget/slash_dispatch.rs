@@ -16,6 +16,7 @@ use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 use crate::workflow_display::WORKFLOW_USAGE;
 use crate::workflow_display::looks_like_workflow_name;
+use crate::workflow_source::read_workflow_path_source;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -992,7 +993,7 @@ impl ChatWidget {
                     "start" if !rest.is_empty() => {
                         let source_path = self.config.cwd.join(rest);
                         if source_path.is_file() {
-                            match std::fs::read_to_string(&source_path) {
+                            match read_workflow_path_source(&source_path) {
                                 Ok(source) => {
                                     self.app_event_tx.send(AppEvent::StartThreadWorkflow {
                                         thread_id,

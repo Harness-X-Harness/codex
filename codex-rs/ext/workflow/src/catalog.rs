@@ -10,11 +10,16 @@ use rhai::Engine;
 use rhai::Map;
 
 use crate::engine::MAX_WORKFLOW_OPERATIONS;
+use crate::engine::MAX_WORKFLOW_SOURCE_BYTES;
 use crate::engine::MAX_WORKFLOW_SOURCE_CHARS;
 use crate::engine::WorkflowSourceError;
+use crate::source_read::BoundedSourceError;
+use crate::source_read::read_bounded_workflow_source;
 
 const MAX_WORKFLOW_NAME_CHARS: usize = 64;
 const MAX_WORKFLOW_DESCRIPTION_CHARS: usize = 512;
+/// Inclusive cap on `.rhai` candidates inspected in one project or user scope.
+pub const MAX_CATALOG_SCOPE_RHAI_FILES: usize = 256;
 
 /// Library roots Host Goal reads. It does not read `~/.grok/**`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,6 +65,8 @@ pub enum CatalogError {
     DuplicateName { name: String, scope: &'static str },
     FilenameMismatch { filename: String, name: String },
     Meta(String),
+    SourceLimit(String),
+    CatalogExceeds(String),
     Io { path: String, error: String },
 }
 
@@ -83,7 +90,10 @@ impl fmt::Display for CatalogError {
                     "saved workflow filename '{filename}' must match meta.name '{name}'"
                 )
             }
-            Self::Meta(reason) | Self::Io { error: reason, .. } => f.write_str(reason),
+            Self::Meta(reason)
+            | Self::SourceLimit(reason)
+            | Self::CatalogExceeds(reason)
+            | Self::Io { error: reason, .. } => f.write_str(reason),
         }
     }
 }
@@ -116,11 +126,17 @@ pub fn resolve_named(name: &str, roots: &CatalogRoots) -> Result<CatalogScript, 
     if let Some(entry) = user.into_iter().find(|entry| entry.name == name) {
         return Ok(entry);
     }
-    for dir in [&roots.project_dir, &roots.user_dir] {
-        let path = dir.join(format!("{name}.rhai"));
-        if path.exists() {
-            return load_library_file(&path);
-        }
+    if let Some(result) = load_regular_named_file(&roots.project_dir, &name) {
+        return result;
+    }
+    if let Some(result) = load_regular_named_file(&roots.user_dir, &name) {
+        return result;
+    }
+    if let Some(result) = load_named_symlink(&roots.project_dir, &name) {
+        return result;
+    }
+    if let Some(result) = load_named_symlink(&roots.user_dir, &name) {
+        return result;
     }
     Err(CatalogError::UnknownName(name))
 }
@@ -154,11 +170,22 @@ fn scan_directory(
         path: dir.display().to_string(),
         error: error.to_string(),
     })?;
-    let mut paths: Vec<PathBuf> = read_dir
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("rhai"))
-        .collect();
+    let mut paths = Vec::new();
+    for entry in read_dir {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rhai") {
+            continue;
+        }
+        if paths.len() >= MAX_CATALOG_SCOPE_RHAI_FILES {
+            return Err(CatalogError::CatalogExceeds(format!(
+                "workflow catalog exceeds {MAX_CATALOG_SCOPE_RHAI_FILES} files in {scope} scope"
+            )));
+        }
+        paths.push(path);
+    }
     paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
 
     let mut entries = Vec::new();
@@ -172,6 +199,7 @@ fn scan_directory(
             Err(
                 CatalogError::Io { .. }
                 | CatalogError::Meta(_)
+                | CatalogError::SourceLimit(_)
                 | CatalogError::InvalidName(_)
                 | CatalogError::FilenameMismatch { .. },
             ) => continue,
@@ -187,27 +215,58 @@ fn scan_directory(
     Ok(entries)
 }
 
-fn load_library_file(path: &Path) -> Result<CatalogScript, CatalogError> {
-    let meta = std::fs::symlink_metadata(path).map_err(|error| CatalogError::Io {
-        path: path.display().to_string(),
-        error: error.to_string(),
-    })?;
+/// After both scopes miss a valid definition, reload a regular `{name}.rhai`
+/// so filename mismatch, meta, oversize, and I/O stay visible instead of
+/// `UnknownName`.
+fn load_regular_named_file(dir: &Path, name: &str) -> Option<Result<CatalogScript, CatalogError>> {
+    let path = dir.join(format!("{name}.rhai"));
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return None;
+    };
     if meta.file_type().is_symlink() || !meta.is_file() {
-        return Err(CatalogError::Io {
-            path: path.display().to_string(),
-            error: "expected a non-symlink regular file".to_string(),
-        });
+        return None;
     }
-    let source = std::fs::read_to_string(path).map_err(|error| CatalogError::Io {
-        path: path.display().to_string(),
-        error: error.to_string(),
-    })?;
-    let chars = source.chars().count();
-    if chars > MAX_WORKFLOW_SOURCE_CHARS {
-        return Err(CatalogError::Meta(format!(
-            "workflow source is {chars} characters; max is {MAX_WORKFLOW_SOURCE_CHARS}"
-        )));
+    Some(load_library_file(&path))
+}
+
+/// Leftover `{name}.rhai` symlink after both scopes had no regular named file.
+fn load_named_symlink(dir: &Path, name: &str) -> Option<Result<CatalogScript, CatalogError>> {
+    let path = dir.join(format!("{name}.rhai"));
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return None;
+    };
+    if !meta.file_type().is_symlink() {
+        return None;
     }
+    Some(load_library_file(&path))
+}
+
+fn load_library_file(path: &Path) -> Result<CatalogScript, CatalogError> {
+    let source = match read_bounded_workflow_source(path) {
+        Ok(source) => source,
+        Err(BoundedSourceError::Io(error)) => {
+            return Err(CatalogError::Io {
+                path: path.display().to_string(),
+                error: error.to_string(),
+            });
+        }
+        Err(BoundedSourceError::TooManyBytes { actual }) => {
+            return Err(CatalogError::SourceLimit(format!(
+                "workflow source is {actual} bytes; max is {MAX_WORKFLOW_SOURCE_BYTES}"
+            )));
+        }
+        Err(BoundedSourceError::NotUtf8) => {
+            return Err(CatalogError::Io {
+                path: path.display().to_string(),
+                error: "workflow source must be UTF-8".to_string(),
+            });
+        }
+        Err(BoundedSourceError::TooManyChars { actual }) => {
+            return Err(CatalogError::SourceLimit(format!(
+                "workflow source is {actual} characters; max is {MAX_WORKFLOW_SOURCE_CHARS}"
+            )));
+        }
+    };
     let parsed = extract_meta(&source)?;
     validate_filename(path, &parsed.name)?;
     Ok(CatalogScript {

@@ -32,6 +32,9 @@ use crate::scratch;
 
 /// Inclusive cap on the source document.
 pub const MAX_WORKFLOW_SOURCE_CHARS: usize = 32_000;
+/// Inclusive UTF-8 byte cap: four bytes per source character plus a
+/// truncated-codepoint allowance. Used before allocating a file read.
+pub const MAX_WORKFLOW_SOURCE_BYTES: usize = MAX_WORKFLOW_SOURCE_CHARS * 4 + 4;
 /// Inclusive cap on VM operations for one host resume.
 pub const MAX_WORKFLOW_OPERATIONS: u64 = 50_000;
 /// Inclusive cap on `ask` yields in one run.
