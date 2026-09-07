@@ -300,6 +300,11 @@ impl WorkflowRun {
         if self.status != WorkflowStatus::Waiting {
             return Err("workflow is not waiting".to_string());
         }
+        if self.pending_instruction.is_some() {
+            self.status = WorkflowStatus::Active;
+            self.updated_at = unix_seconds();
+            return Ok(WorkflowAdvance::Yielded);
+        }
         match self.eval_current() {
             Ok(outcome) => self.apply_outcome(outcome),
             Err(error) => {
@@ -312,6 +317,17 @@ impl WorkflowRun {
     pub fn park(&mut self) -> Result<(), String> {
         if self.status != WorkflowStatus::Paused {
             return Err("workflow is not paused".to_string());
+        }
+        self.status = WorkflowStatus::Waiting;
+        self.updated_at = unix_seconds();
+        Ok(())
+    }
+
+    /// Demote an `active` occupant to waiting FIFO when the engine slot is
+    /// not actually owned.
+    pub fn yield_occupancy(&mut self) -> Result<(), String> {
+        if self.status != WorkflowStatus::Active {
+            return Err("workflow is not active".to_string());
         }
         self.status = WorkflowStatus::Waiting;
         self.updated_at = unix_seconds();

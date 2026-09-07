@@ -19,6 +19,7 @@ use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
 use codex_core::content_items_to_text;
 use codex_extension_api::EngineOccupant;
+use codex_extension_api::EngineSlot;
 use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::engine_slot;
@@ -29,6 +30,7 @@ use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
 use crate::catalog::resolve_named;
+use crate::claim::WorkflowClaim;
 use crate::engine::SpawnBinding;
 use crate::engine::WorkflowSourceError;
 use crate::engine::truncate_workflow_reply;
@@ -226,17 +228,17 @@ impl WorkflowService {
                 "a workflow is already active; /workflow stop first".to_string(),
             ));
         }
-        let claimed = self.try_claim_workflow(thread_id).await;
-        let run = build(thread_id, claimed).map_err(WorkflowServiceError::InvalidRequest)?;
+        let mut claim = WorkflowClaim::acquire(self.workflow_slot(thread_id).await);
+        claim.rollback_if_held();
+        let claimed = claim.succeeded();
+        let run = match build(thread_id, claimed) {
+            Ok(run) => run,
+            Err(error) => return Err(WorkflowServiceError::InvalidRequest(error)),
+        };
         if let Err(error) = persist_run(&self.persist_root, &run) {
-            if claimed {
-                if let Some(thread) = self.live_thread(thread_id).await {
-                    let _ = engine_slot(thread.thread_extension_data())
-                        .release(EngineOccupant::Workflow);
-                }
-            }
             return Err(error);
         }
+        claim.commit();
         self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
         self.kick_if_active(&run).await;
@@ -320,11 +322,14 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let run = if self.try_claim_workflow(thread_id).await {
-            self.mutate_run(thread_id, WorkflowRun::resume).await?
+        let claim = WorkflowClaim::acquire(self.workflow_slot(thread_id).await);
+        let run = if claim.succeeded() {
+            self.mutate_run(thread_id, WorkflowRun::resume).await
         } else {
-            self.mutate_run(thread_id, WorkflowRun::park).await?
+            self.mutate_run(thread_id, WorkflowRun::park).await
         };
+        let run = run?;
+        claim.commit();
         self.kick_if_active(&run).await;
         Ok(run)
     }
@@ -337,6 +342,12 @@ impl WorkflowService {
         else {
             return Ok(());
         };
+        if run.occupies_idle() && !self.try_claim_workflow(thread_id).await {
+            self.mutate_run(thread_id, WorkflowRun::yield_occupancy)
+                .await
+                .map_err(|err| err.to_string())?;
+            return Ok(());
+        }
         self.refresh_idle_hold(&run).await;
         Ok(())
     }
@@ -350,12 +361,19 @@ impl WorkflowService {
             return Ok(());
         };
         let run = if run.status == WorkflowStatus::Waiting {
-            if !self.try_claim_workflow(thread_id).await {
+            let claim = WorkflowClaim::acquire(self.workflow_slot(thread_id).await);
+            if !claim.succeeded() {
                 return Ok(());
             }
-            self.mutate_run(thread_id, |run| run.activate().map(|_| ()))
+            let run = match self
+                .mutate_run(thread_id, |run| run.activate().map(|_| ()))
                 .await
-                .map_err(|err| err.to_string())?
+            {
+                Ok(run) => run,
+                Err(err) => return Err(err.to_string()),
+            };
+            claim.commit();
+            run
         } else {
             run
         };
@@ -598,14 +616,22 @@ impl WorkflowService {
         };
         let slot = engine_slot(thread.thread_extension_data());
         if run.occupies_idle() {
-            let _ = slot.try_claim(EngineOccupant::Workflow);
-            thread.thread_extension_data().insert(HostIdleHold);
+            if slot.try_claim(EngineOccupant::Workflow) {
+                thread.thread_extension_data().insert(HostIdleHold);
+            } else {
+                thread.thread_extension_data().remove::<HostIdleHold>();
+            }
             false
         } else {
             let released = slot.release(EngineOccupant::Workflow);
             thread.thread_extension_data().remove::<HostIdleHold>();
             released
         }
+    }
+
+    async fn workflow_slot(&self, thread_id: ThreadId) -> Option<Arc<EngineSlot>> {
+        let thread = self.live_thread(thread_id).await?;
+        Some(engine_slot(thread.thread_extension_data()))
     }
 
     async fn kick_waiting_goal(&self, thread_id: ThreadId) {

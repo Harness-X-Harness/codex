@@ -4,6 +4,7 @@
 //! does not write Goal state.
 
 mod catalog;
+mod claim;
 mod engine;
 mod extension;
 mod host_opts;
@@ -22,6 +23,9 @@ pub use catalog::MAX_CATALOG_SCOPE_RHAI_FILES;
 pub use catalog::looks_like_catalog_name;
 pub use catalog::normalize_catalog_name;
 pub use catalog::resolve_named;
+pub use claim::OwnershipEffect;
+pub use claim::WorkflowClaim;
+pub use claim::reconcile_workflow_ownership;
 pub use engine::MAX_WORKFLOW_OPERATIONS;
 pub use engine::MAX_WORKFLOW_REPLY_CHARS;
 pub use engine::MAX_WORKFLOW_SOURCE_BYTES;
