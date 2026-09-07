@@ -100,3 +100,32 @@ fn activate_restores_a_parked_yield_without_re_eval() {
     assert_eq!(run.status, WorkflowStatus::Active);
     assert_eq!(run.pending_instruction, instruction);
 }
+
+#[test]
+fn reconcile_releases_a_completed_workflow_occupant() {
+    let slot = EngineSlot::default();
+    assert!(slot.try_claim(EngineOccupant::Workflow));
+    let mut run = WorkflowRun::start(ThreadId::from_u128(10), "complete();").expect("complete");
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(
+        reconcile_workflow_ownership(&slot, &mut run),
+        OwnershipEffect::Released { kicked: true }
+    );
+    assert_eq!(run.status, WorkflowStatus::Complete);
+    assert_eq!(slot.occupant(), None);
+}
+
+#[test]
+fn reconcile_does_not_steal_goal_how_from_a_waiting_run() {
+    let slot = EngineSlot::default();
+    assert!(slot.try_claim(EngineOccupant::GoalHow));
+    let mut run =
+        WorkflowRun::queue(ThreadId::from_u128(11), r#"ask("x"); complete();"#).expect("queued");
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+    assert_eq!(
+        reconcile_workflow_ownership(&slot, &mut run),
+        OwnershipEffect::Released { kicked: false }
+    );
+    assert_eq!(run.status, WorkflowStatus::Waiting);
+    assert_eq!(slot.occupant(), Some(EngineOccupant::GoalHow));
+}
