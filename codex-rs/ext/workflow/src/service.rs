@@ -316,10 +316,22 @@ impl WorkflowService {
         if run.occupies_idle() {
             self.kick_if_active(&run).await;
         } else {
-            // Stop interrupts an in-flight yield; the first idle notify can
-            // fire while that turn is still live. Re-notify after the owned
-            // terminal so a waiting Goal HOW can claim the slot.
+            // Stop interrupts an in-flight yield. The owned terminal is
+            // applied inside abort_all_tasks before mailbox teardown, so the
+            // first idle notify can be rejected as PendingTriggerTurn and no
+            // later stock idle is emitted. Re-notify now and again after that
+            // teardown yields so a waiting Goal HOW can claim the slot.
             self.kick_waiting_goal(run.thread_id).await;
+            if let Some(thread) = self.live_thread(run.thread_id).await {
+                tokio::spawn(async move {
+                    for _ in 0..4 {
+                        tokio::task::yield_now().await;
+                        thread
+                            .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
+                            .await;
+                    }
+                });
+            }
         }
         Ok(Some(run))
     }
