@@ -15,6 +15,7 @@ mod run;
 mod scratch;
 mod service;
 mod source_read;
+mod spawn_waits;
 mod steering;
 
 pub use catalog::CatalogError;

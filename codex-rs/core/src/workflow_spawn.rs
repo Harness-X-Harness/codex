@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::agent::AgentStatus;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
@@ -9,15 +7,17 @@ use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::user_input::UserInput;
+use tokio::sync::watch;
 
 /// Classified stock-spawn wait result. Completed child outcomes stay here so
 /// `/workflow` can journal `ok == false` without treating infrastructure
 /// failure as a script-visible child error.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum StockSpawnWait {
     Completed(String),
     ChildErrored,
     ChildUnavailable,
+    Cancelled,
 }
 
 impl CodexThread {
@@ -29,10 +29,12 @@ impl CodexThread {
     ///
     /// Waits for that existing child turn and returns a classified child outcome.
     /// Does not start a parent-thread turn and does not change stock `spawn_agent`.
+    /// `cancel` becoming `true` drops this wait without interrupting the stock child.
     pub async fn spawn_stock_agent_and_wait_text(
         &self,
         message: &str,
         task_name: &str,
+        cancel: watch::Receiver<bool>,
     ) -> CodexResult<StockSpawnWait> {
         if !self.stock_spawn_agent_available().await {
             return Err(CodexErr::InvalidRequest(
@@ -65,27 +67,69 @@ impl CodexThread {
                 },
             )
             .await?;
-        loop {
-            match self
-                .session
-                .services
-                .agent_control
-                .get_status(spawned.thread_id)
-                .await
-            {
-                AgentStatus::Completed(text) => {
-                    return Ok(StockSpawnWait::Completed(text.unwrap_or_default()));
+        if *cancel.borrow() {
+            return Ok(StockSpawnWait::Cancelled);
+        }
+        let status_rx = match self
+            .session
+            .services
+            .agent_control
+            .subscribe_status(spawned.thread_id)
+            .await
+        {
+            Ok(status_rx) => status_rx,
+            Err(_) => {
+                let status = self
+                    .session
+                    .services
+                    .agent_control
+                    .get_status(spawned.thread_id)
+                    .await;
+                return Ok(
+                    classify_stock_status(status).unwrap_or(StockSpawnWait::ChildUnavailable)
+                );
+            }
+        };
+        Ok(wait_classified_stock_status(status_rx, cancel).await)
+    }
+}
+
+fn classify_stock_status(status: AgentStatus) -> Option<StockSpawnWait> {
+    match status {
+        AgentStatus::Completed(text) => Some(StockSpawnWait::Completed(text.unwrap_or_default())),
+        AgentStatus::Errored(_) => Some(StockSpawnWait::ChildErrored),
+        AgentStatus::Shutdown | AgentStatus::NotFound => Some(StockSpawnWait::ChildUnavailable),
+        AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted => None,
+    }
+}
+
+async fn wait_classified_stock_status(
+    mut status_rx: watch::Receiver<AgentStatus>,
+    mut cancel: watch::Receiver<bool>,
+) -> StockSpawnWait {
+    loop {
+        if *cancel.borrow() {
+            return StockSpawnWait::Cancelled;
+        }
+        if let Some(done) = classify_stock_status(status_rx.borrow().clone()) {
+            return done;
+        }
+        tokio::select! {
+            changed = cancel.changed() => {
+                if changed.is_err() || *cancel.borrow() {
+                    return StockSpawnWait::Cancelled;
                 }
-                AgentStatus::Errored(_) => return Ok(StockSpawnWait::ChildErrored),
-                AgentStatus::Shutdown | AgentStatus::NotFound => {
-                    return Ok(StockSpawnWait::ChildUnavailable);
-                }
-                // Interrupted is not a completed child outcome: the child may
-                // still receive more input.
-                AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted => {
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            changed = status_rx.changed() => {
+                if changed.is_err() {
+                    return classify_stock_status(status_rx.borrow().clone())
+                        .unwrap_or(StockSpawnWait::ChildUnavailable);
                 }
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "workflow_spawn_tests.rs"]
+mod tests;

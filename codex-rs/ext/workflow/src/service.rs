@@ -43,6 +43,7 @@ use crate::persist::load_workflow_document;
 use crate::persist::persist_workflow_document;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
+use crate::spawn_waits::SpawnWaits;
 use crate::steering::yield_steering_item;
 
 /// Errors from the workflow service.
@@ -78,6 +79,7 @@ pub struct WorkflowService {
     project_root: PathBuf,
     runs: Mutex<HashMap<String, WorkflowRun>>,
     in_flight: InFlightTurns,
+    spawn_waits: SpawnWaits,
     thread_manager: Weak<ThreadManager>,
     update_sink: StdMutex<Option<WorkflowUpdateSink>>,
 }
@@ -97,6 +99,7 @@ impl WorkflowService {
             project_root: project_root.into(),
             runs: Mutex::new(HashMap::new()),
             in_flight: InFlightTurns::default(),
+            spawn_waits: SpawnWaits::default(),
             thread_manager,
             update_sink: StdMutex::new(None),
         }
@@ -226,6 +229,7 @@ impl WorkflowService {
                 "a workflow is already active; /workflow stop first".to_string(),
             ));
         }
+        self.spawn_waits.cancel(thread_id);
         let mut claim = self.claim_workflow(thread_id).await;
         claim.rollback_if_held();
         let claimed = claim.succeeded();
@@ -436,6 +440,7 @@ impl WorkflowService {
                 return Ok(());
             };
             if let Some(task_name) = run.pending_spawn_task_name.clone() {
+                let cancel = self.spawn_waits.remember(thread_id);
                 if let Err(err) = self
                     .mutate_run(thread_id, |run| {
                         run.mark_pending_yield_started();
@@ -443,14 +448,20 @@ impl WorkflowService {
                     })
                     .await
                 {
+                    self.spawn_waits.forget(thread_id);
                     tracing::debug!("failed to mark workflow spawn started for {thread_id}: {err}");
                     return Ok(());
                 }
                 match thread
-                    .spawn_stock_agent_and_wait_text(&instruction, &task_name)
+                    .spawn_stock_agent_and_wait_text(&instruction, &task_name, cancel)
                     .await
                 {
+                    Ok(StockSpawnWait::Cancelled) => {
+                        self.spawn_waits.forget(thread_id);
+                        return Ok(());
+                    }
                     Ok(StockSpawnWait::Completed(reply)) => {
+                        self.spawn_waits.forget(thread_id);
                         match self
                             .advance_spawn_wait(thread_id, HostCallResult::success(reply))
                             .await
@@ -468,6 +479,7 @@ impl WorkflowService {
                         }
                     }
                     Ok(StockSpawnWait::ChildErrored) => {
+                        self.spawn_waits.forget(thread_id);
                         match self
                             .advance_spawn_wait(
                                 thread_id,
@@ -488,6 +500,7 @@ impl WorkflowService {
                         }
                     }
                     Ok(StockSpawnWait::ChildUnavailable) => {
+                        self.spawn_waits.forget(thread_id);
                         match self
                             .advance_spawn_wait(
                                 thread_id,
@@ -508,6 +521,7 @@ impl WorkflowService {
                         }
                     }
                     Err(error) => {
+                        self.spawn_waits.forget(thread_id);
                         tracing::debug!(
                             %error,
                             "workflow spawn failed with an unrecoverable host/runtime error"
@@ -630,6 +644,9 @@ impl WorkflowService {
     }
 
     async fn after_run_changed(&self, run: &WorkflowRun) {
+        if run.status != WorkflowStatus::Active {
+            self.spawn_waits.cancel(run.thread_id);
+        }
         let released = self.refresh_idle_hold(run).await;
         let sink = self
             .update_sink
@@ -759,3 +776,7 @@ pub type SharedWorkflowService = Arc<WorkflowService>;
 #[cfg(test)]
 #[path = "service_owned_turn_tests.rs"]
 mod owned_turn_tests;
+
+#[cfg(test)]
+#[path = "service_spawn_wait_tests.rs"]
+mod spawn_wait_tests;
