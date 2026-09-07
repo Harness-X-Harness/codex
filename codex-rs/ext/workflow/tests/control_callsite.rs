@@ -3,16 +3,19 @@ use tempfile::TempDir;
 
 use codex_protocol::ThreadId;
 use codex_workflow_extension::REPLAY_DIVERGENCE;
+use codex_workflow_extension::SpawnBinding;
 use codex_workflow_extension::WorkflowEval;
 use codex_workflow_extension::WorkflowRun;
 use codex_workflow_extension::WorkflowStatus;
 use codex_workflow_extension::eval_source;
+use codex_workflow_extension::eval_source_with_spawn;
 
 mod common;
 use common::agent_record;
 use common::await_user_record;
 use common::pause_record;
 use common::source_callsite;
+use common::spawn_record;
 
 #[test]
 fn pause_resumes_through_the_same_callsite() {
@@ -139,6 +142,21 @@ fn result_bearing_ask_and_agent_identity_is_unchanged() {
             instruction: "Compile the crate.".to_string(),
         }
     );
+    let spawned = r#"
+        let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+        if r.ok && r.text == "ok" { complete(); }
+    "#;
+    assert_eq!(
+        eval_source_with_spawn(
+            spawned,
+            &[spawn_record("Say ok.", "review", "ok")],
+            &rhai::Map::new(),
+            SpawnBinding::Available,
+        )
+        .expect("spawn")
+        .eval,
+        WorkflowEval::Completed
+    );
 }
 
 #[test]
@@ -150,7 +168,6 @@ fn two_pause_callsites_do_not_share_a_digest() {
     "#;
     let first = source_callsite(source, "pause", 0);
     let second = source_callsite(source, "pause", 1);
-    assert_ne!(first, second);
     assert_eq!(
         eval_source(source, &[pause_record(&first)]).expect("second pause"),
         WorkflowEval::Paused

@@ -1,7 +1,6 @@
 use codex_workflow_extension::ContinuationKind;
 use codex_workflow_extension::ContinuationRecord;
 use codex_workflow_extension::HostCallResult;
-use codex_workflow_extension::control_request;
 use codex_workflow_extension::request_digest;
 
 pub fn ask_record(instruction: &str, reply: &str) -> ContinuationRecord {
@@ -55,7 +54,7 @@ pub fn spawn_failure_record(prompt: &str, task_name: &str, error: &str) -> Conti
 pub fn pause_record(callsite: &str) -> ContinuationRecord {
     record(
         ContinuationKind::Pause,
-        control_request(callsite),
+        serde_json::json!({ "callsite": callsite }),
         HostCallResult::success(""),
     )
 }
@@ -63,7 +62,7 @@ pub fn pause_record(callsite: &str) -> ContinuationRecord {
 pub fn await_user_record(callsite: &str) -> ContinuationRecord {
     record(
         ContinuationKind::AwaitUser,
-        control_request(callsite),
+        serde_json::json!({ "callsite": callsite }),
         HostCallResult::success(""),
     )
 }
