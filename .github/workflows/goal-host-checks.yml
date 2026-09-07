@@ -66,7 +66,7 @@ jobs:
           set -euo pipefail
           just test -p codex-workflow-extension
           just test -p codex-goal-extension -E 'test(/host_policy_installs|workflow_how_turn|host_evaluate|update_goal|host_skeptics/)'
-          just test -p codex-app-server -E 'test(/thread_workflow::|thread_goal_host/)'
+          just test -p codex-app-server -E 'test(/thread_workflow::|thread_workflow_occupancy|thread_goal_host/)'
           just test -p codex-tui -E 'test(/workflow/)'
       - name: Check for a clean worktree
         if: always() && !cancelled()
