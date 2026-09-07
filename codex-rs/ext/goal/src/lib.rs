@@ -29,7 +29,6 @@ pub use evaluator_prompt::EVALUATOR_SAMPLE_ATTEMPTS;
 pub use evaluator_prompt::GoalEvaluatorEvidence;
 pub use evaluator_prompt::build_goal_evaluator_user_payload;
 pub use evaluator_prompt::collect_evaluator_output_text;
-pub use evaluator_prompt::collect_evaluator_output_text;
 pub use evaluator_prompt::goal_evaluator_evidence;
 pub use evaluator_prompt::goal_evaluator_output_schema;
 pub use evaluator_prompt::verdict_from_sample_attempts;
