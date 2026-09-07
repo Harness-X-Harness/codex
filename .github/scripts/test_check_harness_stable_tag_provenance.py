@@ -44,11 +44,12 @@ class AncestryTest(unittest.TestCase):
             tag = self.commit(repo, "stock.txt", "stock")
             self.run_git(repo, "tag", "rust-v0.200.1", tag)
             self.commit(repo, "host.txt", "host goal")
-            report = check_provenance(
+            report, ok = check_provenance(
                 repo,
                 "harness/rust-v0.200.1",
                 ("HEAD",),
             )
+            self.assertTrue(ok)
             self.assertIn("stock_tag=rust-v0.200.1", report)
             self.assertIn("ancestor=yes", report)
 
@@ -56,9 +57,19 @@ class AncestryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = self.init_repo(Path(temp_dir))
             self.commit(repo, "stock.txt", "stock")
-            with self.assertRaises(ProvenanceError) as caught:
-                check_provenance(repo, "harness/other-tag", ("HEAD",))
-            self.assertIn("missing stock tag other-tag", str(caught.exception))
+            report, ok = check_provenance(repo, "harness/other-tag", ("HEAD",))
+            self.assertFalse(ok)
+            self.assertIn("stock_tag=other-tag", report)
+            self.assertIn("tag_sha=missing", report)
+
+    def test_branch_name_is_not_accepted_as_the_stock_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = self.init_repo(Path(temp_dir))
+            self.commit(repo, "stock.txt", "stock")
+            self.run_git(repo, "branch", "other-tag")
+            report, ok = check_provenance(repo, "harness/other-tag", ("HEAD",))
+            self.assertFalse(ok)
+            self.assertIn("tag_sha=missing", report)
 
     def test_tag_that_is_not_an_ancestor_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -69,9 +80,9 @@ class AncestryTest(unittest.TestCase):
             self.run_git(repo, "tag", "rust-v0.200.1", other)
             self.run_git(repo, "switch", "-")
             self.commit(repo, "host.txt", "host goal")
-            with self.assertRaises(ProvenanceError) as caught:
-                check_provenance(repo, "harness/rust-v0.200.1", ("HEAD",))
-            self.assertIn("is not an ancestor", str(caught.exception))
+            report, ok = check_provenance(repo, "harness/rust-v0.200.1", ("HEAD",))
+            self.assertFalse(ok)
+            self.assertIn("ancestor=no", report)
 
     def init_repo(self, root: Path) -> Path:
         self.run_git(root, "init", "--initial-branch=main")

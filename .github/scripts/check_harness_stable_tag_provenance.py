@@ -7,13 +7,12 @@ Codex version and is not a second source-authority.
 
 import argparse
 import subprocess
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 
 class ProvenanceError(Exception):
-    """Branch/tag mapping or ancestry failed."""
+    """Branch/tag mapping failed."""
 
 
 def expected_stock_tag(base_branch: str) -> str:
@@ -28,6 +27,10 @@ def expected_stock_tag(base_branch: str) -> str:
     return tag
 
 
+def stock_tag_ref(tag: str) -> str:
+    return f"refs/tags/{tag}"
+
+
 def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(
         ["git", *args],
@@ -37,12 +40,11 @@ def git(repo: Path, *args: str) -> str:
     ).strip()
 
 
-def short_sha(repo: Path, ref: str) -> str:
+def short_sha(repo: Path, ref: str) -> str | None:
     try:
         return git(repo, "rev-parse", "--verify", "--short", f"{ref}^{{commit}}")
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.strip() or error.stdout.strip() or str(error)
-        raise ProvenanceError(f"missing ref {ref}: {detail}") from error
+    except subprocess.CalledProcessError:
+        return None
 
 
 def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
@@ -50,39 +52,43 @@ def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
         ["git", "merge-base", "--is-ancestor", ancestor, descendant],
         cwd=repo,
         check=False,
-        capture_output=True,
-        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    if result.returncode == 0:
-        return True
-    if result.returncode == 1:
-        return False
-    detail = result.stderr.strip() or result.stdout.strip() or str(result.returncode)
-    raise ProvenanceError(f"ancestry check failed for {ancestor} -> {descendant}: {detail}")
+    return result.returncode == 0
 
 
-def check_provenance(repo: Path, base_branch: str, lineage_refs: Sequence[str]) -> str:
-    tag = expected_stock_tag(base_branch)
+def check_provenance(
+    repo: Path, base_branch: str, lineage_refs: Sequence[str]
+) -> tuple[str, bool]:
+    lines = [f"harness_branch={base_branch}"]
     try:
-        tag_sha = short_sha(repo, tag)
-    except ProvenanceError as error:
-        raise ProvenanceError(f"missing stock tag {tag}: {error}") from error
-
-    lines = [
-        f"harness_branch={base_branch}",
-        f"stock_tag={tag}",
-        f"tag_sha={tag_sha}",
-    ]
+        tag = expected_stock_tag(base_branch)
+    except ProvenanceError:
+        lines.append("stock_tag=invalid")
+        return "\n".join(lines), False
+    lines.append(f"stock_tag={tag}")
+    tag_ref = stock_tag_ref(tag)
+    tag_sha = short_sha(repo, tag_ref)
+    if tag_sha is None:
+        lines.append("tag_sha=missing")
+        return "\n".join(lines), False
+    lines.append(f"tag_sha={tag_sha}")
     if not lineage_refs:
-        raise ProvenanceError("no lineage refs to check")
+        lines.append("lineage=missing")
+        return "\n".join(lines), False
+    ok = True
     for ref in lineage_refs:
         sha = short_sha(repo, ref)
-        if not is_ancestor(repo, tag, ref):
-            raise ProvenanceError(
-                f"stock tag {tag} ({tag_sha}) is not an ancestor of {ref} ({sha})"
-            )
-        lines.append(f"lineage={ref}:{sha} ancestor=yes")
-    return "\n".join(lines)
+        if sha is None:
+            lines.append(f"lineage={ref}:missing ancestor=no")
+            ok = False
+            continue
+        ancestor = is_ancestor(repo, tag_ref, ref)
+        lines.append(f"lineage={ref}:{sha} ancestor={'yes' if ancestor else 'no'}")
+        if not ancestor:
+            ok = False
+    return "\n".join(lines), ok
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -90,30 +96,18 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--base-branch", required=True)
     parser.add_argument("--lineage-ref", action="append", default=[])
     parser.add_argument("--repo", default=".")
-    parser.add_argument(
-        "--print-tag",
-        action="store_true",
-        help="print the derived stock tag and exit",
-    )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    try:
-        if args.print_tag:
-            print(expected_stock_tag(args.base_branch))
-            return 0
-        report = check_provenance(
-            Path(args.repo).resolve(),
-            args.base_branch,
-            args.lineage_ref,
-        )
-    except ProvenanceError as error:
-        print(f"harness provenance: {error}", file=sys.stderr)
-        return 1
+    report, ok = check_provenance(
+        Path(args.repo).resolve(),
+        args.base_branch,
+        args.lineage_ref,
+    )
     print(report)
-    return 0
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
