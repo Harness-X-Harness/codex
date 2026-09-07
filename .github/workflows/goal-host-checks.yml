@@ -17,6 +17,31 @@ permissions:
   contents: read
 
 jobs:
+  provenance:
+    name: Harness stable-tag provenance
+    if: github.event_name == 'pull_request' && startsWith(github.base_ref, 'harness/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Fetch harness base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - name: Check matching stock tag is an ancestor
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/check_harness_stable_tag_provenance.py \
+            --base-branch "${{ github.base_ref }}" \
+            --lineage-ref HEAD \
+            --lineage-ref "origin/${{ github.base_ref }}"
+      - name: Test provenance helper
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s .github/scripts -p 'test_check_harness_stable_tag_provenance.py'
+
   rust:
     name: Host Goal Rust gates
     runs-on: ubuntu-24.04
