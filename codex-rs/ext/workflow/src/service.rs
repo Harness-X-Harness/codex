@@ -313,7 +313,14 @@ impl WorkflowService {
             .mutate_run(thread_id, move |run| run.apply_owned_host_result(result))
             .await?;
         self.in_flight.forget(thread_id);
-        self.kick_if_active(&run).await;
+        if run.occupies_idle() {
+            self.kick_if_active(&run).await;
+        } else {
+            // Stop interrupts an in-flight yield; the first idle notify can
+            // fire while that turn is still live. Re-notify after the owned
+            // terminal so a waiting Goal HOW can claim the slot.
+            self.kick_waiting_goal(run.thread_id).await;
+        }
         Ok(Some(run))
     }
 
