@@ -30,7 +30,9 @@ use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
 use crate::catalog::resolve_named;
+use crate::claim::OwnershipEffect;
 use crate::claim::WorkflowClaim;
+use crate::claim::reconcile_workflow_ownership;
 use crate::engine::SpawnBinding;
 use crate::engine::WorkflowSourceError;
 use crate::engine::truncate_workflow_reply;
@@ -228,7 +230,7 @@ impl WorkflowService {
                 "a workflow is already active; /workflow stop first".to_string(),
             ));
         }
-        let mut claim = WorkflowClaim::acquire(self.workflow_slot(thread_id).await);
+        let mut claim = self.claim_workflow(thread_id).await;
         claim.rollback_if_held();
         let claimed = claim.succeeded();
         let run = match build(thread_id, claimed) {
@@ -322,7 +324,7 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        let claim = WorkflowClaim::acquire(self.workflow_slot(thread_id).await);
+        let claim = self.claim_workflow(thread_id).await;
         let run = if claim.succeeded() {
             self.mutate_run(thread_id, WorkflowRun::resume).await
         } else {
@@ -342,13 +344,21 @@ impl WorkflowService {
         else {
             return Ok(());
         };
-        if run.occupies_idle() && !self.try_claim_workflow(thread_id).await {
-            self.mutate_run(thread_id, WorkflowRun::yield_occupancy)
-                .await
-                .map_err(|err| err.to_string())?;
+        let Some(slot) = self.workflow_slot(thread_id).await else {
+            self.refresh_idle_hold(&run).await;
             return Ok(());
+        };
+        let mut snapshot = run;
+        match reconcile_workflow_ownership(&slot, &mut snapshot) {
+            OwnershipEffect::Parked => {
+                self.mutate_run(thread_id, WorkflowRun::yield_occupancy)
+                    .await
+                    .map_err(|err| err.to_string())?;
+            }
+            OwnershipEffect::Held | OwnershipEffect::Released { .. } => {
+                self.refresh_idle_hold(&snapshot).await;
+            }
         }
-        self.refresh_idle_hold(&run).await;
         Ok(())
     }
 
@@ -361,7 +371,7 @@ impl WorkflowService {
             return Ok(());
         };
         let run = if run.status == WorkflowStatus::Waiting {
-            let claim = WorkflowClaim::acquire(self.workflow_slot(thread_id).await);
+            let claim = self.claim_workflow(thread_id).await;
             if !claim.succeeded() {
                 return Ok(());
             }
@@ -632,6 +642,13 @@ impl WorkflowService {
     async fn workflow_slot(&self, thread_id: ThreadId) -> Option<Arc<EngineSlot>> {
         let thread = self.live_thread(thread_id).await?;
         Some(engine_slot(thread.thread_extension_data()))
+    }
+
+    async fn claim_workflow(&self, thread_id: ThreadId) -> WorkflowClaim {
+        match self.workflow_slot(thread_id).await {
+            Some(slot) => WorkflowClaim::acquire(slot),
+            None => WorkflowClaim::vacuous(),
+        }
     }
 
     async fn kick_waiting_goal(&self, thread_id: ThreadId) {

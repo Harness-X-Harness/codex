@@ -23,16 +23,17 @@ pub struct WorkflowClaim {
 }
 
 impl WorkflowClaim {
-    /// Claims `slot` when present. A missing slot is a vacuous success with
-    /// nothing to roll back (no live Thread).
-    pub fn acquire(slot: Option<Arc<EngineSlot>>) -> Self {
-        let Some(slot) = slot else {
-            return Self {
-                slot: None,
-                succeeded: true,
-                release_on_drop: false,
-            };
-        };
+    /// Success with nothing to roll back because the Thread is not live.
+    pub fn vacuous() -> Self {
+        Self {
+            slot: None,
+            succeeded: true,
+            release_on_drop: false,
+        }
+    }
+
+    /// Claims `slot` for Workflow. Same-occupant reclaim succeeds.
+    pub fn acquire(slot: Arc<EngineSlot>) -> Self {
         let vacant = slot.occupant().is_none();
         if !slot.try_claim(EngineOccupant::Workflow) {
             return Self {
@@ -78,7 +79,7 @@ impl Drop for WorkflowClaim {
 
 /// Align persisted run status with the live engine slot.
 ///
-/// `HostIdleHold` is derived from [`OwnershipEffect::Held`] only.
+/// Callers install `HostIdleHold` only after [`OwnershipEffect::Held`].
 pub fn reconcile_workflow_ownership(slot: &EngineSlot, run: &mut WorkflowRun) -> OwnershipEffect {
     if run.occupies_idle() {
         if slot.try_claim(EngineOccupant::Workflow) {

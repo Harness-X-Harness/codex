@@ -140,6 +140,51 @@ async fn oversized_args_are_rejected_before_a_run_is_created() {
     );
 }
 
+#[tokio::test]
+async fn start_persist_failure_does_not_leave_a_run() {
+    let dir = TempDir::new().expect("temp");
+    let thread_id = ThreadId::from_u128(44);
+    let path = dir.path().join(format!("{thread_id}.json"));
+    std::fs::create_dir(&path).expect("block start persist");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let error = service
+        .start_run(thread_id, yield_source())
+        .await
+        .expect_err("persist fail");
+    assert!(
+        matches!(error, WorkflowServiceError::Internal(_)),
+        "{error:?}"
+    );
+    match service.get_run(thread_id).await {
+        Ok(None) => {}
+        Ok(Some(run)) => panic!("start persist failure must not remember a run: {run:?}"),
+        Err(_) => {}
+    }
+}
+
+#[tokio::test]
+async fn resume_of_a_completed_run_fails_closed() {
+    let dir = TempDir::new().expect("temp");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(45);
+    let started = service
+        .start_run(thread_id, "complete();")
+        .await
+        .expect("start");
+    assert_eq!(started.status, WorkflowStatus::Complete);
+    let error = service.resume_run(thread_id).await.expect_err("not paused");
+    assert!(
+        matches!(error, WorkflowServiceError::InvalidRequest(_)),
+        "{error:?}"
+    );
+    let live = service
+        .get_run(thread_id)
+        .await
+        .expect("cached")
+        .expect("run");
+    assert_eq!(live.status, WorkflowStatus::Complete);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn mutation_persist_failure_does_not_stay_active() {

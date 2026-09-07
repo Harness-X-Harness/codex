@@ -1,7 +1,8 @@
 //! Transactional Workflow occupancy and restore reconciliation.
 
-use pretty_assertions::assert_eq;
 use std::sync::Arc;
+
+use pretty_assertions::assert_eq;
 
 use codex_extension_api::EngineOccupant;
 use codex_extension_api::EngineSlot;
@@ -16,7 +17,7 @@ use codex_workflow_extension::reconcile_workflow_ownership;
 fn dropped_new_claim_releases_the_slot() {
     let slot = Arc::new(EngineSlot::default());
     {
-        let claim = WorkflowClaim::acquire(Some(Arc::clone(&slot)));
+        let claim = WorkflowClaim::acquire(Arc::clone(&slot));
         assert!(claim.succeeded());
         assert_eq!(slot.occupant(), Some(EngineOccupant::Workflow));
     }
@@ -27,7 +28,7 @@ fn dropped_new_claim_releases_the_slot() {
 fn committed_claim_keeps_the_slot() {
     let slot = Arc::new(EngineSlot::default());
     {
-        let claim = WorkflowClaim::acquire(Some(Arc::clone(&slot)));
+        let claim = WorkflowClaim::acquire(Arc::clone(&slot));
         assert!(claim.succeeded());
         claim.commit();
     }
@@ -39,9 +40,30 @@ fn start_rollback_releases_a_reclaimed_phantom() {
     let slot = Arc::new(EngineSlot::default());
     assert!(slot.try_claim(EngineOccupant::Workflow));
     {
-        let mut claim = WorkflowClaim::acquire(Some(Arc::clone(&slot)));
+        let mut claim = WorkflowClaim::acquire(Arc::clone(&slot));
         assert!(claim.succeeded());
         claim.rollback_if_held();
+    }
+    assert_eq!(slot.occupant(), None);
+}
+
+#[test]
+fn persist_or_construction_failure_after_claim_releases() {
+    let slot = Arc::new(EngineSlot::default());
+    {
+        let mut claim = WorkflowClaim::acquire(Arc::clone(&slot));
+        claim.rollback_if_held();
+        assert!(claim.succeeded());
+    }
+    assert_eq!(slot.occupant(), None);
+}
+
+#[test]
+fn resume_or_activation_failure_releases_a_new_claim() {
+    let slot = Arc::new(EngineSlot::default());
+    {
+        let claim = WorkflowClaim::acquire(Arc::clone(&slot));
+        assert!(claim.succeeded());
     }
     assert_eq!(slot.occupant(), None);
 }
@@ -50,14 +72,14 @@ fn start_rollback_releases_a_reclaimed_phantom() {
 fn denied_claim_does_not_touch_goal_how() {
     let slot = Arc::new(EngineSlot::default());
     assert!(slot.try_claim(EngineOccupant::GoalHow));
-    let claim = WorkflowClaim::acquire(Some(Arc::clone(&slot)));
+    let claim = WorkflowClaim::acquire(Arc::clone(&slot));
     assert!(!claim.succeeded());
     assert_eq!(slot.occupant(), Some(EngineOccupant::GoalHow));
 }
 
 #[test]
 fn vacuous_claim_without_a_slot_succeeds() {
-    let claim = WorkflowClaim::acquire(None);
+    let claim = WorkflowClaim::vacuous();
     assert!(claim.succeeded());
 }
 
