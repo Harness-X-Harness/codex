@@ -1174,6 +1174,111 @@ async fn workflow_stop_during_ask_blocks_resume_while_in_flight() -> Result<()> 
 }
 
 #[tokio::test]
+async fn workflow_stop_during_spawn_drops_waiter_and_ignores_late_child() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker: "ok",
+        worker_delay: std::time::Duration::from_millis(800),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(
+        &server,
+        &[Feature::Goals, Feature::GoalHost, Feature::MultiAgentV2],
+    )
+    .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(
+                thread.id.clone(),
+                r#"
+                    let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
+                    if r.ok && r.text == "ok" { complete(); } else { ask("wrong reply"); }
+                "#,
+            ),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_request_contains(&server, "Say ok.").await?;
+
+    let stopped: ThreadWorkflowStopResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStop {
+            request_id,
+            params: ThreadWorkflowStopParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
+
+    sleep(std::time::Duration::from_millis(1200)).await;
+    let get: ThreadWorkflowGetResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+            request_id,
+            params: ThreadWorkflowGetParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        get.workflow.as_ref().map(|workflow| workflow.status),
+        Some(ThreadWorkflowStatus::Paused)
+    );
+    assert_eq!(
+        get.workflow
+            .as_ref()
+            .map(|workflow| workflow.result.clone()),
+        Some(serde_json::Value::Null)
+    );
+
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/resume",
+            Some(serde_json::to_value(ThreadWorkflowResumeParams {
+                thread_id: thread.id,
+            })?),
+        )
+        .await?;
+    let outcome = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_result_or_error(RequestId::Integer(request_id)),
+    )
+    .await??;
+    match outcome {
+        Err(error) => {
+            assert!(
+                error.error.message.contains("in flight"),
+                "unexpected resume error: {}",
+                error.error.message
+            );
+        }
+        Ok(response) => {
+            let resumed: ThreadWorkflowResumeResponse = serde_json::from_value(response.result)?;
+            assert_ne!(resumed.workflow.status, ThreadWorkflowStatus::Complete);
+        }
+    }
+    Ok(())
+}
+
+async fn wait_until_request_contains(server: &wiremock::MockServer, needle: &str) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+    loop {
+        let requests = response_requests(server).await?;
+        if requests
+            .iter()
+            .any(|(_, body)| body.to_string().contains(needle))
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("{needle} not observed in host requests: {requests:?}");
+        }
+        sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+#[tokio::test]
 async fn workflow_advance_is_optional_override() -> Result<()> {
     let server = create_scripted_host_server(ScriptedHostResponder {
         worker_delay: std::time::Duration::from_millis(400),
