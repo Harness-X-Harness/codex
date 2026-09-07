@@ -27,6 +27,8 @@ pub const WORKFLOW_ERROR_LEGACY_RESUME: &str = "legacy_resume_required";
 pub const WORKFLOW_ERROR_UNSAFE_JOURNAL: &str = "unsafe_journal";
 /// Persisted terminal workflow error for an unrecoverable host/runtime fault.
 pub const WORKFLOW_ERROR_HOST_RUNTIME: &str = "host_runtime";
+/// Persisted terminal workflow error for an orphaned in-flight host continuation.
+pub const WORKFLOW_ERROR_INFLIGHT_INTERRUPTED: &str = "inflight_interrupted";
 
 /// Secret-safe same-Thread turn failure.
 pub const HOST_ERROR_TURN_ERRORED: &str = "turn_errored";

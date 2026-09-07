@@ -827,3 +827,7 @@ mod owned_turn_tests;
 #[cfg(test)]
 #[path = "service_spawn_wait_tests.rs"]
 mod spawn_wait_tests;
+
+#[cfg(test)]
+#[path = "service_restore_tests.rs"]
+mod restore_tests;

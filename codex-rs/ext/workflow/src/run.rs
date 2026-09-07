@@ -25,6 +25,7 @@ use crate::journal::HOST_ERROR_TURN_ERRORED;
 use crate::journal::HostCallResult;
 use crate::journal::REPLAY_DIVERGENCE;
 use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
+use crate::journal::WORKFLOW_ERROR_INFLIGHT_INTERRUPTED;
 use crate::journal::WORKFLOW_ERROR_LEGACY_RESUME;
 use crate::journal::WORKFLOW_ERROR_REPLAY_DIVERGED;
 use crate::journal::WORKFLOW_ERROR_UNSAFE_JOURNAL;
@@ -432,6 +433,17 @@ impl WorkflowRun {
             self.fail(WORKFLOW_ERROR_UNSAFE_JOURNAL);
             return Ok(());
         }
+        if self.pending_yield_started {
+            match self.status {
+                WorkflowStatus::Complete | WorkflowStatus::Failed => {
+                    self.clear_pending_yield_started();
+                }
+                WorkflowStatus::Active | WorkflowStatus::Waiting | WorkflowStatus::Paused => {
+                    self.fail(WORKFLOW_ERROR_INFLIGHT_INTERRUPTED);
+                    return Ok(());
+                }
+            }
+        }
         let has_legacy = !self.served_replies.is_empty() || self.served_pauses > 0;
         if !self.continuations.is_empty() {
             self.format_version = WORKFLOW_PERSIST_VERSION;
@@ -645,3 +657,7 @@ fn unix_seconds() -> i64 {
 #[cfg(test)]
 #[path = "run_owned_host_tests.rs"]
 mod owned_host_tests;
+
+#[cfg(test)]
+#[path = "run_restore_tests.rs"]
+mod run_restore_tests;
