@@ -127,10 +127,12 @@ async fn oversized_args_are_rejected_before_a_run_is_created() {
         .start_named_run(ThreadId::from_u128(42), "demo", args)
         .await
         .expect_err("args cap");
-    assert!(
-        matches!(error, WorkflowServiceError::InvalidRequest(reason) if reason.contains("workflow args exceed")),
-        "{error:?}"
-    );
+    match error {
+        WorkflowServiceError::InvalidRequest(reason) => {
+            assert!(reason.contains("workflow args exceed"), "{reason}");
+        }
+        other => panic!("expected InvalidRequest, got {other:?}"),
+    }
     assert!(
         !dir.path()
             .join(format!("{}.json", ThreadId::from_u128(42)))
