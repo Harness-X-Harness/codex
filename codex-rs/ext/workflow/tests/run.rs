@@ -292,7 +292,12 @@ fn stop_and_resume_are_host_owned() {
     run.mark_pending_yield_started();
     run.stop().expect("stop");
     assert_eq!(run.status, WorkflowStatus::Paused);
-    assert!(!run.pending_yield_started);
+    assert!(run.pending_yield_started);
+    assert_eq!(
+        run.resume().expect_err("in flight"),
+        "workflow host turn is still in flight"
+    );
+    run.clear_pending_yield_started();
     run.resume().expect("resume");
     assert_eq!(run.status, WorkflowStatus::Active);
     assert_eq!(
@@ -484,6 +489,86 @@ async fn cancelled_ask_pauses_instead_of_failing() {
     assert_eq!(paused.status, WorkflowStatus::Paused);
     assert_eq!(paused.error, None);
     assert!(!paused.occupies_idle());
+}
+
+#[tokio::test]
+async fn stop_keeps_in_flight_until_owned_turn_ends() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(42);
+    service
+        .start_run(thread_id, yield_then_complete())
+        .await
+        .expect("start");
+    let mut run = service.get_run(thread_id).await.expect("get").expect("run");
+    run.mark_pending_yield_started();
+    std::fs::write(
+        dir.path().join(format!("{thread_id}.json")),
+        serde_json::to_vec_pretty(&run).expect("encode"),
+    )
+    .expect("write");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let stopped = service.stop_run(thread_id).await.expect("stop");
+    assert_eq!(stopped.status, WorkflowStatus::Paused);
+    assert!(stopped.pending_yield_started);
+    let error = service.resume_run(thread_id).await.expect_err("in flight");
+    assert!(
+        error.to_string().contains("in flight"),
+        "unexpected resume error: {error}"
+    );
+    let paused = service
+        .finish_yield_turn_with_result(thread_id, HostCallResult::failure("turn_cancelled"))
+        .await
+        .expect("cancel")
+        .expect("run");
+    assert_eq!(paused.status, WorkflowStatus::Paused);
+    assert!(!paused.pending_yield_started);
+    assert_eq!(paused.error, None);
+    assert!(paused.continuations.is_empty());
+    let resumed = service.resume_run(thread_id).await.expect("resume");
+    assert_eq!(resumed.status, WorkflowStatus::Active);
+    assert_eq!(
+        resumed.pending_instruction.as_deref(),
+        Some("Compile the crate.")
+    );
+}
+
+#[tokio::test]
+async fn late_success_after_stop_is_journaled_and_not_reissued() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(43);
+    service
+        .start_run(
+            thread_id,
+            r#"
+                let r = agent("Say ok.");
+                if r.ok && r.text == "ok" { complete(); } else { ask("wrong reply"); }
+            "#,
+        )
+        .await
+        .expect("start");
+    let mut run = service.get_run(thread_id).await.expect("get").expect("run");
+    run.mark_pending_yield_started();
+    std::fs::write(
+        dir.path().join(format!("{thread_id}.json")),
+        serde_json::to_vec_pretty(&run).expect("encode"),
+    )
+    .expect("write");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service.stop_run(thread_id).await.expect("stop");
+    let completed = service
+        .finish_yield_turn_with_result(thread_id, HostCallResult::success("ok"))
+        .await
+        .expect("late success")
+        .expect("run");
+    assert_eq!(completed.status, WorkflowStatus::Complete);
+    assert_eq!(result_replies(&completed), vec!["ok".to_string()]);
+    let error = service.resume_run(thread_id).await.expect_err("complete");
+    assert!(
+        error.to_string().contains("paused"),
+        "unexpected resume error: {error}"
+    );
 }
 
 #[tokio::test]

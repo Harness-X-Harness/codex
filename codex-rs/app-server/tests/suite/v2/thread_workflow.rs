@@ -49,6 +49,13 @@ use super::goal_host_support::text;
 use super::goal_host_support::wait_until_turn_trigger;
 use super::goal_host_support::wait_until_workflow_status;
 
+fn workflow_request_count(triggers: &[Option<String>]) -> usize {
+    triggers
+        .iter()
+        .filter(|trigger| trigger.as_deref() == Some("workflow"))
+        .count()
+}
+
 fn start_params(
     thread_id: impl Into<String>,
     source: impl Into<String>,
@@ -1017,20 +1024,40 @@ async fn waiting_workflow_rejects_a_second_start() -> Result<()> {
 
 #[tokio::test]
 async fn workflow_stop_pauses_and_resume_returns_to_active() -> Result<()> {
-    let server = create_scripted_host_server(ScriptedHostResponder {
-        worker_delay: std::time::Duration::from_millis(400),
-        ..ScriptedHostResponder::default()
-    })
-    .await;
-    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let (mut app, _codex_home, _server) = app_with_features(&goal_host_features()).await?;
     let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![text("materialize this thread")],
+        ..Default::default()
+    })
+    .await?;
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("waiting workflow stop has no started host turn".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     let started: ThreadWorkflowStartResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStart {
             request_id,
             params: start_params(thread.id.clone(), ASK_THEN_COMPLETE),
         })
         .await?;
-    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Waiting);
 
     let stopped: ThreadWorkflowStopResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStop {
@@ -1042,18 +1069,18 @@ async fn workflow_stop_pauses_and_resume_returns_to_active() -> Result<()> {
         .await?;
     assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
 
-    let paused: ThreadWorkflowGetResponse = app
-        .request(|request_id| ClientRequest::ThreadWorkflowGet {
+    let paused_goal: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
             request_id,
-            params: ThreadWorkflowGetParams {
+            params: ThreadGoalSetParams {
                 thread_id: thread.id.clone(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
             },
         })
         .await?;
-    assert_eq!(
-        paused.workflow.map(|workflow| workflow.status),
-        Some(ThreadWorkflowStatus::Paused)
-    );
+    assert_eq!(paused_goal.goal.status, ThreadGoalStatus::Paused);
 
     let resumed: ThreadWorkflowResumeResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowResume {
@@ -1066,6 +1093,84 @@ async fn workflow_stop_pauses_and_resume_returns_to_active() -> Result<()> {
     assert_eq!(resumed.workflow.status, ThreadWorkflowStatus::Active);
     wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
     Ok(())
+}
+
+async fn assert_stop_during_inflight_host_turn_blocks_resume(source: &str) -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker_delay: std::time::Duration::from_millis(800),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: start_params(thread.id.clone(), source),
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
+    wait_until_turn_trigger(&server, "workflow").await?;
+    let before = workflow_request_count(&response_turn_triggers(&server).await?);
+    assert_eq!(before, 1);
+
+    let stopped: ThreadWorkflowStopResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStop {
+            request_id,
+            params: ThreadWorkflowStopParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
+    assert_eq!(
+        workflow_request_count(&response_turn_triggers(&server).await?),
+        before,
+        "stop must not start a second host turn"
+    );
+
+    let request_id = app
+        .send_raw_request(
+            "thread/workflow/resume",
+            Some(serde_json::to_value(ThreadWorkflowResumeParams {
+                thread_id: thread.id.clone(),
+            })?),
+        )
+        .await?;
+    let outcome = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_result_or_error(RequestId::Integer(request_id)),
+    )
+    .await??;
+    match outcome {
+        Err(error) => {
+            assert!(
+                error.error.message.contains("in flight"),
+                "unexpected resume error: {}",
+                error.error.message
+            );
+            assert_eq!(
+                workflow_request_count(&response_turn_triggers(&server).await?),
+                before,
+                "resume must not start a second host turn while the first is still in flight"
+            );
+        }
+        Ok(response) => {
+            let resumed: ThreadWorkflowResumeResponse = serde_json::from_value(response.result)?;
+            assert_eq!(resumed.workflow.status, ThreadWorkflowStatus::Active);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_stop_during_agent_blocks_resume_while_in_flight() -> Result<()> {
+    assert_stop_during_inflight_host_turn_blocks_resume(AGENT_REQUIRES_OK_RESULT).await
+}
+
+#[tokio::test]
+async fn workflow_stop_during_ask_blocks_resume_while_in_flight() -> Result<()> {
+    assert_stop_during_inflight_host_turn_blocks_resume(ASK_THEN_COMPLETE).await
 }
 
 #[tokio::test]
