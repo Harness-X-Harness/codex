@@ -23,6 +23,7 @@ use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleCause;
 use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::Op;
 use tokio::sync::Mutex;
 
 use crate::catalog::CatalogRoots;
@@ -32,11 +33,9 @@ use crate::claim::WorkflowClaim;
 use crate::claim::reconcile_workflow_ownership;
 use crate::engine::SpawnBinding;
 use crate::engine::WorkflowSourceError;
-use crate::journal::ContinuationKind;
+use crate::inflight::InFlightTurns;
 use crate::journal::HOST_ERROR_CHILD_ERRORED;
 use crate::journal::HOST_ERROR_CHILD_UNAVAILABLE;
-use crate::journal::HOST_ERROR_TURN_CANCELLED;
-use crate::journal::HOST_ERROR_TURN_ERRORED;
 use crate::journal::HostCallResult;
 use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
 use crate::persist::MAX_WORKFLOW_PERSIST_BYTES;
@@ -79,6 +78,7 @@ pub struct WorkflowService {
     persist_root: PathBuf,
     project_root: PathBuf,
     runs: Mutex<HashMap<String, WorkflowRun>>,
+    in_flight: InFlightTurns,
     thread_manager: Weak<ThreadManager>,
     update_sink: StdMutex<Option<WorkflowUpdateSink>>,
 }
@@ -97,6 +97,7 @@ impl WorkflowService {
             persist_root: persist_root.into(),
             project_root: project_root.into(),
             runs: Mutex::new(HashMap::new()),
+            in_flight: InFlightTurns::default(),
             thread_manager,
             update_sink: StdMutex::new(None),
         }
@@ -275,51 +276,68 @@ impl WorkflowService {
         thread_id: ThreadId,
         result: HostCallResult,
     ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
+        self.apply_owned_host_turn(thread_id, /*turn_id*/ None, result)
+            .await
+    }
+
+    pub async fn finish_owned_host_turn(
+        &self,
+        thread_id: ThreadId,
+        turn_id: &str,
+        result: HostCallResult,
+    ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
+        self.apply_owned_host_turn(thread_id, Some(turn_id), result)
+            .await
+    }
+
+    async fn apply_owned_host_turn(
+        &self,
+        thread_id: ThreadId,
+        turn_id: Option<&str>,
+        result: HostCallResult,
+    ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
         let Some(existing) = self.get_run(thread_id).await? else {
             return Ok(None);
         };
-        if existing.status != WorkflowStatus::Active
-            || !existing.pending_yield_started
+        if !existing.pending_yield_started
             || existing.pending_spawn_task_name.is_some()
+            || !matches!(
+                existing.status,
+                WorkflowStatus::Active | WorkflowStatus::Paused
+            )
+            || !self.in_flight.owns(thread_id, turn_id)
         {
             return Ok(Some(existing));
         }
         let run = self
-            .mutate_run(thread_id, move |run| {
-                if run.status != WorkflowStatus::Active
-                    || !run.pending_yield_started
-                    || run.pending_spawn_task_name.is_some()
-                {
-                    return Ok(());
-                }
-                if run.pending_kind == Some(ContinuationKind::Ask) && !result.ok {
-                    if result.error == HOST_ERROR_TURN_CANCELLED {
-                        run.stop()?;
-                    } else {
-                        let error = if result.error.is_empty() {
-                            HOST_ERROR_TURN_ERRORED.to_string()
-                        } else {
-                            result.error.clone()
-                        };
-                        run.fail(error);
-                    }
-                    return Ok(());
-                }
-                run.advance_with_outcome(result).map(|_| ())
-            })
+            .mutate_run(thread_id, move |run| run.apply_owned_host_result(result))
             .await?;
+        self.in_flight.forget(thread_id);
         self.kick_if_active(&run).await;
         Ok(Some(run))
     }
 
     pub async fn stop_run(&self, thread_id: ThreadId) -> Result<WorkflowRun, WorkflowServiceError> {
-        self.mutate_run(thread_id, WorkflowRun::stop).await
+        let run = self.mutate_run(thread_id, WorkflowRun::stop).await?;
+        if run.pending_yield_started {
+            self.interrupt_same_thread_turn(thread_id).await;
+        }
+        Ok(run)
     }
 
     pub async fn resume_run(
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
+        if self
+            .get_run(thread_id)
+            .await?
+            .is_some_and(|run| run.pending_yield_started)
+        {
+            return Err(WorkflowServiceError::InvalidRequest(
+                "workflow host turn is still in flight".to_string(),
+            ));
+        }
         let claim = self.claim_workflow(thread_id).await;
         let run = if claim.succeeded() {
             self.mutate_run(thread_id, WorkflowRun::resume).await
@@ -517,7 +535,8 @@ impl WorkflowService {
                 )
                 .await
             {
-                Ok(StartIfIdleSubmission::Started { .. }) => {
+                Ok(StartIfIdleSubmission::Started { turn_id }) => {
+                    self.in_flight.remember(thread_id, turn_id);
                     if let Err(err) = self
                         .mutate_run(thread_id, |run| {
                             run.mark_pending_yield_started();
@@ -668,6 +687,15 @@ impl WorkflowService {
         thread_manager.get_thread(thread_id).await.ok()
     }
 
+    async fn interrupt_same_thread_turn(&self, thread_id: ThreadId) {
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return;
+        };
+        if let Err(err) = thread.submit(Op::Interrupt).await {
+            tracing::debug!("workflow stop interrupt failed for {thread_id}: {err}");
+        }
+    }
+
     async fn kick_if_active(&self, run: &WorkflowRun) {
         if run.status != WorkflowStatus::Active || run.pending_instruction.is_none() {
             return;
@@ -727,3 +755,7 @@ fn load_run(
 
 /// Shared handle used by App Server and the extension install path.
 pub type SharedWorkflowService = Arc<WorkflowService>;
+
+#[cfg(test)]
+#[path = "service_owned_turn_tests.rs"]
+mod owned_turn_tests;

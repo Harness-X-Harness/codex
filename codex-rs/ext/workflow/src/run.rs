@@ -20,6 +20,8 @@ use crate::engine::truncate_workflow_reply;
 use crate::engine::validate_source;
 use crate::journal::ContinuationKind;
 use crate::journal::ContinuationRecord;
+use crate::journal::HOST_ERROR_TURN_CANCELLED;
+use crate::journal::HOST_ERROR_TURN_ERRORED;
 use crate::journal::HostCallResult;
 use crate::journal::REPLAY_DIVERGENCE;
 use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
@@ -344,11 +346,58 @@ impl WorkflowRun {
 
     pub fn advance_with_outcome(
         &mut self,
-        mut result: HostCallResult,
+        result: HostCallResult,
     ) -> Result<WorkflowAdvance, String> {
         if self.status != WorkflowStatus::Active {
             return Err("workflow is not active".to_string());
         }
+        self.consume_pending_yield(result)
+    }
+
+    /// Apply the exact owned same-Thread host result after stop or completion.
+    ///
+    /// Confirmed cancel while already paused does not journal. A late
+    /// non-cancel terminal is journaled; if the script becomes Active again,
+    /// the run is immediately paused so resume kicks the next yield.
+    pub(crate) fn apply_owned_host_result(&mut self, result: HostCallResult) -> Result<(), String> {
+        if !self.pending_yield_started
+            || self.pending_spawn_task_name.is_some()
+            || !matches!(self.status, WorkflowStatus::Active | WorkflowStatus::Paused)
+        {
+            return Ok(());
+        }
+        if self.status == WorkflowStatus::Paused {
+            if !result.ok && result.error == HOST_ERROR_TURN_CANCELLED {
+                self.clear_pending_yield_started();
+                return Ok(());
+            }
+            self.consume_pending_yield(result)?;
+            if self.status == WorkflowStatus::Active {
+                self.stop()?;
+            }
+            return Ok(());
+        }
+        if self.pending_kind == Some(ContinuationKind::Ask) && !result.ok {
+            if result.error == HOST_ERROR_TURN_CANCELLED {
+                self.stop()?;
+                self.clear_pending_yield_started();
+            } else {
+                let error = if result.error.is_empty() {
+                    HOST_ERROR_TURN_ERRORED.to_string()
+                } else {
+                    result.error.clone()
+                };
+                self.fail(error);
+            }
+            return Ok(());
+        }
+        self.advance_with_outcome(result).map(|_| ())
+    }
+
+    fn consume_pending_yield(
+        &mut self,
+        mut result: HostCallResult,
+    ) -> Result<WorkflowAdvance, String> {
         let Some(_) = self.pending_instruction.as_ref() else {
             return Err("workflow has no pending yield".to_string());
         };
@@ -450,15 +499,21 @@ impl WorkflowRun {
             return Err("workflow is not active".to_string());
         }
         self.status = WorkflowStatus::Paused;
-        // Drop the in-flight yield claim so resume can kick a new host turn.
-        self.pending_yield_started = false;
         self.updated_at = unix_seconds();
         Ok(())
+    }
+
+    pub fn clear_pending_yield_started(&mut self) {
+        self.pending_yield_started = false;
+        self.updated_at = unix_seconds();
     }
 
     pub fn resume(&mut self) -> Result<(), String> {
         if self.status != WorkflowStatus::Paused {
             return Err("workflow is not paused".to_string());
+        }
+        if self.pending_yield_started {
+            return Err("workflow host turn is still in flight".to_string());
         }
         self.status = WorkflowStatus::Active;
         self.updated_at = unix_seconds();
@@ -586,3 +641,7 @@ fn unix_seconds() -> i64 {
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "run_owned_host_tests.rs"]
+mod owned_host_tests;

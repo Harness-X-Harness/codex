@@ -8,6 +8,7 @@ mod claim;
 mod engine;
 mod extension;
 mod host_opts;
+mod inflight;
 mod journal;
 mod persist;
 mod run;

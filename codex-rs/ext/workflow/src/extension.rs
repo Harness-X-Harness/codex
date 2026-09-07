@@ -102,10 +102,12 @@ where
             let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
                 return;
             };
+            let turn_id = input.turn_store.level_id();
             let outcome = if input.turn_store.get::<WorkflowTurnFailure>().is_some() {
                 self.service
-                    .finish_yield_turn_with_result(
+                    .finish_owned_host_turn(
                         thread_id,
+                        turn_id,
                         HostCallResult::failure(HOST_ERROR_TURN_ERRORED),
                     )
                     .await
@@ -116,7 +118,7 @@ where
                     .map(|reply| reply.0.clone())
                     .unwrap_or_default();
                 self.service
-                    .finish_yield_turn_with_result(thread_id, HostCallResult::success(reply))
+                    .finish_owned_host_turn(thread_id, turn_id, HostCallResult::success(reply))
                     .await
             };
             if let Err(err) = outcome {
@@ -133,11 +135,13 @@ where
             let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
                 return;
             };
+            let turn_id = input.turn_store.level_id();
             let outcome = match input.reason {
                 TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited => self
                     .service
-                    .finish_yield_turn_with_result(
+                    .finish_owned_host_turn(
                         thread_id,
+                        turn_id,
                         HostCallResult::failure(HOST_ERROR_TURN_CANCELLED),
                     )
                     .await
