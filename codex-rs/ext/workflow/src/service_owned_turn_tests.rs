@@ -43,3 +43,21 @@ async fn foreign_turn_result_is_not_applied_to_an_owned_yield() {
     assert!(!applied.pending_yield_started);
     assert_eq!(applied.continuations.len(), 1);
 }
+
+#[tokio::test]
+async fn remembered_turn_blocks_resume_before_pending_flag_is_persisted() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    let thread_id = ThreadId::from_u128(61);
+    service
+        .start_run(thread_id, r#"ask("Compile the crate."); complete();"#)
+        .await
+        .expect("start");
+    service.stop_run(thread_id).await.expect("stop");
+    service.in_flight.remember(thread_id, "turn-a".to_string());
+    let error = service.resume_run(thread_id).await.expect_err("in flight");
+    assert!(
+        error.to_string().contains("in flight"),
+        "unexpected resume error: {error}"
+    );
+}

@@ -280,7 +280,7 @@ impl WorkflowService {
             .await
     }
 
-    pub async fn finish_owned_host_turn(
+    pub(crate) async fn finish_owned_host_turn(
         &self,
         thread_id: ThreadId,
         turn_id: &str,
@@ -319,8 +319,12 @@ impl WorkflowService {
 
     pub async fn stop_run(&self, thread_id: ThreadId) -> Result<WorkflowRun, WorkflowServiceError> {
         let run = self.mutate_run(thread_id, WorkflowRun::stop).await?;
-        if run.pending_yield_started {
-            self.interrupt_same_thread_turn(thread_id).await;
+        if run.pending_yield_started || self.in_flight.has(thread_id) {
+            if let Some(thread) = self.live_thread(thread_id).await
+                && let Err(err) = thread.submit(Op::Interrupt).await
+            {
+                tracing::debug!("workflow stop interrupt failed for {thread_id}: {err}");
+            }
         }
         Ok(run)
     }
@@ -329,10 +333,11 @@ impl WorkflowService {
         &self,
         thread_id: ThreadId,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
-        if self
-            .get_run(thread_id)
-            .await?
-            .is_some_and(|run| run.pending_yield_started)
+        if self.in_flight.has(thread_id)
+            || self
+                .get_run(thread_id)
+                .await?
+                .is_some_and(|run| run.pending_yield_started)
         {
             return Err(WorkflowServiceError::InvalidRequest(
                 "workflow host turn is still in flight".to_string(),
@@ -407,7 +412,7 @@ impl WorkflowService {
         if !self.try_claim_workflow(thread_id).await {
             return Ok(());
         }
-        if run.pending_yield_started {
+        if run.pending_yield_started || self.in_flight.has(thread_id) {
             return Ok(());
         }
         let Some(thread_manager) = self.thread_manager.upgrade() else {
@@ -420,7 +425,10 @@ impl WorkflowService {
         };
         let mut run = run;
         loop {
-            if run.status != WorkflowStatus::Active || run.pending_yield_started {
+            if run.status != WorkflowStatus::Active
+                || run.pending_yield_started
+                || self.in_flight.has(thread_id)
+            {
                 return Ok(());
             }
             let Some(instruction) = run.pending_instruction.clone() else {
@@ -685,15 +693,6 @@ impl WorkflowService {
     async fn live_thread(&self, thread_id: ThreadId) -> Option<Arc<codex_core::CodexThread>> {
         let thread_manager = self.thread_manager.upgrade()?;
         thread_manager.get_thread(thread_id).await.ok()
-    }
-
-    async fn interrupt_same_thread_turn(&self, thread_id: ThreadId) {
-        let Some(thread) = self.live_thread(thread_id).await else {
-            return;
-        };
-        if let Err(err) = thread.submit(Op::Interrupt).await {
-            tracing::debug!("workflow stop interrupt failed for {thread_id}: {err}");
-        }
     }
 
     async fn kick_if_active(&self, run: &WorkflowRun) {

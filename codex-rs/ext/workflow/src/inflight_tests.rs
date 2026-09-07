@@ -9,11 +9,13 @@ fn owns_matches_recorded_turn_and_rejects_foreign_or_missing_ids() {
     assert!(turns.owns(thread, Some("turn-a")));
 
     turns.remember(thread, "turn-a".to_string());
+    assert!(turns.has(thread));
     assert!(turns.owns(thread, Some("turn-a")));
     assert!(!turns.owns(thread, Some("turn-b")));
     assert!(!turns.owns(thread, None));
 
     turns.forget(thread);
+    assert!(!turns.has(thread));
     assert!(turns.owns(thread, Some("turn-b")));
     assert!(turns.owns(thread, None));
 }

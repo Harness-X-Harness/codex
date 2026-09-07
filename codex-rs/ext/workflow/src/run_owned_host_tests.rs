@@ -7,13 +7,6 @@ use crate::journal::HOST_ERROR_TURN_CANCELLED;
 use crate::journal::HostCallResult;
 use codex_protocol::ThreadId;
 
-fn agent_then_ask() -> &'static str {
-    r#"
-        let r = agent("Say ok.");
-        if r.ok && r.text == "ok" { ask("next"); } else { complete(); }
-    "#
-}
-
 #[test]
 fn stop_without_started_host_turn_resumes() {
     let mut run = WorkflowRun::start(
@@ -50,7 +43,14 @@ fn paused_run_rejects_advance_with_outcome() {
 
 #[test]
 fn late_success_after_stop_with_remaining_yield_stays_paused() {
-    let mut run = WorkflowRun::start(ThreadId::from_u128(52), agent_then_ask()).expect("start");
+    let mut run = WorkflowRun::start(
+        ThreadId::from_u128(52),
+        r#"
+            let r = agent("Say ok.");
+            if r.ok && r.text == "ok" { ask("next"); } else { complete(); }
+        "#,
+    )
+    .expect("start");
     run.mark_pending_yield_started();
     run.stop().expect("stop");
     run.apply_owned_host_result(HostCallResult::success("ok"))

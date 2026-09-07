@@ -26,6 +26,13 @@ impl InFlightTurns {
             .remove(&thread_id.to_string());
     }
 
+    pub(crate) fn has(&self, thread_id: ThreadId) -> bool {
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(&thread_id.to_string())
+    }
+
     pub(crate) fn owns(&self, thread_id: ThreadId, turn_id: Option<&str>) -> bool {
         let owned = self
             .turns
