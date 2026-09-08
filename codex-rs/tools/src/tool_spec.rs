@@ -51,6 +51,8 @@ pub enum ToolSpec {
         #[serde(skip_serializing_if = "Option::is_none")]
         search_content_types: Option<Vec<String>>,
     },
+    #[serde(rename = "x_search")]
+    XSearch,
     #[serde(rename = "custom")]
     Freeform(FreeformTool),
 }
@@ -62,6 +64,7 @@ impl ToolSpec {
             ToolSpec::Namespace(namespace) => namespace.name.as_str(),
             ToolSpec::ToolSearch { .. } => "tool_search",
             ToolSpec::WebSearch { .. } => "web_search",
+            ToolSpec::XSearch => "x_search",
             ToolSpec::Freeform(tool) => tool.name.as_str(),
         }
     }
