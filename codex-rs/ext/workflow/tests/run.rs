@@ -473,14 +473,10 @@ async fn cancelled_ask_pauses_instead_of_failing() {
         .start_run(thread_id, yield_then_complete())
         .await
         .expect("start");
-    let mut run = service.get_run(thread_id).await.expect("get").expect("run");
-    run.mark_pending_yield_started();
-    std::fs::write(
-        dir.path().join(format!("{thread_id}.json")),
-        serde_json::to_vec_pretty(&run).expect("encode"),
-    )
-    .expect("write");
-    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service
+        .mark_pending_yield_started(thread_id)
+        .await
+        .expect("mark started");
     let paused = service
         .finish_yield_turn_with_result(thread_id, HostCallResult::failure("turn_cancelled"))
         .await
@@ -500,14 +496,10 @@ async fn stop_keeps_in_flight_until_owned_turn_ends() {
         .start_run(thread_id, yield_then_complete())
         .await
         .expect("start");
-    let mut run = service.get_run(thread_id).await.expect("get").expect("run");
-    run.mark_pending_yield_started();
-    std::fs::write(
-        dir.path().join(format!("{thread_id}.json")),
-        serde_json::to_vec_pretty(&run).expect("encode"),
-    )
-    .expect("write");
-    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service
+        .mark_pending_yield_started(thread_id)
+        .await
+        .expect("mark started");
     let stopped = service.stop_run(thread_id).await.expect("stop");
     assert_eq!(stopped.status, WorkflowStatus::Paused);
     assert!(stopped.pending_yield_started);
@@ -548,14 +540,10 @@ async fn late_success_after_stop_is_journaled_and_not_reissued() {
         )
         .await
         .expect("start");
-    let mut run = service.get_run(thread_id).await.expect("get").expect("run");
-    run.mark_pending_yield_started();
-    std::fs::write(
-        dir.path().join(format!("{thread_id}.json")),
-        serde_json::to_vec_pretty(&run).expect("encode"),
-    )
-    .expect("write");
-    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service
+        .mark_pending_yield_started(thread_id)
+        .await
+        .expect("mark started");
     service.stop_run(thread_id).await.expect("stop");
     let completed = service
         .finish_yield_turn_with_result(thread_id, HostCallResult::success("ok"))
@@ -651,7 +639,7 @@ async fn advance_run_cannot_resume_a_pause() {
 async fn advance_run_cannot_bypass_a_pending_spawn() {
     let dir = TempDir::new().expect("tempdir");
     let thread_id = ThreadId::from_u128(36);
-    let mut started = WorkflowRun::start_with_spawn(
+    let started = WorkflowRun::start_with_spawn(
         thread_id,
         r#"
             let r = agent("Say ok.", #{ "spawn": true, task_name: "review" });
@@ -660,13 +648,16 @@ async fn advance_run_cannot_bypass_a_pending_spawn() {
         SpawnBinding::Available,
     )
     .expect("start");
-    started.mark_pending_yield_started();
     std::fs::write(
         dir.path().join(format!("{thread_id}.json")),
         serde_json::to_vec_pretty(&started).expect("encode"),
     )
     .expect("write");
     let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service
+        .mark_pending_yield_started(thread_id)
+        .await
+        .expect("mark started");
     let advanced = service.advance_run(thread_id).await.expect("advance");
     assert_eq!(advanced.status, WorkflowStatus::Active);
     assert!(advanced.continuations.is_empty());

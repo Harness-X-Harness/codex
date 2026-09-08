@@ -298,6 +298,21 @@ impl WorkflowService {
         })
     }
 
+    /// Marks the live run as having started its next same-Thread host turn.
+    ///
+    /// Production scheduling does this immediately before submitting the turn.
+    /// In-process tests use the same path so they do not simulate a restart.
+    pub async fn mark_pending_yield_started(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<WorkflowRun, WorkflowServiceError> {
+        self.mutate_run(thread_id, |run| {
+            run.mark_pending_yield_started();
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn finish_yield_turn_with_result(
         &self,
         thread_id: ThreadId,

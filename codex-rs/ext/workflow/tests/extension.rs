@@ -21,16 +21,13 @@ async fn persist_started_yield(
     thread_id: ThreadId,
     source: &str,
 ) -> WorkflowService {
-    let first = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
-    first.start_run(thread_id, source).await.expect("start");
-    let mut run = first.get_run(thread_id).await.expect("get").expect("run");
-    run.mark_pending_yield_started();
-    std::fs::write(
-        dir.path().join(format!("{thread_id}.json")),
-        serde_json::to_vec_pretty(&run).expect("encode"),
-    )
-    .expect("write");
-    WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new())
+    let service = WorkflowService::new(dir.path().to_path_buf(), std::sync::Weak::new());
+    service.start_run(thread_id, source).await.expect("start");
+    service
+        .mark_pending_yield_started(thread_id)
+        .await
+        .expect("mark started");
+    service
 }
 
 async fn stop_workflow_turn(
