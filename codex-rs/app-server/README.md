@@ -197,6 +197,12 @@ Example with notification opt-out:
 - `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes. Parent-owned Multi-Agent V2 subagents reject goal clearing, including while unloaded.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
 - `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
+- `thread/workflow/get` — experimental; fetch the independent `/workflow` run for a thread. Requires `goal_host`. Returns `workflow: null` when none exists. Distinct from `/goal`. Terminal unrecoverable failures persist as `status: "failed"` with a secret-safe `error`.
+- `thread/workflow/start` — experimental; start an independent Rhai `/workflow` run on a thread. Requires `goal_host`. Rejects if a run is already `active` or `waiting`. `source` is inline Rhai. `name` loads `$CODEX_HOME/workflows/<name>.rhai` or `<root>/.codex/workflows/<name>.rhai` (filename must match `meta.name`). `args` is injected as the script `args` map. When Goal HOW occupies the engine, the start persists as `waiting` until the occupant is no longer `active`. The host auto-resumes the VM after each yield until the program completes, the user stops it, or the run fails.
+- `thread/workflow/advance` — experimental; optional client override to host-resume the current Rhai workflow run after a yield. Not required for ordinary completion.
+- `thread/workflow/stop` — experimental; pause an active workflow run.
+- `thread/workflow/resume` — experimental; resume a paused workflow run.
+- `thread/workflow/updated` — experimental notification emitted whenever a workflow run changes.
 - `thread/queue/add` — experimental; persist a user turn for automatic FIFO submission when the thread next becomes idle.
 - `thread/queue/list` — experimental; return one page of a thread's queued turns.
 - `thread/queue/update` — experimental; edit a queued turn while preserving its stable submission ID, client message ID, and position.
@@ -879,6 +885,25 @@ Use `thread/goal/clear` to remove the current goal.
 { "method": "thread/goal/clear", "id": 30, "params": { "threadId": "thr_123" } }
 { "id": 30, "result": { "cleared": true } }
 { "method": "thread/goal/cleared", "params": { "threadId": "thr_123" } }
+```
+
+### Example: Independent `/workflow` run (experimental)
+
+Workflow RPCs require `capabilities.experimentalApi = true` and the `goal_host` feature. They are the independent HOW layer and do not complete or replace `/goal`. After `start`, the host auto-resumes the Rhai VM after each yield. `thread/workflow/advance` is an optional override; `thread/workflow/stop` pauses an active run. Unrecoverable runtime, persistence, or replay failures persist as `failed` with a secret-safe `error` and release occupancy. A script-level `agent().ok == false` does not itself fail the run.
+
+```json
+{ "method": "thread/workflow/start", "id": 31, "params": {
+    "threadId": "thr_123",
+    "source": "ask(\"Read the diff.\"); complete();"
+} }
+{ "method": "thread/workflow/start", "id": 34, "params": {
+    "threadId": "thr_123",
+    "source": "",
+    "name": "demo",
+    "args": { "topic": "rust" }
+} }
+{ "method": "thread/workflow/advance", "id": 32, "params": { "threadId": "thr_123" } }
+{ "method": "thread/workflow/stop", "id": 33, "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Queue a follow-up user turn (experimental)
