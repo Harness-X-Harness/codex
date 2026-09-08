@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -8,6 +10,8 @@ use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnStartOptions;
+use codex_extension_api::EngineOccupant;
+use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -17,7 +21,12 @@ use crate::accounting::GoalAccountingState;
 use crate::analytics::GoalAnalytics;
 use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
+use crate::host_evaluate::HostEvaluateRoundState;
+use crate::host_evaluate::HostGoalStatus;
 use crate::metrics::GoalMetrics;
+use crate::policy::GoalCompletionAuthority;
+use crate::policy::GoalPolicy;
+use crate::steering::GoalContinuationOwner;
 use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
@@ -32,6 +41,7 @@ pub struct GoalRuntimeHandle {
 pub(crate) struct GoalRuntimeConfig {
     pub(crate) analytics: GoalAnalytics,
     pub(crate) enabled: bool,
+    pub(crate) policy: GoalPolicy,
     pub(crate) tools_available_for_thread: bool,
     pub(crate) root_accounting_state: Option<Arc<GoalAccountingState>>,
 }
@@ -52,6 +62,8 @@ struct GoalRuntimeInner {
     accounting_state: Arc<GoalAccountingState>,
     root_accounting_state: Option<Arc<GoalAccountingState>>,
     enabled: AtomicBool,
+    policy: Mutex<GoalPolicy>,
+    host_evaluate: Mutex<HostEvaluateRoundState>,
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
 }
@@ -105,6 +117,8 @@ impl GoalRuntimeHandle {
                 accounting_state,
                 root_accounting_state: config.root_accounting_state,
                 enabled: AtomicBool::new(config.enabled),
+                policy: Mutex::new(config.policy),
+                host_evaluate: Mutex::new(HostEvaluateRoundState::default()),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
@@ -115,8 +129,131 @@ impl GoalRuntimeHandle {
         self.inner.enabled.store(enabled, Ordering::Relaxed);
     }
 
+    pub(crate) fn set_policy(&self, policy: GoalPolicy) {
+        *self
+            .inner
+            .policy
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = policy;
+    }
+
     pub(crate) fn is_enabled(&self) -> bool {
         self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    /// Current completion and verification policy for this thread.
+    pub fn policy(&self) -> GoalPolicy {
+        *self
+            .inner
+            .policy
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn continuation_owner(&self) -> GoalContinuationOwner<'static> {
+        match self.policy().completion {
+            GoalCompletionAuthority::ModelCommit => GoalContinuationOwner::ModelCommit,
+            GoalCompletionAuthority::HostEvaluate => {
+                GoalContinuationOwner::HostEvaluate { next_step: None }
+            }
+        }
+    }
+
+    pub(crate) async fn load_thread_goal(&self) -> Result<Option<codex_state::ThreadGoal>, String> {
+        self.inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    fn host_evaluate_state(&self) -> std::sync::MutexGuard<'_, HostEvaluateRoundState> {
+        self.inner
+            .host_evaluate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn align_host_evaluate_goal(&self, goal_id: &str) {
+        self.host_evaluate_state().align_goal(goal_id);
+    }
+
+    pub(crate) fn record_host_blocker(&self, blocker_key: &str) -> u32 {
+        self.host_evaluate_state().record_blocker(blocker_key)
+    }
+
+    pub(crate) fn reset_host_blocker(&self) {
+        self.host_evaluate_state().reset_blocker();
+    }
+
+    pub(crate) fn set_host_next_step(&self, next_step: String) {
+        self.host_evaluate_state().set_next_step(next_step);
+    }
+
+    pub(crate) fn take_host_next_step(&self) -> Option<String> {
+        self.host_evaluate_state().take_next_step()
+    }
+
+    pub(crate) fn clear_host_evaluate_transients(&self) {
+        *self.host_evaluate_state() = HostEvaluateRoundState::default();
+    }
+
+    pub(crate) async fn apply_host_goal_status(
+        &self,
+        turn_id: &str,
+        status: HostGoalStatus,
+    ) -> Result<(), String> {
+        if !self.is_enabled() {
+            return Ok(());
+        }
+
+        let _goal_state_permit = self.goal_state_permit().await?;
+        let Some(active_goal) = self.load_thread_goal().await? else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        };
+        if active_goal.status != codex_state::ThreadGoalStatus::Active {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+        let previous_status = Some(active_goal.status);
+        let Some(goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .update_thread_goal(
+                self.thread_id(),
+                codex_state::GoalUpdate {
+                    objective: None,
+                    status: Some(status.state()),
+                    token_budget: None,
+                    expected_goal_id: Some(active_goal.goal_id),
+                },
+            )
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            return Ok(());
+        };
+        self.inner
+            .metrics
+            .record_terminal_if_status_changed(previous_status, &goal);
+        self.inner.analytics.status_changed(
+            &goal,
+            previous_status,
+            GoalEventAttribution::Turn(turn_id),
+        );
+        self.inner.accounting_state.clear_active_goal();
+        *self.host_evaluate_state() = HostEvaluateRoundState::default();
+        self.release_goal_how().await;
+        let goal = protocol_goal_from_state(goal);
+        self.inner.event_emitter.thread_goal_updated(
+            format!("{turn_id}:{}", status.event_name()),
+            Some(turn_id.to_string()),
+            goal,
+        );
+        Ok(())
     }
 
     pub(crate) fn tools_visible(&self) -> bool {
@@ -143,6 +280,26 @@ impl GoalRuntimeHandle {
             return;
         };
         thread.thread_extension_data().remove::<TurnStartOptions>();
+    }
+
+    async fn claim_goal_how(&self) {
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            return;
+        };
+        let _ = engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::GoalHow);
+    }
+
+    async fn release_goal_how(&self) {
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            return;
+        };
+        engine_slot(thread.thread_extension_data()).release(EngineOccupant::GoalHow);
     }
 
     pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {
@@ -224,21 +381,27 @@ impl GoalRuntimeHandle {
                         .mark_idle_goal_active(goal.goal_id.clone());
                 }
                 if objective_changed {
-                    let item = objective_updated_steering_item(&protocol_goal_from_state(goal));
+                    let item = objective_updated_steering_item(
+                        &protocol_goal_from_state(goal),
+                        self.continuation_owner(),
+                    );
                     self.inject_active_turn_steering(item).await;
                 }
+                self.claim_goal_how().await;
                 self.continue_if_idle().await?;
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
                 if self.inner.accounting_state.current_turn_id().is_none() {
                     self.inner.accounting_state.clear_active_goal();
                 }
+                self.release_goal_how().await;
             }
             codex_state::ThreadGoalStatus::Paused
             | codex_state::ThreadGoalStatus::Blocked
             | codex_state::ThreadGoalStatus::UsageLimited
             | codex_state::ThreadGoalStatus::Complete => {
                 self.inner.accounting_state.clear_active_goal();
+                self.release_goal_how().await;
             }
         }
         Ok(())
@@ -254,6 +417,7 @@ impl GoalRuntimeHandle {
 
         self.inner.analytics.cleared(&goal);
         self.inner.accounting_state.clear_active_goal();
+        self.release_goal_how().await;
         Ok(())
     }
 
@@ -363,6 +527,7 @@ impl GoalRuntimeHandle {
             GoalEventAttribution::Turn(turn_id),
         );
         self.inner.accounting_state.clear_active_goal();
+        self.release_goal_how().await;
         let goal = protocol_goal_from_state(goal);
         self.inner.event_emitter.thread_goal_updated(
             format!("{turn_id}:{event_name}"),
@@ -390,8 +555,12 @@ impl GoalRuntimeHandle {
                     .accounting_state
                     .mark_idle_goal_active(goal.goal_id);
                 self.inner.metrics.record_resumed();
+                self.claim_goal_how().await;
             }
-            Some(_) | None => self.inner.accounting_state.clear_active_goal(),
+            Some(_) | None => {
+                self.inner.accounting_state.clear_active_goal();
+                self.release_goal_how().await;
+            }
         }
         Ok(())
     }
@@ -424,30 +593,52 @@ impl GoalRuntimeHandle {
             tracing::debug!("skipping goal continuation because live thread is unavailable");
             return Ok(());
         };
+        let host_evaluate = self.policy().completion == GoalCompletionAuthority::HostEvaluate;
+        if host_evaluate
+            && (thread
+                .thread_extension_data()
+                .get::<codex_extension_api::HostIdleHold>()
+                .is_some()
+                || !engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::GoalHow))
+        {
+            tracing::debug!("skipping goal continuation because the engine slot is occupied");
+            return Ok(());
+        }
 
-        let Some(goal) = self
+        let goal = match self
             .inner
             .state_dbs
             .thread_goals()
             .get_thread_goal(self.thread_id())
             .await
-            .map_err(|err| err.to_string())?
-        else {
-            self.inner.accounting_state.clear_active_goal();
-            return Ok(());
+        {
+            Ok(Some(goal)) if goal.status == codex_state::ThreadGoalStatus::Active => goal,
+            Ok(Some(_)) | Ok(None) => {
+                self.inner.accounting_state.clear_active_goal();
+                self.release_goal_how().await;
+                return Ok(());
+            }
+            Err(err) => {
+                self.release_goal_how().await;
+                return Err(err.to_string());
+            }
         };
-        if goal.status != codex_state::ThreadGoalStatus::Active {
-            self.inner.accounting_state.clear_active_goal();
-            return Ok(());
-        }
         let start_options = thread
             .thread_extension_data()
             .get::<TurnStartOptions>()
             .map(|options| options.as_ref().clone())
             .unwrap_or_default();
+        let host_next_step = self.take_host_next_step();
+        let owner = match self.policy().completion {
+            GoalCompletionAuthority::ModelCommit => GoalContinuationOwner::ModelCommit,
+            GoalCompletionAuthority::HostEvaluate => GoalContinuationOwner::HostEvaluate {
+                next_step: host_next_step.as_deref(),
+            },
+        };
         let item = continuation_steering_item(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
+            owner,
         );
 
         match thread
@@ -465,12 +656,14 @@ impl GoalRuntimeHandle {
                     ?reason,
                     "skipping goal continuation because automatic idle work was rejected"
                 );
+                self.release_goal_how().await;
             }
             Err(error) => {
                 tracing::debug!(
                     %error,
                     "skipping goal continuation because turn input submission failed"
                 );
+                self.release_goal_how().await;
             }
         }
 
