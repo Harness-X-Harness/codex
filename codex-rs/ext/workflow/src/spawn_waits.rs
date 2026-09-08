@@ -54,6 +54,25 @@ impl SpawnWaits {
         }
     }
 
+    pub(crate) fn drop_thread(&self, thread_id: ThreadId) {
+        if let Some(slot) = self
+            .senders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&thread_id.to_string())
+        {
+            let _ = slot.tx.send(true);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.senders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
     pub(crate) fn forget(&self, wait: &SpawnWait) {
         let mut senders = self.senders.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(slot) = senders.get(&wait.thread_key) else {

@@ -35,3 +35,13 @@ fn forget_does_not_drop_a_later_wait() {
     waits.cancel(thread_id);
     assert!(*second.rx.borrow());
 }
+
+#[test]
+fn drop_thread_cancels_and_removes_the_slot() {
+    let waits = SpawnWaits::default();
+    let thread_id = ThreadId::from_u128(73);
+    let token = waits.remember(thread_id);
+    waits.drop_thread(thread_id);
+    assert!(*token.rx.borrow());
+    assert_eq!(waits.len(), 0);
+}

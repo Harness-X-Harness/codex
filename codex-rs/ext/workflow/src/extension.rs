@@ -11,6 +11,7 @@ use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnItemContributor;
@@ -100,6 +101,17 @@ where
                     "failed to continue active workflow for idle thread {thread_id}: {err}"
                 );
             }
+        })
+    }
+
+    fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            engine_slot(input.thread_store).release(EngineOccupant::Workflow);
+            input.thread_store.remove::<HostIdleHold>();
+            let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+                return;
+            };
+            self.service.forget_thread(thread_id).await;
         })
     }
 }

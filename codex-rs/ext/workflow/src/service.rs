@@ -373,6 +373,28 @@ impl WorkflowService {
         self.mutate_run(thread_id, WorkflowRun::stop).await
     }
 
+    /// Drop process-local runtime for a stopped Thread. Persist and scratch stay.
+    pub async fn forget_thread(&self, thread_id: ThreadId) {
+        self.spawn_waits.drop_thread(thread_id);
+        self.in_flight.forget(thread_id);
+        self.runs.lock().await.remove(&thread_id.to_string());
+        let Some(thread) = self.live_thread(thread_id).await else {
+            return;
+        };
+        engine_slot(thread.thread_extension_data()).release(EngineOccupant::Workflow);
+        thread.thread_extension_data().remove::<HostIdleHold>();
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn cached_run_count(&self) -> usize {
+        self.runs.lock().await.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spawn_wait_count(&self) -> usize {
+        self.spawn_waits.len()
+    }
+
     pub async fn resume_run(
         &self,
         thread_id: ThreadId,
@@ -846,3 +868,7 @@ mod spawn_wait_tests;
 #[cfg(test)]
 #[path = "service_restore_tests.rs"]
 mod restore_tests;
+
+#[cfg(test)]
+#[path = "service_forget_tests.rs"]
+mod forget_tests;
