@@ -273,6 +273,7 @@ mod status_command_tests;
 mod status_surface_previews;
 mod terminal_title;
 mod usage;
+mod workflow_status;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;
 
