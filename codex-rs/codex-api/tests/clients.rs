@@ -31,6 +31,9 @@ use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::value::RawValue;
 
+#[path = "clients/grok_tests.rs"]
+mod grok_tests;
+
 fn assert_path_ends_with(requests: &[Request], suffix: &str) {
     assert_eq!(requests.len(), 1);
     let url = &requests[0].url;
@@ -150,6 +153,7 @@ fn provider(name: &str) -> Provider {
             retry_transport: true,
         },
         stream_idle_timeout: Duration::from_millis(10),
+        responses_dialect: codex_api::ResponsesDialect::OpenAi,
     }
 }
 
