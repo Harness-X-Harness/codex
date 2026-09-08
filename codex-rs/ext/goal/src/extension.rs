@@ -10,6 +10,7 @@ use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
@@ -249,7 +250,7 @@ where
         let config = (self.goal_config)(new_config);
         let eligible = thread_store
             .get::<GoalThreadEligibility>()
-            .is_none_or(|flag| flag.eligible);
+            .is_some_and(|flag| flag.eligible);
         let enabled = eligible && config.enabled;
         let policy = config.policy;
         thread_store.insert(GoalExtensionConfig { enabled, ..config });
@@ -264,6 +265,9 @@ where
             slot.release(EngineOccupant::GoalHow);
             return;
         }
+        if thread_store.get::<HostIdleHold>().is_some() {
+            return;
+        }
         tokio::spawn(async move {
             let Ok(Some(goal)) = runtime.load_thread_goal().await else {
                 return;
@@ -271,10 +275,11 @@ where
             if goal.status != codex_state::ThreadGoalStatus::Active {
                 return;
             }
-            runtime
-                .accounting_state()
-                .mark_idle_goal_active(goal.goal_id);
-            let _ = slot.try_claim(EngineOccupant::GoalHow);
+            if slot.try_claim(EngineOccupant::GoalHow) {
+                runtime
+                    .accounting_state()
+                    .mark_idle_goal_active(goal.goal_id);
+            }
         });
     }
 }

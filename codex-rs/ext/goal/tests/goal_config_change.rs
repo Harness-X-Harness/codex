@@ -32,8 +32,9 @@ async fn internal_thread_stays_host_goal_disabled_after_config_reload() -> anyho
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-    let (registry, session_store, thread_store) = started_goal(
+    let (registry, session_store, thread_store) = started_goal_with_service(
         runtime,
+        Arc::new(GoalService::new()),
         thread_id,
         SessionSource::Internal(InternalSessionSource::GoalSkeptic),
         host_config(),
@@ -123,7 +124,7 @@ async fn reenabling_host_goal_claims_the_slot_only_when_it_is_free() -> anyhow::
 
     assert!(slot.release(EngineOccupant::Workflow));
     apply_config(&registry, &session_store, &thread_store, host_config());
-    wait_until_occupant(&thread_store, Some(EngineOccupant::GoalHow)).await;
+    wait_until_goal_how(&thread_store).await;
     Ok(())
 }
 
@@ -141,26 +142,6 @@ fn stock_config() -> GoalExtensionConfig {
         max_goal_token_budget: None,
         policy: GoalPolicy::model_commit(),
     }
-}
-
-async fn started_goal(
-    runtime: Arc<codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    session_source: SessionSource,
-    start_config: GoalExtensionConfig,
-) -> (
-    codex_extension_api::ExtensionRegistry<GoalExtensionConfig>,
-    ExtensionData,
-    ExtensionData,
-) {
-    started_goal_with_service(
-        runtime,
-        Arc::new(GoalService::new()),
-        thread_id,
-        session_source,
-        start_config,
-    )
-    .await
 }
 
 async fn started_goal_with_service(
@@ -259,15 +240,15 @@ async fn set_active_goal(
     Ok(())
 }
 
-async fn wait_until_occupant(thread_store: &ExtensionData, expected: Option<EngineOccupant>) {
+async fn wait_until_goal_how(thread_store: &ExtensionData) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let occupant = engine_slot(thread_store).occupant();
-        if occupant == expected {
+        if occupant == Some(EngineOccupant::GoalHow) {
             return;
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("engine occupant stayed {occupant:?}, expected {expected:?}");
+            panic!("engine occupant stayed {occupant:?}, expected GoalHow");
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }

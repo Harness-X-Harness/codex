@@ -240,7 +240,7 @@ where
         let configured = (self.workflow_config)(new_config);
         let eligible = thread_store
             .get::<WorkflowThreadEligibility>()
-            .is_none_or(|flag| flag.eligible);
+            .is_some_and(|flag| flag.eligible);
         let enabled = eligible && configured.enabled;
         thread_store.insert(WorkflowExtensionConfig { enabled });
         if enabled {
@@ -253,13 +253,24 @@ where
         let slot = engine_slot(thread_store);
         let service = Arc::clone(&self.service);
         tokio::spawn(async move {
-            if let Ok(Some(run)) = service.get_run(thread_id).await
-                && matches!(run.status, WorkflowStatus::Active | WorkflowStatus::Waiting)
-                && let Err(err) = service.stop_run(thread_id).await
-            {
-                tracing::warn!(
-                    "failed to stop workflow after goal_host disable for {thread_id}: {err}"
-                );
+            match service.get_run(thread_id).await {
+                Ok(Some(run))
+                    if matches!(run.status, WorkflowStatus::Active | WorkflowStatus::Waiting) =>
+                {
+                    if let Err(err) = service.stop_run(thread_id).await {
+                        tracing::warn!(
+                            "failed to stop workflow after goal_host disable for {thread_id}: {err}"
+                        );
+                        return;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to load workflow after goal_host disable for {thread_id}: {err}"
+                    );
+                    return;
+                }
+                Ok(_) => {}
             }
             slot.release(EngineOccupant::Workflow);
         });
