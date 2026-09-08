@@ -28,7 +28,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 
 #[tokio::test]
-async fn internal_thread_stays_host_goal_disabled_after_config_reload() -> anyhow::Result<()> {
+async fn internal_thread_stays_host_evaluate_disabled_after_config_reload() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -54,7 +54,7 @@ async fn internal_thread_stays_host_goal_disabled_after_config_reload() -> anyho
 }
 
 #[tokio::test]
-async fn host_goal_off_releases_goal_how_and_exposes_stock_update_goal() -> anyhow::Result<()> {
+async fn host_evaluate_off_releases_goal_how_and_exposes_stock_update_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -90,7 +90,7 @@ async fn host_goal_off_releases_goal_how_and_exposes_stock_update_goal() -> anyh
 }
 
 #[tokio::test]
-async fn reenabling_host_goal_claims_the_slot_only_when_it_is_free() -> anyhow::Result<()> {
+async fn reenabling_host_evaluate_claims_the_slot_only_when_it_is_free() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
