@@ -131,18 +131,22 @@ async fn restore_of_active_workflow_and_goal_keeps_one_owner() -> Result<()> {
         .path()
         .join("workflows")
         .join(format!("{}.json", thread.id));
-    let active_persist = std::fs::read(&persist_path)?;
-    let persisted: serde_json::Value = serde_json::from_slice(&active_persist)?;
+    let mut persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&persist_path)?)?;
     anyhow::ensure!(
         persisted.get("status").and_then(serde_json::Value::as_str) == Some("active"),
         "pre-crash persist must be active so restore can reconcile occupancy"
     );
+    // The turn trigger means the host yield was marked started. That flag
+    // has no durable reattachment receipt, so restore fail-closes (#232).
+    // This test is occupancy reconcile of an Active run whose next host
+    // work has not started.
+    persisted["pending_yield_started"] = serde_json::Value::Bool(false);
 
     drop(app);
     // Graceful teardown aborts the in-flight Ask and persists paused.
     // Restore the Active document so resume exercises occupancy
     // reconcile, not the aborted-yield pause path.
-    std::fs::write(&persist_path, active_persist)?;
+    std::fs::write(&persist_path, serde_json::to_vec_pretty(&persisted)?)?;
 
     let mut app = TestAppServer::builder()
         .with_codex_home(codex_home.path())
