@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use codex_core::TurnStartOptions;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::EngineOccupant;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
@@ -14,6 +16,7 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnItemContributor;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStopInput;
+use codex_extension_api::engine_slot;
 use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
@@ -24,12 +27,20 @@ use crate::engine::truncate_workflow_reply;
 use crate::journal::HOST_ERROR_TURN_CANCELLED;
 use crate::journal::HOST_ERROR_TURN_ERRORED;
 use crate::journal::HostCallResult;
+use crate::run::WorkflowStatus;
 use crate::service::WorkflowService;
 
 /// Host `goal_host` gate for the independent `/workflow` layer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkflowExtensionConfig {
     pub enabled: bool,
+}
+
+/// Start-time Host Goal / `/workflow` eligibility. Config reload may change
+/// the configured `goal_host` value; it must not rewrite this flag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkflowThreadEligibility {
+    eligible: bool,
 }
 
 struct WorkflowExtension<C> {
@@ -43,11 +54,14 @@ where
 {
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let mut config = (self.workflow_config)(input.config);
-            if matches!(input.session_source, SessionSource::Internal(_)) {
-                config.enabled = false;
-            }
-            input.thread_store.insert(config);
+            let configured = (self.workflow_config)(input.config);
+            let eligible = !matches!(input.session_source, SessionSource::Internal(_));
+            input
+                .thread_store
+                .insert(WorkflowThreadEligibility { eligible });
+            input.thread_store.insert(WorkflowExtensionConfig {
+                enabled: eligible && configured.enabled,
+            });
         })
     }
 
@@ -223,7 +237,32 @@ where
         _previous_config: &C,
         new_config: &C,
     ) {
-        thread_store.insert((self.workflow_config)(new_config));
+        let configured = (self.workflow_config)(new_config);
+        let eligible = thread_store
+            .get::<WorkflowThreadEligibility>()
+            .is_none_or(|flag| flag.eligible);
+        let enabled = eligible && configured.enabled;
+        thread_store.insert(WorkflowExtensionConfig { enabled });
+        if enabled {
+            return;
+        }
+        let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
+            return;
+        };
+        thread_store.remove::<HostIdleHold>();
+        let slot = engine_slot(thread_store);
+        let service = Arc::clone(&self.service);
+        tokio::spawn(async move {
+            if let Ok(Some(run)) = service.get_run(thread_id).await
+                && matches!(run.status, WorkflowStatus::Active | WorkflowStatus::Waiting)
+                && let Err(err) = service.stop_run(thread_id).await
+            {
+                tracing::warn!(
+                    "failed to stop workflow after goal_host disable for {thread_id}: {err}"
+                );
+            }
+            slot.release(EngineOccupant::Workflow);
+        });
     }
 }
 

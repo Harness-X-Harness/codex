@@ -5,6 +5,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_core::TurnStartOptions;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::EngineOccupant;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
@@ -25,6 +26,7 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_extension_api::engine_slot;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -59,6 +61,13 @@ pub struct GoalExtensionConfig {
     ///
     /// Defaults to stock `update_goal` completion. Independent of Provider.
     pub policy: GoalPolicy,
+}
+
+/// Start-time Host Goal / `/workflow` eligibility. Config reload may change
+/// the configured feature value; it must not rewrite this flag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GoalThreadEligibility {
+    eligible: bool,
 }
 
 /// Optional host-owned evaluator and skeptic panel installed with the extension.
@@ -120,15 +129,20 @@ where
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let config = (self.goal_config)(input.config);
-            let enabled =
-                config.enabled && !matches!(input.session_source, SessionSource::Internal(_));
+            let eligible = !matches!(input.session_source, SessionSource::Internal(_));
+            let enabled = config.enabled && eligible;
             let policy = config.policy;
+            input
+                .thread_store
+                .insert(GoalThreadEligibility { eligible });
             let tools_available_for_thread = input.persistent_thread_state_available
                 && !matches!(
                     input.session_source,
                     SessionSource::SubAgent(SubAgentSource::Review) | SessionSource::Internal(_)
                 );
-            input.thread_store.insert(config);
+            input
+                .thread_store
+                .insert(GoalExtensionConfig { enabled, ..config });
             let accounting_state = input
                 .thread_store
                 .get_or_init::<GoalAccountingState>(GoalAccountingState::default);
@@ -233,13 +247,35 @@ where
         new_config: &C,
     ) {
         let config = (self.goal_config)(new_config);
-        let enabled = config.enabled;
+        let eligible = thread_store
+            .get::<GoalThreadEligibility>()
+            .is_none_or(|flag| flag.eligible);
+        let enabled = eligible && config.enabled;
         let policy = config.policy;
-        thread_store.insert(config);
-        if let Some(runtime) = goal_runtime_handle(thread_store) {
-            runtime.set_enabled(enabled);
-            runtime.set_policy(policy);
+        thread_store.insert(GoalExtensionConfig { enabled, ..config });
+        let Some(runtime) = goal_runtime_handle(thread_store) else {
+            return;
+        };
+        runtime.set_enabled(enabled);
+        runtime.set_policy(policy);
+        let slot = engine_slot(thread_store);
+        if !enabled || policy.completion == GoalCompletionAuthority::ModelCommit {
+            runtime.clear_host_evaluate_transients();
+            slot.release(EngineOccupant::GoalHow);
+            return;
         }
+        tokio::spawn(async move {
+            let Ok(Some(goal)) = runtime.load_thread_goal().await else {
+                return;
+            };
+            if goal.status != codex_state::ThreadGoalStatus::Active {
+                return;
+            }
+            runtime
+                .accounting_state()
+                .mark_idle_goal_active(goal.goal_id);
+            let _ = slot.try_claim(EngineOccupant::GoalHow);
+        });
     }
 }
 

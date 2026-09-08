@@ -195,6 +195,10 @@ impl GoalRuntimeHandle {
         self.host_evaluate_state().take_next_step()
     }
 
+    pub(crate) fn clear_host_evaluate_transients(&self) {
+        *self.host_evaluate_state() = HostEvaluateRoundState::default();
+    }
+
     pub(crate) async fn apply_host_goal_status(
         &self,
         turn_id: &str,
@@ -589,11 +593,13 @@ impl GoalRuntimeHandle {
             tracing::debug!("skipping goal continuation because live thread is unavailable");
             return Ok(());
         };
-        if thread
-            .thread_extension_data()
-            .get::<codex_extension_api::HostIdleHold>()
-            .is_some()
-            || !engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::GoalHow)
+        let host_evaluate = self.policy().completion == GoalCompletionAuthority::HostEvaluate;
+        if host_evaluate
+            && (thread
+                .thread_extension_data()
+                .get::<codex_extension_api::HostIdleHold>()
+                .is_some()
+                || !engine_slot(thread.thread_extension_data()).try_claim(EngineOccupant::GoalHow))
         {
             tracing::debug!("skipping goal continuation because the engine slot is occupied");
             return Ok(());
