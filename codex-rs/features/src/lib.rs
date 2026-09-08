@@ -318,6 +318,11 @@ pub enum Feature {
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Host-owned Goal completion, verification, and optional workflow bind.
+    ///
+    /// Stacked harness stages share this flag: round-end evaluation, host
+    /// skeptics, independent `/workflow`, and optional Goal-to-workflow bind.
+    GoalHost,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
     /// Enables experimental context management.
@@ -1590,6 +1595,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GoalHost,
+        key: "goal_host",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TokenBudget,
