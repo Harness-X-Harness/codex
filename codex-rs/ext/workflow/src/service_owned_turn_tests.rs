@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 use super::WorkflowService;
+use super::WorkflowServiceError;
 use crate::journal::HostCallResult;
+use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
 use crate::run::WorkflowStatus;
 use codex_protocol::ThreadId;
 
@@ -60,4 +64,70 @@ async fn remembered_turn_blocks_resume_before_pending_flag_is_persisted() {
         error.to_string().contains("in flight"),
         "unexpected resume error: {error}"
     );
+}
+
+#[tokio::test]
+async fn concurrent_stop_and_owned_finish_do_not_fail_persist() {
+    let dir = TempDir::new().expect("tempdir");
+    let service = Arc::new(WorkflowService::new(
+        dir.path().to_path_buf(),
+        std::sync::Weak::new(),
+    ));
+    let thread_id = ThreadId::from_u128(62);
+    service
+        .start_run(thread_id, r#"ask("Compile the crate."); complete();"#)
+        .await
+        .expect("start");
+    service
+        .mutate_run(thread_id, |run| {
+            run.mark_pending_yield_started();
+            Ok(())
+        })
+        .await
+        .expect("mark started");
+    service.in_flight.remember(thread_id, "turn-a".to_string());
+
+    let stopper = Arc::clone(&service);
+    let finisher = Arc::clone(&service);
+    let (stopped, finished) = tokio::join!(
+        async move { stopper.stop_run(thread_id).await },
+        async move {
+            finisher
+                .finish_owned_host_turn(thread_id, "turn-a", HostCallResult::success("ok"))
+                .await
+        }
+    );
+
+    match stopped {
+        Ok(run) => {
+            assert_ne!(run.status, WorkflowStatus::Failed);
+            assert_ne!(run.error.as_deref(), Some(WORKFLOW_ERROR_HOST_RUNTIME));
+        }
+        Err(WorkflowServiceError::InvalidRequest(message)) => {
+            assert!(
+                message.contains("not active"),
+                "unexpected stop error: {message}"
+            );
+        }
+        Err(error) => panic!("stop persist raced: {error}"),
+    }
+    match finished {
+        Ok(Some(run)) => {
+            assert_ne!(run.status, WorkflowStatus::Failed);
+            assert_ne!(run.error.as_deref(), Some(WORKFLOW_ERROR_HOST_RUNTIME));
+        }
+        Ok(None) => panic!("owned finish dropped the run"),
+        Err(error) => panic!("finish persist raced: {error}"),
+    }
+
+    let run = service.get_run(thread_id).await.expect("get").expect("run");
+    assert!(
+        matches!(
+            run.status,
+            WorkflowStatus::Paused | WorkflowStatus::Complete
+        ),
+        "unexpected status {:?}",
+        run.status
+    );
+    assert_ne!(run.error.as_deref(), Some(WORKFLOW_ERROR_HOST_RUNTIME));
 }

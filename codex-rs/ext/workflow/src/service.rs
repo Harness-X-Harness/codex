@@ -81,6 +81,9 @@ pub struct WorkflowService {
     persist_root: PathBuf,
     project_root: PathBuf,
     runs: Mutex<HashMap<String, WorkflowRun>>,
+    /// Serializes persist+remember so concurrent mutations cannot race the
+    /// shared `{thread_id}.json.tmp` staging file or persist a stale snapshot.
+    persist_lock: Mutex<()>,
     in_flight: InFlightTurns,
     spawn_waits: SpawnWaits,
     thread_manager: Weak<ThreadManager>,
@@ -102,6 +105,7 @@ impl WorkflowService {
             persist_root: persist_root.into(),
             project_root: project_root.into(),
             runs: Mutex::new(HashMap::new()),
+            persist_lock: Mutex::new(()),
             in_flight: InFlightTurns::default(),
             spawn_waits: SpawnWaits::default(),
             thread_manager,
@@ -122,6 +126,7 @@ impl WorkflowService {
             persist_root,
             project_root,
             runs: Mutex::new(HashMap::new()),
+            persist_lock: Mutex::new(()),
             in_flight: InFlightTurns::default(),
             spawn_waits: SpawnWaits::default(),
             thread_manager,
@@ -261,11 +266,12 @@ impl WorkflowService {
             Ok(run) => run,
             Err(error) => return Err(WorkflowServiceError::InvalidRequest(error)),
         };
-        if let Err(error) = persist_run(&self.persist_root, &run) {
-            return Err(error);
+        {
+            let _persist = self.persist_lock.lock().await;
+            persist_run(&self.persist_root, &run)?;
+            claim.commit();
+            self.remember(key, run.clone()).await;
         }
-        claim.commit();
-        self.remember(key, run.clone()).await;
         self.after_run_changed(&run).await;
         self.kick_if_active(&run).await;
         Ok(run)
@@ -690,37 +696,55 @@ impl WorkflowService {
         mutate: impl FnOnce(&mut WorkflowRun) -> Result<(), String>,
     ) -> Result<WorkflowRun, WorkflowServiceError> {
         let key = thread_id.to_string();
-        let mut run = self.load_cached_or_disk(&key).await?.ok_or_else(|| {
-            WorkflowServiceError::InvalidRequest("no workflow is set for this thread".to_string())
-        })?;
-        mutate(&mut run).map_err(WorkflowServiceError::InvalidRequest)?;
-        if let Err(error) = persist_run(&self.persist_root, &run) {
-            run.fail(WORKFLOW_ERROR_HOST_RUNTIME);
+        let (run, persist_error) = {
+            let _persist = self.persist_lock.lock().await;
+            let (loaded, _) = self.load_cached_or_disk_parts(&key).await?;
+            let mut run = loaded.ok_or_else(|| {
+                WorkflowServiceError::InvalidRequest(
+                    "no workflow is set for this thread".to_string(),
+                )
+            })?;
+            mutate(&mut run).map_err(WorkflowServiceError::InvalidRequest)?;
+            let persist_error = persist_run(&self.persist_root, &run).err();
+            if persist_error.is_some() {
+                run.fail(WORKFLOW_ERROR_HOST_RUNTIME);
+            }
             self.remember(key, run.clone()).await;
-            self.after_run_changed(&run).await;
-            return Err(error);
-        }
-        self.remember(key, run.clone()).await;
+            (run, persist_error)
+        };
         self.after_run_changed(&run).await;
-        Ok(run)
+        match persist_error {
+            Some(error) => Err(error),
+            None => Ok(run),
+        }
     }
 
     async fn load_cached_or_disk(
         &self,
         key: &str,
     ) -> Result<Option<WorkflowRun>, WorkflowServiceError> {
+        let (run, notify_failed) = self.load_cached_or_disk_parts(key).await?;
+        if notify_failed {
+            if let Some(run) = &run {
+                self.after_run_changed(run).await;
+            }
+        }
+        Ok(run)
+    }
+
+    async fn load_cached_or_disk_parts(
+        &self,
+        key: &str,
+    ) -> Result<(Option<WorkflowRun>, bool), WorkflowServiceError> {
         if let Some(run) = self.runs.lock().await.get(key).cloned() {
-            return Ok(Some(run));
+            return Ok((Some(run), false));
         }
         let Some((mut run, notify_failed)) = load_run(&self.persist_root, key)? else {
-            return Ok(None);
+            return Ok((None, false));
         };
         run.bind_scratch_dir(self.scratch_dir_for(run.thread_id));
         self.remember(key.to_string(), run.clone()).await;
-        if notify_failed {
-            self.after_run_changed(&run).await;
-        }
-        Ok(Some(run))
+        Ok((Some(run), notify_failed))
     }
 
     async fn remember(&self, key: String, run: WorkflowRun) {

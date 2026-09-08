@@ -47,6 +47,7 @@ use super::goal_host_support::response_requests;
 use super::goal_host_support::response_turn_triggers;
 use super::goal_host_support::text;
 use super::goal_host_support::wait_until_turn_trigger;
+use super::goal_host_support::wait_until_worker_started;
 use super::goal_host_support::wait_until_workflow_status;
 
 fn workflow_request_count(triggers: &[Option<String>]) -> usize {
@@ -1096,11 +1097,11 @@ async fn workflow_stop_pauses_and_resume_returns_to_active() -> Result<()> {
 }
 
 async fn assert_stop_during_inflight_host_turn_blocks_resume(source: &str) -> Result<()> {
-    let server = create_scripted_host_server(ScriptedHostResponder {
+    let responder = ScriptedHostResponder {
         worker_delay: std::time::Duration::from_millis(800),
         ..ScriptedHostResponder::default()
-    })
-    .await;
+    };
+    let server = create_scripted_host_server(responder.clone()).await;
     let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
     let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
     let started: ThreadWorkflowStartResponse = app
@@ -1110,9 +1111,7 @@ async fn assert_stop_during_inflight_host_turn_blocks_resume(source: &str) -> Re
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
-    wait_until_turn_trigger(&server, "workflow").await?;
-    let before = workflow_request_count(&response_turn_triggers(&server).await?);
-    assert_eq!(before, 1);
+    wait_until_worker_started(&responder, /*count*/ 1).await?;
 
     let stopped: ThreadWorkflowStopResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStop {
@@ -1123,11 +1122,6 @@ async fn assert_stop_during_inflight_host_turn_blocks_resume(source: &str) -> Re
         })
         .await?;
     assert_eq!(stopped.workflow.status, ThreadWorkflowStatus::Paused);
-    assert_eq!(
-        workflow_request_count(&response_turn_triggers(&server).await?),
-        before,
-        "stop must not start a second host turn"
-    );
 
     let request_id = app
         .send_raw_request(
@@ -1149,17 +1143,18 @@ async fn assert_stop_during_inflight_host_turn_blocks_resume(source: &str) -> Re
                 "unexpected resume error: {}",
                 error.error.message
             );
-            assert_eq!(
-                workflow_request_count(&response_turn_triggers(&server).await?),
-                before,
-                "resume must not start a second host turn while the first is still in flight"
-            );
         }
         Ok(response) => {
             let resumed: ThreadWorkflowResumeResponse = serde_json::from_value(response.result)?;
             assert_eq!(resumed.workflow.status, ThreadWorkflowStatus::Active);
         }
     }
+    wait_until_turn_trigger(&server, "workflow").await?;
+    assert_eq!(
+        workflow_request_count(&response_turn_triggers(&server).await?),
+        1,
+        "stop and resume must not start a second host turn"
+    );
     Ok(())
 }
 
@@ -1175,12 +1170,12 @@ async fn workflow_stop_during_ask_blocks_resume_while_in_flight() -> Result<()> 
 
 #[tokio::test]
 async fn workflow_stop_during_spawn_drops_waiter_and_ignores_late_child() -> Result<()> {
-    let server = create_scripted_host_server(ScriptedHostResponder {
+    let responder = ScriptedHostResponder {
         worker: "ok",
         worker_delay: std::time::Duration::from_millis(800),
         ..ScriptedHostResponder::default()
-    })
-    .await;
+    };
+    let server = create_scripted_host_server(responder.clone()).await;
     let (mut app, _codex_home) = app_with_server(
         &server,
         &[Feature::Goals, Feature::GoalHost, Feature::MultiAgentV2],
@@ -1200,7 +1195,7 @@ async fn workflow_stop_during_spawn_drops_waiter_and_ignores_late_child() -> Res
         })
         .await?;
     assert_eq!(started.workflow.status, ThreadWorkflowStatus::Active);
-    wait_until_request_contains(&server, "Say ok.").await?;
+    wait_until_worker_started(&responder, /*count*/ 1).await?;
 
     let stopped: ThreadWorkflowStopResponse = app
         .request(|request_id| ClientRequest::ThreadWorkflowStop {
@@ -1259,23 +1254,6 @@ async fn workflow_stop_during_spawn_drops_waiter_and_ignores_late_child() -> Res
         }
     }
     Ok(())
-}
-
-async fn wait_until_request_contains(server: &wiremock::MockServer, needle: &str) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
-    loop {
-        let requests = response_requests(server).await?;
-        if requests
-            .iter()
-            .any(|(_, body)| body.to_string().contains(needle))
-        {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("{needle} not observed in host requests: {requests:?}");
-        }
-        sleep(std::time::Duration::from_millis(25)).await;
-    }
 }
 
 #[tokio::test]

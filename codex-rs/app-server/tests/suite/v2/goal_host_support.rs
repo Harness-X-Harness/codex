@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -110,12 +113,13 @@ pub(super) async fn create_scripted_host_server(responder: ScriptedHostResponder
     server
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct ScriptedHostResponder {
     pub worker: &'static str,
     pub evaluator: &'static str,
     pub skeptic: &'static str,
     pub worker_delay: Duration,
+    pub worker_started: Arc<AtomicUsize>,
 }
 
 impl Default for ScriptedHostResponder {
@@ -125,6 +129,7 @@ impl Default for ScriptedHostResponder {
             evaluator: CONTINUE_VERDICT,
             skeptic: SKEPTIC_PASS,
             worker_delay: Duration::ZERO,
+            worker_started: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -137,6 +142,7 @@ impl Respond for ScriptedHostResponder {
         } else if body.contains("candidate_complete") {
             self.evaluator
         } else {
+            self.worker_started.fetch_add(1, Ordering::SeqCst);
             if !self.worker_delay.is_zero() {
                 std::thread::sleep(self.worker_delay);
             }
@@ -163,6 +169,23 @@ pub(super) async fn wait_until_turn_trigger(
     expected: &str,
 ) -> Result<Vec<Option<String>>> {
     wait_until_turn_trigger_count(server, expected, /*count*/ 1).await
+}
+
+pub(super) async fn wait_until_worker_started(
+    responder: &ScriptedHostResponder,
+    count: usize,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
+    loop {
+        let observed = responder.worker_started.load(Ordering::SeqCst);
+        if observed >= count {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("worker start count {count} not observed: {observed}");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 pub(super) async fn wait_until_turn_trigger_count(
