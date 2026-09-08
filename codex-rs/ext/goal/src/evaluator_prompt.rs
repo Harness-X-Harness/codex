@@ -103,7 +103,8 @@ pub fn goal_evaluator_evidence(items: &[RolloutItem]) -> GoalEvaluatorEvidence {
             | RolloutItem::WorldState(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::EventMsg(_)
-            | RolloutItem::RealtimeItem(_) => {}
+            | RolloutItem::RealtimeItem(_)
+            | RolloutItem::RetainedContext(_) => {}
         }
     }
 
@@ -208,6 +209,7 @@ fn transcript_row(item: &ResponseItem) -> Option<String> {
         | ResponseItem::Compaction { .. }
         | ResponseItem::CompactionTrigger {}
         | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::ConfigurationUpdate { .. }
         | ResponseItem::Other => return None,
     };
     let trimmed = text.trim();
