@@ -1,0 +1,397 @@
+name: grokex-checks
+
+on:
+  pull_request:
+    branches: ['release/**']
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+
+concurrency:
+  group: grokex-checks-${{ inputs.source_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CHECKOUT_SHA: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  # The path contract (grokex/check_scope.py) decides which gate groups a pull
+  # request needs from the paths it changes. Anything that is not a pull
+  # request, and any path the contract does not name, needs every gate.
+  scope:
+    name: Resolve the path contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      helpers: ${{ steps.scope.outputs.helpers }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            git fetch --quiet --depth=1 origin "${BASE_SHA}"
+            python3 grokex/check_scope.py --base "${BASE_SHA}" --head "${CHECKOUT_SHA}" --github-output | tee -a "${GITHUB_OUTPUT}"
+          else
+            python3 grokex/check_scope.py --all --github-output | tee -a "${GITHUB_OUTPUT}"
+          fi
+
+  helpers:
+    name: Release helper contracts
+    needs: scope
+    if: needs.scope.outputs.helpers == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: grokex/validator/go.mod
+          cache-dependency-path: grokex/validator/go.sum
+      - name: Lint the Grokex workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grokex-*.yml
+      - name: Verify the canonical-session validator
+        working-directory: grokex/validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go build -o "${RUNNER_TEMP}/grokex-live" ./cmd/grokex-live
+          # The validator refuses a scenario the contract does not name.
+          if "${RUNNER_TEMP}/grokex-live" --contracts ../live_contracts.json --archive x --config x --evidence x \
+              --source-sha x --run-id x --scenario not-a-scenario; then
+            echo "validator accepted a scenario outside the contract" >&2
+            exit 1
+          fi
+      - name: Verify helper contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            grokex/check_scope.py \
+            grokex/release.py \
+            grokex/seam_series.py \
+            grokex/test_check_scope.py \
+            grokex/test_release.py \
+            grokex/test_seam_series.py
+          python3 -m unittest grokex.test_check_scope grokex.test_release grokex.test_seam_series
+          upstream_commit="$(python3 grokex/release.py identity --github-output | sed -n 's/^upstream_commit=//p')"
+          git fetch --quiet --depth=1 origin "${upstream_commit}"
+          python3 grokex/seam_series.py plan --head "${CHECKOUT_SHA}" > "${RUNNER_TEMP}/seam-plan.txt"
+          python3 grokex/seam_series.py export --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series" > /dev/null
+          python3 grokex/seam_series.py verify --head "${CHECKOUT_SHA}" --out "${RUNNER_TEMP}/seam-series"
+          bash -n grokex/dist/grokex grokex/dist/install-grokex.sh grokex/download-archives.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/dist/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/dist/install-grokex.ps1))'
+          python3 grokex/release.py verify-profile --path grokex/dist/config.toml.example
+          release_tag="$(python3 grokex/release.py identity --github-output | sed -n 's/^release_tag=//p')"
+          product_tree="$(python3 grokex/release.py identity --github-output | sed -n 's/^product_tree=//p')"
+          [[ -n "${release_tag}" && -n "${product_tree}" ]]
+          fixture="${RUNNER_TEMP}/grokex-fixture"
+          mkdir -p "${fixture}/raw"
+          for target in \
+            aarch64-apple-darwin x86_64-apple-darwin \
+            aarch64-unknown-linux-musl x86_64-unknown-linux-musl \
+            aarch64-pc-windows-msvc x86_64-pc-windows-msvc; do
+            mkdir -p "${fixture}/raw/${target}"
+            if [[ "${target}" == *windows* ]]; then
+              touch "${fixture}/raw/${target}/codex.exe" "${fixture}/raw/${target}/codex-code-mode-host.exe"
+            else
+              touch "${fixture}/raw/${target}/codex" "${fixture}/raw/${target}/codex-code-mode-host"
+            fi
+            if [[ "${target}" == *linux* ]]; then
+              touch "${fixture}/raw/${target}/bwrap"
+            fi
+          done
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --product-tree "${product_tree}" \
+            --built-from-sha "${CHECKOUT_SHA}" \
+            --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --product-tree "${product_tree}" \
+            --target x86_64-unknown-linux-musl
+          candidate="${fixture}/dist/${release_tag}-x86_64-unknown-linux-musl.tar.gz"
+          mkdir -p "${fixture}/extracted" "${fixture}/installed"
+          tar -xzf "${candidate}" -C "${fixture}/extracted"
+          GROKEX_BIN_DIR="${fixture}/installed/bin" \
+            GROKEX_HOME="${fixture}/installed/home" \
+            sh "${fixture}/extracted/${release_tag}/install-grokex.sh"
+          test -x "${fixture}/installed/bin/bwrap"
+          candidate_sha="$(sha256sum "${candidate}" | awk '{print $1}')"
+          python3 grokex/release.py package \
+            --raw-root "${fixture}/raw" \
+            --output "${fixture}/dist" \
+            --repository . \
+            --product-tree "${product_tree}" \
+            --built-from-sha "${CHECKOUT_SHA}" \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin \
+            --target aarch64-unknown-linux-musl \
+            --target aarch64-pc-windows-msvc \
+            --target x86_64-pc-windows-msvc
+          [[ "$(sha256sum "${candidate}" | awk '{print $1}')" == "${candidate_sha}" ]]
+          python3 grokex/release.py verify-archives \
+            --dist "${fixture}/dist" \
+            --product-tree "${product_tree}"
+          # Assemble a full asset set from synthetic completed evidence and
+          # verify it the way the publish job does.
+          mkdir -p "${fixture}/evidence"
+          for scenario in $(jq -r '.scenarios | keys[]' grokex/live_contracts.json); do
+            story="$(jq -r --arg s "${scenario}" '.scenarios[$s].story' grokex/live_contracts.json)"
+            jq -n --arg scenario "${scenario}" --arg story "${story}" \
+              '{scenario: $scenario, story: $story, mode: "release", status: "completed", turn_durations_seconds: [1.5]}' \
+              > "${fixture}/evidence/LIVE_EVIDENCE-${scenario}.json"
+          done
+          python3 grokex/release.py assemble \
+            --archives "${fixture}/dist" \
+            --evidence-dir "${fixture}/evidence" \
+            --output "${fixture}/assets" \
+            --repository . \
+            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --release-run 0
+          python3 grokex/release.py verify-assets \
+            --dist "${fixture}/assets" \
+            --source-sha "${CHECKOUT_SHA}" \
+            --product-tree "${product_tree}" \
+            --release-run 0
+
+  formatting:
+    name: Formatting
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - run: cargo fmt -- --config imports_granularity=Item --check
+
+  contracts:
+    name: Stock and Grok contracts
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - id: provider
+        name: Provider contracts
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_cargo() {
+            output="$(mktemp)"
+            cargo test "$@" | tee "${output}"
+            grep -Eq 'test result: ok\.' "${output}" || {
+              echo "cargo test failed: $*" >&2
+              exit 1
+            }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "${output}" || {
+              echo "cargo test executed 0 tests: $*" >&2
+              exit 1
+            }
+          }
+          # Bounded crates: whole crate, including stock unit tests at the
+          # Provider/API seams the graft edits.
+          run_cargo -p codex-model-provider -p codex-model-provider-info -p codex-api
+      - id: projections
+        name: Stock App Server Provider projections
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_cargo() {
+            output="$(mktemp)"
+            cargo test "$@" | tee "${output}"
+            grep -Eq 'test result: ok\.' "${output}" || {
+              echo "cargo test failed: $*" >&2
+              exit 1
+            }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "${output}" || {
+              echo "cargo test executed 0 tests: $*" >&2
+              exit 1
+            }
+          }
+          # Large crate: Grok-owned modules and Grok-named tests.
+          run_cargo -p codex-app-server --test all grok
+      - id: controls
+        name: Shared stock seam controls
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_cargo() {
+            output="$(mktemp)"
+            cargo test "$@" | tee "${output}"
+            grep -Eq 'test result: ok\.' "${output}" || {
+              echo "cargo test failed: $*" >&2
+              exit 1
+            }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "${output}" || {
+              echo "cargo test executed 0 tests: $*" >&2
+              exit 1
+            }
+          }
+          run_cargo -p codex-core --lib grok
+          run_cargo -p codex-core --lib review_model_policy
+          run_cargo -p codex-guardian-v2 -p codex-memories-write --lib
+          run_cargo -p codex-config --lib grok
+          run_cargo -p codex-app-server --test all mcp_server_tool_call_returns_tool_result
+      - id: grok
+        name: Grok metadata-driven V2, Ultra, and hosted X Search
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_cargo() {
+            output="$(mktemp)"
+            cargo test "$@" | tee "${output}"
+            grep -Eq 'test result: ok\.' "${output}" || {
+              echo "cargo test failed: $*" >&2
+              exit 1
+            }
+            grep -Eq 'test result: ok\. [1-9][0-9]* passed' "${output}" || {
+              echo "cargo test executed 0 tests: $*" >&2
+              exit 1
+            }
+          }
+          run_cargo -p codex-core --test all grok
+          run_cargo -p codex-history --lib
+          run_cargo -p codex-core --lib provider_hosted_custom_tool_call
+          run_cargo -p codex-image-generation-extension --lib
+      - name: Require every contract group
+        if: always()
+        env:
+          CONTROLS: ${{ steps.controls.outcome }}
+          GROK: ${{ steps.grok.outcome }}
+          PROJECTIONS: ${{ steps.projections.outcome }}
+          PROVIDER: ${{ steps.provider.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${PROVIDER}" == "success" ]] || failures+=("Provider contracts")
+          [[ "${PROJECTIONS}" == "success" ]] || failures+=("stock Provider projections")
+          [[ "${CONTROLS}" == "success" ]] || failures+=("stock controls")
+          [[ "${GROK}" == "success" ]] || failures+=("Grok contracts")
+          if (( ${#failures[@]} )); then
+            printf 'Failed contract group: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
+
+  lints:
+    name: Affected library lints
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - name: Lint affected libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy -p codex-api -p codex-config -p codex-guardian-v2 -p codex-image-generation-extension -p codex-memories-write -p codex-model-provider -p codex-model-provider-info -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
+          cargo clippy -p codex-core --test all -- -D warnings
+          cargo clippy -p codex-app-server --test all -- -D warnings
+
+  require:
+    name: Require every deterministic gate
+    needs: [scope, helpers, formatting, contracts, lints]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require success, or a skip the path contract asked for
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          WANT_RUST: ${{ needs.scope.outputs.rust }}
+          WANT_HELPERS: ${{ needs.scope.outputs.helpers }}
+          CONTRACTS: ${{ needs.contracts.result }}
+          FORMATTING: ${{ needs.formatting.result }}
+          HELPERS: ${{ needs.helpers.result }}
+          LINTS: ${{ needs.lints.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=()
+          [[ "${SCOPE}" == "success" ]] || failures+=("path contract")
+          gate() {
+            # A gate passes when it succeeded, or when the contract said the
+            # change does not need it and the job was therefore skipped.
+            local label="$1" result="$2" wanted="$3"
+            if [[ "${result}" == "success" ]]; then
+              return
+            fi
+            if [[ "${wanted}" == "false" && "${result}" == "skipped" ]]; then
+              echo "${label}: not needed by the path contract"
+              return
+            fi
+            failures+=("${label} (${result})")
+          }
+          gate "release helpers" "${HELPERS}" "${WANT_HELPERS}"
+          gate "formatting" "${FORMATTING}" "${WANT_RUST}"
+          gate "contracts" "${CONTRACTS}" "${WANT_RUST}"
+          gate "lints" "${LINTS}" "${WANT_RUST}"
+          if (( ${#failures[@]} )); then
+            printf 'Failed deterministic gate: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi

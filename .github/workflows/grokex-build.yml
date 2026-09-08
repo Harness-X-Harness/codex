@@ -1,0 +1,129 @@
+name: grokex-build
+
+# Builds Grokex release archives once per product tree. The product tree is a
+# digest over every path that feeds a build (release.py PRODUCT_PATHS); a push
+# that changes only validators, workflows, or docs keeps the same tree and
+# reuses the archive already uploaded for it. A push to a release branch builds
+# the Linux target; grokex-release calls this workflow for all six targets.
+
+on:
+  push:
+    branches: ['release/**']
+  workflow_call:
+    inputs:
+      targets:
+        description: JSON array of Rust target triples to build
+        required: true
+        type: string
+    outputs:
+      product_tree:
+        description: Product tree digest the archives implement
+        value: ${{ jobs.identity.outputs.product_tree }}
+      release_tag:
+        description: Release tag from release-source.json
+        value: ${{ jobs.identity.outputs.release_tag }}
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  identity:
+    name: Resolve product identity
+    runs-on: ubuntu-24.04
+    outputs:
+      product_tree: ${{ steps.identity.outputs.product_tree }}
+      release_tag: ${{ steps.identity.outputs.release_tag }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: identity
+        run: python3 grokex/release.py identity --github-output >> "${GITHUB_OUTPUT}"
+      - id: matrix
+        name: Pair each requested target with its native runner
+        env:
+          REQUESTED: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${REQUESTED}" ]]; then
+            targets="${REQUESTED}"
+          else
+            targets='["x86_64-unknown-linux-musl"]'
+          fi
+          runners='{
+            "aarch64-apple-darwin": "macos-15",
+            "x86_64-apple-darwin": "macos-15-intel",
+            "aarch64-unknown-linux-musl": "ubuntu-24.04-arm",
+            "x86_64-unknown-linux-musl": "ubuntu-24.04",
+            "aarch64-pc-windows-msvc": "windows-11-arm",
+            "x86_64-pc-windows-msvc": "windows-2025"
+          }'
+          matrix="$(jq -c --argjson runners "${runners}" '
+            if type != "array" or length == 0 then error("targets must be a non-empty array") else . end
+            | map({target: ., runner: ($runners[.] // error("no runner for target \(.)"))})
+          ' <<<"${targets}")"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: identity
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.identity.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 170
+    env:
+      ARTIFACT: grokex-build-${{ needs.identity.outputs.product_tree }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: cache
+        name: Look for an archive already built for this product tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT}&per_page=20" \
+            --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty')"
+          if [[ -n "${existing}" ]]; then
+            echo "Reusing ${ARTIFACT} from run ${existing}"
+            echo "run_id=${existing}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No archive for ${ARTIFACT}; building"
+          fi
+      - if: steps.cache.outputs.run_id == ''
+        uses: ./.github/actions/build-grokex
+        with:
+          target: ${{ matrix.target }}
+      - if: steps.cache.outputs.run_id == ''
+        name: Package the archive for this target
+        env:
+          PRODUCT_TREE: ${{ needs.identity.outputs.product_tree }}
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${PYTHON}" grokex/release.py package \
+            --raw-root "${RUNNER_TEMP}/raw" \
+            --output "${RUNNER_TEMP}/archive" \
+            --repository . \
+            --product-tree "${PRODUCT_TREE}" \
+            --built-from-sha "${GITHUB_SHA}" \
+            --target "${TARGET}"
+          "${PYTHON}" grokex/release.py verify-archives \
+            --dist "${RUNNER_TEMP}/archive" \
+            --product-tree "${PRODUCT_TREE}" \
+            --target "${TARGET}"
+      - if: steps.cache.outputs.run_id == ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ runner.temp }}/archive
+          if-no-files-found: error
+          retention-days: 90
