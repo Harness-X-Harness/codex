@@ -1,17 +1,14 @@
 name: grokex-release
 
-# One run is the evidence: resolve identities, reuse or build the six archives
-# for the product tree, run every Live scenario against the Linux archive, then
-# publish the immutable tag once and verify what was published.
-#
-# workflow_dispatch publishes (or rehearses with dry_run). The nightly schedule
-# runs the same build and Live jobs in observation mode and never publishes.
+# Build six archives, run llm-go Grok Live against the Linux archive, then
+# optionally publish the tag. workflow_dispatch publishes (or rehearses with
+# dry_run). The nightly schedule runs build and Live and never publishes.
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Build, prove, and assemble without creating the tag or Release
+        description: Build and prove without creating the tag or Release
         required: false
         default: false
         type: boolean
@@ -28,36 +25,36 @@ permissions:
 
 jobs:
   preflight:
-    name: Resolve source, identity, and destination
+    name: Resolve branch version and destination
     runs-on: ubuntu-24.04
     outputs:
-      mode: ${{ steps.mode.outputs.mode }}
       publish: ${{ steps.mode.outputs.publish }}
       release_tag: ${{ steps.identity.outputs.release_tag }}
-      upstream_tag: ${{ steps.identity.outputs.upstream_tag }}
       version: ${{ steps.identity.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - id: identity
-        run: python3 grokex/release.py identity --github-output >> "${GITHUB_OUTPUT}"
-      - id: mode
-        env:
-          DRY_RUN: ${{ inputs.dry_run }}
-          UPSTREAM_TAG: ${{ steps.identity.outputs.upstream_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${GITHUB_REF}" == "refs/heads/release/${UPSTREAM_TAG}" ]]
-          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
-            echo "mode=observation" >> "${GITHUB_OUTPUT}"
-            echo "publish=false" >> "${GITHUB_OUTPUT}"
-          elif [[ "${DRY_RUN}" == "true" ]]; then
-            echo "mode=release" >> "${GITHUB_OUTPUT}"
+          ref="${GITHUB_REF_NAME}"
+          prefix="release/rust-v"
+          [[ "${GITHUB_REF}" == "refs/heads/${prefix}"* ]]
+          version="${ref#"${prefix}"}"
+          [[ -n "${version}" && "${version}" != */* ]]
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=grokex-v${version}" >> "${GITHUB_OUTPUT}"
+      - id: mode
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" || "${DRY_RUN}" == "true" ]]; then
             echo "publish=false" >> "${GITHUB_OUTPUT}"
           else
-            echo "mode=release" >> "${GITHUB_OUTPUT}"
             echo "publish=true" >> "${GITHUB_OUTPUT}"
           fi
       - name: Verify public Grok profile
@@ -87,33 +84,29 @@ jobs:
       targets: '["aarch64-apple-darwin","x86_64-apple-darwin","aarch64-unknown-linux-musl","x86_64-unknown-linux-musl","aarch64-pc-windows-msvc","x86_64-pc-windows-msvc"]'
 
   live:
-    name: Live ${{ matrix.scenario }} (${{ needs.preflight.outputs.mode }})
+    name: llm-go Grok Live
     needs: [preflight, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        scenario:
-          - basic-exact-reply
-          - encrypted-reasoning-tool-continuation
-          - ultra-full-history-collaboration
-          - image-generation-history-edit
-          - custom-apply-patch
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Download the Linux archive for this product tree
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grokex-build-${{ github.sha }}-x86_64-unknown-linux-musl
+          path: archives
+      - name: Verify the Linux archive
         env:
-          GH_TOKEN: ${{ github.token }}
-          PRODUCT_TREE: ${{ needs.build.outputs.product_tree }}
+          VERSION: ${{ needs.preflight.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          bash grokex/download-archives.sh "${PRODUCT_TREE}" archives x86_64-unknown-linux-musl
-          python3 grokex/release.py verify-archives --dist archives --product-tree "${PRODUCT_TREE}" --target x86_64-unknown-linux-musl
+          python3 grokex/release.py verify-archives \
+            --dist archives \
+            --version "${VERSION}" \
+            --built-from-sha "${GITHUB_SHA}" \
+            --target x86_64-unknown-linux-musl
       - name: Materialize and validate secret profile
         env:
           GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
@@ -124,123 +117,81 @@ jobs:
           umask 077
           printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
           python3 grokex/release.py verify-profile --path "${RUNNER_TEMP}/config.toml" --secret
+      - name: Extract the Codex binary
+        env:
+          RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p extracted
+          tar -xzf "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" -C extracted
+          test -x "extracted/${RELEASE_TAG}/bin/grokex-bin"
+          echo "GROKEX_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grokex-bin" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ronhuafeng/llm-go
+          ref: 9b72c486c516e21a7b1895c412f2203e231c2840
+          path: llm-go
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: grokex/validator/go.mod
-          cache-dependency-path: grokex/validator/go.sum
-      - name: Build the validator
-        working-directory: grokex/validator
-        run: go build -o "${RUNNER_TEMP}/grokex-live" ./cmd/grokex-live
-      - name: Execute the scenario
+          go-version-file: llm-go/codexsdk/go.mod
+          cache-dependency-path: llm-go/codexsdk/go.sum
+      - name: Run Grok Live tests
+        working-directory: llm-go/codexsdk
         env:
-          MODE: ${{ needs.preflight.outputs.mode }}
-          RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
-          SCENARIO: ${{ matrix.scenario }}
-        shell: bash
+          GROKEX_LIVE: "1"
+          GROKEX_LIVE_CONFIG: ${{ runner.temp }}/config.toml
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/grokex-live" \
-            --contracts grokex/live_contracts.json \
-            --archive "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" \
-            --config "${RUNNER_TEMP}/config.toml" \
-            --evidence "${RUNNER_TEMP}/LIVE_EVIDENCE-${SCENARIO}.json" \
-            --source-sha "${GITHUB_SHA}" \
-            --run-id "${GITHUB_RUN_ID}" \
-            --scenario "${SCENARIO}" \
-            --mode "${MODE}"
-      - name: Summarize secret-safe evidence
-        if: always()
-        env:
-          SCENARIO: ${{ matrix.scenario }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="${RUNNER_TEMP}/LIVE_EVIDENCE-${SCENARIO}.json"
-          [[ -f "${evidence}" ]] || exit 0
-          {
-            echo "### ${SCENARIO}"
-            echo
-            jq -r '"- mode: \(.mode // "unknown")\n- outcome: \(.outcome // .status // "unknown")\n- last proven stage: \(.last_proven_stage // ((.stage_timings // [])[-1].stage) // "unknown")\n- turn durations (s): \((.turn_durations_seconds // []) | map(tostring) | join(", "))"' "${evidence}"
-            echo
-          } >> "${GITHUB_STEP_SUMMARY}"
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always()
-        with:
-          name: grokex-live-evidence-${{ matrix.scenario }}
-          path: ${{ runner.temp }}/LIVE_EVIDENCE-${{ matrix.scenario }}.json
-          if-no-files-found: error
-          retention-days: 30
+          test -x "${GROKEX_LIVE_CODEX_BIN}"
+          go test . -count=1 -timeout 30m -run '^TestGrok'
 
   publish:
-    name: Assemble, publish once, verify
+    name: Checksums and publish once
     needs: [preflight, build, live]
-    if: needs.preflight.outputs.mode == 'release'
+    if: needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: write
     env:
-      PRODUCT_TREE: ${{ needs.build.outputs.product_tree }}
-      PUBLISH: ${{ needs.preflight.outputs.publish }}
       RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Download the six archives for this product tree
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash grokex/download-archives.sh "${PRODUCT_TREE}" archives \
-            aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl \
-            x86_64-unknown-linux-musl aarch64-pc-windows-msvc x86_64-pc-windows-msvc
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: grokex-live-evidence-*
-          path: evidence-download
+          pattern: grokex-build-${{ github.sha }}-*
+          path: archive-download
           merge-multiple: true
-      - name: Assemble and verify release assets
+      - name: Stage archives and checksums
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p evidence
-          find evidence-download -name 'LIVE_EVIDENCE-*.json' -type f -exec cp {} evidence/ \;
-          python3 grokex/release.py assemble \
-            --archives archives \
-            --evidence-dir evidence \
-            --output release-assets \
-            --repository . \
-            --source-sha "${GITHUB_SHA}" \
-            --product-tree "${PRODUCT_TREE}" \
-            --release-run "${GITHUB_RUN_ID}"
-          python3 grokex/release.py verify-assets \
+          mkdir -p release-assets
+          find archive-download -name '*.tar.gz' -type f -exec cp {} release-assets/ \;
+          python3 grokex/release.py verify-archives \
             --dist release-assets \
-            --source-sha "${GITHUB_SHA}" \
-            --product-tree "${PRODUCT_TREE}" \
-            --release-run "${GITHUB_RUN_ID}"
-          {
-            echo "## ${RELEASE_TAG} (publish=${PUBLISH})"
-            echo
-            sed 's/^/    /' release-assets/RELEASE.json
-          } >> "${GITHUB_STEP_SUMMARY}"
+            --version "${VERSION}" \
+            --built-from-sha "${GITHUB_SHA}"
+          python3 grokex/release.py checksums --dist release-assets
+          cp grokex/dist/config.toml.example grokex/dist/install-grokex.sh grokex/dist/install-grokex.ps1 release-assets/
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: grokex-release-assets
           path: release-assets
           if-no-files-found: error
           retention-days: 30
-      - if: env.PUBLISH == 'true'
-        name: Recheck the destination and publish once
+      - name: Recheck the destination and publish once
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_TAG: ${{ needs.preflight.outputs.upstream_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/release/${UPSTREAM_TAG}" --jq .object.sha)"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${GITHUB_REF_NAME}" --jq .object.sha)"
           [[ "${branch_sha}" == "${GITHUB_SHA}" ]]
           if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Destination tag appeared during validation" >&2
@@ -251,8 +202,7 @@ jobs:
             --target "${GITHUB_SHA}" \
             --title "Grokex ${VERSION}" \
             --notes "Stock Codex ${VERSION} harness with the release-bundled grok-4.6 Provider catalog."
-      - if: env.PUBLISH == 'true'
-        name: Download and verify the published destination
+      - name: Download and verify the published destination
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -262,8 +212,7 @@ jobs:
           [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${GITHUB_SHA}" ]]
           mkdir published
           gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --dir published
-          python3 grokex/release.py verify-assets \
+          python3 grokex/release.py verify-archives \
             --dist published \
-            --source-sha "${GITHUB_SHA}" \
-            --product-tree "${PRODUCT_TREE}" \
-            --release-run "${GITHUB_RUN_ID}"
+            --version "${VERSION}" \
+            --built-from-sha "${GITHUB_SHA}"
