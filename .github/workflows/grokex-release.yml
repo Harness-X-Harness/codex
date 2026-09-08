@@ -142,6 +142,7 @@ jobs:
         env:
           GROKEX_LIVE: "1"
           GROKEX_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GOWORK: "off"
         run: |
           set -euo pipefail
           test -x "${GROKEX_LIVE_CODEX_BIN}"
