@@ -1,0 +1,96 @@
+name: goal-host-checks
+
+# Independent Host Goal / Rhai /workflow gate. This fork does not run stock
+# blocking-ci. Host Goal lands on harness/<stable-tag>, matching release/<tag>.
+on:
+  pull_request:
+    branches:
+      - "harness/**"
+      - "release/**"
+  workflow_dispatch:
+
+concurrency:
+  group: goal-host-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    name: Harness stable-tag provenance
+    if: github.event_name == 'pull_request' && startsWith(github.base_ref, 'harness/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Fetch harness base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - name: Check matching stock tag is an ancestor
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/check_harness_stable_tag_provenance.py \
+            --base-branch "${{ github.base_ref }}" \
+            --lineage-ref HEAD \
+            --lineage-ref "origin/${{ github.base_ref }}"
+      - name: Test provenance helper
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s .github/scripts -p 'test_check_harness_stable_tag_provenance.py'
+
+  rust:
+    name: Host Goal Rust gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: cargo-nextest
+      - name: Check App Server protocol schema
+        run: |
+          set -euo pipefail
+          just write-app-server-schema
+          just write-app-server-schema --experimental
+          just test -p codex-app-server-protocol
+      - name: Run Host Goal and Workflow gates
+        run: |
+          set -euo pipefail
+          # A–H carry-forward matrix: full small Host Goal crates plus the
+          # smallest stock spawn seam and App Server/TUI Host Goal surfaces.
+          just test -p codex-workflow-extension
+          just test -p codex-goal-extension
+          just test -p codex-core -E 'test(/workflow_spawn/)'
+          just test -p codex-app-server -E 'test(/thread_workflow::|thread_workflow_occupancy|thread_goal_host/)'
+          just test -p codex-tui -E 'test(/workflow/)'
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  python:
+    name: Host Goal Python SDK models
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Test workflow RPC models
+        run: |
+          set -euo pipefail
+          python -m pip install --user pydantic pytest
+          python -m pytest sdk/python/tests/test_workflow_rpc_models.py
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
