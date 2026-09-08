@@ -37,6 +37,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
@@ -1981,7 +1982,11 @@ async fn guardian_request_model_for_auto_review(
         },
     );
     let parent_model = turn.model_info().slug.clone();
-    let preferred_model = turn.provider.approval_review_preferred_model().to_string();
+    let preferred_model = turn
+        .provider
+        .approval_review_preferred_model()
+        .expect("test provider should define an approval review model")
+        .to_string();
     let parent_turn_id = turn.sub_id.clone();
     seed_guardian_parent_history(&session, &turn).await;
 
@@ -3775,6 +3780,24 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
             guardian_config.model_auto_compact_token_limit,
         ),
         (Some(128_000), Some(100_000))
+    );
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_rejects_provider_without_review_model_policy() {
+    let server = start_mock_server().await;
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be unique");
+    let provider_info = ModelProviderInfo {
+        wire_api: WireApi::GrokResponses,
+        ..turn_mut.config.model_provider.clone()
+    };
+    turn_mut.provider = create_model_provider(provider_info, turn_mut.auth_manager.clone());
+
+    assert!(
+        guardian_review_session_config(session.as_ref(), turn.as_ref())
+            .await
+            .is_err()
     );
 }
 
