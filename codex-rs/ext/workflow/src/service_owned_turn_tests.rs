@@ -66,7 +66,7 @@ async fn remembered_turn_blocks_resume_before_pending_flag_is_persisted() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_stop_and_owned_finish_do_not_fail_persist() {
     let dir = TempDir::new().expect("tempdir");
     let service = Arc::new(WorkflowService::new(
@@ -87,16 +87,20 @@ async fn concurrent_stop_and_owned_finish_do_not_fail_persist() {
         .expect("mark started");
     service.in_flight.remember(thread_id, "turn-a".to_string());
 
-    let stopper = Arc::clone(&service);
-    let finisher = Arc::clone(&service);
-    let (stopped, finished) = tokio::join!(
-        async move { stopper.stop_run(thread_id).await },
+    let stop_task = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.stop_run(thread_id).await }
+    });
+    let finish_task = tokio::spawn({
+        let service = Arc::clone(&service);
         async move {
-            finisher
+            service
                 .finish_owned_host_turn(thread_id, "turn-a", HostCallResult::success("ok"))
                 .await
         }
-    );
+    });
+    let stopped = stop_task.await.expect("stop join");
+    let finished = finish_task.await.expect("finish join");
 
     match stopped {
         Ok(run) => {
