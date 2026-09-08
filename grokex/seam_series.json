@@ -73,7 +73,7 @@
         "codex-rs/tools/",
         "codex-rs/history/",
         "codex-rs/core/src/context_manager/",
-        "codex-rs/core/tests/suite/x_search.rs",
+        "codex-rs/core/tests/suite/grok_x_search.rs",
         "codex-rs/core/tests/suite/grok_web_search.rs"
       ]
     },

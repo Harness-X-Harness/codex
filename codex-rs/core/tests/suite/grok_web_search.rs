@@ -113,4 +113,16 @@ async fn grok_web_search_uses_bare_live_declaration_and_replays_stock_history() 
             "action": {"type": "search", "query": "current UTC date"},
         }),
     );
+    let input = follow_up["input"]
+        .as_array()
+        .expect("follow-up should include canonical history");
+    assert!(
+        input.iter().all(|item| {
+            !matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("custom_tool_call_output") | Some("function_call_output")
+            )
+        }),
+        "provider-hosted web search must not create a local tool result"
+    );
 }

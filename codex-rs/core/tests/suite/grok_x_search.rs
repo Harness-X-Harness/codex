@@ -1,3 +1,6 @@
+//! Grok-specific X Search contracts. Kept apart from stock suites so
+//! upstream edits never collide with the Grok graft.
+
 #![allow(clippy::unwrap_used)]
 
 use codex_model_provider_info::WireApi;
