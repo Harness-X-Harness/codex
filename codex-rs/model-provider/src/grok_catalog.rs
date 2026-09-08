@@ -21,6 +21,7 @@ const GROK_AUTO_COMPACT_TOKEN_LIMIT: i64 = 400_000;
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
         models: vec![ModelInfo {
+            guardian: None,
             slug: GROK_4_6_MODEL_ID.to_string(),
             display_name: "Grok 4.6".to_string(),
             description: Some("Grok 4.6 model".to_string()),
@@ -62,6 +63,7 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             input_modalities: vec![InputModality::Text, InputModality::Image],
             used_fallback_model_metadata: false,
             supports_search_tool: false,
+            supports_experimental_context: false,
             use_responses_lite: false,
             node_repl_auto_review_required: false,
             node_repl_disabled: false,
