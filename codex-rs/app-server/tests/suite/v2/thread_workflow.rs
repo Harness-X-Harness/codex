@@ -1257,7 +1257,7 @@ async fn workflow_stop_during_spawn_drops_waiter_and_ignores_late_child() -> Res
 }
 
 #[tokio::test]
-async fn workflow_advance_is_optional_override() -> Result<()> {
+async fn workflow_advance_is_optional_nudge() -> Result<()> {
     let server = create_scripted_host_server(ScriptedHostResponder {
         worker_delay: std::time::Duration::from_millis(400),
         ..ScriptedHostResponder::default()
