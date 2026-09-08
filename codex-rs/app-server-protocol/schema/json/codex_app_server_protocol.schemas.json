@@ -4722,6 +4722,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/workflow/updated"
+              ],
+              "title": "Thread/workflow/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadWorkflowUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/workflow/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/queue/changed"
               ],
               "title": "Thread/queue/changedNotificationMethod",
@@ -24376,6 +24396,80 @@
         "required": [
           "estimatedUsageCreditsMicros"
         ],
+        "type": "object"
+      },
+      "ThreadWorkflow": {
+        "properties": {
+          "createdAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "pendingInstruction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": true,
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/ThreadWorkflowStatus"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAt",
+          "name",
+          "result",
+          "runId",
+          "status",
+          "threadId",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ThreadWorkflowStatus": {
+        "enum": [
+          "active",
+          "paused",
+          "complete",
+          "waiting",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "ThreadWorkflowUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/definitions/v2/ThreadWorkflow"
+          }
+        },
+        "required": [
+          "threadId",
+          "workflow"
+        ],
+        "title": "ThreadWorkflowUpdatedNotification",
         "type": "object"
       },
       "TokenUsageBreakdown": {
