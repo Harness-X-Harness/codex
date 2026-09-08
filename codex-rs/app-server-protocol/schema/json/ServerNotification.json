@@ -6050,6 +6050,78 @@
       ],
       "type": "object"
     },
+    "ThreadWorkflow": {
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "pendingInstruction": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": true,
+        "runId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadWorkflowStatus"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "name",
+        "result",
+        "runId",
+        "status",
+        "threadId",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadWorkflowStatus": {
+      "enum": [
+        "active",
+        "paused",
+        "complete",
+        "waiting",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "ThreadWorkflowUpdatedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "workflow": {
+          "$ref": "#/definitions/ThreadWorkflow"
+        }
+      },
+      "required": [
+        "threadId",
+        "workflow"
+      ],
+      "type": "object"
+    },
     "TokenUsageBreakdown": {
       "properties": {
         "cacheWriteInputTokens": {
@@ -6943,6 +7015,26 @@
         "params"
       ],
       "title": "Thread/goal/clearedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/workflow/updated"
+          ],
+          "title": "Thread/workflow/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadWorkflowUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/workflow/updatedNotification",
       "type": "object"
     },
     {
