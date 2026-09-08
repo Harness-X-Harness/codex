@@ -22,7 +22,11 @@ use codex_extension_api::ExtensionWarning;
 use codex_extension_api::InternalSessionSpawnFuture;
 use codex_extension_api::InternalSessionSpawner;
 use codex_goal_extension::GoalExtensionConfig;
+use codex_goal_extension::GoalHostCapabilities;
+use codex_goal_extension::GoalPolicy;
 use codex_goal_extension::GoalService;
+use codex_goal_extension::GuardianGoalSkepticPanel;
+use codex_goal_extension::ModelGoalRoundEvaluator;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
@@ -50,6 +54,8 @@ pub(crate) struct ThreadExtensionDependencies {
     pub(crate) http_client_factory: HttpClientFactory,
     /// Process-scoped queue shared by idle dispatch and app-server requests.
     pub(crate) queue_service: Option<Arc<QueuedItemService>>,
+    /// Process-scoped independent `/workflow` engine under `goal_host`.
+    pub(crate) workflow_service: Option<Arc<codex_workflow_extension::WorkflowService>>,
 }
 
 pub(crate) fn thread_extensions<S>(
@@ -71,14 +77,22 @@ where
         git_attribution_base_url,
         http_client_factory,
         queue_service,
+        workflow_service,
     } = dependencies;
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::clone(&event_sink));
     if let Some(queue_service) = queue_service {
         codex_queue_extension::install(&mut builder, queue_service);
     }
+    if let Some(workflow_service) = workflow_service {
+        codex_workflow_extension::install(&mut builder, workflow_service, |config: &Config| {
+            codex_workflow_extension::WorkflowExtensionConfig {
+                enabled: config.features.enabled(codex_features::Feature::GoalHost),
+            }
+        });
+    }
     codex_history_notes_extension::install(&mut builder, auth_manager.clone());
     if let Some(state_db) = state_db {
-        codex_goal_extension::install_with_backend(
+        codex_goal_extension::install_with_host_capabilities(
             &mut builder,
             state_db,
             analytics_events_client,
@@ -88,6 +102,21 @@ where
             |config: &Config| GoalExtensionConfig {
                 enabled: config.features.enabled(codex_features::Feature::Goals),
                 max_goal_token_budget: config.max_goal_token_budget,
+                policy: if config.features.enabled(codex_features::Feature::GoalHost) {
+                    GoalPolicy::host()
+                } else {
+                    GoalPolicy::model_commit()
+                },
+            },
+            GoalHostCapabilities {
+                evaluator: Some(Arc::new(ModelGoalRoundEvaluator::new(
+                    thread_manager.clone(),
+                    auth_manager.clone(),
+                ))),
+                skeptic_panel: Some(Arc::new(GuardianGoalSkepticPanel::new(
+                    thread_manager.clone(),
+                    internal_session_spawner(thread_manager.clone()),
+                ))),
             },
         );
     }
