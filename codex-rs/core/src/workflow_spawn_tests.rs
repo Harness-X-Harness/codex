@@ -1,9 +1,18 @@
 use pretty_assertions::assert_eq;
 use tokio::sync::watch;
 
-use super::StockSpawnWait;
+use super::ChildAgentWait;
 use super::wait_classified_stock_status;
 use crate::agent::AgentStatus;
+
+#[test]
+fn stock_spawn_bridge_is_not_a_codex_thread_impl() {
+    let src = include_str!("workflow_spawn.rs");
+    assert!(
+        !src.contains("impl CodexThread"),
+        "workflow spawn must stay free functions, not CodexThread methods"
+    );
+}
 
 async fn not_found() -> AgentStatus {
     AgentStatus::NotFound
@@ -18,7 +27,7 @@ async fn wait_returns_completed_from_status_watch() {
         .expect("send");
     assert_eq!(
         wait.await.expect("join"),
-        StockSpawnWait::Completed("ok".into())
+        ChildAgentWait::Completed("ok".into())
     );
 }
 
@@ -29,13 +38,13 @@ async fn wait_maps_errored_and_unavailable_once() {
     let wait = tokio::spawn(wait_classified_stock_status(rx, cancel, not_found));
     tx.send(AgentStatus::Errored("secret".into()))
         .expect("send");
-    assert_eq!(wait.await.expect("join"), StockSpawnWait::ChildErrored);
+    assert_eq!(wait.await.expect("join"), ChildAgentWait::ChildErrored);
 
     let (tx, rx) = watch::channel(AgentStatus::PendingInit);
     let (_cancel_tx, cancel) = watch::channel(false);
     let wait = tokio::spawn(wait_classified_stock_status(rx, cancel, not_found));
     tx.send(AgentStatus::Shutdown).expect("send");
-    assert_eq!(wait.await.expect("join"), StockSpawnWait::ChildUnavailable);
+    assert_eq!(wait.await.expect("join"), ChildAgentWait::ChildUnavailable);
 }
 
 #[tokio::test]
@@ -44,7 +53,7 @@ async fn wait_cancel_returns_before_child_is_terminal() {
     let (cancel_tx, cancel) = watch::channel(false);
     let wait = tokio::spawn(wait_classified_stock_status(rx, cancel, not_found));
     cancel_tx.send(true).expect("cancel");
-    assert_eq!(wait.await.expect("join"), StockSpawnWait::Cancelled);
+    assert_eq!(wait.await.expect("join"), ChildAgentWait::Cancelled);
 }
 
 #[tokio::test]
@@ -57,7 +66,7 @@ async fn interrupted_is_not_terminal_and_completed_still_wins() {
         .expect("send");
     assert_eq!(
         wait.await.expect("join"),
-        StockSpawnWait::Completed("ok".into())
+        ChildAgentWait::Completed("ok".into())
     );
 }
 
@@ -71,7 +80,7 @@ async fn closed_watch_rereads_status_before_classifying() {
     drop(tx);
     assert_eq!(
         wait.await.expect("join"),
-        StockSpawnWait::Completed("ok".into())
+        ChildAgentWait::Completed("ok".into())
     );
 }
 
@@ -81,7 +90,7 @@ async fn closed_watch_maps_missing_child_to_unavailable() {
     let (_cancel_tx, cancel) = watch::channel(false);
     let wait = tokio::spawn(wait_classified_stock_status(rx, cancel, not_found));
     drop(tx);
-    assert_eq!(wait.await.expect("join"), StockSpawnWait::ChildUnavailable);
+    assert_eq!(wait.await.expect("join"), ChildAgentWait::ChildUnavailable);
 }
 
 #[tokio::test]
@@ -92,5 +101,5 @@ async fn closed_watch_does_not_invent_unavailable_for_non_final_child() {
         AgentStatus::Interrupted
     }));
     drop(tx);
-    assert_eq!(wait.await.expect("join"), StockSpawnWait::Cancelled);
+    assert_eq!(wait.await.expect("join"), ChildAgentWait::Cancelled);
 }

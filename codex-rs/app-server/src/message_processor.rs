@@ -60,6 +60,7 @@ use crate::thread_state::ThreadStateManager;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
 use crate::turn_cost_worker::TurnCostWorker;
+use crate::workflow_spawn_host::AppServerWorkflowSpawnHost;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ClientNotification;
@@ -490,6 +491,9 @@ impl MessageProcessor {
             ),
         };
         workflow_service.set_update_sink(workflow_update_sink(outgoing.clone()));
+        workflow_service.set_spawn_host(Arc::new(AppServerWorkflowSpawnHost::new(Arc::downgrade(
+            &thread_manager,
+        ))));
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
             outgoing.clone(),

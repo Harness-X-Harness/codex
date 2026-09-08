@@ -12,7 +12,6 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 
 use codex_core::StartIfIdleSubmission;
-use codex_core::StockSpawnWait;
 use codex_core::ThreadManager;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
@@ -44,6 +43,9 @@ use crate::persist::load_workflow_document;
 use crate::persist::persist_workflow_document;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
+use crate::spawn::WorkflowSpawnHost;
+use crate::spawn::WorkflowSpawnOutcome;
+use crate::spawn::WorkflowSpawnRequest;
 use crate::spawn_waits::SpawnWait;
 use crate::spawn_waits::SpawnWaits;
 use crate::steering::yield_steering_item;
@@ -87,6 +89,7 @@ pub struct WorkflowService {
     in_flight: InFlightTurns,
     spawn_waits: SpawnWaits,
     thread_manager: Weak<ThreadManager>,
+    spawn_host: StdMutex<Option<Arc<dyn WorkflowSpawnHost>>>,
     update_sink: StdMutex<Option<WorkflowUpdateSink>>,
 }
 
@@ -109,6 +112,7 @@ impl WorkflowService {
             in_flight: InFlightTurns::default(),
             spawn_waits: SpawnWaits::default(),
             thread_manager,
+            spawn_host: StdMutex::new(None),
             update_sink: StdMutex::new(None),
         }
     }
@@ -130,6 +134,7 @@ impl WorkflowService {
             in_flight: InFlightTurns::default(),
             spawn_waits: SpawnWaits::default(),
             thread_manager,
+            spawn_host: StdMutex::new(None),
             update_sink: StdMutex::new(None),
         })
     }
@@ -139,6 +144,20 @@ impl WorkflowService {
             .update_sink
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(sink);
+    }
+
+    pub fn set_spawn_host(&self, host: Arc<dyn WorkflowSpawnHost>) {
+        *self
+            .spawn_host
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(host);
+    }
+
+    fn spawn_host(&self) -> Option<Arc<dyn WorkflowSpawnHost>> {
+        self.spawn_host
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub async fn get_run(
@@ -218,10 +237,10 @@ impl WorkflowService {
     }
 
     async fn spawn_binding_for(&self, thread_id: ThreadId) -> SpawnBinding {
-        let Some(thread) = self.live_thread(thread_id).await else {
+        let Some(host) = self.spawn_host() else {
             return SpawnBinding::Unavailable;
         };
-        if thread.stock_spawn_agent_available().await {
+        if host.spawn_available(thread_id).await {
             SpawnBinding::Available
         } else {
             SpawnBinding::Unavailable
@@ -520,18 +539,29 @@ impl WorkflowService {
                     tracing::debug!("failed to mark workflow spawn started for {thread_id}: {err}");
                     return Ok(());
                 }
+                let Some(host) = self.spawn_host() else {
+                    if let Some(updated) = self
+                        .finish_spawn_wait(
+                            thread_id,
+                            &run_id,
+                            wait,
+                            Ok(WorkflowSpawnOutcome::ChildUnavailable),
+                        )
+                        .await
+                    {
+                        run = updated;
+                        continue;
+                    }
+                    return Ok(());
+                };
+                let request = WorkflowSpawnRequest {
+                    message: instruction.clone(),
+                    task_name,
+                    cancel: wait.rx.clone(),
+                };
                 if let Some(service) = self.this.upgrade() {
-                    let thread = thread.clone();
-                    let instruction = instruction.clone();
-                    let task_name = task_name.clone();
                     tokio::spawn(async move {
-                        let outcome = thread
-                            .spawn_stock_agent_and_wait_text(
-                                &instruction,
-                                &task_name,
-                                wait.rx.clone(),
-                            )
-                            .await;
+                        let outcome = host.spawn_and_wait(thread_id, request).await;
                         if let Some(updated) = service
                             .finish_spawn_wait(thread_id, &run_id, wait, outcome)
                             .await
@@ -548,9 +578,7 @@ impl WorkflowService {
                     });
                     return Ok(());
                 }
-                let outcome = thread
-                    .spawn_stock_agent_and_wait_text(&instruction, &task_name, wait.rx.clone())
-                    .await;
+                let outcome = host.spawn_and_wait(thread_id, request).await;
                 if let Some(updated) = self
                     .finish_spawn_wait(thread_id, &run_id, wait, outcome)
                     .await
@@ -613,12 +641,12 @@ impl WorkflowService {
         thread_id: ThreadId,
         run_id: &str,
         wait: SpawnWait,
-        outcome: Result<StockSpawnWait, CodexErr>,
+        outcome: Result<WorkflowSpawnOutcome, CodexErr>,
     ) -> Option<WorkflowRun> {
         self.spawn_waits.forget(&wait);
         match outcome {
-            Ok(StockSpawnWait::Cancelled) => None,
-            Ok(StockSpawnWait::Completed(reply)) => self
+            Ok(WorkflowSpawnOutcome::Cancelled) => None,
+            Ok(WorkflowSpawnOutcome::Completed(reply)) => self
                 .advance_spawn_wait(thread_id, run_id, HostCallResult::success(reply))
                 .await
                 .map_err(|err| {
@@ -627,7 +655,7 @@ impl WorkflowService {
                     );
                 })
                 .ok(),
-            Ok(StockSpawnWait::ChildErrored) => self
+            Ok(WorkflowSpawnOutcome::ChildErrored) => self
                 .advance_spawn_wait(
                     thread_id,
                     run_id,
@@ -640,7 +668,7 @@ impl WorkflowService {
                     );
                 })
                 .ok(),
-            Ok(StockSpawnWait::ChildUnavailable) => self
+            Ok(WorkflowSpawnOutcome::ChildUnavailable) => self
                 .advance_spawn_wait(
                     thread_id,
                     run_id,
@@ -896,3 +924,7 @@ mod restore_tests;
 #[cfg(test)]
 #[path = "service_forget_tests.rs"]
 mod forget_tests;
+
+#[cfg(test)]
+#[path = "spawn_host_tests.rs"]
+mod spawn_host_tests;

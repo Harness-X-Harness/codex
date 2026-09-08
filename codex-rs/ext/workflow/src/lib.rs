@@ -15,6 +15,7 @@ mod run;
 mod scratch;
 mod service;
 mod source_read;
+mod spawn;
 mod spawn_waits;
 mod steering;
 
@@ -65,3 +66,8 @@ pub use service::SharedWorkflowService;
 pub use service::WorkflowService;
 pub use service::WorkflowServiceError;
 pub use service::WorkflowUpdateSink;
+pub use spawn::WorkflowSpawnAvailableFuture;
+pub use spawn::WorkflowSpawnFuture;
+pub use spawn::WorkflowSpawnHost;
+pub use spawn::WorkflowSpawnOutcome;
+pub use spawn::WorkflowSpawnRequest;
