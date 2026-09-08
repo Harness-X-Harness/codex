@@ -12,7 +12,6 @@ use codex_extension_api::EngineOccupant;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
-use codex_extension_api::ToolExecutor;
 use codex_extension_api::engine_slot;
 use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalObjectiveUpdate;
@@ -42,11 +41,11 @@ async fn internal_thread_stays_host_evaluate_disabled_after_config_reload() -> a
     .await;
 
     let handle = runtime_handle(&thread_store)?;
-    assert!(!handle.is_enabled());
+    assert_eq!(stored_enabled(&thread_store), Some(false));
     assert!(tool_names(&registry, &session_store, &thread_store).is_empty());
 
     apply_config(&registry, &session_store, &thread_store, host_config());
-    assert!(!handle.is_enabled());
+    assert_eq!(stored_enabled(&thread_store), Some(false));
     assert_eq!(handle.policy(), GoalPolicy::host_evaluate());
     assert!(tool_names(&registry, &session_store, &thread_store).is_empty());
     assert_eq!(engine_slot(&thread_store).occupant(), None);
@@ -73,7 +72,7 @@ async fn host_evaluate_off_releases_goal_how_and_exposes_stock_update_goal() -> 
 
     apply_config(&registry, &session_store, &thread_store, stock_config());
     let handle = runtime_handle(&thread_store)?;
-    assert!(handle.is_enabled());
+    assert_eq!(stored_enabled(&thread_store), Some(true));
     assert_eq!(handle.policy(), GoalPolicy::model_commit());
     assert_eq!(slot.occupant(), None);
     assert!(
@@ -204,6 +203,12 @@ fn runtime_handle(thread_store: &ExtensionData) -> anyhow::Result<Arc<GoalRuntim
     thread_store
         .get::<GoalRuntimeHandle>()
         .context("goal runtime should be stored on thread start")
+}
+
+fn stored_enabled(thread_store: &ExtensionData) -> Option<bool> {
+    thread_store
+        .get::<GoalExtensionConfig>()
+        .map(|config| config.enabled)
 }
 
 fn tool_names(
