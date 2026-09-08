@@ -5756,6 +5756,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "The Grok Responses dialect exposed by the configured Grok backend.",
+          "enum": [
+            "grok_responses"
+          ],
+          "type": "string"
         }
       ]
     },

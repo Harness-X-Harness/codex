@@ -160,6 +160,7 @@ fn model_provider_from_proto(
     let id = provider.id;
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
+        Ok(proto::WireApi::GrokResponses) => WireApi::GrokResponses,
         Ok(proto::WireApi::Unspecified) => {
             return Err(parse_error("remote thread config omitted wire_api"));
         }
@@ -305,6 +306,7 @@ fn proto_string_map(values: HashMap<String, RedactedString>) -> proto::StringMap
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
+        WireApi::GrokResponses => proto::WireApi::GrokResponses,
     }
 }
 
@@ -458,6 +460,20 @@ mod tests {
 
         assert_eq!(id, "local");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn model_provider_proto_round_trips_grok_wire_api() {
+        let provider = ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            ..expected_provider()
+        };
+
+        let proto = model_provider_to_proto("grok", provider.clone());
+        let (id, actual) = model_provider_from_proto(proto).expect("Grok provider from proto");
+
+        assert_eq!(id, "grok");
+        assert_eq!(actual, provider);
     }
 
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {

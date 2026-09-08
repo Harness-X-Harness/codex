@@ -933,7 +933,9 @@ impl ModelClient {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
-        let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        let mut input = self.state.provider.project_model_input(
+            prompt.get_formatted_input_for_request(model_info.use_responses_lite),
+        );
         let is_openai = self.state.provider.info().is_openai();
         let (instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
@@ -973,18 +975,6 @@ impl ModelClient {
                 Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
             )
         };
-        if !is_openai {
-            for item in &mut input {
-                item.clear_internal_chat_message_metadata_passthrough();
-                if let ResponseItem::FunctionCall {
-                    encrypted_function_args,
-                    ..
-                } = item
-                {
-                    *encrypted_function_args = None;
-                }
-            }
-        }
         let reasoning = self.build_reasoning(model_info, effort, summary);
         let stream_options = (self.state.concurrent_reasoning_summaries_enabled
             && is_openai
@@ -1085,7 +1075,7 @@ impl ModelClient {
             && crate::guardian::is_basic_session_source(&self.state.session_source)
             && self.uses_codex_backend(auth)
             && self.state.provider.info().supports_codex_backend_routes()
-            && model == self.state.provider.approval_review_preferred_model()
+            && Some(model) == self.state.provider.approval_review_preferred_model()
         {
             ResponsesEndpoint::Guardian
         } else {
@@ -2026,7 +2016,7 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
-            WireApi::Responses => {
+            WireApi::Responses | WireApi::GrokResponses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
