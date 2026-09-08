@@ -70,6 +70,10 @@ pub struct CodexHarnessMetadata {
     /// Copied parent context stays model-visible but must not become child-local authorization.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherited_user_message: bool,
+
+    /// Whether the Provider executed this tool call and no client output is expected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_hosted_tool_call: bool,
 }
 
 impl ResponseItemEnvelope {

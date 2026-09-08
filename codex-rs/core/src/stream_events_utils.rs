@@ -2,6 +2,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
+use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
@@ -294,8 +295,24 @@ pub(crate) async fn handle_output_item_done(
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.mode() == ModeKind::Plan;
+    let mut item = item;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    let provider_hosted_tool_call = ctx.tool_runtime.exposes_x_search()
+        && ctx
+            .turn_context
+            .provider
+            .is_provider_hosted_tool_call(&item);
+
+    match ctx
+        .tool_runtime
+        .restore_tool_call(&mut item)
+        .and_then(|()| {
+            if provider_hosted_tool_call {
+                Ok(None)
+            } else {
+                ToolRouter::build_tool_call(item.clone())
+            }
+        }) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             ctx.sess
@@ -350,13 +367,28 @@ pub(crate) async fn handle_output_item_done(
                     .emit_turn_item_completed(&ctx.turn_context, finalized_turn_item.turn_item)
                     .await;
             }
-            record_completed_response_item_with_finalized_facts(
-                ctx.sess.as_ref(),
-                ctx.turn_context.as_ref(),
-                &item,
-                finalized_facts.as_ref(),
-            )
-            .await;
+            if provider_hosted_tool_call {
+                ctx.sess
+                    .record_annotated_conversation_items(
+                        ctx.turn_context.as_ref(),
+                        vec![ResponseItemEnvelope {
+                            item: item.clone(),
+                            metadata: Some(CodexHarnessMetadata {
+                                provider_hosted_tool_call: true,
+                                ..Default::default()
+                            }),
+                        }],
+                    )
+                    .await;
+            } else {
+                record_completed_response_item_with_finalized_facts(
+                    ctx.sess.as_ref(),
+                    ctx.turn_context.as_ref(),
+                    &item,
+                    finalized_facts.as_ref(),
+                )
+                .await;
+            }
 
             output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
         }
