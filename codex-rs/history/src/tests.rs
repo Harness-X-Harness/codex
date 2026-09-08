@@ -156,8 +156,8 @@ fn provider_hosted_tool_metadata_round_trips_beside_rollout_payload() -> Result<
             },
         })
     );
-    let restored = serde_json::from_value::<RolloutLine>(serialized)?;
-    let RolloutItem::ResponseItem(envelope) = restored.item else {
+    let restored = serde_json::from_value(serialized)?;
+    let RolloutItem::ResponseItem(envelope) = restored else {
         panic!("expected response item");
     };
     assert_eq!(envelope.item, response_item);
