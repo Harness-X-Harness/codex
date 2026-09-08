@@ -7,6 +7,7 @@ use codex_core::ThreadManager;
 use codex_core::child_agent_v2_available;
 use codex_core::spawn_child_agent_and_wait_text;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_workflow_extension::WorkflowSpawnAvailableFuture;
 use codex_workflow_extension::WorkflowSpawnFuture;
 use codex_workflow_extension::WorkflowSpawnHost;
@@ -42,15 +43,10 @@ impl WorkflowSpawnHost for AppServerWorkflowSpawnHost {
         request: WorkflowSpawnRequest,
     ) -> WorkflowSpawnFuture<'_> {
         Box::pin(async move {
-            let Some(manager) = self.thread_manager.upgrade() else {
-                return Ok(WorkflowSpawnOutcome::ChildUnavailable);
-            };
-            let Ok(thread) = manager.get_thread(thread_id).await else {
-                return Ok(WorkflowSpawnOutcome::ChildUnavailable);
-            };
-            if !child_agent_v2_available(&thread).await {
-                return Ok(WorkflowSpawnOutcome::ChildUnavailable);
-            }
+            let manager = self.thread_manager.upgrade().ok_or_else(|| {
+                CodexErr::InvalidRequest("thread manager is unavailable".to_string())
+            })?;
+            let thread = manager.get_thread(thread_id).await?;
             Ok(
                 match spawn_child_agent_and_wait_text(
                     &thread,

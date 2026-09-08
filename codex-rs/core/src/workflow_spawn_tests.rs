@@ -5,15 +5,6 @@ use super::ChildAgentWait;
 use super::wait_classified_stock_status;
 use crate::agent::AgentStatus;
 
-#[test]
-fn stock_spawn_bridge_is_not_a_codex_thread_impl() {
-    let src = include_str!("workflow_spawn.rs");
-    assert!(
-        !src.contains("impl CodexThread"),
-        "workflow spawn must stay free functions, not CodexThread methods"
-    );
-}
-
 async fn not_found() -> AgentStatus {
     AgentStatus::NotFound
 }

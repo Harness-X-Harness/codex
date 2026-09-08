@@ -122,6 +122,7 @@ impl WorkflowService {
         persist_root: impl Into<PathBuf>,
         project_root: impl Into<PathBuf>,
         thread_manager: Weak<ThreadManager>,
+        spawn_host: Arc<dyn WorkflowSpawnHost>,
     ) -> Arc<Self> {
         let persist_root = persist_root.into();
         let project_root = project_root.into();
@@ -134,7 +135,7 @@ impl WorkflowService {
             in_flight: InFlightTurns::default(),
             spawn_waits: SpawnWaits::default(),
             thread_manager,
-            spawn_host: StdMutex::new(None),
+            spawn_host: StdMutex::new(Some(spawn_host)),
             update_sink: StdMutex::new(None),
         })
     }
@@ -540,18 +541,16 @@ impl WorkflowService {
                     return Ok(());
                 }
                 let Some(host) = self.spawn_host() else {
-                    if let Some(updated) = self
+                    let _ = self
                         .finish_spawn_wait(
                             thread_id,
                             &run_id,
                             wait,
-                            Ok(WorkflowSpawnOutcome::ChildUnavailable),
+                            Err(CodexErr::InvalidRequest(
+                                "workflow spawn host is unavailable".to_string(),
+                            )),
                         )
-                        .await
-                    {
-                        run = updated;
-                        continue;
-                    }
+                        .await;
                     return Ok(());
                 };
                 let request = WorkflowSpawnRequest {

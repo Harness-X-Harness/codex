@@ -331,6 +331,7 @@ impl MessageProcessor {
                 config.codex_home.join("workflows"),
                 config.cwd.to_path_buf(),
                 thread_manager.clone(),
+                Arc::new(AppServerWorkflowSpawnHost::new(thread_manager.clone())),
             );
             workflow_service = Some(Arc::clone(&workflows));
             let manager = ThreadManager::new(
@@ -488,12 +489,12 @@ impl MessageProcessor {
                 config.codex_home.join("workflows"),
                 config.cwd.to_path_buf(),
                 Arc::downgrade(&thread_manager),
+                Arc::new(AppServerWorkflowSpawnHost::new(Arc::downgrade(
+                    &thread_manager,
+                ))),
             ),
         };
         workflow_service.set_update_sink(workflow_update_sink(outgoing.clone()));
-        workflow_service.set_spawn_host(Arc::new(AppServerWorkflowSpawnHost::new(Arc::downgrade(
-            &thread_manager,
-        ))));
         let thread_goal_processor = ThreadGoalRequestProcessor::new(
             Arc::clone(&thread_manager),
             outgoing.clone(),

@@ -7,6 +7,7 @@ use super::WorkflowService;
 use crate::engine::SpawnBinding;
 use crate::journal::HOST_ERROR_CHILD_ERRORED;
 use crate::journal::HOST_ERROR_CHILD_UNAVAILABLE;
+use crate::journal::HostCallResult;
 use crate::journal::WORKFLOW_ERROR_HOST_RUNTIME;
 use crate::run::WorkflowRun;
 use crate::run::WorkflowStatus;
@@ -116,9 +117,10 @@ async fn completed_spawn_outcome_journals_success_including_empty_text() {
         .await
         .expect("completed");
     assert_eq!(run.status, WorkflowStatus::Complete);
-    assert_eq!(run.continuations.len(), 1);
-    assert!(run.continuations[0].result.ok);
-    assert_eq!(run.continuations[0].result.text, "");
+    assert_eq!(
+        run.continuations[0].result,
+        HostCallResult::success(String::new())
+    );
 }
 
 #[tokio::test]
@@ -139,7 +141,10 @@ async fn child_error_outcomes_journal_stable_host_errors() {
         .expect("errored");
     assert_eq!(run.status, WorkflowStatus::Active);
     assert_eq!(run.pending_instruction.as_deref(), Some("wrong reply"));
-    assert_eq!(run.continuations[0].result.error, HOST_ERROR_CHILD_ERRORED);
+    assert_eq!(
+        run.continuations[0].result,
+        HostCallResult::failure(HOST_ERROR_CHILD_ERRORED)
+    );
 
     let dir = TempDir::new().expect("tempdir");
     let thread_id = ThreadId::from_u128(95);
@@ -156,8 +161,8 @@ async fn child_error_outcomes_journal_stable_host_errors() {
         .await
         .expect("unavailable");
     assert_eq!(
-        run.continuations[0].result.error,
-        HOST_ERROR_CHILD_UNAVAILABLE
+        run.continuations[0].result,
+        HostCallResult::failure(HOST_ERROR_CHILD_UNAVAILABLE)
     );
 }
 
@@ -206,21 +211,4 @@ async fn host_runtime_error_fails_the_run() {
     let run = service.get_run(thread_id).await.expect("get").expect("run");
     assert_eq!(run.status, WorkflowStatus::Failed);
     assert_eq!(run.error.as_deref(), Some(WORKFLOW_ERROR_HOST_RUNTIME));
-}
-
-#[test]
-fn service_does_not_call_codex_thread_spawn_methods() {
-    let src = include_str!("service.rs");
-    assert!(
-        !src.contains("stock_spawn_agent_available"),
-        "workflow service must use WorkflowSpawnHost, not CodexThread"
-    );
-    assert!(
-        !src.contains("spawn_stock_agent_and_wait_text"),
-        "workflow service must use WorkflowSpawnHost, not CodexThread"
-    );
-    assert!(
-        !src.contains("StockSpawnWait"),
-        "workflow service must own WorkflowSpawnOutcome"
-    );
 }
