@@ -83,6 +83,9 @@ pub struct WorkflowRun {
     /// True after the host started a model turn for the current yield.
     #[serde(default)]
     pub pending_yield_started: bool,
+    /// True when an explicit resume of pause/await_user is waiting for the slot.
+    #[serde(default)]
+    pub pending_resume_intent: bool,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(skip)]
@@ -131,6 +134,7 @@ impl WorkflowRun {
             pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
+            pending_resume_intent: false,
             created_at: now,
             updated_at: now,
             scratch_dir: None,
@@ -169,6 +173,7 @@ impl WorkflowRun {
             pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
+            pending_resume_intent: false,
             created_at: now,
             updated_at: now,
             scratch_dir: None,
@@ -213,6 +218,7 @@ impl WorkflowRun {
             pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
+            pending_resume_intent: false,
             created_at: now,
             updated_at: now,
             scratch_dir: None,
@@ -282,6 +288,7 @@ impl WorkflowRun {
             pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
+            pending_resume_intent: false,
             created_at: now,
             updated_at: now,
             scratch_dir: Some(scratch_dir),
@@ -303,6 +310,12 @@ impl WorkflowRun {
         if self.status != WorkflowStatus::Waiting {
             return Err("workflow is not waiting".to_string());
         }
+        if self.pending_resume_intent {
+            self.pending_resume_intent = false;
+            self.status = WorkflowStatus::Active;
+            self.updated_at = unix_seconds();
+            return self.consume_pending_control_resume();
+        }
         if self.pending_instruction.is_some() {
             self.status = WorkflowStatus::Active;
             self.updated_at = unix_seconds();
@@ -320,6 +333,14 @@ impl WorkflowRun {
     pub fn park(&mut self) -> Result<(), String> {
         if self.status != WorkflowStatus::Paused {
             return Err("workflow is not paused".to_string());
+        }
+        if self.pending_instruction.is_none()
+            && matches!(
+                self.pending_kind,
+                Some(ContinuationKind::Pause | ContinuationKind::AwaitUser)
+            )
+        {
+            self.pending_resume_intent = true;
         }
         self.status = WorkflowStatus::Waiting;
         self.updated_at = unix_seconds();
@@ -486,6 +507,7 @@ impl WorkflowRun {
             pending_spawn_task_name: None,
             pending_instruction: None,
             pending_yield_started: false,
+            pending_resume_intent: false,
             created_at: now,
             updated_at: now,
             scratch_dir: None,
@@ -498,6 +520,7 @@ impl WorkflowRun {
         self.pending_instruction = None;
         self.pending_spawn_task_name = None;
         self.pending_yield_started = false;
+        self.pending_resume_intent = false;
         self.pending_kind = None;
         self.pending_request_digest = None;
         self.updated_at = unix_seconds();
@@ -527,27 +550,31 @@ impl WorkflowRun {
         if self.pending_yield_started {
             return Err("workflow host turn is still in flight".to_string());
         }
+        self.pending_resume_intent = false;
         self.status = WorkflowStatus::Active;
         self.updated_at = unix_seconds();
         if self.pending_instruction.is_some() {
             return Ok(());
         }
+        self.consume_pending_control_resume().map(|_| ())
+    }
+
+    fn consume_pending_control_resume(&mut self) -> Result<WorkflowAdvance, String> {
         let previous = self.continuations.clone();
         let previous_asks = self.served_asks;
-        let pending_kind = self.pending_kind;
-        let pending_request_digest = self.pending_request_digest.clone();
-        if let (Some(kind), Some(digest)) = (pending_kind, pending_request_digest.clone()) {
+        if let (Some(kind), Some(digest)) = (self.pending_kind, self.pending_request_digest.clone())
+        {
             self.push_continuation(kind, digest, HostCallResult::success(String::new()));
             self.pending_kind = None;
             self.pending_request_digest = None;
         }
         match self.eval_current() {
-            Ok(outcome) => self.apply_outcome(outcome).map(|_| ()),
+            Ok(outcome) => self.apply_outcome(outcome),
             Err(error) => {
                 self.continuations = previous;
                 self.served_asks = previous_asks;
                 self.fail(unrecoverable_error_code(&error));
-                Ok(())
+                Ok(WorkflowAdvance::Failed)
             }
         }
     }
@@ -661,3 +688,7 @@ mod owned_host_tests;
 #[cfg(test)]
 #[path = "run_restore_tests.rs"]
 mod run_restore_tests;
+
+#[cfg(test)]
+#[path = "run_resume_intent_tests.rs"]
+mod run_resume_intent_tests;

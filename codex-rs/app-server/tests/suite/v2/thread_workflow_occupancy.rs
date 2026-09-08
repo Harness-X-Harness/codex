@@ -13,6 +13,8 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadWorkflowGetParams;
 use codex_app_server_protocol::ThreadWorkflowGetResponse;
+use codex_app_server_protocol::ThreadWorkflowResumeParams;
+use codex_app_server_protocol::ThreadWorkflowResumeResponse;
 use codex_app_server_protocol::ThreadWorkflowStartParams;
 use codex_app_server_protocol::ThreadWorkflowStartResponse;
 use codex_app_server_protocol::ThreadWorkflowStatus;
@@ -29,6 +31,7 @@ use super::goal_host_support::create_scripted_host_server;
 use super::goal_host_support::goal_host_features;
 use super::goal_host_support::response_turn_triggers;
 use super::goal_host_support::wait_until_turn_trigger;
+use super::goal_host_support::wait_until_workflow_status;
 
 #[tokio::test]
 async fn rejected_workflow_start_leaves_the_slot_for_goal_how() -> Result<()> {
@@ -211,5 +214,71 @@ async fn restore_of_active_workflow_and_goal_keeps_one_owner() -> Result<()> {
         }
         sleep(std::time::Duration::from_millis(25)).await;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn resume_of_pause_waits_then_completes_without_a_second_resume() -> Result<()> {
+    let server = create_scripted_host_server(ScriptedHostResponder {
+        worker_delay: std::time::Duration::from_millis(800),
+        ..ScriptedHostResponder::default()
+    })
+    .await;
+    let (mut app, _codex_home) = app_with_server(&server, &goal_host_features()).await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+
+    let started: ThreadWorkflowStartResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowStart {
+            request_id,
+            params: ThreadWorkflowStartParams {
+                thread_id: thread.id.clone(),
+                source: "pause(); complete();".to_string(),
+                name: None,
+                args: None,
+            },
+        })
+        .await?;
+    assert_eq!(started.workflow.status, ThreadWorkflowStatus::Paused);
+
+    let set: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: Some("queued pause resume must wait for the slot".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(set.goal.status, ThreadGoalStatus::Active);
+    wait_until_turn_trigger(&server, "goal").await?;
+
+    let resumed: ThreadWorkflowResumeResponse = app
+        .request(|request_id| ClientRequest::ThreadWorkflowResume {
+            request_id,
+            params: ThreadWorkflowResumeParams {
+                thread_id: thread.id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(resumed.workflow.status, ThreadWorkflowStatus::Waiting);
+
+    // Pause Goal so it does not reclaim on the next idle. The in-flight Goal
+    // turn still completing is what idles the Thread and activates the wait.
+    let paused_goal: ThreadGoalSetResponse = app
+        .request(|request_id| ClientRequest::ThreadGoalSet {
+            request_id,
+            params: ThreadGoalSetParams {
+                thread_id: thread.id.clone(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        })
+        .await?;
+    assert_eq!(paused_goal.goal.status, ThreadGoalStatus::Paused);
+
+    wait_until_workflow_status(&mut app, &thread.id, ThreadWorkflowStatus::Complete).await?;
     Ok(())
 }
