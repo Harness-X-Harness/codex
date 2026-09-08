@@ -5,10 +5,12 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_core::TurnStartOptions;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::EngineOccupant;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::HostIdleHold;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
@@ -25,6 +27,7 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_extension_api::engine_slot;
 use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -38,7 +41,11 @@ use crate::accounting::GoalAccountingState;
 use crate::analytics::GoalAnalytics;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
+use crate::host_evaluate::GoalRoundEvaluator;
+use crate::host_verify::GoalSkepticPanel;
 use crate::metrics::GoalMetrics;
+use crate::policy::GoalCompletionAuthority;
+use crate::policy::GoalPolicy;
 use crate::runtime::ActiveGoalStopReason;
 use crate::runtime::GoalRuntimeConfig;
 use crate::runtime::GoalRuntimeHandle;
@@ -51,6 +58,24 @@ use crate::tool::GoalToolExecutor;
 pub struct GoalExtensionConfig {
     pub enabled: bool,
     pub max_goal_token_budget: Option<i64>,
+    /// Who may complete the goal, whether the host verifies, and how work proceeds.
+    ///
+    /// Defaults to stock `update_goal` completion. Independent of Provider.
+    pub policy: GoalPolicy,
+}
+
+/// Start-time Host Goal / `/workflow` eligibility. Config reload may change
+/// the configured feature value; it must not rewrite this flag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GoalThreadEligibility {
+    eligible: bool,
+}
+
+/// Optional host-owned evaluator and skeptic panel installed with the extension.
+#[derive(Clone, Default)]
+pub struct GoalHostCapabilities {
+    pub evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+    pub skeptic_panel: Option<Arc<dyn GoalSkepticPanel>>,
 }
 
 #[derive(Clone)]
@@ -62,6 +87,8 @@ pub struct GoalExtension<C> {
     thread_manager: Weak<ThreadManager>,
     goal_service: Arc<GoalService>,
     goal_config: Arc<dyn Fn(&C) -> GoalExtensionConfig + Send + Sync>,
+    evaluator: Option<Arc<dyn GoalRoundEvaluator>>,
+    skeptic_panel: Option<Arc<dyn GoalSkepticPanel>>,
 }
 
 impl<C> std::fmt::Debug for GoalExtension<C> {
@@ -71,6 +98,7 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 }
 
 impl<C> GoalExtension<C> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
         analytics_events_client: AnalyticsEventsClient,
@@ -79,6 +107,7 @@ impl<C> GoalExtension<C> {
         thread_manager: Weak<ThreadManager>,
         goal_service: Arc<GoalService>,
         goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
+        capabilities: GoalHostCapabilities,
     ) -> Self {
         Self {
             state_dbs,
@@ -88,6 +117,8 @@ impl<C> GoalExtension<C> {
             thread_manager,
             goal_service,
             goal_config: Arc::new(goal_config),
+            evaluator: capabilities.evaluator,
+            skeptic_panel: capabilities.skeptic_panel,
         }
     }
 }
@@ -99,13 +130,20 @@ where
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let config = (self.goal_config)(input.config);
-            let enabled = config.enabled;
+            let eligible = !matches!(input.session_source, SessionSource::Internal(_));
+            let enabled = config.enabled && eligible;
+            let policy = config.policy;
+            input
+                .thread_store
+                .insert(GoalThreadEligibility { eligible });
             let tools_available_for_thread = input.persistent_thread_state_available
                 && !matches!(
                     input.session_source,
-                    SessionSource::SubAgent(SubAgentSource::Review)
+                    SessionSource::SubAgent(SubAgentSource::Review) | SessionSource::Internal(_)
                 );
-            input.thread_store.insert(config);
+            input
+                .thread_store
+                .insert(GoalExtensionConfig { enabled, ..config });
             let accounting_state = input
                 .thread_store
                 .get_or_init::<GoalAccountingState>(GoalAccountingState::default);
@@ -147,12 +185,14 @@ where
                     GoalRuntimeConfig {
                         analytics: self.analytics.clone(),
                         enabled,
+                        policy,
                         tools_available_for_thread,
                         root_accounting_state,
                     },
                 )
             });
             runtime.set_enabled(enabled);
+            runtime.set_policy(policy);
             self.goal_service.register_runtime(&runtime);
         })
     }
@@ -208,11 +248,39 @@ where
         new_config: &C,
     ) {
         let config = (self.goal_config)(new_config);
-        let enabled = config.enabled;
-        thread_store.insert(config);
-        if let Some(runtime) = goal_runtime_handle(thread_store) {
-            runtime.set_enabled(enabled);
+        let eligible = thread_store
+            .get::<GoalThreadEligibility>()
+            .is_some_and(|flag| flag.eligible);
+        let enabled = eligible && config.enabled;
+        let policy = config.policy;
+        thread_store.insert(GoalExtensionConfig { enabled, ..config });
+        let Some(runtime) = goal_runtime_handle(thread_store) else {
+            return;
+        };
+        runtime.set_enabled(enabled);
+        runtime.set_policy(policy);
+        let slot = engine_slot(thread_store);
+        if !enabled || policy.completion == GoalCompletionAuthority::ModelCommit {
+            runtime.clear_host_evaluate_transients();
+            slot.release(EngineOccupant::GoalHow);
+            return;
         }
+        if thread_store.get::<HostIdleHold>().is_some() {
+            return;
+        }
+        tokio::spawn(async move {
+            let Ok(Some(goal)) = runtime.load_thread_goal().await else {
+                return;
+            };
+            if goal.status != codex_state::ThreadGoalStatus::Active {
+                return;
+            }
+            if slot.try_claim(EngineOccupant::GoalHow) {
+                runtime
+                    .accounting_state()
+                    .mark_idle_goal_active(goal.goal_id);
+            }
+        });
     }
 }
 
@@ -249,6 +317,9 @@ where
                 codex_protocol::config_types::ModeKind::Plan
             ) {
                 accounting.clear_current_turn_goal();
+                return;
+            }
+            if workflow_how_turn(input.turn_store) {
                 return;
             }
             let Ok(goal) = self
@@ -311,6 +382,25 @@ where
                 );
                 return;
             }
+            if runtime
+                .accounting_state()
+                .current_active_goal_id_for_turn(turn_id)
+                .is_some()
+                && !workflow_how_turn(input.turn_store)
+                && let Err(err) = crate::host_evaluate::evaluate_active_round(
+                    runtime.as_ref(),
+                    self.evaluator.as_deref(),
+                    self.skeptic_panel.as_deref(),
+                    turn_id,
+                )
+                .await
+            {
+                input.thread_store.remove::<TurnStartOptions>();
+                tracing::warn!(
+                    "failed to apply host goal evaluation at turn stop for {turn_id}: {err}"
+                );
+                return;
+            }
             let accounting = runtime.accounting_state();
             if accounting
                 .current_active_goal_id_for_turn(turn_id)
@@ -363,6 +453,9 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            if workflow_how_turn(input.turn_store) {
+                return;
+            }
 
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
@@ -484,7 +577,7 @@ where
             {
                 return;
             }
-            let item = budget_limit_steering_item(&goal);
+            let item = budget_limit_steering_item(&goal, runtime.continuation_owner());
             runtime.inject_active_turn_steering(item).await;
         })
     }
@@ -510,25 +603,29 @@ where
         let max_goal_token_budget = thread_store
             .get::<GoalExtensionConfig>()
             .and_then(|config| config.max_goal_token_budget);
-
+        let get = Arc::new(GoalToolExecutor::get(
+            runtime.thread_id(),
+            Arc::clone(&self.state_dbs),
+            runtime.accounting_state(),
+            self.analytics.clone(),
+            self.event_emitter.clone(),
+            self.metrics.clone(),
+        ));
+        let create = Arc::new(GoalToolExecutor::create(
+            runtime.thread_id(),
+            Arc::clone(&self.state_dbs),
+            runtime.accounting_state(),
+            self.analytics.clone(),
+            self.event_emitter.clone(),
+            self.metrics.clone(),
+            max_goal_token_budget,
+        ));
+        if runtime.policy().completion == GoalCompletionAuthority::HostEvaluate {
+            return vec![get, create];
+        }
         vec![
-            Arc::new(GoalToolExecutor::get(
-                runtime.thread_id(),
-                Arc::clone(&self.state_dbs),
-                runtime.accounting_state(),
-                self.analytics.clone(),
-                self.event_emitter.clone(),
-                self.metrics.clone(),
-            )),
-            Arc::new(GoalToolExecutor::create(
-                runtime.thread_id(),
-                Arc::clone(&self.state_dbs),
-                runtime.accounting_state(),
-                self.analytics.clone(),
-                self.event_emitter.clone(),
-                self.metrics.clone(),
-                max_goal_token_budget,
-            )),
+            get,
+            create,
             Arc::new(GoalToolExecutor::update(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
@@ -552,6 +649,31 @@ pub fn install_with_backend<C>(
 ) where
     C: Send + Sync + 'static,
 {
+    install_with_host_capabilities(
+        registry,
+        state_dbs,
+        analytics_events_client,
+        metrics_client,
+        thread_manager,
+        goal_service,
+        goal_config,
+        GoalHostCapabilities::default(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn install_with_host_capabilities<C>(
+    registry: &mut ExtensionRegistryBuilder<C>,
+    state_dbs: Arc<codex_state::StateRuntime>,
+    analytics_events_client: AnalyticsEventsClient,
+    metrics_client: Option<MetricsClient>,
+    thread_manager: Weak<ThreadManager>,
+    goal_service: Arc<GoalService>,
+    goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
+    capabilities: GoalHostCapabilities,
+) where
+    C: Send + Sync + 'static,
+{
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
         analytics_events_client,
@@ -560,6 +682,7 @@ pub fn install_with_backend<C>(
         thread_manager,
         Arc::clone(&goal_service),
         goal_config,
+        capabilities,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
@@ -571,6 +694,12 @@ pub fn install_with_backend<C>(
 
 fn goal_runtime_handle(thread_store: &ExtensionData) -> Option<Arc<GoalRuntimeHandle>> {
     thread_store.get::<GoalRuntimeHandle>()
+}
+
+fn workflow_how_turn(turn_store: &ExtensionData) -> bool {
+    turn_store
+        .get::<TurnStartOptions>()
+        .is_some_and(|options| options.turn_trigger.as_deref() == Some("workflow"))
 }
 
 fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
