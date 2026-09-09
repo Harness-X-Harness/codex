@@ -22,12 +22,19 @@ use super::post_unified_exec_tool_use_payload;
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
     // The model is trained on `session_id`.
+    #[serde(deserialize_with = "crate::tools::handlers::json_whole_number::deserialize_whole_i32")]
     session_id: i32,
     #[serde(default)]
     chars: String,
-    #[serde(default = "super::default_write_stdin_yield_time_ms")]
+    #[serde(
+        default = "super::default_write_stdin_yield_time_ms",
+        deserialize_with = "crate::tools::handlers::json_whole_number::deserialize_whole_u64"
+    )]
     yield_time_ms: u64,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::handlers::json_whole_number::deserialize_option_whole_usize"
+    )]
     max_output_tokens: Option<usize>,
 }
 
@@ -136,5 +143,26 @@ impl CoreToolRuntime for WriteStdinHandler {
         // A `write_stdin` poll can observe final completion for the original
         // `exec_command`; emit that command's matching Bash PostToolUse.
         post_unified_exec_tool_use_payload(invocation, result)
+    }
+}
+
+#[cfg(test)]
+mod grok_write_stdin_number_tests {
+    use super::WriteStdinArgs;
+    use crate::tools::handlers::parse_arguments;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn grok_write_stdin_session_id_accepts_whole_json_float() {
+        let args: WriteStdinArgs =
+            parse_arguments(r#"{"session_id":45.0}"#).expect("session_id float");
+        assert_eq!(args.session_id, 45);
+    }
+
+    #[test]
+    fn grok_write_stdin_yield_time_ms_accepts_whole_json_float() {
+        let args: WriteStdinArgs =
+            parse_arguments(r#"{"session_id":1,"yield_time_ms":250.0}"#).expect("yield_time_ms");
+        assert_eq!(args.yield_time_ms, 250);
     }
 }

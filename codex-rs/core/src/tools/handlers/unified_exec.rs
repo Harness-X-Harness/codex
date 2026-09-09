@@ -5,6 +5,8 @@ use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::json_whole_number::deserialize_option_whole_usize;
+use crate::tools::handlers::json_whole_number::deserialize_whole_u64;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use codex_exec_server::Environment;
@@ -33,11 +35,14 @@ pub(crate) struct ExecCommandArgs {
     login: Option<bool>,
     #[serde(default = "default_tty")]
     tty: bool,
-    #[serde(default = "default_exec_yield_time_ms")]
+    #[serde(
+        default = "default_exec_yield_time_ms",
+        deserialize_with = "deserialize_whole_u64"
+    )]
     yield_time_ms: u64,
     #[serde(default)]
     timeout_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_option_whole_usize")]
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: Option<SandboxPermissions>,
@@ -151,6 +156,28 @@ pub(crate) fn shell_mode_for_environment(
         UnifiedExecShellMode::Direct
     } else {
         turn_shell_mode.clone()
+    }
+}
+
+#[cfg(test)]
+mod grok_exec_command_number_tests {
+    use super::ExecCommandArgs;
+    use crate::tools::handlers::parse_arguments;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn grok_exec_yield_time_ms_accepts_whole_json_float() {
+        let args: ExecCommandArgs =
+            parse_arguments(r#"{"cmd":"true","yield_time_ms":10000.0}"#).expect("yield_time_ms");
+        assert_eq!(args.yield_time_ms, 10_000);
+    }
+
+    #[test]
+    fn grok_exec_max_output_tokens_accepts_whole_json_float() {
+        let args: ExecCommandArgs =
+            parse_arguments(r#"{"cmd":"true","max_output_tokens":10000.0}"#)
+                .expect("max_output_tokens");
+        assert_eq!(args.max_output_tokens, Some(10_000));
     }
 }
 

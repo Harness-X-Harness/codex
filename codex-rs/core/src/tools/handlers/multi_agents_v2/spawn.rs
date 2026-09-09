@@ -283,6 +283,10 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::handlers::json_whole_number::deserialize_optional_string_or_whole_count"
+    )]
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }
@@ -351,5 +355,69 @@ impl ToolOutput for SpawnAgentResult {
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         tool_output_code_mode_result(self, "spawn_agent")
+    }
+}
+
+#[cfg(test)]
+mod grok_fork_turns_tests {
+    use super::SpawnAgentArgs;
+    use crate::agent::control::SpawnAgentForkMode;
+    use crate::function_tool::FunctionCallError;
+    use crate::tools::handlers::parse_arguments;
+    use pretty_assertions::assert_eq;
+
+    fn parse_fork(fork_field: &str) -> SpawnAgentArgs {
+        let json = if fork_field.is_empty() {
+            r#"{"message":"m","task_name":"t"}"#.to_string()
+        } else {
+            format!(r#"{{"message":"m","task_name":"t",{fork_field}}}"#)
+        };
+        parse_arguments(&json).unwrap_or_else(|err| panic!("parse {json}: {err}"))
+    }
+
+    #[test]
+    fn grok_fork_turns_omitted_forks_full_history() {
+        let args = parse_fork("");
+        assert_eq!(
+            args.fork_mode().expect("omitted fork"),
+            Some(SpawnAgentForkMode::FullHistory)
+        );
+    }
+
+    #[test]
+    fn grok_fork_turns_accepts_none_all_and_string_count() {
+        assert_eq!(
+            parse_fork(r#""fork_turns":"none""#).fork_mode().unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_fork(r#""fork_turns":"all""#).fork_mode().unwrap(),
+            Some(SpawnAgentForkMode::FullHistory)
+        );
+        assert_eq!(
+            parse_fork(r#""fork_turns":"3""#).fork_mode().unwrap(),
+            Some(SpawnAgentForkMode::LastNTurns(3))
+        );
+    }
+
+    #[test]
+    fn grok_fork_turns_accepts_json_integer() {
+        assert_eq!(
+            parse_fork(r#""fork_turns":3"#).fork_mode().unwrap(),
+            Some(SpawnAgentForkMode::LastNTurns(3))
+        );
+    }
+
+    #[test]
+    fn grok_fork_turns_rejects_zero() {
+        let err = parse_fork(r#""fork_turns":0"#)
+            .fork_mode()
+            .expect_err("zero is invalid");
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "fork_turns must be `none`, `all`, or a positive integer string".to_string()
+            )
+        );
     }
 }

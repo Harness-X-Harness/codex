@@ -1,5 +1,6 @@
 use super::*;
 use crate::session::InputQueueActivity;
+use crate::tools::handlers::json_whole_number::deserialize_option_whole_i64;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
@@ -126,6 +127,7 @@ impl CoreToolRuntime for Handler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WaitArgs {
+    #[serde(default, deserialize_with = "deserialize_option_whole_i64")]
     timeout_ms: Option<i64>,
 }
 
@@ -201,5 +203,50 @@ async fn wait_for_activity(
             InputQueueActivity::Steer => WaitOutcome::Steered,
         },
         Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
+    }
+}
+
+#[cfg(test)]
+mod grok_wait_timeout_tests {
+    use super::WaitArgs;
+    use crate::tools::handlers::parse_arguments;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn grok_wait_args_accept_json_integer() {
+        let args: WaitArgs = parse_arguments(r#"{"timeout_ms":180000}"#).expect("integer timeout");
+        assert_eq!(args.timeout_ms, Some(180_000));
+    }
+
+    #[test]
+    fn grok_wait_args_accept_whole_json_float() {
+        let args: WaitArgs =
+            parse_arguments(r#"{"timeout_ms":180000.0}"#).expect("whole float timeout");
+        assert_eq!(args.timeout_ms, Some(180_000));
+    }
+
+    #[test]
+    fn grok_wait_args_omitted_keeps_none() {
+        let args: WaitArgs = parse_arguments("{}").expect("omitted timeout");
+        assert_eq!(args.timeout_ms, None);
+    }
+
+    #[test]
+    fn grok_wait_args_reject_fractional_float_without_serde_type_error() {
+        let err = parse_arguments::<WaitArgs>(r#"{"timeout_ms":180000.5}"#)
+            .expect_err("fractional timeout");
+        let err = err.to_string();
+        assert!(
+            err.contains("must be a finite whole number"),
+            "expected whole-number error, got {err}"
+        );
+        assert!(
+            !err.contains("expected i64"),
+            "must not return a raw serde i64 type error, got {err}"
+        );
+        assert!(
+            !err.contains("invalid type: map"),
+            "must parse dotted JSON numbers, got {err}"
+        );
     }
 }
