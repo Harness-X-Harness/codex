@@ -32,20 +32,28 @@ struct OptionalForkTurns {
     fork_turns: Option<String>,
 }
 
+fn parse_json<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, String> {
+    serde_json::from_str(json).map_err(serde_json_error_to_string)
+}
+
+fn serde_json_error_to_string(err: serde_json::Error) -> String {
+    err.to_string()
+}
+
 fn parse_i64(json: &str) -> Result<OptionalI64, String> {
-    serde_json::from_str(json).map_err(ToString::to_string)
+    parse_json(json)
 }
 
 fn parse_u64(json: &str) -> Result<RequiredU64, String> {
-    serde_json::from_str(json).map_err(ToString::to_string)
+    parse_json(json)
 }
 
 fn parse_i32(json: &str) -> Result<RequiredI32, String> {
-    serde_json::from_str(json).map_err(ToString::to_string)
+    parse_json(json)
 }
 
 fn parse_fork_turns(json: &str) -> Result<OptionalForkTurns, String> {
-    serde_json::from_str(json).map_err(ToString::to_string)
+    parse_json(json)
 }
 
 #[test]
