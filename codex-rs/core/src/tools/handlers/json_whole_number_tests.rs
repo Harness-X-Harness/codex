@@ -33,19 +33,19 @@ struct OptionalForkTurns {
 }
 
 fn parse_i64(json: &str) -> Result<OptionalI64, String> {
-    serde_json::from_str(json).map_err(|err| err.to_string())
+    serde_json::from_str(json).map_err(ToString::to_string)
 }
 
 fn parse_u64(json: &str) -> Result<RequiredU64, String> {
-    serde_json::from_str(json).map_err(|err| err.to_string())
+    serde_json::from_str(json).map_err(ToString::to_string)
 }
 
 fn parse_i32(json: &str) -> Result<RequiredI32, String> {
-    serde_json::from_str(json).map_err(|err| err.to_string())
+    serde_json::from_str(json).map_err(ToString::to_string)
 }
 
 fn parse_fork_turns(json: &str) -> Result<OptionalForkTurns, String> {
-    serde_json::from_str(json).map_err(|err| err.to_string())
+    serde_json::from_str(json).map_err(ToString::to_string)
 }
 
 #[test]
