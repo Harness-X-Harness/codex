@@ -105,6 +105,10 @@ fn accepts_decimal_and_exponent_whole_forms() {
             timeout_ms: Some(0)
         }
     );
+    assert_eq!(
+        parse_u64(r#"{"yield_time_ms":-0.0}"#).expect("unsigned -0.0"),
+        RequiredU64 { yield_time_ms: 0 }
+    );
 }
 
 #[test]
