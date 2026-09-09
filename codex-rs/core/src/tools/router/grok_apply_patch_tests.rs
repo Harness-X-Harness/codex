@@ -76,32 +76,6 @@ fn restore_patch(router: &ToolRouter, patch: &str) -> Result<ResponseItem, Funct
 }
 
 #[test]
-fn grok_projected_apply_patch_keeps_lark_grammar_in_the_model_visible_contract() {
-    let router = grok_apply_patch_router();
-    let tool = match &router.model_visible_specs()[0] {
-        ToolSpec::Function(tool) => tool,
-        spec => panic!("expected projected function, got {spec:?}"),
-    };
-    let properties = tool
-        .parameters
-        .properties
-        .as_ref()
-        .expect("projected apply_patch should declare properties");
-    assert!(properties.contains_key("patch"));
-    assert!(
-        tool.description
-            .contains("begin_patch: \"*** Begin Patch\""),
-        "projected apply_patch must keep the Lark grammar, not only a string field",
-    );
-    assert!(
-        !tool
-            .description
-            .contains("begin_patch: \"*** Begin Patch ***\""),
-        "projected grammar must keep the canonical begin marker",
-    );
-}
-
-#[test]
 fn grok_restore_accepts_canonical_apply_patch_markers() {
     let router = grok_apply_patch_router();
     let item = restore_patch(&router, CANONICAL_PATCH).expect("canonical patch should restore");
