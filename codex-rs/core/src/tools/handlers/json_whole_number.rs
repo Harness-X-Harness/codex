@@ -4,6 +4,7 @@
 //! reject that token. `serde_json`'s `arbitrary_precision` feature also makes
 //! `deserialize_any` see dotted numbers as a map, so this helper deserializes
 //! `serde_json::Number` (and `Value` only for `fork_turns` string-or-number).
+//! Decimal and exponent tokens are converted from the JSON lexical form, not `f64`.
 
 use serde::Deserialize;
 use serde::Deserializer;
@@ -73,7 +74,7 @@ fn number_to_i64<E: DeError>(number: Number) -> Result<i64, E> {
     if let Some(value) = number.as_u64() {
         return i64::try_from(value).map_err(|_| E::custom(WHOLE_NUMBER_ERROR));
     }
-    f64_to_i64(number_as_f64(number)?)
+    i64::try_from(lexical_whole_i128(&number)?).map_err(|_| E::custom(WHOLE_NUMBER_ERROR))
 }
 
 fn number_to_u64<E: DeError>(number: Number) -> Result<u64, E> {
@@ -83,44 +84,117 @@ fn number_to_u64<E: DeError>(number: Number) -> Result<u64, E> {
     if let Some(value) = number.as_i64() {
         return u64::try_from(value).map_err(|_| E::custom(WHOLE_NUMBER_ERROR));
     }
-    f64_to_u64(number_as_f64(number)?)
+    u64::try_from(lexical_whole_i128(&number)?).map_err(|_| E::custom(WHOLE_NUMBER_ERROR))
 }
 
 fn number_to_usize<E: DeError>(number: Number) -> Result<usize, E> {
     usize::try_from(number_to_u64(number)?).map_err(|_| E::custom(WHOLE_NUMBER_ERROR))
 }
 
-fn number_as_f64<E: DeError>(number: Number) -> Result<f64, E> {
-    number.as_f64().ok_or_else(|| E::custom(WHOLE_NUMBER_ERROR))
+fn lexical_whole_i128<E: DeError>(number: &Number) -> Result<i128, E> {
+    parse_json_whole_i128(&number.to_string()).ok_or_else(|| E::custom(WHOLE_NUMBER_ERROR))
 }
 
-fn f64_to_i64<E: DeError>(value: f64) -> Result<i64, E> {
-    let value = reject_non_whole_float(value)?;
-    if value < i64::MIN as f64 || value > i64::MAX as f64 {
-        return Err(E::custom(WHOLE_NUMBER_ERROR));
+fn parse_json_whole_i128(token: &str) -> Option<i128> {
+    let bytes = token.as_bytes();
+    if bytes.is_empty() {
+        return None;
     }
-    let converted = value as i64;
-    if converted as f64 != value {
-        return Err(E::custom(WHOLE_NUMBER_ERROR));
+    let (negative, mantissa) = if bytes[0] == b'-' {
+        (true, bytes.get(1..)?)
+    } else {
+        (false, bytes)
+    };
+    if mantissa.is_empty() {
+        return None;
     }
-    Ok(converted)
+
+    let exp_at = mantissa.iter().position(|&b| b == b'e' || b == b'E');
+    let (digits_part, exponent) = match exp_at {
+        Some(index) => (
+            mantissa.get(..index)?,
+            parse_exponent(mantissa.get(index + 1..)?)?,
+        ),
+        None => (mantissa, 0_i32),
+    };
+    if digits_part.is_empty() {
+        return None;
+    }
+
+    let dot_at = digits_part.iter().position(|&b| b == b'.');
+    let (int_digits, frac_digits) = match dot_at {
+        Some(index) => (digits_part.get(..index)?, digits_part.get(index + 1..)?),
+        None => (digits_part, &b""[..]),
+    };
+    if int_digits.is_empty()
+        || !int_digits.iter().all(u8::is_ascii_digit)
+        || !frac_digits.iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+
+    let mut digits = Vec::with_capacity(int_digits.len() + frac_digits.len());
+    digits.extend_from_slice(int_digits);
+    digits.extend_from_slice(frac_digits);
+    let scale = exponent.checked_sub(i32::try_from(frac_digits.len()).ok()?)?;
+    if scale >= 0 {
+        digits.resize(
+            digits.len().checked_add(usize::try_from(scale).ok()?)?,
+            b'0',
+        );
+        return parse_ascii_i128(&digits, negative);
+    }
+
+    let frac_len = usize::try_from(scale.checked_neg()?).ok()?;
+    if frac_len > digits.len() {
+        return digits.iter().all(|&digit| digit == b'0').then_some(0);
+    }
+    let split = digits.len() - frac_len;
+    if digits.get(split..)?.iter().any(|&digit| digit != b'0') {
+        return None;
+    }
+    parse_ascii_i128(digits.get(..split)?, negative)
 }
 
-fn f64_to_u64<E: DeError>(value: f64) -> Result<u64, E> {
-    let value = reject_non_whole_float(value)?;
-    if value < 0.0 || value > u64::MAX as f64 {
-        return Err(E::custom(WHOLE_NUMBER_ERROR));
+fn parse_exponent(token: &[u8]) -> Option<i32> {
+    if token.is_empty() {
+        return None;
     }
-    let converted = value as u64;
-    if converted as f64 != value {
-        return Err(E::custom(WHOLE_NUMBER_ERROR));
+    let (negative, digits) = match token[0] {
+        b'+' => (false, token.get(1..)?),
+        b'-' => (true, token.get(1..)?),
+        _ => (false, token),
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
     }
-    Ok(converted)
+    let mut value = 0_i32;
+    for digit in digits {
+        value = value
+            .checked_mul(10)?
+            .checked_add(i32::from(digit - b'0'))?;
+    }
+    if negative {
+        value.checked_neg()
+    } else {
+        Some(value)
+    }
 }
 
-fn reject_non_whole_float<E: DeError>(value: f64) -> Result<f64, E> {
-    if !value.is_finite() || value.fract() != 0.0 {
-        return Err(E::custom(WHOLE_NUMBER_ERROR));
+fn parse_ascii_i128(digits: &[u8], negative: bool) -> Option<i128> {
+    let mut value = 0_i128;
+    for digit in digits {
+        value = value
+            .checked_mul(10)?
+            .checked_add(i128::from(digit - b'0'))?;
     }
-    Ok(value)
+    if negative {
+        value.checked_neg()
+    } else {
+        Some(value)
+    }
 }
+
+#[cfg(test)]
+#[path = "json_whole_number_tests.rs"]
+mod tests;
