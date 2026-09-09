@@ -13,6 +13,7 @@ use crate::provider::ResponsesDialect;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::turn_input::CyberAccessProgram;
@@ -181,6 +182,21 @@ fn grok_rejects_residual_agent_message_before_transport() {
         content: vec![AgentMessageInputContent::EncryptedContent {
             encrypted_content: "opaque".to_string(),
         }],
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    assert!(ResponsesDialect::Grok.project_request(&request).is_err());
+}
+
+#[test]
+fn grok_rejects_residual_function_call_output_without_call_id_before_transport() {
+    let mut request = responses_request_with_tools(json!([]));
+    request.input = vec![ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: None,
+        namespace: None,
+        output: FunctionCallOutputPayload::from_text("orphan".to_string()),
         internal_chat_message_metadata_passthrough: None,
     }];
 

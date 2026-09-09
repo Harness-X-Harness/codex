@@ -42,19 +42,27 @@ impl ResponsesDialect {
         if self == Self::Grok
             && let Some(object) = value.as_object_mut()
         {
-            let has_agent_message =
-                object
-                    .get("input")
-                    .and_then(Value::as_array)
-                    .is_some_and(|items| {
-                        items.iter().any(|item| {
-                            item.get("type").and_then(Value::as_str) == Some("agent_message")
-                        })
-                    });
-            if has_agent_message {
-                return Err(<serde_json::Error as serde::ser::Error>::custom(
-                    "Grok cannot replay unsupported encrypted collaboration history",
-                ));
+            if let Some(items) = object.get("input").and_then(Value::as_array) {
+                for item in items {
+                    match item.get("type").and_then(Value::as_str) {
+                        Some("agent_message") => {
+                            return Err(<serde_json::Error as serde::ser::Error>::custom(
+                                "Grok cannot replay unsupported encrypted collaboration history",
+                            ));
+                        }
+                        Some("function_call_output")
+                            if !item
+                                .get("call_id")
+                                .and_then(Value::as_str)
+                                .is_some_and(|call_id| !call_id.is_empty()) =>
+                        {
+                            return Err(<serde_json::Error as serde::ser::Error>::custom(
+                                "Grok cannot replay function_call_output history without call_id",
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
             }
             if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
                 for tool in tools {

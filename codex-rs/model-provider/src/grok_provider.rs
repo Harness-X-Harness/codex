@@ -71,7 +71,7 @@ impl ModelProvider for GrokModelProvider {
     fn project_model_input(&self, input: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let mut input = self.inner.project_model_input(input);
         for item in &mut input {
-            let projected_agent_message = match item {
+            let projected_item = match item {
                 ResponseItem::AgentMessage {
                     id,
                     content,
@@ -85,10 +85,27 @@ impl ModelProvider for GrokModelProvider {
                     internal_chat_message_metadata_passthrough:
                         internal_chat_message_metadata_passthrough.clone(),
                 }),
+                ResponseItem::FunctionCallOutput {
+                    id,
+                    call_id: None,
+                    name: Some(_),
+                    output,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } => output.text_content().map(|text| ResponseItem::Message {
+                    id: id.clone(),
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: text.to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                }),
                 _ => None,
             };
-            if let Some(projected_agent_message) = projected_agent_message {
-                *item = projected_agent_message;
+            if let Some(projected_item) = projected_item {
+                *item = projected_item;
                 continue;
             }
             if let ResponseItem::Reasoning {
