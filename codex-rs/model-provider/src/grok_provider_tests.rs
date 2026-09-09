@@ -69,15 +69,23 @@ fn canonical_agent_message(content: Vec<AgentMessageInputContent>) -> ResponseIt
     }
 }
 
-fn named_unpaired_function_call_output(name: &str, output: &str) -> ResponseItem {
+fn named_unpaired_function_call_output(
+    name: &str,
+    namespace: Option<&str>,
+    output: &str,
+) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
         id: None,
         call_id: None,
         name: Some(name.to_string()),
-        namespace: None,
+        namespace: namespace.map(str::to_string),
         output: FunctionCallOutputPayload::from_text(output.to_string()),
         internal_chat_message_metadata_passthrough: None,
     }
+}
+
+fn stock_named_unpaired_function_call_output() -> ResponseItem {
+    named_unpaired_function_call_output("notifications", Some("slack"), "Alice mentioned you.")
 }
 
 fn grok_provider() -> std::sync::Arc<dyn crate::provider::ModelProvider> {
@@ -313,6 +321,7 @@ fn stock_openai_provider_keeps_canonical_history_unchanged() {
 fn grok_projects_named_unpaired_function_call_output_to_user_message() {
     let input = vec![named_unpaired_function_call_output(
         "notify",
+        None,
         "scheduled task fired",
     )];
 
@@ -331,13 +340,38 @@ fn grok_projects_named_unpaired_function_call_output_to_user_message() {
 }
 
 #[test]
+fn grok_projects_stock_named_unpaired_function_call_output_without_omit_call_id_wire() {
+    let projected =
+        grok_provider().project_model_input(vec![stock_named_unpaired_function_call_output()]);
+    let expected = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Alice mentioned you.".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    assert_eq!(projected, expected);
+    assert_eq!(
+        serde_json::to_value(&projected).expect("projected items should serialize"),
+        json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Alice mentioned you."}]
+        }])
+    );
+}
+
+#[test]
 fn grok_projects_named_unpaired_function_call_output_in_replayed_history() {
     let mut input = canonical_history(
         /*metadata*/ None, /*encrypted_function_args*/ None,
     );
     input.insert(
         1,
-        named_unpaired_function_call_output("notify", "scheduled task fired"),
+        named_unpaired_function_call_output("notify", None, "scheduled task fired"),
     );
     let original = input.clone();
 
@@ -388,6 +422,7 @@ fn grok_does_not_reinterpret_unnamed_function_call_output_without_call_id() {
 fn stock_openai_provider_keeps_named_unpaired_function_call_output() {
     let input = vec![named_unpaired_function_call_output(
         "notify",
+        None,
         "scheduled task fired",
     )];
     let stock = create_model_provider(
