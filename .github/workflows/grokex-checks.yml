@@ -1,5 +1,8 @@
 name: grokex-checks
 
+# Product checks: rustfmt, clippy, native Rust contracts.
+# Packaging readiness: release.py packaging tests, shell syntax, actionlint.
+
 on:
   pull_request:
     branches: ['release/**']
@@ -178,7 +181,7 @@ jobs:
           cargo clippy -p codex-app-server --test all -- -D warnings
 
   packaging:
-    name: Packaging helpers
+    name: Packaging readiness
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -203,10 +206,9 @@ jobs:
           python3 -m unittest grokex.test_release
           bash -n grokex/dist/grokex grokex/dist/install-grokex.sh
           pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/dist/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/dist/install-grokex.ps1))'
-          python3 grokex/release.py verify-profile --path grokex/dist/config.toml.example
 
   require:
-    name: Require every deterministic gate
+    name: Require every required gate
     needs: [formatting, contracts, lints, packaging]
     if: always()
     runs-on: ubuntu-24.04
@@ -226,6 +228,6 @@ jobs:
           [[ "${LINTS}" == "success" ]] || failures+=("lints")
           [[ "${PACKAGING}" == "success" ]] || failures+=("packaging")
           if (( ${#failures[@]} )); then
-            printf 'Failed deterministic gate: %s\n' "${failures[@]}" >&2
+            printf 'Failed required gate: %s\n' "${failures[@]}" >&2
             exit 1
           fi

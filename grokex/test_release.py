@@ -20,45 +20,6 @@ def write_raw_binaries(raw_root: Path) -> None:
             (raw / "bwrap").write_bytes(b"bwrap")
 
 
-class ProfileTest(unittest.TestCase):
-    def test_live_profile_rejects_catalog_and_child_model_overrides(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            profile = Path(temporary) / "config.toml"
-            profile.write_text(
-                """
-model = "grok-4.6"
-model_provider = "grok"
-
-[agents]
-default_subagent_model = "grok-4.5"
-
-[model_providers.grok]
-base_url = "https://grok.trustedtunnel.app/v1"
-experimental_bearer_token = "secret"
-requires_openai_auth = false
-supports_websockets = false
-wire_api = "grok_responses"
-""".strip()
-                + "\n",
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(SystemExit, "must not override the default child model"):
-                release.verify_profile(profile, secret=True)
-
-            profile.write_text(
-                profile.read_text(encoding="utf-8").replace(
-                    '[agents]\ndefault_subagent_model = "grok-4.5"\n',
-                    'model_catalog_json = "custom-catalog.json"\n',
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(SystemExit, "release-bundled model catalog"):
-                release.verify_profile(profile, secret=True)
-
-    def test_public_profile_is_valid_and_token_free(self) -> None:
-        release.verify_profile(REPOSITORY / release.DIST_ROOT / "config.toml.example", secret=False)
-
-
 class ArchiveTest(unittest.TestCase):
     def test_packages_and_verifies_archives(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

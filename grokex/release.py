@@ -14,7 +14,6 @@ import json
 import shutil
 import tarfile
 import tempfile
-import tomllib
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parent
@@ -29,12 +28,6 @@ TARGETS = (
     "x86_64-pc-windows-msvc",
 )
 LIVE_TARGET = "x86_64-unknown-linux-musl"
-LEGACY_KEYS = {
-    "model_provider_adapter",
-    "model_provider_registrations",
-    "provider_adapter",
-    "provider_catalog",
-}
 DIST_FILES = (
     "config.toml.example",
     "INSTALL.md",
@@ -206,55 +199,6 @@ def verify_archives(
             raise SystemExit(f"{path.name} provenance mismatch")
 
 
-def find_legacy_key(value: object) -> str | None:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if key in LEGACY_KEYS:
-                return key
-            found = find_legacy_key(child)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = find_legacy_key(child)
-            if found:
-                return found
-    return None
-
-
-def verify_profile(path: Path, secret: bool) -> None:
-    with path.open("rb") as handle:
-        config = tomllib.load(handle)
-    legacy = find_legacy_key(config)
-    if legacy:
-        raise SystemExit(f"profile contains unsupported authority: {legacy}")
-    if config.get("model") != "grok-4.6" or config.get("model_provider") != "grok":
-        raise SystemExit("profile must select exact grok-4.6 from Provider grok")
-    if "model_catalog_json" in config:
-        raise SystemExit("profile must use the release-bundled model catalog")
-    agents = config.get("agents")
-    if isinstance(agents, dict) and agents.get("default_subagent_model") is not None:
-        raise SystemExit("profile must not override the default child model")
-    providers = config.get("model_providers")
-    provider = providers.get("grok") if isinstance(providers, dict) else None
-    if not isinstance(provider, dict):
-        raise SystemExit("profile has no model_providers.grok table")
-    required = {
-        "base_url": "https://grok.trustedtunnel.app/v1",
-        "wire_api": "grok_responses",
-        "requires_openai_auth": False,
-        "supports_websockets": False,
-    }
-    if any(provider.get(key) != value for key, value in required.items()):
-        raise SystemExit("profile does not match the supported Grok transport contract")
-    env_auth = provider.get("env_key") == "GROK_API_KEY"
-    token_auth = secret and bool(provider.get("experimental_bearer_token"))
-    if not (env_auth or token_auth):
-        raise SystemExit("profile has no supported Grok bearer-token authority")
-    if not secret and provider.get("experimental_bearer_token") is not None:
-        raise SystemExit("public profile must not contain a bearer token")
-
-
 def write_checksums(dist: Path) -> Path:
     archives = sorted(dist.glob("*.tar.gz"))
     if not archives:
@@ -285,10 +229,6 @@ def main() -> None:
     verify_archives_parser.add_argument("--built-from-sha")
     verify_archives_parser.add_argument("--target", action="append", choices=TARGETS)
 
-    verify_profile_parser = subparsers.add_parser("verify-profile")
-    verify_profile_parser.add_argument("--path", type=Path, required=True)
-    verify_profile_parser.add_argument("--secret", action="store_true")
-
     checksums_parser = subparsers.add_parser("checksums")
     checksums_parser.add_argument("--dist", type=Path, required=True)
 
@@ -309,8 +249,6 @@ def main() -> None:
             args.built_from_sha,
             tuple(args.target) if args.target else TARGETS,
         )
-    elif args.command == "verify-profile":
-        verify_profile(args.path, args.secret)
     elif args.command == "checksums":
         print(write_checksums(args.dist))
 

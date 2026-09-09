@@ -4772,3 +4772,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_loader_tests.rs"]
 mod config_loader_tests;
+
+#[cfg(test)]
+#[path = "grok_profile_tests.rs"]
+mod grok_profile_tests;

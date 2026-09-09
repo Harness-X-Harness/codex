@@ -57,8 +57,6 @@ jobs:
           else
             echo "publish=true" >> "${GITHUB_OUTPUT}"
           fi
-      - name: Verify public Grok profile
-        run: python3 grokex/release.py verify-profile --path grokex/dist/config.toml.example
       - if: steps.mode.outputs.publish == 'true'
         name: Require an empty destination
         env:
@@ -107,7 +105,7 @@ jobs:
             --version "${VERSION}" \
             --built-from-sha "${GITHUB_SHA}" \
             --target x86_64-unknown-linux-musl
-      - name: Materialize and validate secret profile
+      - name: Materialize secret profile
         env:
           GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
         shell: bash
@@ -116,7 +114,6 @@ jobs:
           [[ -n "${GROK_CONFIG_TOML}" ]]
           umask 077
           printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
-          python3 grokex/release.py verify-profile --path "${RUNNER_TEMP}/config.toml" --secret
       - name: Extract the Codex binary
         env:
           RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
