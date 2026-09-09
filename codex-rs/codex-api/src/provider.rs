@@ -51,10 +51,10 @@ impl ResponsesDialect {
                             ));
                         }
                         Some("function_call_output")
-                            if !item
+                            if item
                                 .get("call_id")
                                 .and_then(Value::as_str)
-                                .is_some_and(|call_id| !call_id.is_empty()) =>
+                                .is_none_or(str::is_empty) =>
                         {
                             return Err(<serde_json::Error as serde::ser::Error>::custom(
                                 "Grok cannot replay function_call_output history without call_id",
