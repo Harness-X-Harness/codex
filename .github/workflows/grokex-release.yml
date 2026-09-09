@@ -137,11 +137,12 @@ jobs:
         with:
           go-version-file: llm-go/codexsdk/go.mod
           cache-dependency-path: llm-go/codexsdk/go.sum
-      - name: Run Grok Live tests
+      - name: Run the standalone llm-go codexsdk module
         working-directory: llm-go/codexsdk
         env:
           GROKEX_LIVE: "1"
           GROKEX_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GOWORK: "off"
         run: |
           set -euo pipefail
           test -x "${GROKEX_LIVE_CODEX_BIN}"
