@@ -7,5 +7,8 @@
 #[path = "flat_projection_tests.rs"]
 mod flat_projection;
 
+#[path = "grok_apply_patch_tests.rs"]
+mod grok_apply_patch;
+
 #[path = "seam_pins_tests.rs"]
 mod seam_pins;

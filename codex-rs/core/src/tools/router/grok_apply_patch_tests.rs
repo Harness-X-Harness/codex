@@ -1,0 +1,159 @@
+//! Grok-owned tests for flat-projected `apply_patch` grammar safety.
+//!
+//! Grok advertises `apply_patch` as a JSON-schema function with a `patch`
+//! string. Reverse projection must not treat a string-typed field as
+//! grammar-valid `custom_tool_call.input`.
+
+use crate::function_tool::FunctionCallError;
+use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
+use crate::tools::registry::ToolRegistry;
+use crate::tools::router::ToolRouter;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ToolMode;
+use codex_tools::ToolSpec;
+use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::collections::BTreeMap;
+
+const CANONICAL_PATCH: &str = "\
+*** Begin Patch
+*** Add File: foo.txt
++hi
+*** End Patch
+";
+
+const DECORATED_BEGIN_PATCH: &str = "\
+*** Begin Patch ***
+*** Add File: foo.txt
++hi
+*** End Patch
+";
+
+const DECORATED_END_PATCH: &str = "\
+*** Begin Patch
+*** Add File: foo.txt
++hi
+*** End Patch ***
+";
+
+const DECORATED_END_OF_FILE_AFTER_TERMINATOR: &str = "\
+*** Begin Patch
+*** Add File: foo.txt
++hi
+*** End Patch ***
+*** End of File ***
+";
+
+fn grok_apply_patch_router() -> ToolRouter {
+    ToolRouter::from_parts_with_projection(
+        ToolRegistry::default(),
+        vec![create_apply_patch_freeform_tool(false)],
+        ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+        true,
+    )
+    .expect("flat apply_patch projection should compile")
+}
+
+fn restore_patch(router: &ToolRouter, patch: &str) -> Result<ResponseItem, FunctionCallError> {
+    let declared_name = match &router.model_visible_specs()[0] {
+        ToolSpec::Function(tool) => tool.name.clone(),
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let mut item = ResponseItem::FunctionCall {
+        id: None,
+        name: declared_name,
+        namespace: None,
+        arguments: json!({ "patch": patch }).to_string(),
+        encrypted_function_args: None,
+        call_id: "call-grok-apply-patch".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    router.restore_tool_call(&mut item)?;
+    Ok(item)
+}
+
+#[test]
+fn grok_projected_apply_patch_keeps_lark_grammar_in_the_model_visible_contract() {
+    let router = grok_apply_patch_router();
+    let tool = match &router.model_visible_specs()[0] {
+        ToolSpec::Function(tool) => tool,
+        spec => panic!("expected projected function, got {spec:?}"),
+    };
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("projected apply_patch should declare properties");
+    assert!(properties.contains_key("patch"));
+    assert!(
+        tool.description
+            .contains("begin_patch: \"*** Begin Patch\""),
+        "projected apply_patch must keep the Lark grammar, not only a string field",
+    );
+    assert!(
+        !tool
+            .description
+            .contains("begin_patch: \"*** Begin Patch ***\""),
+        "projected grammar must keep the canonical begin marker",
+    );
+}
+
+#[test]
+fn grok_restore_accepts_canonical_apply_patch_markers() {
+    let router = grok_apply_patch_router();
+    let item = restore_patch(&router, CANONICAL_PATCH).expect("canonical patch should restore");
+    assert_eq!(
+        item,
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-grok-apply-patch".to_string(),
+            name: "apply_patch".to_string(),
+            namespace: None,
+            input: CANONICAL_PATCH.to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }
+    );
+}
+
+#[test]
+fn grok_restore_rejects_decorated_begin_patch_marker() {
+    let router = grok_apply_patch_router();
+    let error = restore_patch(&router, DECORATED_BEGIN_PATCH)
+        .expect_err("decorated begin marker must fail at the Provider boundary");
+    assert_eq!(
+        error,
+        FunctionCallError::RespondToModel(
+            "apply_patch grammar rejected at the Provider boundary: expected first line \"*** Begin Patch\", got \"*** Begin Patch ***\"".to_string()
+        )
+    );
+}
+
+#[test]
+fn grok_restore_rejects_decorated_end_patch_marker() {
+    let router = grok_apply_patch_router();
+    let error = restore_patch(&router, DECORATED_END_PATCH)
+        .expect_err("decorated end marker must fail at the Provider boundary");
+    assert_eq!(
+        error,
+        FunctionCallError::RespondToModel(
+            "apply_patch grammar rejected at the Provider boundary: expected last line \"*** End Patch\", got \"*** End Patch ***\"".to_string()
+        )
+    );
+}
+
+#[test]
+fn grok_restore_rejects_end_of_file_after_patch_terminator() {
+    let router = grok_apply_patch_router();
+    let error = restore_patch(&router, DECORATED_END_OF_FILE_AFTER_TERMINATOR)
+        .expect_err("text after End Patch must fail at the Provider boundary");
+    assert_eq!(
+        error,
+        FunctionCallError::RespondToModel(
+            "apply_patch grammar rejected at the Provider boundary: expected last line \"*** End Patch\", got \"*** End of File ***\"".to_string()
+        )
+    );
+}

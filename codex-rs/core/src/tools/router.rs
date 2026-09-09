@@ -32,6 +32,8 @@ use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+mod flat_apply_patch;
+
 pub use crate::tools::context::ToolCallSource;
 
 use codex_tools::FlatToolRoutes;
@@ -488,13 +490,19 @@ impl ToolRouter {
                 tool_name,
                 input_key,
             } => {
+                let input = decode_custom_input(name, arguments, input_key)?;
+                let input = if tool_name.is_default_namespace() && tool_name.name == "apply_patch" {
+                    flat_apply_patch::validate_projected_apply_patch(&input)?
+                } else {
+                    input
+                };
                 let restored = ResponseItem::CustomToolCall {
                     id: id.clone(),
                     status: None,
                     call_id: call_id.clone(),
                     name: tool_name.name.clone(),
                     namespace: tool_name.namespace.clone(),
-                    input: decode_custom_input(name, arguments, input_key)?,
+                    input,
                     internal_chat_message_metadata_passthrough:
                         internal_chat_message_metadata_passthrough.clone(),
                 };
