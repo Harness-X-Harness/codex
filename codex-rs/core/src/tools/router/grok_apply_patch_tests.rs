@@ -130,7 +130,7 @@ fn grok_restore_rejects_decorated_end_patch_marker() {
 fn grok_restore_rejects_end_of_file_after_patch_terminator() {
     let router = grok_apply_patch_router();
     let error = restore_patch(&router, DECORATED_END_OF_FILE_AFTER_TERMINATOR)
-        .expect_err("text after EndPatch must fail at the Provider boundary");
+        .expect_err("text after End Patch must fail at the Provider boundary");
     assert_eq!(
         error,
         FunctionCallError::RespondToModel(
