@@ -82,6 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p codex-core --lib grok
+          cargo test -p codex-core --lib json_whole_number
           cargo test -p codex-core --lib review_model_policy
           cargo test -p codex-guardian-v2 -p codex-memories-write --lib
           cargo test -p codex-config --lib grok
