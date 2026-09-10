@@ -1,0 +1,96 @@
+name: harness
+
+# Harness owns Host Goal / Workflow acceptance independently from Grok.
+
+on:
+  pull_request:
+    branches: ['harness/**']
+  push:
+    branches: ['harness/**']
+
+concurrency:
+  group: harness-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  workflow:
+    name: Workflow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/harness.yml
+
+  rust:
+    name: Harness Rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Regenerate App Server protocol schema
+        run: |
+          set -euo pipefail
+          just write-app-server-schema
+          just write-app-server-schema --experimental
+      - name: App Server protocol
+        working-directory: codex-rs
+        run: cargo test -p codex-app-server-protocol
+      - name: Workflow and Goal extensions
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test -p codex-workflow-extension
+          cargo test -p codex-goal-extension
+      - name: Stock integration seams
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo test -p codex-core workflow_spawn
+          cargo test -p codex-app-server --test all thread_workflow
+          cargo test -p codex-app-server --test all thread_workflow_occupancy
+          cargo test -p codex-app-server --test all thread_goal_host
+          cargo test -p codex-tui workflow
+      - name: Check generated files
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  python-sdk:
+    name: Harness Python SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Workflow RPC models
+        run: |
+          python -m pip install --user pydantic pytest
+          python -m pytest sdk/python/tests/test_workflow_rpc_models.py
