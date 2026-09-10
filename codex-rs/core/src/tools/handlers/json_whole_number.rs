@@ -133,27 +133,61 @@ fn parse_json_whole_i128(token: &str) -> Option<i128> {
         return None;
     }
 
-    let mut digits = Vec::with_capacity(int_digits.len() + frac_digits.len());
-    digits.extend_from_slice(int_digits);
-    digits.extend_from_slice(frac_digits);
-    let scale = exponent.checked_sub(i32::try_from(frac_digits.len()).ok()?)?;
-    if scale >= 0 {
-        digits.resize(
-            digits.len().checked_add(usize::try_from(scale).ok()?)?,
-            b'0',
-        );
-        return parse_ascii_i128(&digits, negative);
+    if int_digits
+        .iter()
+        .chain(frac_digits)
+        .all(|&digit| digit == b'0')
+    {
+        return Some(0);
     }
 
-    let frac_len = usize::try_from(scale.checked_neg()?).ok()?;
-    if frac_len > digits.len() {
-        return digits.iter().all(|&digit| digit == b'0').then_some(0);
+    let scale = exponent.checked_sub(i32::try_from(frac_digits.len()).ok()?)?;
+    if scale >= 0 {
+        let scale_digits = usize::try_from(scale).ok()?;
+        let significant = int_digits
+            .iter()
+            .chain(frac_digits)
+            .skip_while(|digit| **digit == b'0')
+            .count();
+        if significant.checked_add(scale_digits)? > 39 {
+            return None;
+        }
+        let mut value = parse_ascii_i128(int_digits, frac_digits, /*negative*/ false)?;
+        for _ in 0..scale_digits {
+            value = value.checked_mul(10)?;
+        }
+        return if negative {
+            value.checked_neg()
+        } else {
+            Some(value)
+        };
     }
-    let split = digits.len() - frac_len;
-    if digits.get(split..)?.iter().any(|&digit| digit != b'0') {
+
+    let drop = usize::try_from(scale.checked_neg()?)?;
+    let total = int_digits.len().checked_add(frac_digits.len())?;
+    if drop > total {
         return None;
     }
-    parse_ascii_i128(digits.get(..split)?, negative)
+    let split = total - drop;
+    for index in split..total {
+        let digit = if index < int_digits.len() {
+            *int_digits.get(index)?
+        } else {
+            *frac_digits.get(index - int_digits.len())?
+        };
+        if digit != b'0' {
+            return None;
+        }
+    }
+    if split <= int_digits.len() {
+        parse_ascii_i128(&int_digits[..split], &[], negative)
+    } else {
+        parse_ascii_i128(
+            int_digits,
+            &frac_digits[..split - int_digits.len()],
+            negative,
+        )
+    }
 }
 
 fn parse_exponent(token: &[u8]) -> Option<i32> {
@@ -181,9 +215,9 @@ fn parse_exponent(token: &[u8]) -> Option<i32> {
     }
 }
 
-fn parse_ascii_i128(digits: &[u8], negative: bool) -> Option<i128> {
+fn parse_ascii_i128(left: &[u8], right: &[u8], negative: bool) -> Option<i128> {
     let mut value = 0_i128;
-    for digit in digits {
+    for digit in left.iter().chain(right) {
         value = value
             .checked_mul(10)?
             .checked_add(i128::from(digit - b'0'))?;

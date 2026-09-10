@@ -209,3 +209,17 @@ fn fork_turns_inherits_exact_whole_number_conversion() {
     let err = parse_fork_turns(r#"{"fork_turns":3.5}"#).expect_err("fractional count");
     assert!(err.contains("must be a finite whole number"), "{err}");
 }
+
+#[test]
+fn huge_positive_exponent_does_not_materialize_scale_zeros() {
+    let err = parse_i64(r#"{"timeout_ms":1e100000000}"#)
+        .expect_err("nonzero mantissa with huge exponent");
+    assert!(err.contains("must be a finite whole number"), "{err}");
+    assert!(!err.contains("expected i64"), "{err}");
+    assert_eq!(
+        parse_i64(r#"{"timeout_ms":0e100000000}"#).expect("zero mantissa"),
+        OptionalI64 {
+            timeout_ms: Some(0)
+        }
+    );
+}
