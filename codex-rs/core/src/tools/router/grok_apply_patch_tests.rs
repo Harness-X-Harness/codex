@@ -44,6 +44,13 @@ const DECORATED_END_OF_FILE_AFTER_TERMINATOR: &str = "\
 *** End of File ***
 ";
 
+const MALFORMED_INTERNAL_HUNK: &str = "\
+*** Begin Patch
+*** Update File: foo.txt
+THIS IS NOT A VALID HUNK
+*** End Patch
+";
+
 fn grok_apply_patch_router() -> ToolRouter {
     ToolRouter::from_parts_with_projection(
         ToolRegistry::default(),
@@ -123,11 +130,24 @@ fn grok_restore_rejects_decorated_end_patch_marker() {
 fn grok_restore_rejects_end_of_file_after_patch_terminator() {
     let router = grok_apply_patch_router();
     let error = restore_patch(&router, DECORATED_END_OF_FILE_AFTER_TERMINATOR)
-        .expect_err("text after End Patch must fail at the Provider boundary");
+        .expect_err("text after EndPatch must fail at the Provider boundary");
     assert_eq!(
         error,
         FunctionCallError::RespondToModel(
             "apply_patch grammar rejected at the Provider boundary: expected last line \"*** End Patch\", got \"*** End of File ***\"".to_string()
         )
     );
+}
+
+#[test]
+fn grok_restore_rejects_malformed_internal_patch_grammar() {
+    let router = grok_apply_patch_router();
+    let error = restore_patch(&router, MALFORMED_INTERNAL_HUNK)
+        .expect_err("invalid internal grammar must fail at the Provider boundary");
+    let FunctionCallError::RespondToModel(message) = error else {
+        panic!("malformed projected patch should produce a model-visible Provider-boundary error");
+    };
+    assert!(message.starts_with("apply_patch grammar rejected at the Provider boundary:"));
+    assert!(!message.contains("expected first line"));
+    assert!(!message.contains("expected last line"));
 }
