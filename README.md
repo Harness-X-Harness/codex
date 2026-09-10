@@ -77,5 +77,6 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Contributing**](./docs/contributing.md)
 - [**Installing & building**](./docs/install.md)
 - [**Open source fund**](./docs/open-source-fund.md)
+- [**Grok**](./grok/README.md) — Grok Provider product docs and Stories in this fork
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
