@@ -302,5 +302,20 @@ jobs:
           set -euo pipefail
           tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.sha)"
           [[ "${tag_sha}" == "${GITHUB_SHA}" ]]
+
           release_target="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish)"
           [[ "${release_target}" == "${GITHUB_SHA}" ]]
+
+          actual_assets="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort)"
+          expected_assets="$(printf '%s\n' \
+            "${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" \
+            "${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" \
+            "${RELEASE_TAG}-aarch64-unknown-linux-musl.tar.gz" \
+            "${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" \
+            "${RELEASE_TAG}-aarch64-pc-windows-msvc.tar.gz" \
+            "${RELEASE_TAG}-x86_64-pc-windows-msvc.tar.gz" \
+            "SHA256SUMS" \
+            "config.toml.example" \
+            "install-grok.sh" \
+            "install-grok.ps1" | sort)"
+          [[ "${actual_assets}" == "${expected_assets}" ]]
