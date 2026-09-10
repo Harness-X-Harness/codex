@@ -14,7 +14,7 @@ use super::ConfigOverrides;
 #[tokio::test]
 async fn grok_shipped_public_profile_resolves_to_supported_provider() -> std::io::Result<()> {
     let profile =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../grokex/dist/config.toml.example");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../grok/dist/config.toml.example");
     let contents = std::fs::read_to_string(&profile)?;
     let cfg: ConfigToml =
         toml::from_str(&contents).expect("shipped public Grok profile should parse");

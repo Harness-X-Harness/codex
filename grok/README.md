@@ -7,6 +7,7 @@ Current human-readable authorities:
 
 - [Architecture](./docs/architecture.md) — Grok Provider and harness boundary
 - [Stories](./docs/stories/) — user-visible Grok claims and their Rust/Go proof
+- [Install](./dist/INSTALL.md) — packaged `grok` command and `~/.grok` home
 
 Release and stock-adoption procedures are not this README. They belong in
 `grok/docs/release.md` and `grok/docs/carry-forward.md` when those documents

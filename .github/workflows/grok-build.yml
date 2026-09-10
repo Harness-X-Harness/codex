@@ -1,6 +1,6 @@
-name: grokex-build
+name: grok-build
 
-# Build Grokex archives from this commit. Packaging is independent from
+# Build Grok archives from this commit. Packaging is independent from
 # Rust/llm-go correctness. Version comes from the grok/rust-v* branch name.
 
 on:
@@ -17,7 +17,7 @@ on:
         description: Dotted version from the grok/rust-v* branch name
         value: ${{ jobs.identity.outputs.version }}
       release_tag:
-        description: Archive tag grokex-vVERSION
+        description: Archive tag grok-vVERSION
         value: ${{ jobs.identity.outputs.release_tag }}
 
 permissions:
@@ -46,7 +46,7 @@ jobs:
           version="${ref#"${prefix}"}"
           [[ -n "${version}" && "${version}" != */* ]]
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "release_tag=grokex-v${version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=grok-v${version}" >> "${GITHUB_OUTPUT}"
       - id: matrix
         name: Pair each requested target with its native runner
         env:
@@ -82,12 +82,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 170
     env:
-      ARTIFACT: grokex-build-${{ github.sha }}-${{ matrix.target }}
+      ARTIFACT: grok-build-${{ github.sha }}-${{ matrix.target }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/build-grokex
+      - uses: ./.github/actions/build-grok
         with:
           target: ${{ matrix.target }}
       - name: Package the archive for this target
@@ -98,14 +98,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "${PYTHON}" grokex/release.py package \
+          "${PYTHON}" grok/release.py package \
             --raw-root "${RUNNER_TEMP}/raw" \
             --output "${RUNNER_TEMP}/archive" \
             --repository . \
             --version "${VERSION}" \
             --built-from-sha "${GITHUB_SHA}" \
             --target "${TARGET}"
-          "${PYTHON}" grokex/release.py verify-archives \
+          "${PYTHON}" grok/release.py verify-archives \
             --dist "${RUNNER_TEMP}/archive" \
             --version "${VERSION}" \
             --built-from-sha "${GITHUB_SHA}" \

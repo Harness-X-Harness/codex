@@ -89,9 +89,9 @@ the same fixed point.
 Server on a Grok-profile Home and asserts that `model/list` returns exactly
 the release-bundled `grok-4.6` `Model` DTO. The stock `model/list` suite in
 the same crate is the stock compatibility control. Both run through native
-`cargo test` in `grokex-checks` until that workflow is replaced.
+`cargo test` in `grok-checks`.
 
 ## Last proven
 
-`grokex-checks` on the `rust-v0.153.4` line
+`grok-checks` on the `rust-v0.153.4` line
 ([Harness-X-Harness/codex#107](https://github.com/Harness-X-Harness/codex/pull/107)).

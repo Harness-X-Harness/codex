@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package Grokex archives from staged binaries and dist files.
+"""Package Grok archives from staged binaries and dist files.
 
 Git owns version history. Rust tests and llm-go own correctness.
 This helper only lays out install archives.
@@ -18,7 +18,7 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = SOURCE_ROOT.parent
-DIST_ROOT = "grokex/dist"
+DIST_ROOT = "grok/dist"
 TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -31,13 +31,13 @@ LIVE_TARGET = "x86_64-unknown-linux-musl"
 DIST_FILES = (
     "config.toml.example",
     "INSTALL.md",
-    "install-grokex.sh",
-    "install-grokex.ps1",
+    "install-grok.sh",
+    "install-grok.ps1",
 )
 
 
 def tag_for(version: str) -> str:
-    return f"grokex-v{version}"
+    return f"grok-v{version}"
 
 
 def archive_name(version: str, target: str) -> str:
@@ -103,20 +103,20 @@ def package(
             for filename in DIST_FILES:
                 shutil.copy2(dist / filename, stage / filename)
             shutil.copy2(repository / "LICENSE", stage / "LICENSE")
-            shutil.copy2(raw / f"codex{suffix}", bin_dir / f"grokex-bin{suffix}")
+            shutil.copy2(raw / f"codex{suffix}", bin_dir / f"grok-bin{suffix}")
             shutil.copy2(
                 raw / f"codex-code-mode-host{suffix}",
                 bin_dir / f"codex-code-mode-host{suffix}",
             )
             if "windows" in target:
-                shutil.copy2(dist / "grokex.ps1", bin_dir / "grokex.ps1")
+                shutil.copy2(dist / "grok.ps1", bin_dir / "grok.ps1")
             else:
-                shutil.copy2(dist / "grokex", bin_dir / "grokex")
+                shutil.copy2(dist / "grok", bin_dir / "grok")
                 for executable in (
-                    bin_dir / "grokex",
-                    bin_dir / "grokex-bin",
+                    bin_dir / "grok",
+                    bin_dir / "grok-bin",
                     bin_dir / "codex-code-mode-host",
-                    stage / "install-grokex.sh",
+                    stage / "install-grok.sh",
                 ):
                     executable.chmod(0o755)
             if "linux" in target:
@@ -169,8 +169,8 @@ def verify_archives(
             f"{tag}/LICENSE",
             f"{tag}/PROVENANCE.json",
             f"{tag}/bin/codex-code-mode-host{suffix}",
-            f"{tag}/bin/grokex-bin{suffix}",
-            f"{tag}/bin/{'grokex.ps1' if suffix else 'grokex'}",
+            f"{tag}/bin/grok-bin{suffix}",
+            f"{tag}/bin/{'grok.ps1' if suffix else 'grok'}",
         }
         if "linux" in target:
             required.add(f"{tag}/bin/bwrap")

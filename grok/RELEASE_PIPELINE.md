@@ -1,4 +1,4 @@
-# Grokex release
+# Grok release
 
 The release line is stock Codex plus the Grok semantic commits. Git owns
 history. Native Rust tests own deterministic contracts. `ronhuafeng/llm-go`
@@ -6,7 +6,7 @@ owns real-provider Live.
 
 ## Checks
 
-`grokex-checks` runs on pull requests to `grok/**`:
+`grok-checks` runs on pull requests to `grok/**`:
 
 - `cargo fmt`
 - clippy on the crates the graft touches
@@ -15,14 +15,14 @@ owns real-provider Live.
 
 ## Packaging
 
-`grokex-build` compiles target binaries and `grokex/release.py package` lays
+`grok-build` compiles target binaries and `grok/release.py package` lays
 out install archives. The version is the `grok/rust-v*` branch name.
 
-`grokex/dist/**` is the launch/install surface.
+`grok/dist/**` is the launch/install surface.
 
 ## Live and publish
 
-`grokex-release` builds the six archives, extracts the Linux Codex binary, and
+`grok-release` builds the six archives, extracts the Linux Codex binary, and
 runs `go test -run '^TestGrok'` in `ronhuafeng/llm-go` `codexsdk` against that
-binary. `workflow_dispatch` can publish the `grokex-v*` tag. The nightly
+binary. `workflow_dispatch` can publish the `grok-v*` tag. The nightly
 schedule never publishes.

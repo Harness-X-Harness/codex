@@ -1,4 +1,4 @@
-name: grokex-release
+name: grok-release
 
 # Build six archives, run llm-go Grok Live against the Linux archive, then
 # optionally publish the tag. workflow_dispatch publishes (or rehearses with
@@ -16,7 +16,7 @@ on:
     - cron: '17 3 * * *'
 
 concurrency:
-  group: grokex-release-${{ github.ref_name }}
+  group: grok-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -45,7 +45,7 @@ jobs:
           version="${ref#"${prefix}"}"
           [[ -n "${version}" && "${version}" != */* ]]
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "release_tag=grokex-v${version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=grok-v${version}" >> "${GITHUB_OUTPUT}"
       - id: mode
         env:
           DRY_RUN: ${{ inputs.dry_run }}
@@ -77,7 +77,7 @@ jobs:
   build:
     name: Archives
     needs: preflight
-    uses: ./.github/workflows/grokex-build.yml
+    uses: ./.github/workflows/grok-build.yml
     with:
       targets: '["aarch64-apple-darwin","x86_64-apple-darwin","aarch64-unknown-linux-musl","x86_64-unknown-linux-musl","aarch64-pc-windows-msvc","x86_64-pc-windows-msvc"]'
 
@@ -92,7 +92,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: grokex-build-${{ github.sha }}-x86_64-unknown-linux-musl
+          name: grok-build-${{ github.sha }}-x86_64-unknown-linux-musl
           path: archives
       - name: Verify the Linux archive
         env:
@@ -100,7 +100,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 grokex/release.py verify-archives \
+          python3 grok/release.py verify-archives \
             --dist archives \
             --version "${VERSION}" \
             --built-from-sha "${GITHUB_SHA}" \
@@ -122,8 +122,8 @@ jobs:
           set -euo pipefail
           mkdir -p extracted
           tar -xzf "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" -C extracted
-          test -x "extracted/${RELEASE_TAG}/bin/grokex-bin"
-          echo "GROKEX_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grokex-bin" >> "${GITHUB_ENV}"
+          test -x "extracted/${RELEASE_TAG}/bin/grok-bin"
+          echo "GROKEX_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grok-bin" >> "${GITHUB_ENV}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ronhuafeng/llm-go
@@ -162,7 +162,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: grokex-build-${{ github.sha }}-*
+          pattern: grok-build-${{ github.sha }}-*
           path: archive-download
           merge-multiple: true
       - name: Stage archives and checksums
@@ -171,15 +171,15 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
           find archive-download -name '*.tar.gz' -type f -exec cp {} release-assets/ \;
-          python3 grokex/release.py verify-archives \
+          python3 grok/release.py verify-archives \
             --dist release-assets \
             --version "${VERSION}" \
             --built-from-sha "${GITHUB_SHA}"
-          python3 grokex/release.py checksums --dist release-assets
-          cp grokex/dist/config.toml.example grokex/dist/install-grokex.sh grokex/dist/install-grokex.ps1 release-assets/
+          python3 grok/release.py checksums --dist release-assets
+          cp grok/dist/config.toml.example grok/dist/install-grok.sh grok/dist/install-grok.ps1 release-assets/
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: grokex-release-assets
+          name: grok-release-assets
           path: release-assets
           if-no-files-found: error
           retention-days: 30
@@ -198,7 +198,7 @@ jobs:
           gh release create "${RELEASE_TAG}" release-assets/* \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
-            --title "Grokex ${VERSION}" \
+            --title "Grok ${VERSION}" \
             --notes "Stock Codex ${VERSION} harness with the release-bundled grok-4.6 Provider catalog."
       - name: Download and verify the published destination
         env:
@@ -210,7 +210,7 @@ jobs:
           [[ "$(git rev-parse "${RELEASE_TAG}^{commit}")" == "${GITHUB_SHA}" ]]
           mkdir published
           gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --dir published
-          python3 grokex/release.py verify-archives \
+          python3 grok/release.py verify-archives \
             --dist published \
             --version "${VERSION}" \
             --built-from-sha "${GITHUB_SHA}"

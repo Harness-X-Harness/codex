@@ -1,4 +1,4 @@
-name: grokex-checks
+name: grok-checks
 
 # Product checks: rustfmt, clippy, native Rust contracts.
 # Packaging readiness: release.py packaging tests, shell syntax, actionlint.
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: grokex-checks-${{ github.event.pull_request.head.sha || github.sha }}
+  group: grok-checks-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -189,7 +189,7 @@ jobs:
         with:
           ref: ${{ env.CHECKOUT_SHA }}
           persist-credentials: false
-      - name: Lint the Grokex workflows
+      - name: Lint the Grok workflows
         env:
           ACTIONLINT_VERSION: 1.7.12
         shell: bash
@@ -197,15 +197,15 @@ jobs:
           set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
             | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
-          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grokex-*.yml
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grok-*.yml
       - name: Verify packaging helpers
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile grokex/release.py grokex/test_release.py
-          python3 -m unittest grokex.test_release
-          bash -n grokex/dist/grokex grokex/dist/install-grokex.sh
-          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grokex/dist/grokex.ps1)); [void][scriptblock]::Create((Get-Content -Raw grokex/dist/install-grokex.ps1))'
+          python3 -m py_compile grok/release.py grok/test_release.py
+          python3 -m unittest grok.test_release
+          bash -n grok/dist/grok grok/dist/install-grok.sh
+          pwsh -NoProfile -Command '[void][scriptblock]::Create((Get-Content -Raw grok/dist/grok.ps1)); [void][scriptblock]::Create((Get-Content -Raw grok/dist/install-grok.ps1))'
 
   require:
     name: Require every required gate
