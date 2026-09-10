@@ -6,7 +6,7 @@ owns real-provider Live.
 
 ## Checks
 
-`grokex-checks` runs on pull requests to `release/**`:
+`grokex-checks` runs on pull requests to `grok/**`:
 
 - `cargo fmt`
 - clippy on the crates the graft touches
@@ -16,7 +16,7 @@ owns real-provider Live.
 ## Packaging
 
 `grokex-build` compiles target binaries and `grokex/release.py package` lays
-out install archives. The version is the `release/rust-v*` branch name.
+out install archives. The version is the `grok/rust-v*` branch name.
 
 `grokex/dist/**` is the launch/install surface.
 

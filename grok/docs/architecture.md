@@ -182,7 +182,8 @@ seam. Native Grok and stock compatibility tests travel with the behavior they
 prove.
 
 The maintainer procedure lives in `grok/docs/carry-forward.md` when that
-document exists.
+document exists. Canonical Grok refs are `grok/<stock-tag>` as described in
+[`docs/downstream-products.md`](../../docs/downstream-products.md).
 
 ## Proof
 

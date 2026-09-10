@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           ref="${GITHUB_REF_NAME}"
-          prefix="release/rust-v"
+          prefix="grok/rust-v"
           [[ "${GITHUB_REF}" == "refs/heads/${prefix}"* ]]
           version="${ref#"${prefix}"}"
           [[ -n "${version}" && "${version}" != */* ]]

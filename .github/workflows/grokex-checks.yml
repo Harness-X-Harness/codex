@@ -5,7 +5,7 @@ name: grokex-checks
 
 on:
   pull_request:
-    branches: ['release/**']
+    branches: ['grok/**']
   workflow_dispatch:
 
 concurrency:

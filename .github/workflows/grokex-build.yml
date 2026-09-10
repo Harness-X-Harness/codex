@@ -1,11 +1,11 @@
 name: grokex-build
 
 # Build Grokex archives from this commit. Packaging is independent from
-# Rust/llm-go correctness. Version comes from the release/* branch name.
+# Rust/llm-go correctness. Version comes from the grok/rust-v* branch name.
 
 on:
   push:
-    branches: ['release/**']
+    branches: ['grok/**']
   workflow_call:
     inputs:
       targets:
@@ -14,7 +14,7 @@ on:
         type: string
     outputs:
       version:
-        description: Dotted version from the release branch name
+        description: Dotted version from the grok/rust-v* branch name
         value: ${{ jobs.identity.outputs.version }}
       release_tag:
         description: Archive tag grokex-vVERSION
@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           ref="${GITHUB_REF_NAME}"
-          prefix="release/rust-v"
+          prefix="grok/rust-v"
           if [[ "${ref}" != "${prefix}"* ]]; then
             echo "packaging version comes from branch ${prefix}*" >&2
             exit 1

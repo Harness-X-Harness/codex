@@ -16,5 +16,4 @@ Implementation stays in the stock Codex modules that own each seam. This tree
 does not relocate Rust for directory symmetry.
 
 Sibling-product branch topology with Harness is owned by
-[`docs/downstream-products.md`](../docs/downstream-products.md) when that
-document exists.
+[`docs/downstream-products.md`](../docs/downstream-products.md).
