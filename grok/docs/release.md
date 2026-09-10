@@ -54,7 +54,7 @@ Markdown in this file is not executable acceptance input. Do not add tests,
 scripts, greps, schemas, Story inventories, heading/keyword checks, or
 required manual-review checklists to enforce it.
 
-Workflow mechanics that implement this model are owned by Codex #167–#170.
-Stock-tag adoption is owned by [`carry-forward.md`](./carry-forward.md) when
-that document exists. Sibling-branch topology is
+Workflow mechanics live in [`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
+Stock-tag adoption lives in [`carry-forward.md`](./carry-forward.md). Sibling
+branch topology lives in
 [`docs/downstream-products.md`](../../docs/downstream-products.md).
