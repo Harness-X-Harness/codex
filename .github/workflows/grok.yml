@@ -224,11 +224,11 @@ jobs:
           mkdir -p extracted
           tar -xzf "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" -C extracted
           test -x "extracted/${RELEASE_TAG}/bin/grok-bin"
-          echo "GROKEX_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grok-bin" >> "${GITHUB_ENV}"
+          echo "GROK_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grok-bin" >> "${GITHUB_ENV}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ronhuafeng/llm-go
-          ref: 9b72c486c516e21a7b1895c412f2203e231c2840
+          ref: 76eb91fc8c07d59899f16c6c06eb2ee8d67a5879
           path: llm-go
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -238,8 +238,8 @@ jobs:
       - name: Run Go Live
         working-directory: llm-go/codexsdk
         env:
-          GROKEX_LIVE: "1"
-          GROKEX_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GROK_LIVE: "1"
+          GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
           GOWORK: "off"
         run: go test . -count=1 -timeout 30m -run '^TestGrok'
 
