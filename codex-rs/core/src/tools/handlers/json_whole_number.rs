@@ -110,12 +110,9 @@ fn parse_json_whole_i128(token: &str) -> Option<i128> {
     }
 
     let exp_at = mantissa.iter().position(|&b| b == b'e' || b == b'E');
-    let (digits_part, exponent) = match exp_at {
-        Some(index) => (
-            mantissa.get(..index)?,
-            parse_exponent(mantissa.get(index + 1..)?)?,
-        ),
-        None => (mantissa, 0_i32),
+    let digits_part = match exp_at {
+        Some(index) => mantissa.get(..index)?,
+        None => mantissa,
     };
     if digits_part.is_empty() {
         return None;
@@ -141,6 +138,10 @@ fn parse_json_whole_i128(token: &str) -> Option<i128> {
         return Some(0);
     }
 
+    let exponent = match exp_at {
+        Some(index) => parse_exponent(mantissa.get(index + 1..)?)?,
+        None => 0_i32,
+    };
     let scale = exponent.checked_sub(i32::try_from(frac_digits.len()).ok()?)?;
     if scale >= 0 {
         let scale_digits = usize::try_from(scale).ok()?;

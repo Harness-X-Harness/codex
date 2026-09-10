@@ -222,4 +222,10 @@ fn huge_positive_exponent_does_not_materialize_scale_zeros() {
             timeout_ms: Some(0)
         }
     );
+    assert_eq!(
+        parse_i64(r#"{"timeout_ms":0e2147483648}"#).expect("zero mantissa ignores exponent range"),
+        OptionalI64 {
+            timeout_ms: Some(0)
+        }
+    );
 }
