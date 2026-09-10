@@ -4,8 +4,6 @@ name: grok-build
 # Rust/llm-go correctness. Version comes from the grok/rust-v* branch name.
 
 on:
-  push:
-    branches: ['grok/**']
   workflow_call:
     inputs:
       targets:
