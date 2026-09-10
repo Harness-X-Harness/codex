@@ -211,7 +211,7 @@ fn fork_turns_inherits_exact_whole_number_conversion() {
 }
 
 #[test]
-fn huge_positive_exponent_does_not_materialize_scale_zeros() {
+fn grok_huge_positive_exponent_does_not_materialize_scale_zeros() {
     let err = parse_i64(r#"{"timeout_ms":1e100000000}"#)
         .expect_err("nonzero mantissa with huge exponent");
     assert!(err.contains("must be a finite whole number"), "{err}");
