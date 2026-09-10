@@ -19,7 +19,6 @@ on:
         value: ${{ jobs.identity.outputs.release_tag }}
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
