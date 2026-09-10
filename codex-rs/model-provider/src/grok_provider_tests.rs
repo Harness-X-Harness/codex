@@ -419,6 +419,20 @@ fn grok_does_not_reinterpret_unnamed_function_call_output_without_call_id() {
 }
 
 #[test]
+fn grok_does_not_reinterpret_empty_named_function_call_output_without_call_id() {
+    let input = vec![ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some(String::new()),
+        namespace: None,
+        output: FunctionCallOutputPayload::from_text("orphan".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    assert_eq!(grok_provider().project_model_input(input.clone()), input);
+}
+
+#[test]
 fn stock_openai_provider_keeps_named_unpaired_function_call_output() {
     let input = vec![named_unpaired_function_call_output(
         "notify",

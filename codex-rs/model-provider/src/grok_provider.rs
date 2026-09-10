@@ -88,11 +88,11 @@ impl ModelProvider for GrokModelProvider {
                 ResponseItem::FunctionCallOutput {
                     id,
                     call_id: None,
-                    name: Some(_),
+                    name: Some(name),
                     output,
                     internal_chat_message_metadata_passthrough,
                     ..
-                } => output.text_content().map(|text| ResponseItem::Message {
+                } if !name.is_empty() => output.text_content().map(|text| ResponseItem::Message {
                     id: id.clone(),
                     role: "user".to_string(),
                     content: vec![ContentItem::InputText {
