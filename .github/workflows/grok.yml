@@ -21,6 +21,25 @@ env:
   CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  workflow:
+    name: Workflow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grok.yml
+
   formatting:
     name: Formatting
     runs-on: ubuntu-24.04
@@ -98,29 +117,10 @@ jobs:
           cargo clippy -p codex-core --test all -- -D warnings
           cargo clippy -p codex-app-server --test all -- -D warnings
 
-  workflow:
-    name: Workflow
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ env.CHECKOUT_SHA }}
-          persist-credentials: false
-      - name: actionlint
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
-            | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
-          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grok.yml .github/workflows/grok-build.yml
-
   identity:
     name: Resolve packaging version
     if: github.event_name == 'push'
-    needs: [formatting, contracts, lints, workflow]
+    needs: [workflow, formatting, contracts, lints]
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.identity.outputs.version }}
@@ -139,12 +139,57 @@ jobs:
           echo "release_tag=grok-v${version}" >> "${GITHUB_OUTPUT}"
 
   build:
-    name: Archives
+    name: Build ${{ matrix.target }}
     if: github.event_name == 'push'
     needs: identity
-    uses: ./.github/workflows/grok-build.yml
-    with:
-      targets: '["aarch64-apple-darwin","x86_64-apple-darwin","aarch64-unknown-linux-musl","x86_64-unknown-linux-musl","aarch64-pc-windows-msvc","x86_64-pc-windows-msvc"]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 170
+    env:
+      ARTIFACT: grok-build-${{ github.sha }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.CHECKOUT_SHA }}
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        with:
+          target: ${{ matrix.target }}
+      - name: Package
+        env:
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.identity.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${PYTHON}" grok/release.py \
+            --raw-root "${RUNNER_TEMP}/raw" \
+            --output "${RUNNER_TEMP}/archive" \
+            --repository . \
+            --version "${VERSION}" \
+            --target "${TARGET}"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ runner.temp }}/archive
+          if-no-files-found: error
+          retention-days: 90
 
   live:
     name: llm-go Grok Live
@@ -237,11 +282,13 @@ jobs:
           set -euo pipefail
           branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${GITHUB_REF_NAME}" --jq .object.sha)"
           [[ "${branch_sha}" == "${GITHUB_SHA}" ]]
+
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release delete "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
           elif gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}"
           fi
+
           gh release create "${RELEASE_TAG}" release-assets/* \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
