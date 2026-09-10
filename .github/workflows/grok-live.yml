@@ -37,6 +37,13 @@ jobs:
         with:
           go-version-file: grok/live/go.mod
           cache: false
+      - name: Resolve the Go module
+        working-directory: grok/live
+        env:
+          GOWORK: 'off'
+        run: |
+          go mod tidy
+          cat go.sum
       - name: Test the pure-Go harness
         working-directory: grok/live
         env:
