@@ -163,7 +163,7 @@ fn parse_json_whole_i128(token: &str) -> Option<i128> {
         };
     }
 
-    let drop = usize::try_from(scale.checked_neg()?)?;
+    let drop = usize::try_from(scale.checked_neg()?).ok()?;
     let total = int_digits.len().checked_add(frac_digits.len())?;
     if drop > total {
         return None;
