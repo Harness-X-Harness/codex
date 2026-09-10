@@ -38,3 +38,14 @@ Harness runtime design: [`harness/docs/architecture.md`](../harness/docs/archite
 
 Historical `release/<stock-tag>` names on the Grok line remain historical
 evidence. They are not the current Grok canonical ref.
+
+## Issue ownership
+
+```text
+Grok implementation / Story / release  -> this repository
+Harness implementation / Story / CI    -> this repository
+Mini proxy behavior                    -> ronhuafeng/mini-proxy-core
+```
+
+Do not file Grok or Harness implementation work in Mini merely because traffic
+passes through Mini.

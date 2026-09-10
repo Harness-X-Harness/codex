@@ -16,3 +16,6 @@ Sibling-product branch topology with Grok is owned by
 does not copy that policy.
 
 Grok Provider semantics and Grok release state are not Harness contracts.
+
+File Harness implementation, Stories, and CI issues in this repository.
+Mini proxy issues belong in `ronhuafeng/mini-proxy-core`.

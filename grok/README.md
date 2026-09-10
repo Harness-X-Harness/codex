@@ -18,3 +18,6 @@ does not relocate Rust for directory symmetry.
 
 Sibling-product branch topology with Harness is owned by
 [`docs/downstream-products.md`](../docs/downstream-products.md).
+
+File Grok implementation, Stories, and release issues in this repository.
+Mini proxy issues belong in `ronhuafeng/mini-proxy-core`.
