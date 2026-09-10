@@ -5,13 +5,11 @@ at the narrowest backend seams.
 
 Current human-readable authorities:
 
-- [Architecture](./docs/architecture.md) — Grok Provider and harness boundary
+- [Architecture](./docs/architecture.md) — Grok Provider and host boundary
+- [Release](./docs/release.md) — moving-channel delivery contract
+- [Carry-forward](./docs/carry-forward.md) — adopting a new stock Codex tag
 - [Stories](./docs/stories/) — user-visible Grok claims and their Rust/Go proof
 - [Install](./dist/INSTALL.md) — packaged `grok` command and `~/.grok` home
-
-Release design: [docs/release.md](./docs/release.md).
-Stock-adoption procedure belongs in `grok/docs/carry-forward.md` when that
-document exists.
 
 Implementation stays in the stock Codex modules that own each seam. This tree
 does not relocate Rust for directory symmetry.
