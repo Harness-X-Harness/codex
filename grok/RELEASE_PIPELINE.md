@@ -1,28 +1,6 @@
-# Grok release
+# Grok release pipeline
 
-The release line is stock Codex plus the Grok semantic commits. Git owns
-history. Native Rust tests own deterministic contracts. `ronhuafeng/llm-go`
-owns real-provider Live.
+The current delivery contract is [docs/release.md](./docs/release.md).
 
-## Checks
-
-`grok-checks` runs on pull requests to `grok/**`:
-
-- `cargo fmt`
-- clippy on the crates the graft touches
-- the native Grok/stock cargo tests
-- packaging helper tests (`release.py`, dist launch scripts)
-
-## Packaging
-
-`grok-build` compiles target binaries and `grok/release.py package` lays
-out install archives. The version is the `grok/rust-v*` branch name.
-
-`grok/dist/**` is the launch/install surface.
-
-## Live and publish
-
-`grok-release` builds the six archives, extracts the Linux Codex binary, and
-runs `go test -run '^TestGrok'` in `ronhuafeng/llm-go` `codexsdk` against that
-binary. `workflow_dispatch` can publish the `grok-v*` tag. The nightly
-schedule never publishes.
+This file is not a second release authority. Workflow implementation of that
+contract is owned by Codex #167–#170.

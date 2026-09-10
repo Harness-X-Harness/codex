@@ -9,9 +9,9 @@ Current human-readable authorities:
 - [Stories](./docs/stories/) — user-visible Grok claims and their Rust/Go proof
 - [Install](./dist/INSTALL.md) — packaged `grok` command and `~/.grok` home
 
-Release and stock-adoption procedures are not this README. They belong in
-`grok/docs/release.md` and `grok/docs/carry-forward.md` when those documents
-exist.
+Release design: [docs/release.md](./docs/release.md).
+Stock-adoption procedure belongs in `grok/docs/carry-forward.md` when that
+document exists.
 
 Implementation stays in the stock Codex modules that own each seam. This tree
 does not relocate Rust for directory symmetry.
