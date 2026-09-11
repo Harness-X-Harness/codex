@@ -93,11 +93,14 @@ This Story does not perform a ChatGPT live Turn.
 
 ## Executable contract
 
-`TestGrokCustomApplyPatch` in `ronhuafeng/llm-go` `codexsdk`. Direct
-`go test . -count=1 -timeout 30m -run '^TestGrok'` against the Linux archive.
+`TestGrokCustomApplyPatch` in the repository-owned `grok/live` Go module.
+Normal Grok delivery runs
+`go test ./... -count=1 -timeout 30m -run '^TestGrok'` from `grok/live` against
+the exact current-run Linux archive. `llm-go/codexsdk` is the SDK dependency,
+not the acceptance owner.
 
 ## Last proven
 
-Release run
-[34027180997](https://github.com/Harness-X-Harness/codex/actions/runs/34027180997)
-on 2026-09-06 for published source `86b8ac4be290ea1c0136123a52c7463739074608`.
+Grok workflow run
+[34549988338](https://github.com/Harness-X-Harness/codex/actions/runs/34549988338)
+on 2026-09-11 for published source `6a22ea48d22f21c0dc06894b107bfc918054870b`.

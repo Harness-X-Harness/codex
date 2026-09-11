@@ -4,9 +4,12 @@ User-visible Grok claims. Each Story names one product boundary and the native
 Rust or Go test that binds it.
 
 Deterministic Stories are proven by Cargo tests in this repository. Live
-Stories are proven by `ronhuafeng/llm-go` `codexsdk` `go test -run '^TestGrok'`
-against the exact Linux archive. A GREEN run of that Go suite is Live evidence.
-Changing an outcome-driving acceptance requires changing the named test.
+Stories are proven by the repository-owned `grok/live` Go suite running
+`go test ./... -count=1 -timeout 30m -run '^TestGrok'` against the exact Linux
+archive. That harness consumes `github.com/ronhuafeng/llm-go/codexsdk` as an
+SDK dependency; llm-go does not own Grok product acceptance semantics. A GREEN
+run of the local Go suite is Live evidence. Changing an outcome-driving
+acceptance requires changing the named test.
 
 These files are not executable acceptance input. Do not add tests that validate
 this directory's existence, headings, or filenames.
