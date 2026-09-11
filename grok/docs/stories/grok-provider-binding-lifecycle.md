@@ -97,9 +97,3 @@ compatibility path to the stock child flow.
 Grok delivery runs `go test ./... -count=1 -timeout 30m -run '^TestGrok'` from
 `grok/live` against the exact current-run Linux archive. `llm-go/codexsdk` is
 the SDK dependency, not the acceptance owner.
-
-## Last proven
-
-Grok workflow run
-[34549988338](https://github.com/Harness-X-Harness/codex/actions/runs/34549988338)
-on 2026-09-11 for published source `6a22ea48d22f21c0dc06894b107bfc918054870b`.

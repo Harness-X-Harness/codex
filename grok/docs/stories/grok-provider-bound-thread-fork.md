@@ -85,8 +85,3 @@ Grok Provider Profile, catalog, or model restrictions.
 `grok_fork_keeps_provider_binding_and_isolates_branch_failure` in
 `codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs`. Native
 `cargo test` in `grok-checks`.
-
-## Last proven
-
-`grok-checks` on the `rust-v0.153.4` line
-([Harness-X-Harness/codex#107](https://github.com/Harness-X-Harness/codex/pull/107)).
