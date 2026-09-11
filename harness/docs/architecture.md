@@ -8,8 +8,9 @@ It does not own Mini Proxy routing, grants, credentials, accounting, stock
 Multi-Agent V2 semantics, official OpenAI Codex releases, or Grok Provider
 semantics.
 
-Git owns source identity. Native `.github/workflows/harness.yml` checks and the
-unique composition Story own acceptance evidence.
+Git owns source identity. `.github/workflows/harness.yml` and the native tests
+it runs own executable acceptance evidence. Current Harness documentation
+describes stable product claims; it is not a second acceptance runner.
 
 ## Product model
 
@@ -181,8 +182,8 @@ durable Workflow state and scratch remain available for later restore.
 ## Verification
 
 Git owns the source SHA. There is no separate current-delivery ledger.
-`.github/workflows/harness.yml` is the deterministic acceptance boundary. It
-must cover:
+`.github/workflows/harness.yml` is the Harness acceptance boundary. It directly
+runs the native owners for:
 
 - flag-off stock Goal compatibility;
 - host Goal authority, evaluator, and skeptic transitions;
@@ -193,12 +194,21 @@ must cover:
 - same-Thread Turn ownership and stop lifecycle;
 - App Server schema/protocol plus TUI and Python Workflow surfaces.
 
-The unique composition Live Story is
-[`host-goal-remains-distinct-from-independent-workflow.md`](./stories/host-goal-remains-distinct-from-independent-workflow.md).
-Run it when a candidate changes relevant Thread/Turn lifecycle, extension
-composition, Goal HOW, Workflow auto-resume, or engine ownership semantics.
-Deterministic gates remain prerequisites and do not replace that composition
-proof.
+The composition Story
+[`host-goal-remains-distinct-from-independent-workflow.md`](./stories/host-goal-remains-distinct-from-independent-workflow.md)
+is human-readable product design for these same stable semantics. Its executable
+contract is owned by the native App Server integration suites
+`thread_workflow.rs`, `thread_workflow_occupancy.rs`, and
+`thread_goal_host.rs`, which `.github/workflows/harness.yml` invokes directly.
+Those tests exercise actual App Server Thread/Goal/Workflow composition through
+controlled host and Responses seams, including engine occupancy, Workflow
+auto-resume, Goal-state isolation, and Host Goal authority.
+
+There is no separate provider-dependent Harness Live authority for semantics
+that these deterministic product seams can represent. If a future current
+Harness invariant genuinely depends on an external Provider behavior that the
+native seams cannot represent, define that boundary when it exists rather than
+preserving a standing Live obligation from historical wording.
 
 Do not add uncontrolled model-dependent Live requirements for Goal
 `complete`, `blocked`, or internal skeptic votes when deterministic host seam
