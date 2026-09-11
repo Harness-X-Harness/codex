@@ -72,7 +72,8 @@ waits) is deterministic coverage rather than another Live Story.
 - Candidate Codex App Server has stock `Goals` and `features.goal_host = true`.
 - Experimental App Server API is enabled.
 - One disposable isolated Home.
-- The candidate already passed `goal-host-checks`.
+- The candidate already passed the deterministic gates in
+  `.github/workflows/harness.yml`.
 - One ordinary Provider path may satisfy at most one Workflow model yield.
 - Do not use a ChatGPT stock-Goals Live Turn as the control.
 
@@ -94,7 +95,8 @@ local paths.
 
 ## Deterministic prerequisites
 
-On the same candidate revision, `goal-host-checks` must prove:
+On the same candidate revision, the deterministic gates in
+`.github/workflows/harness.yml` must prove:
 
 - flag-off stock Goals retain worker `update_goal` authority and Workflow RPCs
   are unavailable;
