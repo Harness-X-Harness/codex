@@ -300,10 +300,10 @@ jobs:
           tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.sha)"
           [[ "${tag_sha}" == "${GITHUB_SHA}" ]]
 
-          release_target="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish)"
+          release_target="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .target_commitish)"
           [[ "${release_target}" == "${GITHUB_SHA}" ]]
 
-          actual_assets="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort)"
+          actual_assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.assets[].name' | sort)"
           expected_assets="$(printf '%s\n' \
             "${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" \
             "${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" \
@@ -316,3 +316,20 @@ jobs:
             "install-grok.sh" \
             "install-grok.ps1" | sort)"
           [[ "${actual_assets}" == "${expected_assets}" ]]
+
+          declare -A local_digests=()
+          while IFS= read -r -d '' path; do
+            name="${path#release-assets/}"
+            digest="$(sha256sum "${path}" | awk '{print $1}')"
+            local_digests["${name}"]="sha256:${digest}"
+          done < <(find release-assets -maxdepth 1 -type f -print0)
+
+          declare -A remote_digests=()
+          while IFS=$'\t' read -r name digest; do
+            [[ -n "${name}" && -n "${digest}" ]]
+            remote_digests["${name}"]="${digest}"
+          done < <(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.assets[] | [.name, .digest] | @tsv')
+
+          for name in "${!local_digests[@]}"; do
+            [[ "${remote_digests[${name}]:-}" == "${local_digests[${name}]}" ]]
+          done
