@@ -1,6 +1,7 @@
 package live
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -31,10 +33,13 @@ const (
 	grokLiveBinEnv    = "GROK_LIVE_CODEX_BIN"
 	grokLiveConfigEnv = "GROK_LIVE_CONFIG"
 
-	proxyModeEnv   = "GROK_LIVE_APP_SERVER_PROXY"
-	proxyBinEnv    = "GROK_LIVE_APP_SERVER_REAL_BIN"
-	proxyStderrEnv = "GROK_LIVE_APP_SERVER_STDERR"
-	stderrTailMax  = 64 << 10
+	proxyModeEnv                    = "GROK_LIVE_APP_SERVER_PROXY"
+	proxyBinEnv                     = "GROK_LIVE_APP_SERVER_REAL_BIN"
+	proxyStderrEnv                  = "GROK_LIVE_APP_SERVER_STDERR"
+	proxyTestChildEnv               = "GROK_LIVE_PROXY_TEST_CHILD"
+	proxyChildShutdownTimeout       = 1500 * time.Millisecond
+	proxyLifecycleTestTimeout       = 5 * time.Second
+	stderrTailMax                   = 64 << 10
 
 	grokProvider = "grok"
 	grokModel    = "grok-4.6"
@@ -62,10 +67,28 @@ var (
 // tests set proxyModeEnv only after their own TestMain has started, so only the
 // child test executable takes this path.
 func TestMain(m *testing.M) {
+	if os.Getenv(proxyTestChildEnv) == "1" {
+		os.Exit(runProxyTestChild())
+	}
 	if os.Getenv(proxyModeEnv) == "1" {
 		os.Exit(runAppServerProxy())
 	}
 	os.Exit(m.Run())
+}
+
+func runProxyTestChild() int {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+
+	_, _ = fmt.Fprintln(os.Stdout, "ready")
+	<-interrupts
+	_, _ = fmt.Fprintln(os.Stdout, "interrupted")
+	var release [1]byte
+	if _, err := os.Stdin.Read(release[:]); err != nil {
+		return 125
+	}
+	return 0
 }
 
 func runAppServerProxy() int {
@@ -84,7 +107,10 @@ func runAppServerProxy() int {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = writer
-	if err := cmd.Run(); err != nil {
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
+	if err := runProxyCommand(cmd, interrupts, proxyChildShutdownTimeout); err != nil {
 		_, _ = fmt.Fprintf(writer, "\ngrok-live proxy: app-server exit: %v\n", err)
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -93,6 +119,116 @@ func runAppServerProxy() int {
 		return 125
 	}
 	return 0
+}
+
+func runProxyCommand(cmd *exec.Cmd, interrupts <-chan os.Signal, shutdownTimeout time.Duration) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		return err
+	case <-interrupts:
+	}
+
+	if cmd.Process != nil {
+		_ = cmd.Process.Signal(os.Interrupt)
+	}
+	if shutdownTimeout <= 0 {
+		return <-done
+	}
+
+	timer := time.NewTimer(shutdownTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		return <-done
+	}
+}
+
+func TestProxyCommandForwardsInterruptAndWaitsForChild(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), proxyTestChildEnv+"=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	interrupts := make(chan os.Signal, 1)
+	done := make(chan error, 1)
+	go func() { done <- runProxyCommand(cmd, interrupts, proxyLifecycleTestTimeout) }()
+
+	lines := make(chan string, 2)
+	scanDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+		scanDone <- scanner.Err()
+		close(lines)
+	}()
+	readLine := func(want string) {
+		t.Helper()
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				t.Fatalf("proxy test child exited before %q", want)
+			}
+			if line != want {
+				t.Fatalf("proxy test child line = %q, want %q", line, want)
+			}
+		case <-time.After(proxyLifecycleTestTimeout):
+			t.Fatalf("timed out waiting for proxy test child %q", want)
+		}
+	}
+
+	readLine("ready")
+	interrupts <- os.Interrupt
+	readLine("interrupted")
+	select {
+	case err := <-done:
+		t.Fatalf("proxy returned before child exit: %v", err)
+	default:
+	}
+	if _, err := stdin.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	_ = stdin.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("proxy command returned error after child exit: %v", err)
+		}
+	case <-time.After(proxyLifecycleTestTimeout):
+		t.Fatal("proxy did not return after child exit")
+	}
+	select {
+	case err := <-scanDone:
+		if err != nil {
+			t.Fatalf("proxy test child stdout: %v", err)
+		}
+	case <-time.After(proxyLifecycleTestTimeout):
+		t.Fatal("proxy test child stdout did not close")
+	}
 }
 
 type tailFileWriter struct {
