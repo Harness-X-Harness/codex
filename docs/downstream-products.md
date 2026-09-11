@@ -1,7 +1,7 @@
 # Downstream products
 
 This repository carries two sibling products over stock Codex. Neither product
-is based on the other. This document owns only that cross-product branch
+is based on the other. This document owns only the cross-product branch
 topology.
 
 ```text
@@ -29,12 +29,16 @@ Example: stock `rust-v0.153.4` yields `grok/rust-v0.153.4` and
 - A temporary composition branch is experimental only unless a real third
   product is explicitly defined.
 - Grok and Harness commit SHAs need not align.
+- Current product docs live only on their owning branch; do not mirror a
+  sibling product's current architecture or Stories into the other line.
 
 Product-specific replay details belong in each product's carry-forward
 document, not here.
 
-Grok runtime design: [`grok/docs/architecture.md`](../grok/docs/architecture.md).
-Harness runtime design: [`harness/docs/architecture.md`](../harness/docs/architecture.md).
+On `grok/<stock-tag>`, start with `grok/README.md`. On
+`harness/<stock-tag>`, start with `harness/README.md`. Those branch-local
+routers own links to their product architecture, carry-forward guide, and
+Stories.
 
 Historical `release/<stock-tag>` names on the Grok line remain historical
 evidence. They are not the current Grok canonical ref.
