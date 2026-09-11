@@ -38,7 +38,9 @@ jobs:
           set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
             | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
-          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grok.yml
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= \
+            .github/workflows/grok.yml \
+            .github/workflows/grok-live.yml
 
   formatting:
     name: Formatting
@@ -193,7 +195,7 @@ jobs:
           retention-days: 90
 
   live:
-    name: llm-go Grok Live
+    name: Grok Live
     if: github.event_name == 'push'
     needs: [identity, build]
     runs-on: ubuntu-24.04
@@ -226,23 +228,17 @@ jobs:
           tar -xzf "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" -C extracted
           test -x "extracted/${RELEASE_TAG}/bin/grok-bin"
           echo "GROK_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grok-bin" >> "${GITHUB_ENV}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ronhuafeng/llm-go
-          ref: 76eb91fc8c07d59899f16c6c06eb2ee8d67a5879
-          path: llm-go
-          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: llm-go/codexsdk/go.mod
-          cache-dependency-path: llm-go/codexsdk/go.sum
-      - name: Run Go Live
-        working-directory: llm-go/codexsdk
+          go-version-file: grok/live/go.mod
+          cache: false
+      - name: Run Grok Live
+        working-directory: grok/live
         env:
           GROK_LIVE: "1"
           GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
           GOWORK: "off"
-        run: go test . -count=1 -timeout 30m -run '^TestGrok'
+        run: go test ./... -count=1 -timeout 30m -run '^TestGrok'
 
   publish:
     name: Publish moving channel
