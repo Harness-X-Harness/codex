@@ -121,8 +121,3 @@ relevant to Workflow completion.
 
 Do not rerun it only because a branch name, commit SHA, documentation file, or
 unrelated implementation changed.
-
-## Last proven
-
-Live Then last proven on source `a10fe97e2`: start `/workflow`, set-goal while
-that run is `active`, workflow `complete`, goal still `active`.
