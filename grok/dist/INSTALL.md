@@ -28,6 +28,7 @@ already exists.
 
 ## Contract
 
-`wire_api = "grok_responses"` is the only serialized Grok selector. The model
-catalog is static release data. The profile does not discover or merge a
-remote catalog.
+`model_provider = "grok"` selects the configured Grok profile. The model
+catalog is static release data unless the supported stock config-catalog seam
+supplies an explicit replacement. The profile does not discover, merge, or
+cache a remote Grok catalog at runtime.
