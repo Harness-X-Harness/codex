@@ -5,6 +5,7 @@ mod dynamic;
 pub(crate) mod extension_tools;
 mod get_context_remaining;
 pub(crate) mod get_context_remaining_spec;
+pub(crate) mod json_whole_number;
 mod list_available_plugins_to_install;
 pub(crate) mod list_available_plugins_to_install_spec;
 mod mcp;

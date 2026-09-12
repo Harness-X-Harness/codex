@@ -46,6 +46,10 @@ fn apply_patch_freeform() -> FreeformTool {
     }
 }
 
+fn canonical_apply_patch() -> String {
+    "*** Begin Patch\n*** Add File: foo.txt\n+hi\n*** End Patch\n".to_string()
+}
+
 fn function(name: &str) -> ResponsesApiNamespaceTool {
     ResponsesApiNamespaceTool::Function(ResponsesApiTool {
         name: name.to_string(),
@@ -408,7 +412,7 @@ fn flat_projection_restores_plain_apply_patch_function_to_custom_call() -> anyho
         id: None,
         name: declared_name,
         namespace: None,
-        arguments: json!({"patch": "*** Begin Patch"}).to_string(),
+        arguments: json!({"patch": canonical_apply_patch()}).to_string(),
         encrypted_function_args: None,
         call_id: "call-restore-apply-patch".to_string(),
         internal_chat_message_metadata_passthrough: None,
@@ -422,7 +426,7 @@ fn flat_projection_restores_plain_apply_patch_function_to_custom_call() -> anyho
             call_id: "call-restore-apply-patch".to_string(),
             name: "apply_patch".to_string(),
             namespace: None,
-            input: "*** Begin Patch".to_string(),
+            input: canonical_apply_patch(),
             internal_chat_message_metadata_passthrough: None,
         }
     );
