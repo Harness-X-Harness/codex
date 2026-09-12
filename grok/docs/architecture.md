@@ -11,9 +11,10 @@ differences.
 
 This document is the human-readable Grok product design. It is not executable
 acceptance input. Deterministic proof is native Cargo tests at the owning
-seams. Real-provider composition that those tests cannot prove is native Go
-`llm-go` `codexsdk` tests (`go test -run '^TestGrok'`). Git owns source
-identity as the exact commit SHA.
+seams. Real-provider composition that those tests cannot prove is owned by the
+repository-local Go tests under `grok/live`; that harness consumes
+`github.com/ronhuafeng/llm-go/codexsdk` as its App Server SDK dependency. Git
+owns source identity as the exact commit SHA.
 
 ## Source of truth
 
@@ -181,8 +182,8 @@ the superseded Grok mechanism. Port Grok as one semantic commit per stock
 seam. Native Grok and stock compatibility tests travel with the behavior they
 prove.
 
-The maintainer procedure lives in `grok/docs/carry-forward.md` when that
-document exists. Canonical Grok refs are `grok/<stock-tag>` as described in
+The maintainer procedure lives in `grok/docs/carry-forward.md`. Canonical Grok
+refs are `grok/<stock-tag>` as described in
 [`docs/downstream-products.md`](../../docs/downstream-products.md).
 
 ## Proof
@@ -190,7 +191,7 @@ document exists. Canonical Grok refs are `grok/<stock-tag>` as described in
 ```text
 native cargo fmt / clippy / test / build
         -> deterministic Grok and stock-seam contracts
-direct go test -run '^TestGrok'
+direct go test ./... -run '^TestGrok' from grok/live
         -> real Grok composition on the exact Linux archive
 Git SHA
         -> source identity

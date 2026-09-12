@@ -38,6 +38,16 @@ suffixes such as `-1` / `-2` are not part of this model.
 Publication starts only after required candidate, artifact, and Live proof is
 GREEN. There is no separate human publication decision after that proof.
 
+Push runs on the same Grok ref are serialized rather than cancelling a running
+push. Immediately before destructive channel replacement, the publisher
+requires the branch head to equal the accepted run SHA. Once replacement
+starts, a newer push cannot cancel it before authoritative readback completes.
+If a GitHub mutation returns an uncertain failure, the same run reads the
+current tag, Release, asset set, and asset digests before any retry decision.
+If that readback already proves the accepted external effect, publication is
+complete; otherwise the run fails with the observed state and does not blindly
+repeat the mutation.
+
 ## Proof authorities
 
 ```text
