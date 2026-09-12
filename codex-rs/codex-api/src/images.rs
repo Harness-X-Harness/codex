@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const GROK_MAX_EDIT_IMAGES: usize = 3;
+pub(crate) const GROK_MAX_EDIT_IMAGES: usize = 3;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {

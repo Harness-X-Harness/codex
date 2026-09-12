@@ -31,9 +31,8 @@ pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::RemoteCompactionSupport;
 pub use provider::SharedModelProvider;
 
-use codex_api::GROK_MAX_EDIT_IMAGES;
-
 const DEFAULT_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 5;
+const GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 3;
 
 /// Provider-owned image-generation policy consumed by the stock image extension.
 ///
@@ -52,16 +51,15 @@ pub struct ImageGenerationPolicy {
 pub fn image_generation_policy(provider: &SharedModelProvider) -> Option<ImageGenerationPolicy> {
     let info = provider.info();
     let is_grok = grok_provider::is_grok_provider_info(info);
-    let stock_available = info.is_openai()
-        || info.requires_openai_auth
-        || info.uses_openai_actor_authorization();
+    let stock_available =
+        info.is_openai() || info.requires_openai_auth || info.uses_openai_actor_authorization();
     if !provider.capabilities().image_generation || (!stock_available && !is_grok) {
         return None;
     }
 
     Some(ImageGenerationPolicy {
         max_edit_images: if is_grok {
-            GROK_MAX_EDIT_IMAGES
+            GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES
         } else {
             DEFAULT_IMAGE_GENERATION_MAX_EDIT_IMAGES
         },

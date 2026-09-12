@@ -655,17 +655,12 @@ fn imagegen_tool_spec(max_edit_images: usize) -> ToolSpec {
         unreachable!("imagegen root schema must be an object");
     };
     if let Some(Value::Object(properties)) = schema.get_mut("properties") {
-        if let Some(Value::Object(referenced_images)) = properties.get_mut("referenced_image_paths") {
-            referenced_images.insert(
-                "maxItems".to_string(),
-                Value::from(max_edit_images as u64),
-            );
+        if let Some(Value::Object(referenced_images)) = properties.get_mut("referenced_image_paths")
+        {
+            referenced_images.insert("maxItems".to_string(), Value::from(max_edit_images as u64));
         }
         if let Some(Value::Object(last_images)) = properties.get_mut("num_last_images_to_include") {
-            last_images.insert(
-                "maximum".to_string(),
-                Value::from(max_edit_images as u64),
-            );
+            last_images.insert("maximum".to_string(), Value::from(max_edit_images as u64));
         }
     }
     let mut input_schema = Map::new();

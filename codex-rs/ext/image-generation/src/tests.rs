@@ -326,7 +326,10 @@ fn generated_image_normalization_rejects_mismatched_mime_metadata() {
         Err(error) => error,
     };
 
-    assert_eq!(error.0, "image generation returned mismatched MIME metadata");
+    assert_eq!(
+        error.0,
+        "image generation returned mismatched MIME metadata"
+    );
 }
 
 #[test]
