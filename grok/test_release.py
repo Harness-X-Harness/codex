@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from grokex import release
+from grok import release
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 VERSION = "1.2.3"

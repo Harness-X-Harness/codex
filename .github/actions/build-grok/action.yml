@@ -1,5 +1,5 @@
-name: Build Grokex target
-description: Build and stage one Grokex release target with the shared release contract.
+name: Build Grok target
+description: Build and stage one Grok release target with the shared release contract.
 
 inputs:
   target:
@@ -51,7 +51,7 @@ runs:
         cargo build --release --target "${{ inputs.target }}" --bin bwrap
         bwrap="${CARGO_TARGET_DIR:-target}/${{ inputs.target }}/release/bwrap"
         echo "CODEX_BWRAP_SHA256=$(sha256sum "${bwrap}" | awk '{print $1}')" >> "${GITHUB_ENV}"
-    - name: Build Grokex binaries
+    - name: Build Grok binaries
       env:
         TARGET: ${{ inputs.target }}
       working-directory: codex-rs
