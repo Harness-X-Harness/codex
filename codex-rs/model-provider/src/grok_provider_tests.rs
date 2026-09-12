@@ -98,10 +98,7 @@ async fn grok_models_manager_never_consults_remote_cache() {
 
     assert_eq!(
         provider
-            .models_manager_with_cache(
-                /*config_model_catalog*/ None,
-                Arc::new(PanicCache),
-            )
+            .models_manager_with_cache(/*config_model_catalog*/ None, Arc::new(PanicCache),)
             .get_remote_models()
             .await,
         bundled_catalog.models
