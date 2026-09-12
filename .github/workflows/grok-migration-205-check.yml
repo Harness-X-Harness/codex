@@ -25,5 +25,5 @@ jobs:
         run: cargo test -p codex-api provider::grok_tests -- --nocapture
       - name: Test Grok reasoning and compaction contracts
         run: cargo test -p codex-model-provider grok_provider -- --nocapture
-      - name: Test stock reasoning request normalization
-        run: cargo test -p codex-core reasoning_effort_for_requests -- --nocapture
+      - name: Test stock reasoning normalization
+        run: cargo test -p codex-protocol reasoning_effort -- --nocapture
