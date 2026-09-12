@@ -38,7 +38,9 @@ jobs:
           set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
             | bash -s -- "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
-          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= .github/workflows/grok.yml
+          "${RUNNER_TEMP}/actionlint" -shellcheck= -pyflakes= \
+            .github/workflows/grok.yml \
+            .github/workflows/grok-live.yml
 
   formatting:
     name: Formatting
@@ -82,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p codex-core --lib grok
+          cargo test -p codex-core --lib json_whole_number
           cargo test -p codex-core --lib review_model_policy
           cargo test -p codex-guardian-v2 -p codex-memories-write --lib
           cargo test -p codex-config --lib grok
@@ -192,7 +195,7 @@ jobs:
           retention-days: 90
 
   live:
-    name: llm-go Grok Live
+    name: Grok Live
     if: github.event_name == 'push'
     needs: [identity, build]
     runs-on: ubuntu-24.04
@@ -225,23 +228,17 @@ jobs:
           tar -xzf "archives/${RELEASE_TAG}-x86_64-unknown-linux-musl.tar.gz" -C extracted
           test -x "extracted/${RELEASE_TAG}/bin/grok-bin"
           echo "GROK_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/extracted/${RELEASE_TAG}/bin/grok-bin" >> "${GITHUB_ENV}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ronhuafeng/llm-go
-          ref: 76eb91fc8c07d59899f16c6c06eb2ee8d67a5879
-          path: llm-go
-          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: llm-go/codexsdk/go.mod
-          cache-dependency-path: llm-go/codexsdk/go.sum
-      - name: Run Go Live
-        working-directory: llm-go/codexsdk
+          go-version-file: grok/live/go.mod
+          cache: false
+      - name: Run Grok Live
+        working-directory: grok/live
         env:
           GROK_LIVE: "1"
           GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
           GOWORK: "off"
-        run: go test . -count=1 -timeout 30m -run '^TestGrok'
+        run: go test ./... -count=1 -timeout 30m -run '^TestGrok'
 
   publish:
     name: Publish moving channel
@@ -303,10 +300,10 @@ jobs:
           tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .object.sha)"
           [[ "${tag_sha}" == "${GITHUB_SHA}" ]]
 
-          release_target="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish)"
+          release_target="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .target_commitish)"
           [[ "${release_target}" == "${GITHUB_SHA}" ]]
 
-          actual_assets="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | sort)"
+          actual_assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.assets[].name' | sort)"
           expected_assets="$(printf '%s\n' \
             "${RELEASE_TAG}-aarch64-apple-darwin.tar.gz" \
             "${RELEASE_TAG}-x86_64-apple-darwin.tar.gz" \
@@ -319,3 +316,20 @@ jobs:
             "install-grok.sh" \
             "install-grok.ps1" | sort)"
           [[ "${actual_assets}" == "${expected_assets}" ]]
+
+          declare -A local_digests=()
+          while IFS= read -r -d '' path; do
+            name="${path#release-assets/}"
+            digest="$(sha256sum "${path}" | awk '{print $1}')"
+            local_digests["${name}"]="sha256:${digest}"
+          done < <(find release-assets -maxdepth 1 -type f -print0)
+
+          declare -A remote_digests=()
+          while IFS=$'\t' read -r name digest; do
+            [[ -n "${name}" && -n "${digest}" ]]
+            remote_digests["${name}"]="${digest}"
+          done < <(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.assets[] | [.name, .digest] | @tsv')
+
+          for name in "${!local_digests[@]}"; do
+            [[ "${remote_digests[${name}]:-}" == "${local_digests[${name}]}" ]]
+          done
