@@ -137,6 +137,12 @@ impl ResponsesDialect {
                 object.remove("tools");
                 object.remove("tool_choice");
                 object.remove("parallel_tool_calls");
+            } else if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
+                for tool in tools {
+                    if tool.get("type").and_then(Value::as_str) == Some("web_search") {
+                        *tool = serde_json::json!({ "type": "web_search" });
+                    }
+                }
             }
         }
         Ok(value)

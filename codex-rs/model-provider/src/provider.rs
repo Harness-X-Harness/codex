@@ -21,6 +21,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderValue;
 
@@ -60,6 +61,7 @@ pub struct ProviderCapabilities {
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
+    pub x_search: bool,
     pub external_web_access: bool,
     pub remote_compaction: RemoteCompactionSupport,
 }
@@ -70,6 +72,7 @@ impl Default for ProviderCapabilities {
             namespace_tools: true,
             image_generation: true,
             web_search: true,
+            x_search: false,
             external_web_access: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
@@ -152,6 +155,16 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Returns whether this provider needs canonical Codex tool declarations projected as flat functions on the wire.
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        false
+    }
+
+    /// Returns whether a completed response item is a provider-hosted tool call.
+    fn is_provider_hosted_tool_call(&self, _item: &ResponseItem) -> bool {
+        false
     }
 
     /// Returns the preferred model used for automatic approval review.

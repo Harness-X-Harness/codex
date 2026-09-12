@@ -1,5 +1,6 @@
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
+use crate::common::ResponsesApiTools;
 use crate::provider::Provider;
 use crate::provider::ResponsesDialect;
 use crate::provider::RetryConfig;
@@ -190,6 +191,43 @@ fn grok_rejects_unpaired_function_output_before_transport() {
         .project_request(&request)
         .expect_err("orphan function output must not reach Grok transport");
     assert!(error.to_string().contains("without call_id"));
+}
+
+#[test]
+fn grok_projects_web_search_to_bare_hosted_contract_without_touching_flat_functions() {
+    let mut canonical = request(vec![user_message("search")]);
+    let tools = serde_json::value::to_raw_value(&json!([
+        {
+            "type": "function",
+            "name": "local__apply_patch__deadbeefcafe",
+            "description": "canonical `apply_patch` tool",
+            "parameters": {"type":"object","properties":{"patch":{"type":"string"}},"required":["patch"],"additionalProperties":false},
+            "strict": true
+        },
+        {
+            "type": "web_search",
+            "external_web_access": true,
+            "indexed_web_access": true,
+            "search_context_size": "medium"
+        },
+        {"type": "x_search"}
+    ])).expect("tool JSON");
+    canonical.tools = Some(ResponsesApiTools::from(std::sync::Arc::from(tools)));
+    let original = canonical.clone();
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("tool projection");
+    assert_eq!(canonical, original, "canonical request must stay unchanged");
+    assert_eq!(projected["tools"][0]["type"], "function");
+    assert_eq!(
+        projected["tools"][0]["name"],
+        "local__apply_patch__deadbeefcafe"
+    );
+    assert_eq!(projected["tools"][1], json!({"type":"web_search"}));
+    assert_eq!(projected["tools"][2], json!({"type":"x_search"}));
+    assert_eq!(projected["tool_choice"], "auto");
+    assert_eq!(projected["parallel_tool_calls"], true);
 }
 
 #[test]

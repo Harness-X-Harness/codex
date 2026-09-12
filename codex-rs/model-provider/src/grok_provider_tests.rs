@@ -122,6 +122,19 @@ async fn non_grok_provider_keeps_stock_config_catalog_behavior() {
 }
 
 #[test]
+fn grok_tool_capabilities_are_explicit_and_image_stays_gated_for_207() {
+    let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
+    let capabilities = provider.capabilities();
+
+    assert!(capabilities.namespace_tools);
+    assert!(capabilities.web_search);
+    assert!(capabilities.x_search);
+    assert!(capabilities.external_web_access);
+    assert!(!capabilities.image_generation);
+    assert!(provider.projects_tools_as_flat_functions());
+}
+
+#[test]
 fn grok_does_not_advertise_remote_compaction_v2() {
     let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
 

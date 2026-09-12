@@ -7,12 +7,15 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::grok_catalog::static_model_catalog;
 use crate::provider::ModelProvider;
 use crate::provider::ModelProviderFuture;
 use crate::provider::ProviderAccountResult;
+use crate::provider::ProviderCapabilities;
+use crate::provider::RemoteCompactionSupport;
 use crate::provider::SharedModelProvider;
 
 pub(crate) const GROK_PROVIDER_NAME: &str = "Grok";
@@ -54,6 +57,40 @@ impl GrokModelProvider {
 impl ModelProvider for GrokModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         self.inner.info()
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            namespace_tools: true,
+            // #207 owns image-generation migration; do not advertise it early.
+            image_generation: false,
+            web_search: true,
+            x_search: true,
+            external_web_access: true,
+            remote_compaction: RemoteCompactionSupport::Unsupported,
+        }
+    }
+
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        true
+    }
+
+    fn is_provider_hosted_tool_call(&self, item: &ResponseItem) -> bool {
+        matches!(
+            item,
+            ResponseItem::CustomToolCall {
+                status: Some(status),
+                name,
+                ..
+            } if status == "completed"
+                && matches!(
+                    name.as_str(),
+                    "x_keyword_search"
+                        | "x_semantic_search"
+                        | "x_user_search"
+                        | "x_thread_fetch"
+                )
+        )
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
