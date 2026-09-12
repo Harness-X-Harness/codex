@@ -1,9 +1,14 @@
+use crate::common::ResponsesApiRequest;
 use codex_client::Request;
 use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use http::Method;
 use http::header::HeaderMap;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
@@ -19,6 +24,123 @@ pub struct RetryConfig {
     pub retry_429: bool,
     pub retry_5xx: bool,
     pub retry_transport: bool,
+}
+
+/// Internal Responses wire shape selected from the resolved API provider.
+///
+/// This is runtime-only API-boundary state. It does not change durable Codex
+/// history or introduce another serialized provider selector.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ResponsesDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
+impl ResponsesDialect {
+    pub(crate) fn for_provider(provider: &Provider) -> Self {
+        if provider.name.eq_ignore_ascii_case("Grok") {
+            Self::Grok
+        } else {
+            Self::OpenAi
+        }
+    }
+
+    pub(crate) fn project_request(
+        self,
+        request: &ResponsesApiRequest,
+    ) -> serde_json::Result<Value> {
+        if self == Self::OpenAi {
+            return serde_json::to_value(request);
+        }
+
+        let mut request = request.clone();
+        for item in &mut request.input {
+            let projected_item = match item {
+                ResponseItem::AgentMessage {
+                    id,
+                    content,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } => plaintext_agent_message_content(content).map(|text| ResponseItem::Message {
+                    id: id.clone(),
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                }),
+                ResponseItem::FunctionCallOutput {
+                    id,
+                    call_id: None,
+                    name: Some(name),
+                    output,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } if !name.is_empty() => output.text_content().map(|text| ResponseItem::Message {
+                    id: id.clone(),
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: text.to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
+                }),
+                _ => None,
+            };
+            if let Some(projected_item) = projected_item {
+                *item = projected_item;
+                continue;
+            }
+
+            // Grok accepts encrypted reasoning replay, but not `content: null`.
+            // `Some(Vec::new())` is intentionally omitted by ResponseItem serde.
+            if let ResponseItem::Reasoning {
+                content,
+                encrypted_content: Some(_),
+                ..
+            } = item
+                && content.is_none()
+            {
+                *content = Some(Vec::new());
+            }
+        }
+
+        for item in &request.input {
+            match item {
+                ResponseItem::AgentMessage { .. } => {
+                    return Err(<serde_json::Error as serde::ser::Error>::custom(
+                        "Grok cannot replay unsupported encrypted collaboration history",
+                    ));
+                }
+                ResponseItem::FunctionCallOutput { call_id, .. }
+                    if call_id.as_deref().is_none_or(str::is_empty) =>
+                {
+                    return Err(<serde_json::Error as serde::ser::Error>::custom(
+                        "Grok cannot replay function_call_output history without call_id",
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let mut value = serde_json::to_value(&request)?;
+        if let Some(object) = value.as_object_mut() {
+            // Grok's verified no-tool request omits the tool-control trio entirely.
+            // Non-empty tool projection is owned by #206.
+            let has_no_tools = match object.get("tools") {
+                None => true,
+                Some(tools) => tools.as_array().is_some_and(Vec::is_empty),
+            };
+            if has_no_tools {
+                object.remove("tools");
+                object.remove("tool_choice");
+                object.remove("parallel_tool_calls");
+            }
+        }
+        Ok(value)
+    }
 }
 
 impl RetryConfig {
@@ -121,6 +243,10 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
     ];
     AZURE_MARKERS.iter().any(|marker| base_url.contains(marker))
 }
+
+#[cfg(test)]
+#[path = "provider_grok_tests.rs"]
+mod grok_tests;
 
 #[cfg(test)]
 mod tests {

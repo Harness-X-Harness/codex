@@ -7,8 +7,10 @@ use codex_models_manager::cache::ModelsCacheEntry;
 use codex_models_manager::cache::ModelsCacheError;
 use codex_models_manager::cache::ModelsCacheFuture;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
+use crate::RemoteCompactionSupport;
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
 use crate::grok_provider::is_grok_provider_info;
@@ -116,5 +118,37 @@ async fn non_grok_provider_keeps_stock_config_catalog_behavior() {
             .get_remote_models()
             .await,
         configured_catalog.models
+    );
+}
+
+#[test]
+fn grok_does_not_advertise_remote_compaction_v2() {
+    let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
+
+    assert_eq!(
+        provider.capabilities().remote_compaction,
+        RemoteCompactionSupport::Unsupported
+    );
+}
+
+#[test]
+fn grok_ultra_resolves_to_xhigh_only_at_request_normalization() {
+    let model = static_model_catalog()
+        .models
+        .into_iter()
+        .next()
+        .expect("bundled Grok catalog should contain a model");
+
+    assert!(
+        model
+            .supported_reasoning_levels
+            .iter()
+            .any(|preset| preset.effort == ReasoningEffort::Ultra),
+        "logical Ultra remains selectable in Codex model state"
+    );
+    assert_eq!(
+        model.resolve_reasoning_effort(ReasoningEffort::Ultra),
+        ReasoningEffort::XHigh,
+        "stock 0.154 request normalization projects logical Ultra to Grok xhigh"
     );
 }
