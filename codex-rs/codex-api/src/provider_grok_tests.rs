@@ -129,7 +129,10 @@ fn grok_projects_replayed_history_on_request_copy_only() {
         .project_request(&canonical)
         .expect("Grok history should project");
 
-    assert_eq!(canonical, original, "durable/canonical request must not mutate");
+    assert_eq!(
+        canonical, original,
+        "durable/canonical request must not mutate"
+    );
     assert_eq!(projected["input"][0]["type"], "message");
     assert_eq!(projected["input"][1]["type"], "message");
     assert_eq!(projected["input"][1]["role"], "user");
@@ -165,7 +168,11 @@ fn grok_rejects_encrypted_collaboration_history_before_transport() {
     let error = ResponsesDialect::Grok
         .project_request(&request)
         .expect_err("encrypted collaboration history is not verified for Grok");
-    assert!(error.to_string().contains("encrypted collaboration history"));
+    assert!(
+        error
+            .to_string()
+            .contains("encrypted collaboration history")
+    );
 }
 
 #[test]
