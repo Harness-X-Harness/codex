@@ -353,12 +353,6 @@ impl ToolRouter {
         input
     }
 
-    pub(crate) fn exposes_x_search(&self) -> bool {
-        self.model_visible_specs
-            .iter()
-            .any(|spec| matches!(spec, ToolSpec::XSearch))
-    }
-
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
         self.registry.deferred_tool_namespaces()
     }

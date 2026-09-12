@@ -295,11 +295,10 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.mode() == ModeKind::Plan;
     let mut item = item;
-    let provider_hosted_tool_call = ctx.tool_runtime.exposes_x_search()
-        && ctx
-            .turn_context
-            .provider
-            .is_provider_hosted_tool_call(&item);
+    let provider_hosted_tool_call = ctx
+        .turn_context
+        .provider
+        .is_provider_hosted_tool_call(&item);
 
     match ctx
         .tool_runtime
