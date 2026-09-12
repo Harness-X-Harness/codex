@@ -28,5 +28,5 @@ jobs:
         run: cargo test -p codex-model-provider grok_provider -- --nocapture
       - name: Test flat tool round-trip and apply_patch boundary
         run: cargo test -p codex-core tools::router::grok_tests -- --nocapture
-      - name: Test stock apply_patch executor path
-        run: cargo test -p codex-core tools::handlers::apply_patch::tests -- --nocapture
+      - name: Test stock apply_patch real file edit
+        run: cargo test -p codex-core --test all apply_patch_normalizes_crlf_without_preserve_line_endings_feature -- --nocapture
