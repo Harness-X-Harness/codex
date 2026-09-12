@@ -14,6 +14,7 @@ use crate::RemoteCompactionSupport;
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
 use crate::grok_provider::is_grok_provider_info;
+use crate::image_generation_policy;
 
 fn provider_info(name: &str) -> ModelProviderInfo {
     ModelProviderInfo {
@@ -120,18 +121,33 @@ async fn non_grok_provider_keeps_stock_config_catalog_behavior() {
         configured_catalog.models
     );
     assert!(!provider.projects_tools_as_flat_functions());
+    assert_eq!(image_generation_policy(&provider), None);
 }
 
 #[test]
-fn grok_tool_contract_is_explicit_and_image_stays_gated_for_207() {
+fn grok_tool_and_image_contract_is_explicit() {
     let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
     let capabilities = provider.capabilities();
 
     assert!(capabilities.namespace_tools);
     assert!(capabilities.web_search);
     assert!(capabilities.external_web_access);
-    assert!(!capabilities.image_generation);
+    assert!(capabilities.image_generation);
     assert!(provider.projects_tools_as_flat_functions());
+    assert_eq!(
+        image_generation_policy(&provider).map(|policy| policy.max_edit_images),
+        Some(3)
+    );
+}
+
+#[test]
+fn stock_openai_image_policy_keeps_five_edit_images() {
+    let provider = create_model_provider(provider_info("OpenAI"), /*auth_manager*/ None);
+
+    assert_eq!(
+        image_generation_policy(&provider).map(|policy| policy.max_edit_images),
+        Some(5)
+    );
 }
 
 #[test]

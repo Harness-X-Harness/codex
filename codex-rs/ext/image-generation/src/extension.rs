@@ -13,6 +13,7 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::image_generation_policy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -29,7 +30,6 @@ type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync
 
 #[derive(Clone)]
 struct ImageGenerationExtensionConfig {
-    available: bool,
     provider: ModelProviderInfo,
     save_root: Option<AbsolutePathBuf>,
 }
@@ -38,9 +38,6 @@ impl ImageGenerationExtensionConfig {
     /// Resolves the image provider and save root for a thread.
     fn from_config(config: &Config, resolve_save_root: &SaveRootResolver) -> Self {
         Self {
-            available: config.model_provider.is_openai()
-                || config.model_provider.requires_openai_auth
-                || config.model_provider.uses_openai_actor_authorization(),
             provider: config.model_provider.clone(),
             save_root: resolve_save_root(config),
         }
@@ -90,17 +87,20 @@ impl ToolContributor for ImageGenerationExtension {
         let Some(config) = thread_store.get::<ImageGenerationExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.available {
+        let provider =
+            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
+        let Some(policy) = image_generation_policy(&provider) else {
             return Vec::new();
-        }
+        };
 
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
-                create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+                provider,
                 thread_store
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
             ),
+            policy.max_edit_images,
             config.save_root.clone(),
             thread_store.level_id().to_string(),
         ))]

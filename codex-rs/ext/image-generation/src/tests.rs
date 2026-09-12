@@ -1,4 +1,7 @@
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ImageBackground;
+use codex_api::ImageData;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
@@ -21,7 +24,9 @@ use pretty_assertions::assert_eq;
 use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenArgs;
+use super::MAX_EDIT_IMAGES;
 use super::imagegen_tool_spec;
+use super::normalize_image_data;
 use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
@@ -31,21 +36,28 @@ use crate::artifact::image_generation_output_hint;
 const RESULT: &str = "cG5n";
 
 #[test]
-fn artifact_path_sanitizes_session_and_call_ids() {
+fn artifact_path_sanitizes_session_and_call_ids_and_preserves_type() {
     let save_root = AbsolutePathBuf::current_dir().expect("current directory should be absolute");
 
     assert_eq!(
-        image_generation_artifact_path(&save_root, "../session", "../call"),
+        image_generation_artifact_path(&save_root, "../session", "../call", "png"),
         save_root
             .join("generated_images")
             .join("___session")
             .join("___call.png")
     );
+    assert_eq!(
+        image_generation_artifact_path(&save_root, "session", "call", "jpg"),
+        save_root
+            .join("generated_images")
+            .join("session")
+            .join("call.jpg")
+    );
 }
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
-    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+    let ToolSpec::Namespace(spec) = imagegen_tool_spec(MAX_EDIT_IMAGES) else {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
@@ -53,10 +65,19 @@ fn uses_reserved_image_gen_namespace() {
         panic!("imagegen should advertise a function tool");
     };
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
+    assert!(function.description.contains("at most 5 edit images"));
+
+    let ToolSpec::Namespace(grok_spec) = imagegen_tool_spec(3) else {
+        panic!("imagegen should advertise a namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(grok_function) = &grok_spec.tools[0] else {
+        panic!("imagegen should advertise a function tool");
+    };
+    assert!(grok_function.description.contains("at most 3 edit images"));
 }
 
 #[tokio::test]
-async fn omitted_references_generate_with_fixed_defaults() {
+async fn omitted_references_generate_with_stock_defaults() {
     assert_eq!(
         request_for_call_args(
             &ImagegenArgs {
@@ -66,6 +87,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
             },
             &[],
             &[],
+            MAX_EDIT_IMAGES,
         )
         .await
         .expect("generation request should build"),
@@ -80,8 +102,11 @@ async fn omitted_references_generate_with_fixed_defaults() {
     );
 }
 
-#[tokio::test]
-async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
+#[tokio::test(flavor = "multi_thread")]
+async fn recent_image_fallback_preserves_generated_image_mime_for_continuation() {
+    let generated =
+        BASE64_STANDARD.encode(include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg"));
+    let generated_url = format!("data:image/jpeg;base64,{generated}");
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -133,7 +158,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             id: Some(ResponseItemId::with_suffix("ig", "generated-call")),
             status: "completed".to_string(),
             revised_prompt: None,
-            result: "generated".to_string(),
+            result: generated,
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
@@ -155,12 +180,13 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             },
             &history,
             &[],
+            MAX_EDIT_IMAGES,
         )
         .await
         .expect("history-backed edit request should build"),
         ImageRequest::Edit(expected_edit_request(
             "change the lighting",
-            &["user-2", "mcp", "code-mode", "generated", "standalone"],
+            &["user-2", "mcp", "code-mode", &generated_url, "standalone"],
         ))
     );
 }
@@ -179,6 +205,7 @@ async fn conflicting_image_selectors_return_tool_error() {
         },
         &[],
         &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -190,7 +217,36 @@ async fn conflicting_image_selectors_return_tool_error() {
 }
 
 #[tokio::test]
-async fn too_many_referenced_image_paths_return_tool_error() {
+async fn provider_edit_limit_rejects_before_reading_files() {
+    let error = request_for_call_args(
+        &ImagegenArgs {
+            prompt: "change the lighting".to_string(),
+            referenced_image_paths: Some(
+                (0..4)
+                    .map(|index| {
+                        format!("/tmp/image-{index}.png")
+                            .try_into()
+                            .expect("test path should be absolute")
+                    })
+                    .collect(),
+            ),
+            num_last_images_to_include: None,
+        },
+        &[],
+        &[],
+        3,
+    )
+    .await
+    .expect_err("provider image limit should fail before reading files");
+
+    assert_eq!(
+        error.to_string(),
+        "`referenced_image_paths` must contain at most 3 paths"
+    );
+}
+
+#[tokio::test]
+async fn stock_edit_limit_remains_five() {
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
@@ -207,6 +263,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
         },
         &[],
         &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -233,6 +290,7 @@ async fn recent_image_fallback_requires_requested_count() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("history-backed edit should require the requested image count");
@@ -244,11 +302,49 @@ async fn recent_image_fallback_requires_requested_count() {
 }
 
 #[test]
+fn generated_image_normalization_detects_actual_mime() {
+    let jpeg = include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg");
+    let normalized = normalize_image_data(
+        ImageData {
+            b64_json: BASE64_STANDARD.encode(jpeg),
+            mime_type: Some("image/jpeg".to_string()),
+        },
+        false,
+    )
+    .expect("valid JPEG should normalize");
+
+    assert_eq!(normalized.mime_type, "image/jpeg");
+    assert_eq!(normalized.extension, "jpg");
+}
+
+#[test]
+fn generated_image_normalization_rejects_mismatched_mime_metadata() {
+    let jpeg = include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg");
+    let result = normalize_image_data(
+        ImageData {
+            b64_json: BASE64_STANDARD.encode(jpeg),
+            mime_type: Some("image/png".to_string()),
+        },
+        false,
+    );
+    let error = match result {
+        Ok(_) => panic!("mismatched MIME metadata should fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error.0,
+        "image generation returned mismatched MIME metadata"
+    );
+}
+
+#[test]
 fn generated_output_returns_image_input_and_output_hint() {
     let output_hint =
         image_generation_output_hint("/tmp", "/tmp/call-1.png").expect("hint should fit");
     let output = GeneratedImageOutput {
-        result: RESULT.to_string(),
+        base64_data: RESULT.to_string(),
+        mime_type: "image/png".to_string(),
         output_hint: Some(output_hint.clone()),
     };
 
@@ -277,14 +373,15 @@ fn generated_output_returns_image_input_and_output_hint() {
 #[test]
 fn generated_output_returns_generated_image_helper_input_in_code_mode() {
     let output = GeneratedImageOutput {
-        result: RESULT.to_string(),
+        base64_data: RESULT.to_string(),
+        mime_type: "image/jpeg".to_string(),
         output_hint: Some("generated image save hint".to_string()),
     };
 
     assert_eq!(
         output.code_mode_result(&function_payload()),
         serde_json::json!({
-            "image_url": format!("data:image/png;base64,{RESULT}"),
+            "image_url": format!("data:image/jpeg;base64,{RESULT}"),
             "output_hint": "generated image save hint",
         })
     );
@@ -294,7 +391,8 @@ fn generated_output_returns_generated_image_helper_input_in_code_mode() {
 fn generated_output_omits_oversized_output_hint() {
     let long_path = "x".repeat(1024);
     let output = GeneratedImageOutput {
-        result: RESULT.to_string(),
+        base64_data: RESULT.to_string(),
+        mime_type: "image/png".to_string(),
         output_hint: image_generation_output_hint("/tmp", long_path),
     };
 
@@ -336,7 +434,11 @@ fn expected_edit_request(prompt: &str, images: &[&str]) -> ImageEditRequest {
         images: images
             .iter()
             .map(|image| ImageUrl {
-                image_url: format!("data:image/png;base64,{image}"),
+                image_url: if image.starts_with("data:image/") {
+                    (*image).to_string()
+                } else {
+                    format!("data:image/png;base64,{image}")
+                },
             })
             .collect(),
         prompt: prompt.to_string(),

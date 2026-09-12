@@ -62,8 +62,7 @@ impl ModelProvider for GrokModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             namespace_tools: true,
-            // #207 owns image-generation migration; do not advertise it early.
-            image_generation: false,
+            image_generation: true,
             web_search: true,
             external_web_access: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
