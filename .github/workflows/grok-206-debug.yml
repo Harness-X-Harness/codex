@@ -1,0 +1,36 @@
+name: grok-206-debug
+
+on:
+  push:
+    branches:
+      - work/grok-rust-v0.154.0-206
+
+permissions:
+  contents: write
+
+jobs:
+  capture-provider-test:
+    if: ${{ contains(github.event.head_commit.message, '[206-debug-request]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - name: Capture provider test output
+        shell: bash
+        run: |
+          set +e
+          cd codex-rs
+          cargo test -p codex-model-provider grok_provider -- --nocapture > ../.github/grok-206-provider-test.log 2>&1
+          status=$?
+          cd ..
+          printf '\nexit_status=%s\n' "$status" >> .github/grok-206-provider-test.log
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/grok-206-provider-test.log
+          git commit -m "ci(grok): capture #206 provider test output [206-debug-log]"
+          git push origin HEAD:work/grok-rust-v0.154.0-206
