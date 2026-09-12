@@ -830,9 +830,7 @@ fn register_code_mode_executors(
             ToolSpec::Namespace(namespace) if !namespace.tools.is_empty() => {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
-            ToolSpec::Namespace(_)
-            | ToolSpec::ToolSearch { .. }
-            | ToolSpec::WebSearch { .. } => {
+            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
                 continue;
             }
         };
