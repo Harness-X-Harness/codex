@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_api::ImagesDialect;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::cache::ModelsCacheEntry;
@@ -120,18 +121,22 @@ async fn non_grok_provider_keeps_stock_config_catalog_behavior() {
         configured_catalog.models
     );
     assert!(!provider.projects_tools_as_flat_functions());
+    assert!(!provider.capabilities().image_generation);
+    assert_eq!(provider.images_dialect(), ImagesDialect::OpenAi);
 }
 
 #[test]
-fn grok_tool_contract_is_explicit_and_image_stays_gated_for_207() {
+fn grok_tool_and_image_contract_is_explicit() {
     let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
     let capabilities = provider.capabilities();
 
     assert!(capabilities.namespace_tools);
     assert!(capabilities.web_search);
     assert!(capabilities.external_web_access);
-    assert!(!capabilities.image_generation);
+    assert!(capabilities.image_generation);
     assert!(provider.projects_tools_as_flat_functions());
+    assert_eq!(provider.image_generation_model(), "grok-imagine-image-2.0");
+    assert_eq!(provider.images_dialect(), ImagesDialect::Grok);
 }
 
 #[test]

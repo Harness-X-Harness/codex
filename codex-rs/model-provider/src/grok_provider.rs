@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_api::ImagesDialect;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -62,8 +63,7 @@ impl ModelProvider for GrokModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             namespace_tools: true,
-            // #207 owns image-generation migration; do not advertise it early.
-            image_generation: false,
+            image_generation: true,
             web_search: true,
             external_web_access: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
@@ -90,6 +90,14 @@ impl ModelProvider for GrokModelProvider {
                         | "x_thread_fetch"
                 )
         )
+    }
+
+    fn image_generation_model(&self) -> &'static str {
+        "grok-imagine-image-2.0"
+    }
+
+    fn images_dialect(&self) -> ImagesDialect {
+        ImagesDialect::Grok
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {

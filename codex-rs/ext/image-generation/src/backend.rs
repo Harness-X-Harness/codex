@@ -74,7 +74,8 @@ impl CodexImagesBackend {
             ReqwestTransport::from_http_client(create_client()),
             provider,
             auth,
-        ))
+        )
+        .with_dialect(self.provider.images_dialect()))
     }
 
     /// Sends a standalone image generation request through the configured Images client.
