@@ -1,0 +1,328 @@
+name: grok-migration-206-check
+
+on:
+  push:
+    branches:
+      - work/grok-rust-v0.154.0-206
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: ${{ !contains(github.event.head_commit.message, '[206-implementation]') && !contains(github.event.head_commit.message, '[206-validation-only]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Apply #206 semantic migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin work/grok-semantic-stack-v0.153.4
+          git show origin/work/grok-semantic-stack-v0.153.4:codex-rs/tools/src/flat_projection.rs > codex-rs/tools/src/flat_projection.rs
+          mkdir -p codex-rs/core/src/tools/router
+          git show origin/work/grok-semantic-stack-v0.153.4:codex-rs/core/src/tools/router/flat_apply_patch.rs > codex-rs/core/src/tools/router/flat_apply_patch.rs
+          git show origin/work/grok-semantic-stack-v0.153.4:codex-rs/core/src/tools/router/flat_projection_tests.rs > codex-rs/core/src/tools/router/flat_projection_tests.rs
+          git show origin/work/grok-semantic-stack-v0.153.4:codex-rs/core/src/tools/router/grok_apply_patch_tests.rs > codex-rs/core/src/tools/router/grok_apply_patch_tests.rs
+          cat > codex-rs/core/src/tools/router/grok_tests.rs <<'EOF'
+          //! Grok-owned tests for the flat tool projection as wired through `ToolRouter`.
+
+          #[path = "flat_projection_tests.rs"]
+          mod flat_projection;
+
+          #[path = "grok_apply_patch_tests.rs"]
+          mod grok_apply_patch;
+          EOF
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_one(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          # codex-tools owns the pure flat projection.
+          replace_one(
+              "codex-rs/tools/src/lib.rs",
+              "mod dynamic_tool;\nmod function_call_error;\n",
+              "mod dynamic_tool;\nmod flat_projection;\nmod function_call_error;\n",
+          )
+          replace_one(
+              "codex-rs/tools/src/lib.rs",
+              "pub use dynamic_tool::parse_dynamic_tool;\npub use function_call_error::FunctionCallError;\n",
+              "pub use dynamic_tool::parse_dynamic_tool;\npub use flat_projection::FlatToolRoutes;\npub use flat_projection::WireToolRoute;\npub use flat_projection::custom_input_key;\npub use flat_projection::decode_custom_input;\npub use flat_projection::flat_wire_name;\npub use flat_projection::project_flat_function_tools;\npub use function_call_error::FunctionCallError;\n",
+          )
+          cargo = Path("codex-rs/tools/Cargo.toml")
+          text = cargo.read_text()
+          if "sha1 = { workspace = true }" not in text:
+              anchor = "serde_json = { workspace = true }\n"
+              if anchor not in text:
+                  raise SystemExit("codex-rs/tools/Cargo.toml: serde_json anchor missing")
+              text = text.replace(anchor, anchor + "sha1 = { workspace = true }\n", 1)
+              cargo.write_text(text)
+
+          # Hosted X Search is a distinct provider-hosted declaration.
+          replace_one(
+              "codex-rs/tools/src/tool_spec.rs",
+              "    #[serde(rename = \"custom\")]\n    Freeform(FreeformTool),\n",
+              "    #[serde(rename = \"x_search\")]\n    XSearch,\n    #[serde(rename = \"custom\")]\n    Freeform(FreeformTool),\n",
+          )
+          replace_one(
+              "codex-rs/tools/src/tool_spec.rs",
+              "            ToolSpec::WebSearch { .. } => \"web_search\",\n            ToolSpec::Freeform(tool) => tool.name.as_str(),\n",
+              "            ToolSpec::WebSearch { .. } => \"web_search\",\n            ToolSpec::XSearch => \"x_search\",\n            ToolSpec::Freeform(tool) => tool.name.as_str(),\n",
+          )
+
+          # Provider contracts: explicit capability gates plus narrow tool-wire hooks.
+          replace_one(
+              "codex-rs/model-provider/src/provider.rs",
+              "use codex_protocol::error::CodexErr;\nuse codex_protocol::openai_models::ModelsResponse;\n",
+              "use codex_protocol::error::CodexErr;\nuse codex_protocol::models::ResponseItem;\nuse codex_protocol::openai_models::ModelsResponse;\n",
+          )
+          replace_one(
+              "codex-rs/model-provider/src/provider.rs",
+              "    pub web_search: bool,\n    pub external_web_access: bool,\n",
+              "    pub web_search: bool,\n    pub x_search: bool,\n    pub external_web_access: bool,\n",
+          )
+          replace_one(
+              "codex-rs/model-provider/src/provider.rs",
+              "            web_search: true,\n            external_web_access: true,\n",
+              "            web_search: true,\n            x_search: false,\n            external_web_access: true,\n",
+          )
+          replace_one(
+              "codex-rs/model-provider/src/provider.rs",
+              "    fn capabilities(&self) -> ProviderCapabilities {\n        ProviderCapabilities::default()\n    }\n\n    /// Returns the preferred model used for automatic approval review.\n",
+              "    fn capabilities(&self) -> ProviderCapabilities {\n        ProviderCapabilities::default()\n    }\n\n    /// Returns whether this provider needs canonical Codex tool declarations projected as flat functions on the wire.\n    fn projects_tools_as_flat_functions(&self) -> bool {\n        false\n    }\n\n    /// Returns whether a completed response item is a provider-hosted tool call.\n    fn is_provider_hosted_tool_call(&self, _item: &ResponseItem) -> bool {\n        false\n    }\n\n    /// Returns the preferred model used for automatic approval review.\n",
+          )
+
+          replace_one(
+              "codex-rs/model-provider/src/grok_provider.rs",
+              "use codex_protocol::openai_models::ModelsResponse;\n\nuse crate::grok_catalog::static_model_catalog;\nuse crate::provider::ModelProvider;\n",
+              "use codex_protocol::models::ResponseItem;\nuse codex_protocol::openai_models::ModelsResponse;\n\nuse crate::grok_catalog::static_model_catalog;\nuse crate::provider::ModelProvider;\nuse crate::provider::ProviderCapabilities;\nuse crate::provider::RemoteCompactionSupport;\n",
+          )
+          replace_one(
+              "codex-rs/model-provider/src/grok_provider.rs",
+              "    fn auth_manager(&self) -> Option<Arc<AuthManager>> {\n        self.inner.auth_manager()\n    }\n",
+              "    fn capabilities(&self) -> ProviderCapabilities {\n        ProviderCapabilities {\n            namespace_tools: true,\n            // #207 owns image-generation migration; do not advertise it early.\n            image_generation: false,\n            web_search: true,\n            x_search: true,\n            external_web_access: true,\n            remote_compaction: RemoteCompactionSupport::Unsupported,\n        }\n    }\n\n    fn projects_tools_as_flat_functions(&self) -> bool {\n        true\n    }\n\n    fn is_provider_hosted_tool_call(&self, item: &ResponseItem) -> bool {\n        matches!(\n            item,\n            ResponseItem::CustomToolCall {\n                status: Some(status),\n                name,\n                ..\n            } if status == \"completed\"\n                && matches!(\n                    name.as_str(),\n                    \"x_keyword_search\"\n                        | \"x_semantic_search\"\n                        | \"x_user_search\"\n                        | \"x_thread_fetch\"\n                )\n        )\n    }\n\n    fn auth_manager(&self) -> Option<Arc<AuthManager>> {\n        self.inner.auth_manager()\n    }\n",
+          )
+
+          # ToolRouter owns reversible wire symbols; stock registry/executor remains authoritative.
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "use std::collections::BTreeMap;\n",
+              "use std::collections::BTreeMap;\nuse std::collections::BTreeSet;\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "use tracing::instrument;\n\npub use crate::tools::context::ToolCallSource;\n",
+              "use tracing::instrument;\n\nmod flat_apply_patch;\n\npub use crate::tools::context::ToolCallSource;\n\nuse codex_tools::FlatToolRoutes;\nuse codex_tools::WireToolRoute;\nuse codex_tools::custom_input_key;\nuse codex_tools::decode_custom_input;\nuse codex_tools::flat_wire_name;\nuse codex_tools::project_flat_function_tools;\n\n#[cfg(test)]\n#[path = \"router/grok_tests.rs\"]\nmod grok_tests;\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "        if self.tool_name.namespace.as_deref() == Some(\"collaboration\")\n            && matches!(\n                self.tool_name.name.as_str(),\n                \"spawn_agent\" | \"send_message\" | \"followup_task\"\n            )\n            && self\n",
+              "        if is_plaintext_collaboration_tool(&self.tool_name)\n            && self\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "}\n\npub(crate) fn tool_log_payload<'a>(\n",
+              "}\n\nfn is_plaintext_collaboration_tool(tool_name: &ToolName) -> bool {\n    tool_name.namespace.as_deref() == Some(\"collaboration\")\n        && matches!(\n            tool_name.name.as_str(),\n            \"spawn_agent\" | \"send_message\" | \"followup_task\"\n        )\n}\n\npub(crate) fn tool_log_payload<'a>(\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "    can_manage_children: bool,\n}\n",
+              "    can_manage_children: bool,\n    projects_tools_as_flat_functions: bool,\n    flat_tool_routes: FlatToolRoutes,\n}\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "            can_manage_children: false,\n        };\n",
+              "            can_manage_children: false,\n            projects_tools_as_flat_functions: false,\n            flat_tool_routes: FlatToolRoutes::default(),\n        };\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "        router\n    }\n\n    pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {\n",
+              "        router\n    }\n\n    pub(crate) fn from_parts_with_projection(\n        registry: ToolRegistry,\n        model_visible_specs: Vec<ToolSpec>,\n        tool_mode: ToolMode,\n        code_mode_tool_names: BTreeMap<String, ToolName>,\n        tool_namespaces_info: Option<TurnToolNamespacesInfo>,\n        child_management_tools: &[ToolName],\n        project_as_flat_functions: bool,\n    ) -> Result<Self, String> {\n        if !project_as_flat_functions {\n            return Ok(Self::from_parts(\n                registry,\n                model_visible_specs,\n                tool_mode,\n                code_mode_tool_names,\n                tool_namespaces_info,\n                child_management_tools,\n            ));\n        }\n        let (model_visible_specs, flat_tool_routes) =\n            project_flat_function_tools(model_visible_specs)?;\n        let mut router = Self {\n            registry,\n            model_visible_specs: model_visible_specs.into(),\n            tool_mode,\n            code_mode_tool_names,\n            tool_namespaces_info,\n            can_manage_children: false,\n            projects_tools_as_flat_functions: true,\n            flat_tool_routes,\n        };\n        router.can_manage_children = !child_management_tools.is_empty()\n            && child_management_tools\n                .iter()\n                .all(|name| router.exposes_tool(name));\n        Ok(router)\n    }\n\n    pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "        if self\n            .code_mode_tool_names\n",
+              "        if self.flat_tool_routes.contains_canonical(&name)\n            || self\n            .code_mode_tool_names\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,\n",
+              "                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } | ToolSpec::XSearch => false,\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "    pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {\n",
+              "    /// Rewrites canonical tool call and output items to the flat wire names declared by this router.\n    pub(crate) fn project_tool_wire(&self, mut input: Vec<ResponseItem>) -> Vec<ResponseItem> {\n        if !self.projects_tools_as_flat_functions {\n            return input;\n        }\n        let mut projected_custom_call_ids = BTreeSet::new();\n        for item in &mut input {\n            match item {\n                ResponseItem::FunctionCall {\n                    name,\n                    namespace,\n                    encrypted_function_args,\n                    ..\n                } => {\n                    let tool_name = ToolName::new(namespace.take(), name.clone());\n                    *name = flat_wire_name(\"function\", &tool_name);\n                    *encrypted_function_args = None;\n                }\n                ResponseItem::FunctionCallOutput {\n                    call_id: None,\n                    name: Some(name),\n                    namespace,\n                    ..\n                } => {\n                    let tool_name = ToolName::new(namespace.take(), name.clone());\n                    *name = flat_wire_name(\"function\", &tool_name);\n                }\n                ResponseItem::CustomToolCall {\n                    id,\n                    status,\n                    call_id,\n                    name,\n                    namespace,\n                    input: custom_input,\n                    internal_chat_message_metadata_passthrough,\n                    ..\n                } if status.is_none() => {\n                    let tool_name = ToolName::new(namespace.clone(), name.clone());\n                    projected_custom_call_ids.insert(call_id.clone());\n                    *item = ResponseItem::FunctionCall {\n                        id: id.clone(),\n                        name: flat_wire_name(\"custom\", &tool_name),\n                        namespace: None,\n                        arguments: serde_json::json!({\n                            (custom_input_key(&tool_name.name)): custom_input,\n                        })\n                        .to_string(),\n                        encrypted_function_args: None,\n                        call_id: call_id.clone(),\n                        internal_chat_message_metadata_passthrough:\n                            internal_chat_message_metadata_passthrough.clone(),\n                    };\n                }\n                _ => {}\n            }\n        }\n        for item in &mut input {\n            let ResponseItem::CustomToolCallOutput {\n                id,\n                call_id,\n                output,\n                internal_chat_message_metadata_passthrough,\n                ..\n            } = item\n            else {\n                continue;\n            };\n            if projected_custom_call_ids.contains(call_id) {\n                *item = ResponseItem::FunctionCallOutput {\n                    id: id.clone(),\n                    call_id: Some(call_id.clone()),\n                    name: None,\n                    namespace: None,\n                    output: output.clone(),\n                    internal_chat_message_metadata_passthrough:\n                        internal_chat_message_metadata_passthrough.clone(),\n                };\n            }\n        }\n        input\n    }\n\n    pub(crate) fn exposes_x_search(&self) -> bool {\n        self.model_visible_specs\n            .iter()\n            .any(|spec| matches!(spec, ToolSpec::XSearch))\n    }\n\n    pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/router.rs",
+              "    #[allow(dead_code)]\n    #[instrument(level = \"trace\", skip_all, err)]\n",
+              "    fn resolve_wire_route(&self, name: &str) -> Option<&WireToolRoute> {\n        self.flat_tool_routes.resolve(name)\n    }\n\n    pub(crate) fn restore_tool_call(\n        &self,\n        item: &mut ResponseItem,\n    ) -> Result<(), FunctionCallError> {\n        let ResponseItem::FunctionCall {\n            id,\n            name,\n            namespace,\n            arguments,\n            encrypted_function_args,\n            call_id,\n            internal_chat_message_metadata_passthrough,\n            ..\n        } = item\n        else {\n            return Ok(());\n        };\n        let Some(route) = self.resolve_wire_route(name) else {\n            return Ok(());\n        };\n        match route {\n            WireToolRoute::Function(tool_name) => {\n                *name = tool_name.name.clone();\n                *namespace = tool_name.namespace.clone();\n                if is_plaintext_collaboration_tool(tool_name) {\n                    *encrypted_function_args = Some(Vec::new());\n                }\n            }\n            WireToolRoute::Custom {\n                tool_name,\n                input_key,\n            } => {\n                let custom_input = decode_custom_input(name, arguments, input_key)?;\n                let custom_input = if tool_name.is_default_namespace() && tool_name.name == \"apply_patch\" {\n                    flat_apply_patch::validate_projected_apply_patch(&custom_input)?\n                } else {\n                    custom_input\n                };\n                *item = ResponseItem::CustomToolCall {\n                    id: id.clone(),\n                    status: None,\n                    call_id: call_id.clone(),\n                    name: tool_name.name.clone(),\n                    namespace: tool_name.namespace.clone(),\n                    input: custom_input,\n                    internal_chat_message_metadata_passthrough:\n                        internal_chat_message_metadata_passthrough.clone(),\n                };\n            }\n        }\n        Ok(())\n    }\n\n    #[allow(dead_code)]\n    #[instrument(level = \"trace\", skip_all, err)]\n",
+          )
+
+          # Finalize one canonical stock plan, then project only the provider wire copy.
+          replace_one(
+              "codex-rs/core/src/tools/spec_plan.rs",
+              "                    ToolSpec::WebSearch { .. } => continue,\n",
+              "                    ToolSpec::WebSearch { .. } | ToolSpec::XSearch => continue,\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/spec_plan.rs",
+              "            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {\n                continue;\n            }\n",
+              "            ToolSpec::Namespace(_)\n            | ToolSpec::ToolSearch { .. }\n            | ToolSpec::WebSearch { .. }\n            | ToolSpec::XSearch => {\n                continue;\n            }\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/spec_plan.rs",
+              "    Ok(ToolRouter::from_parts(\n        registry,\n        model_visible_specs,\n        tool_mode,\n        code_mode_tool_names,\n        tool_namespaces_info,\n        &child_management_tools,\n    ))\n",
+              "    ToolRouter::from_parts_with_projection(\n        registry,\n        model_visible_specs,\n        tool_mode,\n        code_mode_tool_names,\n        tool_namespaces_info,\n        &child_management_tools,\n        turn_context.provider.projects_tools_as_flat_functions(),\n    )\n    .map_err(|wire_name| CodexErrorDetails::ToolCollision(wire_name).into())\n",
+          )
+          spec = Path("codex-rs/core/src/tools/spec_plan.rs")
+          text = spec.read_text()
+          marker = "fn hosted_model_tool_specs("
+          start = text.find(marker)
+          if start < 0:
+              raise SystemExit("hosted_model_tool_specs not found")
+          insert_at = text.find("    specs\n}", start)
+          if insert_at < 0:
+              raise SystemExit("hosted_model_tool_specs return not found")
+          prefix = text[start:insert_at]
+          if "ToolSpec::XSearch" not in prefix:
+              addition = "    if turn_context.provider.capabilities().x_search {\n        specs.push(ToolSpec::XSearch);\n    }\n"
+              text = text[:insert_at] + addition + text[insert_at:]
+              spec.write_text(text)
+
+          replace_one(
+              "codex-rs/core/src/session/turn.rs",
+              "    Prompt {\n        input,\n        tools: step_context.tool_router.model_visible_specs(),\n",
+              "    Prompt {\n        input: step_context.tool_router.project_tool_wire(input),\n        tools: step_context.tool_router.model_visible_specs(),\n",
+          )
+
+          replace_one(
+              "codex-rs/core/src/tools/parallel.rs",
+              "use codex_protocol::models::ResponseInputItem;\n",
+              "use codex_protocol::models::ResponseInputItem;\nuse codex_protocol::models::ResponseItem;\n",
+          )
+          replace_one(
+              "codex-rs/core/src/tools/parallel.rs",
+              "    #[instrument(level = \"trace\", skip_all)]\n    pub(crate) fn handle_tool_call(\n",
+              "    pub(crate) fn restore_tool_call(\n        &self,\n        item: &mut ResponseItem,\n    ) -> Result<(), FunctionCallError> {\n        self.step_context.tool_router.restore_tool_call(item)\n    }\n\n    pub(crate) fn exposes_x_search(&self) -> bool {\n        self.step_context.tool_router.exposes_x_search()\n    }\n\n    #[instrument(level = \"trace\", skip_all)]\n    pub(crate) fn handle_tool_call(\n",
+          )
+
+          # Restore flat wire calls before stock dispatch. Provider-hosted X calls are retained in history and never locally executed.
+          replace_one(
+              "codex-rs/core/src/stream_events_utils.rs",
+              "    let mut output = OutputItemResult::default();\n    let plan_mode = ctx.turn_context.mode() == ModeKind::Plan;\n\n    match ToolRouter::build_tool_call(item.clone()) {\n",
+              "    let mut output = OutputItemResult::default();\n    let plan_mode = ctx.turn_context.mode() == ModeKind::Plan;\n    let mut item = item;\n    let provider_hosted_tool_call = ctx.tool_runtime.exposes_x_search()\n        && ctx\n            .turn_context\n            .provider\n            .is_provider_hosted_tool_call(&item);\n\n    match ctx.tool_runtime.restore_tool_call(&mut item).and_then(|()| {\n        if provider_hosted_tool_call {\n            Ok(None)\n        } else {\n            ToolRouter::build_tool_call(item.clone())\n        }\n    }) {\n",
+          )
+
+          # Grok web-search wire shape is a bare hosted declaration; flat/local declarations were already projected by ToolRouter.
+          replace_one(
+              "codex-rs/codex-api/src/provider.rs",
+              "            if has_no_tools {\n                object.remove(\"tools\");\n                object.remove(\"tool_choice\");\n                object.remove(\"parallel_tool_calls\");\n            }\n",
+              "            if has_no_tools {\n                object.remove(\"tools\");\n                object.remove(\"tool_choice\");\n                object.remove(\"parallel_tool_calls\");\n            } else if let Some(tools) = object.get_mut(\"tools\").and_then(Value::as_array_mut) {\n                for tool in tools {\n                    if tool.get(\"type\").and_then(Value::as_str) == Some(\"web_search\") {\n                        *tool = serde_json::json!({ \"type\": \"web_search\" });\n                    }\n                }\n            }\n",
+          )
+
+          # Pin capability ownership in the existing provider tests.
+          replace_one(
+              "codex-rs/model-provider/src/grok_provider_tests.rs",
+              "fn grok_does_not_advertise_remote_compaction_v2() {\n",
+              "fn grok_tool_capabilities_are_explicit_and_image_stays_gated_for_207() {\n    let provider = create_model_provider(provider_info(\"Grok\"), /*auth_manager*/ None);\n    let capabilities = provider.capabilities();\n\n    assert!(capabilities.namespace_tools);\n    assert!(capabilities.web_search);\n    assert!(capabilities.x_search);\n    assert!(capabilities.external_web_access);\n    assert!(!capabilities.image_generation);\n    assert!(provider.projects_tools_as_flat_functions());\n}\n\n#[test]\nfn grok_does_not_advertise_remote_compaction_v2() {\n",
+          )
+
+          # API-boundary search projection test; stock identity remains covered below it.
+          api_test = Path("codex-rs/codex-api/src/provider_grok_tests.rs")
+          text = api_test.read_text()
+          text = text.replace(
+              "use crate::common::ResponsesApiRequest;\n",
+              "use crate::common::ResponsesApiRequest;\nuse crate::common::ResponsesApiTools;\n",
+              1,
+          )
+          anchor = "#[test]\nfn stock_openai_projection_remains_identity() {\n"
+          if anchor not in text:
+              raise SystemExit("provider_grok_tests stock test anchor missing")
+          test = r'''#[test]
+          fn grok_projects_web_search_to_bare_hosted_contract_without_touching_flat_functions() {
+              let mut canonical = request(vec![user_message("search")]);
+              let tools = serde_json::value::to_raw_value(&json!([
+                  {
+                      "type": "function",
+                      "name": "local__apply_patch__deadbeefcafe",
+                      "description": "canonical `apply_patch` tool",
+                      "parameters": {"type":"object","properties":{"patch":{"type":"string"}},"required":["patch"],"additionalProperties":false},
+                      "strict": true
+                  },
+                  {
+                      "type": "web_search",
+                      "external_web_access": true,
+                      "indexed_web_access": true,
+                      "search_context_size": "medium"
+                  },
+                  {"type": "x_search"}
+              ])).expect("tool JSON");
+              canonical.tools = Some(ResponsesApiTools::from(std::sync::Arc::from(tools)));
+              let original = canonical.clone();
+
+              let projected = ResponsesDialect::Grok.project_request(&canonical).expect("tool projection");
+              assert_eq!(canonical, original, "canonical request must stay unchanged");
+              assert_eq!(projected["tools"][0]["type"], "function");
+              assert_eq!(projected["tools"][0]["name"], "local__apply_patch__deadbeefcafe");
+              assert_eq!(projected["tools"][1], json!({"type":"web_search"}));
+              assert_eq!(projected["tools"][2], json!({"type":"x_search"}));
+              assert_eq!(projected["tool_choice"], "auto");
+              assert_eq!(projected["parallel_tool_calls"], true);
+          }
+
+          '''
+          text = text.replace(anchor, test + anchor, 1)
+          api_test.write_text(text)
+          PY
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - name: Format migration
+        working-directory: codex-rs
+        run: cargo fmt -- --config imports_granularity=Item
+      - name: Check migrated crates compile
+        working-directory: codex-rs
+        run: cargo check -p codex-tools -p codex-api -p codex-model-provider -p codex-core
+      - name: Commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add codex-rs
+          git commit -m "feat(grok): migrate tool projection and search contracts [206-implementation]"
+          git push origin HEAD:work/grok-rust-v0.154.0-206
+
+  validate:
+    if: ${{ contains(github.event.head_commit.message, '[206-implementation]') || contains(github.event.head_commit.message, '[206-validation-only]') }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Test Grok API tool/search projection
+        run: cargo test -p codex-api provider::grok_tests -- --nocapture
+      - name: Test Grok provider capability gates
+        run: cargo test -p codex-model-provider grok_provider -- --nocapture
+      - name: Test flat tool round-trip and apply_patch boundary
+        run: cargo test -p codex-core tools::router::grok_tests -- --nocapture
+      - name: Test stock apply_patch handler
+        run: cargo test -p codex-core tools::handlers::apply_patch::tests -- --nocapture
