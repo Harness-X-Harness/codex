@@ -155,11 +155,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         ProviderCapabilities::default()
     }
 
-    /// Returns whether this provider exposes the hosted X Search tool.
-    fn supports_x_search(&self) -> bool {
-        false
-    }
-
     /// Returns whether this provider needs canonical Codex tool declarations projected as flat functions on the wire.
     fn projects_tools_as_flat_functions(&self) -> bool {
         false

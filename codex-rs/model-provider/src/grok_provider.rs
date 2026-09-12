@@ -70,10 +70,6 @@ impl ModelProvider for GrokModelProvider {
         }
     }
 
-    fn supports_x_search(&self) -> bool {
-        true
-    }
-
     fn projects_tools_as_flat_functions(&self) -> bool {
         true
     }
