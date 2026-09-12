@@ -253,9 +253,7 @@ impl ToolRouter {
                             ResponsesApiNamespaceTool::Custom(tool) => tool.name == name.name,
                         })
                 }
-                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } | ToolSpec::XSearch => {
-                    false
-                }
+                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
             })
         {
             return true;

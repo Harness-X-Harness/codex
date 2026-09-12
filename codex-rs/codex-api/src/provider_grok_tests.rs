@@ -194,7 +194,7 @@ fn grok_rejects_unpaired_function_output_before_transport() {
 }
 
 #[test]
-fn grok_projects_web_search_to_bare_hosted_contract_without_touching_flat_functions() {
+fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
     let mut canonical = request(vec![user_message("search")]);
     let tools = serde_json::value::to_raw_value(&json!([
         {
@@ -209,9 +209,9 @@ fn grok_projects_web_search_to_bare_hosted_contract_without_touching_flat_functi
             "external_web_access": true,
             "indexed_web_access": true,
             "search_context_size": "medium"
-        },
-        {"type": "x_search"}
-    ])).expect("tool JSON");
+        }
+    ]))
+    .expect("tool JSON");
     canonical.tools = Some(ResponsesApiTools::from(std::sync::Arc::from(tools)));
     let original = canonical.clone();
 
@@ -232,7 +232,16 @@ fn grok_projects_web_search_to_bare_hosted_contract_without_touching_flat_functi
 
 #[test]
 fn stock_openai_projection_remains_identity() {
-    let canonical = request(vec![user_message("stock")]);
+    let mut canonical = request(vec![user_message("stock")]);
+    let tools = serde_json::value::to_raw_value(&json!([{
+        "type": "function",
+        "name": "stock_function",
+        "description": "stock",
+        "parameters": {"type":"object","properties":{},"additionalProperties":false},
+        "strict": true
+    }]))
+    .expect("tool JSON");
+    canonical.tools = Some(ResponsesApiTools::from(std::sync::Arc::from(tools)));
     let expected = serde_json::to_value(&canonical).expect("stock request serializes");
 
     assert_eq!(
@@ -241,6 +250,7 @@ fn stock_openai_projection_remains_identity() {
             .expect("stock projection"),
         expected
     );
+    assert_eq!(expected["tools"].as_array().map(Vec::len), Some(1));
     assert_eq!(expected["tool_choice"], json!("auto"));
     assert_eq!(expected["parallel_tool_calls"], json!(true));
 }

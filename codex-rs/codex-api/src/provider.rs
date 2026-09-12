@@ -128,7 +128,6 @@ impl ResponsesDialect {
         let mut value = serde_json::to_value(&request)?;
         if let Some(object) = value.as_object_mut() {
             // Grok's verified no-tool request omits the tool-control trio entirely.
-            // Non-empty tool projection is owned by #206.
             let has_no_tools = match object.get("tools") {
                 None => true,
                 Some(tools) => tools.as_array().is_some_and(Vec::is_empty),
@@ -138,10 +137,16 @@ impl ResponsesDialect {
                 object.remove("tool_choice");
                 object.remove("parallel_tool_calls");
             } else if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
-                for tool in tools {
+                for tool in tools.iter_mut() {
                     if tool.get("type").and_then(Value::as_str) == Some("web_search") {
                         *tool = serde_json::json!({ "type": "web_search" });
                     }
+                }
+                if !tools
+                    .iter()
+                    .any(|tool| tool.get("type").and_then(Value::as_str) == Some("x_search"))
+                {
+                    tools.push(serde_json::json!({ "type": "x_search" }));
                 }
             }
         }
