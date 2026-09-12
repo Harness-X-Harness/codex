@@ -304,10 +304,13 @@ async fn recent_image_fallback_requires_requested_count() {
 #[test]
 fn generated_image_normalization_detects_actual_mime() {
     let jpeg = include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg");
-    let normalized = normalize_image_data(ImageData {
-        b64_json: BASE64_STANDARD.encode(jpeg),
-        mime_type: Some("image/jpeg".to_string()),
-    })
+    let normalized = normalize_image_data(
+        ImageData {
+            b64_json: BASE64_STANDARD.encode(jpeg),
+            mime_type: Some("image/jpeg".to_string()),
+        },
+        false,
+    )
     .expect("valid JPEG should normalize");
 
     assert_eq!(normalized.mime_type, "image/jpeg");
@@ -317,10 +320,13 @@ fn generated_image_normalization_detects_actual_mime() {
 #[test]
 fn generated_image_normalization_rejects_mismatched_mime_metadata() {
     let jpeg = include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg");
-    let result = normalize_image_data(ImageData {
-        b64_json: BASE64_STANDARD.encode(jpeg),
-        mime_type: Some("image/png".to_string()),
-    });
+    let result = normalize_image_data(
+        ImageData {
+            b64_json: BASE64_STANDARD.encode(jpeg),
+            mime_type: Some("image/png".to_string()),
+        },
+        false,
+    );
     let error = match result {
         Ok(_) => panic!("mismatched MIME metadata should fail"),
         Err(error) => error,

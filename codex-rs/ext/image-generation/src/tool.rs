@@ -59,6 +59,8 @@ use crate::backend::CodexImagesBackend;
 const IMAGE_MODEL: &str = "gpt-image-2";
 pub(crate) const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
+    MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
 #[derive(Clone)]
@@ -190,7 +192,7 @@ impl ImageGenerationTool {
                 .into_iter()
                 .next()
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
-                .and_then(normalize_image_data)
+                .and_then(|data| normalize_image_data(data, self.save_root.is_none()))
                 .map(|image| (image, transparent_background, imagegen_request_id))
         });
         let (image, transparent_background, imagegen_request_id) = match result {
@@ -257,14 +259,22 @@ struct NormalizedImage {
 
 fn normalize_image_data(
     data: codex_api::ImageData,
+    enforce_executor_limit: bool,
 ) -> Result<NormalizedImage, (String, Option<ImageGenerationFailure>)> {
-    let bytes = BASE64_STANDARD.decode(data.b64_json.trim()).map_err(|_| {
+    let encoded = data.b64_json.trim();
+    if enforce_executor_limit && encoded.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
+        return Err((
+            "generated image exceeds the executor file size limit".to_string(),
+            None,
+        ));
+    }
+    let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
         (
             "image generation returned invalid base64 data".to_string(),
             None,
         )
     })?;
-    if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
+    if enforce_executor_limit && bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
         return Err((
             "generated image exceeds the executor file size limit".to_string(),
             None,
