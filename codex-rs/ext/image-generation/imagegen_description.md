@@ -9,7 +9,7 @@ Guidelines:
 - For edits, use `referenced_image_paths` when every target image has a local file path.
 - If you have not seen a local image yet, use `view_image` to inspect it before editing.
 - Use `num_last_images_to_include` only when at least one target image has no local file path.
-- Set `num_last_images_to_include` to the smallest number of recent conversation images that includes every target image, up to 5.
+- Set `num_last_images_to_include` to the smallest number of recent conversation images that includes every target image.
 - Never provide both `referenced_image_paths` and `num_last_images_to_include`.
 - If neither mechanism can include every target image, ask the user to attach the missing images again.
 - Directly generate the image without reconfirmation or clarification unless required images must be attached again.

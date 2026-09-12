@@ -1357,7 +1357,7 @@ pub(crate) fn build_prompt(
 ) -> Prompt {
     let turn_context = &step_context.turn;
     Prompt {
-        input,
+        input: step_context.tool_router.project_tool_wire(input),
         tools: step_context.tool_router.model_visible_specs(),
         parallel_tool_calls: true,
         base_instructions,

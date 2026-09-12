@@ -3004,10 +3004,13 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     let preferred = web_search_mode.value();
     let is_allowed = |mode: WebSearchMode| {
         let provider_supports_mode = match mode {
-            WebSearchMode::Live | WebSearchMode::Indexed => {
+            WebSearchMode::Live => provider_capabilities.external_web_access,
+            WebSearchMode::Indexed => {
                 provider_capabilities.external_web_access
+                    && provider_capabilities.indexed_web_search
             }
-            WebSearchMode::Cached | WebSearchMode::Disabled => true,
+            WebSearchMode::Cached => provider_capabilities.cached_web_search,
+            WebSearchMode::Disabled => true,
         };
 
         provider_supports_mode && web_search_mode.can_set(&mode).is_ok()

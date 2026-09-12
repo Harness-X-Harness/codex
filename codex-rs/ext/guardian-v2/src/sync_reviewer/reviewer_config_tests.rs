@@ -8,6 +8,7 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -266,5 +267,33 @@ async fn falls_back_to_parent_model_and_effective_reasoning() -> Result<()> {
         (options.config.model, options.config.model_reasoning_effort),
         (Some("gpt-5.5".to_string()), Some(ReasoningEffort::XHigh))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_provider_without_reviewer_model_policy() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-5.5")
+        .with_model_info_override("gpt-5.5", |model| {
+            model.auto_review_model_override = None;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mut parent_config = test.config.clone();
+    parent_config.model_provider.wire_api = WireApi::GrokResponses;
+
+    let extension = GuardianExtension::new(Arc::downgrade(&test.thread_manager), ());
+    let result = extension
+        .prepare_reviewer_options(
+            &parent_config,
+            &test.codex.environment_selections().await,
+            "gpt-5.5",
+            /*parent_reasoning_effort*/ None,
+            /*live_network_config*/ None,
+        )
+        .await;
+
+    assert!(result.is_err());
     Ok(())
 }
