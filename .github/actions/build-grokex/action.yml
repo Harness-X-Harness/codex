@@ -1,0 +1,85 @@
+name: Build Grokex target
+description: Build and stage one Grokex release target with the shared release contract.
+
+inputs:
+  target:
+    description: Rust target triple to build and stage.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-ci
+    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      with:
+        targets: ${{ inputs.target }}
+    - if: runner.os == 'Windows'
+      uses: ./.github/actions/setup-msvc-env
+      with:
+        target: ${{ inputs.target }}
+    - if: contains(inputs.target, 'linux')
+      name: Use hermetic Cargo home
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo_home="${GITHUB_WORKSPACE}/.cargo-home-${{ inputs.target }}"
+        mkdir -p "${cargo_home}/bin"
+        : > "${cargo_home}/config.toml"
+        echo "CARGO_HOME=${cargo_home}" >> "${GITHUB_ENV}"
+        echo "${cargo_home}/bin" >> "${GITHUB_PATH}"
+    - if: contains(inputs.target, 'linux')
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        version: 0.14.0
+        use-cache: false
+    - if: contains(inputs.target, 'linux')
+      name: Install musl tools
+      env:
+        TARGET: ${{ inputs.target }}
+      shell: bash
+      run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+    - uses: ./.github/actions/setup-rusty-v8
+      with:
+        target: ${{ inputs.target }}
+    - if: contains(inputs.target, 'linux')
+      name: Build Linux sandbox helper
+      working-directory: codex-rs
+      shell: bash
+      run: |
+        set -euo pipefail
+        export AWS_LC_SYS_NO_JITTER_ENTROPY=1
+        cargo build --release --target "${{ inputs.target }}" --bin bwrap
+        bwrap="${CARGO_TARGET_DIR:-target}/${{ inputs.target }}/release/bwrap"
+        echo "CODEX_BWRAP_SHA256=$(sha256sum "${bwrap}" | awk '{print $1}')" >> "${GITHUB_ENV}"
+    - name: Build Grokex binaries
+      env:
+        TARGET: ${{ inputs.target }}
+      working-directory: codex-rs
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${TARGET}" == "x86_64-pc-windows-msvc" ]]; then
+          export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+        fi
+        if [[ "${TARGET}" == *linux* ]]; then
+          export AWS_LC_SYS_NO_JITTER_ENTROPY=1
+        fi
+        cargo build --release --target "${TARGET}" --bin codex --bin codex-code-mode-host
+    - name: Stage raw binaries
+      env:
+        TARGET: ${{ inputs.target }}
+      working-directory: codex-rs
+      shell: bash
+      run: |
+        set -euo pipefail
+        release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
+        output="${RUNNER_TEMP}/raw/${TARGET}"
+        mkdir -p "${output}"
+        if [[ "${TARGET}" == *windows* ]]; then
+          cp "${release_dir}/codex.exe" "${release_dir}/codex-code-mode-host.exe" "${output}/"
+        else
+          cp "${release_dir}/codex" "${release_dir}/codex-code-mode-host" "${output}/"
+        fi
+        if [[ "${TARGET}" == *linux* ]]; then
+          cp "${release_dir}/bwrap" "${output}/"
+        fi

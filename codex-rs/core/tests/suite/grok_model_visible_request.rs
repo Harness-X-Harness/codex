@@ -41,7 +41,7 @@ use core_test_support::wait_for_event;
 use sha1::Digest;
 use sha1::Sha1;
 
-// The first-Turn prompts of grokex/live_contracts.json scenarios, verbatim.
+// First-Turn prompts for the Grok request-shape snapshots.
 const BASIC_PROMPT: &str = "Reply with exactly GROKEX_BASIC_RESPONSE_OK and no other text.";
 const CONTINUATION_PROMPT: &str = "Use the grokex_live_probe result, then reply with exactly GROKEX_LIVE_RESPONSE_OK and no other text.";
 const COLLABORATION_PROMPT: &str = "Delegate one bounded task to a child named live_child using the default \
