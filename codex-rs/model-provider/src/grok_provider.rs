@@ -65,10 +65,13 @@ impl ModelProvider for GrokModelProvider {
             // #207 owns image-generation migration; do not advertise it early.
             image_generation: false,
             web_search: true,
-            x_search: true,
             external_web_access: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
+    }
+
+    fn supports_x_search(&self) -> bool {
+        true
     }
 
     fn projects_tools_as_flat_functions(&self) -> bool {

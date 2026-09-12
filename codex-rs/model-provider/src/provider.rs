@@ -61,7 +61,6 @@ pub struct ProviderCapabilities {
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
-    pub x_search: bool,
     pub external_web_access: bool,
     pub remote_compaction: RemoteCompactionSupport,
 }
@@ -72,7 +71,6 @@ impl Default for ProviderCapabilities {
             namespace_tools: true,
             image_generation: true,
             web_search: true,
-            x_search: false,
             external_web_access: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
@@ -155,6 +153,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Returns whether this provider exposes the hosted X Search tool.
+    fn supports_x_search(&self) -> bool {
+        false
     }
 
     /// Returns whether this provider needs canonical Codex tool declarations projected as flat functions on the wire.

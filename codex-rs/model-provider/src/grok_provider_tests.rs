@@ -119,18 +119,20 @@ async fn non_grok_provider_keeps_stock_config_catalog_behavior() {
             .await,
         configured_catalog.models
     );
+    assert!(!provider.supports_x_search());
+    assert!(!provider.projects_tools_as_flat_functions());
 }
 
 #[test]
-fn grok_tool_capabilities_are_explicit_and_image_stays_gated_for_207() {
+fn grok_tool_contract_is_explicit_and_image_stays_gated_for_207() {
     let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
     let capabilities = provider.capabilities();
 
     assert!(capabilities.namespace_tools);
     assert!(capabilities.web_search);
-    assert!(capabilities.x_search);
     assert!(capabilities.external_web_access);
     assert!(!capabilities.image_generation);
+    assert!(provider.supports_x_search());
     assert!(provider.projects_tools_as_flat_functions());
 }
 

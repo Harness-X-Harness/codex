@@ -625,7 +625,7 @@ fn hosted_model_tool_specs(
     }) {
         specs.push(hosted_web_search_tool);
     }
-    if turn_context.provider.capabilities().x_search {
+    if turn_context.provider.supports_x_search() {
         specs.push(ToolSpec::XSearch);
     }
     specs
