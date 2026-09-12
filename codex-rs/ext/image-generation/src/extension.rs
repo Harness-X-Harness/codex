@@ -13,12 +13,12 @@ use codex_extension_api::ToolContributor;
 use codex_extension_api::ToolExecutor;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::image_generation_policy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
-use crate::tool::MAX_EDIT_IMAGES;
 
 #[derive(Clone)]
 struct ImageGenerationExtension {
@@ -89,13 +89,10 @@ impl ToolContributor for ImageGenerationExtension {
         };
         let provider =
             create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
-        if !provider.capabilities().image_generation {
+        let Some(policy) = image_generation_policy(&provider) else {
             return Vec::new();
-        }
-        let image_model = provider.image_generation_model();
-        let max_edit_images = provider
-            .images_dialect()
-            .effective_max_edit_images(MAX_EDIT_IMAGES);
+        };
+
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
                 provider,
@@ -103,8 +100,7 @@ impl ToolContributor for ImageGenerationExtension {
                     .get::<ThreadOriginator>()
                     .map(|originator| originator.0.clone()),
             ),
-            image_model,
-            max_edit_images,
+            policy.max_edit_images,
             config.save_root.clone(),
             thread_store.level_id().to_string(),
         ))]

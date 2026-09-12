@@ -1,6 +1,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ImageBackground;
+use codex_api::ImageData;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
@@ -25,6 +26,7 @@ use super::ImageRequest;
 use super::ImagegenArgs;
 use super::MAX_EDIT_IMAGES;
 use super::imagegen_tool_spec;
+use super::normalize_image_data;
 use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
@@ -32,8 +34,9 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 
 const RESULT: &str = "cG5n";
+
 #[test]
-fn artifact_path_sanitizes_session_and_call_ids() {
+fn artifact_path_sanitizes_session_and_call_ids_and_preserves_type() {
     let save_root = AbsolutePathBuf::current_dir().expect("current directory should be absolute");
 
     assert_eq!(
@@ -62,10 +65,19 @@ fn uses_reserved_image_gen_namespace() {
         panic!("imagegen should advertise a function tool");
     };
     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
+    assert!(function.description.contains("at most 5 edit images"));
+
+    let ToolSpec::Namespace(grok_spec) = imagegen_tool_spec(3) else {
+        panic!("imagegen should advertise a namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(grok_function) = &grok_spec.tools[0] else {
+        panic!("imagegen should advertise a function tool");
+    };
+    assert!(grok_function.description.contains("at most 3 edit images"));
 }
 
 #[tokio::test]
-async fn omitted_references_generate_with_fixed_defaults() {
+async fn omitted_references_generate_with_stock_defaults() {
     assert_eq!(
         request_for_call_args(
             &ImagegenArgs {
@@ -75,7 +87,6 @@ async fn omitted_references_generate_with_fixed_defaults() {
             },
             &[],
             &[],
-            "gpt-image-2",
             MAX_EDIT_IMAGES,
         )
         .await
@@ -92,7 +103,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
+async fn recent_image_fallback_preserves_generated_image_mime_for_continuation() {
     let generated =
         BASE64_STANDARD.encode(include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg"));
     let generated_url = format!("data:image/jpeg;base64,{generated}");
@@ -169,7 +180,6 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             },
             &history,
             &[],
-            "gpt-image-2",
             MAX_EDIT_IMAGES,
         )
         .await
@@ -195,7 +205,6 @@ async fn conflicting_image_selectors_return_tool_error() {
         },
         &[],
         &[],
-        "gpt-image-2",
         MAX_EDIT_IMAGES,
     )
     .await
@@ -208,7 +217,36 @@ async fn conflicting_image_selectors_return_tool_error() {
 }
 
 #[tokio::test]
-async fn too_many_referenced_image_paths_return_tool_error() {
+async fn provider_edit_limit_rejects_before_reading_files() {
+    let error = request_for_call_args(
+        &ImagegenArgs {
+            prompt: "change the lighting".to_string(),
+            referenced_image_paths: Some(
+                (0..4)
+                    .map(|index| {
+                        format!("/tmp/image-{index}.png")
+                            .try_into()
+                            .expect("test path should be absolute")
+                    })
+                    .collect(),
+            ),
+            num_last_images_to_include: None,
+        },
+        &[],
+        &[],
+        3,
+    )
+    .await
+    .expect_err("provider image limit should fail before reading files");
+
+    assert_eq!(
+        error.to_string(),
+        "`referenced_image_paths` must contain at most 3 paths"
+    );
+}
+
+#[tokio::test]
+async fn stock_edit_limit_remains_five() {
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
@@ -225,7 +263,6 @@ async fn too_many_referenced_image_paths_return_tool_error() {
         },
         &[],
         &[],
-        "gpt-image-2",
         MAX_EDIT_IMAGES,
     )
     .await
@@ -253,7 +290,6 @@ async fn recent_image_fallback_requires_requested_count() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
-        "gpt-image-2",
         MAX_EDIT_IMAGES,
     )
     .await
@@ -263,6 +299,34 @@ async fn recent_image_fallback_requires_requested_count() {
         error.to_string(),
         "requested the last 2 conversation images, but only 1 were available"
     );
+}
+
+#[test]
+fn generated_image_normalization_detects_actual_mime() {
+    let jpeg = include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg");
+    let normalized = normalize_image_data(ImageData {
+        b64_json: BASE64_STANDARD.encode(jpeg),
+        mime_type: Some("image/jpeg".to_string()),
+    })
+    .expect("valid JPEG should normalize");
+
+    assert_eq!(normalized.mime_type, "image/jpeg");
+    assert_eq!(normalized.extension, "jpg");
+}
+
+#[test]
+fn generated_image_normalization_rejects_mismatched_mime_metadata() {
+    let jpeg = include_bytes!("../../../vendor/bubblewrap/bubblewrap.jpg");
+    let result = normalize_image_data(ImageData {
+        b64_json: BASE64_STANDARD.encode(jpeg),
+        mime_type: Some("image/png".to_string()),
+    });
+    let error = match result {
+        Ok(_) => panic!("mismatched MIME metadata should fail"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.0, "image generation returned mismatched MIME metadata");
 }
 
 #[test]

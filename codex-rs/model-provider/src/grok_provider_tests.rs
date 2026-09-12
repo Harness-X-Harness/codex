@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_api::ImagesDialect;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::cache::ModelsCacheEntry;
@@ -15,6 +14,7 @@ use crate::RemoteCompactionSupport;
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
 use crate::grok_provider::is_grok_provider_info;
+use crate::image_generation_policy;
 
 fn provider_info(name: &str) -> ModelProviderInfo {
     ModelProviderInfo {
@@ -121,8 +121,7 @@ async fn non_grok_provider_keeps_stock_config_catalog_behavior() {
         configured_catalog.models
     );
     assert!(!provider.projects_tools_as_flat_functions());
-    assert!(!provider.capabilities().image_generation);
-    assert_eq!(provider.images_dialect(), ImagesDialect::OpenAi);
+    assert_eq!(image_generation_policy(&provider), None);
 }
 
 #[test]
@@ -135,8 +134,20 @@ fn grok_tool_and_image_contract_is_explicit() {
     assert!(capabilities.external_web_access);
     assert!(capabilities.image_generation);
     assert!(provider.projects_tools_as_flat_functions());
-    assert_eq!(provider.image_generation_model(), "grok-imagine-image-2.0");
-    assert_eq!(provider.images_dialect(), ImagesDialect::Grok);
+    assert_eq!(
+        image_generation_policy(&provider).map(|policy| policy.max_edit_images),
+        Some(3)
+    );
+}
+
+#[test]
+fn stock_openai_image_policy_keeps_five_edit_images() {
+    let provider = create_model_provider(provider_info("OpenAI"), /*auth_manager*/ None);
+
+    assert_eq!(
+        image_generation_policy(&provider).map(|policy| policy.max_edit_images),
+        Some(5)
+    );
 }
 
 #[test]

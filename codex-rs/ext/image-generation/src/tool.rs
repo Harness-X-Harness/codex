@@ -56,16 +56,14 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
+const IMAGE_MODEL: &str = "gpt-image-2";
 pub(crate) const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
-    MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
-    image_model: &'static str,
     max_edit_images: usize,
     save_root: Option<AbsolutePathBuf>,
     thread_id: String,
@@ -75,14 +73,12 @@ impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
     pub(crate) fn new(
         backend: CodexImagesBackend,
-        image_model: &'static str,
         max_edit_images: usize,
         save_root: Option<AbsolutePathBuf>,
         thread_id: String,
     ) -> Self {
         Self {
             backend,
-            image_model,
             max_edit_images,
             save_root,
             thread_id,
@@ -153,7 +149,6 @@ impl ImageGenerationTool {
             &args,
             call.conversation_history.items(),
             &call.environments,
-            self.image_model,
             self.max_edit_images,
         )
         .await?;
@@ -195,7 +190,7 @@ impl ImageGenerationTool {
                 .into_iter()
                 .next()
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
-                .and_then(|data| normalize_image_data(data, self.save_root.is_none()))
+                .and_then(normalize_image_data)
                 .map(|image| (image, transparent_background, imagegen_request_id))
         });
         let (image, transparent_background, imagegen_request_id) = match result {
@@ -262,24 +257,16 @@ struct NormalizedImage {
 
 fn normalize_image_data(
     data: codex_api::ImageData,
-    enforce_executor_limit: bool,
 ) -> Result<NormalizedImage, (String, Option<ImageGenerationFailure>)> {
-    let encoded = data.b64_json.trim();
-    if enforce_executor_limit && encoded.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
-        return Err((
-            "image generation returned image data above the executor file size limit".to_string(),
-            None,
-        ));
-    }
-    let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
+    let bytes = BASE64_STANDARD.decode(data.b64_json.trim()).map_err(|_| {
         (
             "image generation returned invalid base64 data".to_string(),
             None,
         )
     })?;
-    if enforce_executor_limit && bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
+    if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
         return Err((
-            "image generation returned image data above the executor file size limit".to_string(),
+            "generated image exceeds the executor file size limit".to_string(),
             None,
         ));
     }
@@ -481,7 +468,6 @@ async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
     environments: &[ToolEnvironment<'_>],
-    image_model: &str,
     max_edit_images: usize,
 ) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
@@ -495,7 +481,7 @@ async fn request_for_call_args(
             return Ok(ImageRequest::Generate(ImageGenerationRequest {
                 prompt: args.prompt.clone(),
                 background: Some(ImageBackground::Auto),
-                model: image_model.to_string(),
+                model: IMAGE_MODEL.to_string(),
                 n: None,
                 quality: Some(ImageQuality::Auto),
                 size: Some("auto".to_string()),
@@ -543,7 +529,7 @@ async fn request_for_call_args(
         images,
         prompt: args.prompt.clone(),
         background: Some(ImageBackground::Auto),
-        model: image_model.to_string(),
+        model: IMAGE_MODEL.to_string(),
         n: None,
         quality: Some(ImageQuality::Auto),
         size: Some("auto".to_string()),
@@ -668,6 +654,20 @@ fn imagegen_tool_spec(max_edit_images: usize) -> ToolSpec {
     let Value::Object(ref mut schema) = schema_value else {
         unreachable!("imagegen root schema must be an object");
     };
+    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        if let Some(Value::Object(referenced_images)) = properties.get_mut("referenced_image_paths") {
+            referenced_images.insert(
+                "maxItems".to_string(),
+                Value::from(max_edit_images as u64),
+            );
+        }
+        if let Some(Value::Object(last_images)) = properties.get_mut("num_last_images_to_include") {
+            last_images.insert(
+                "maximum".to_string(),
+                Value::from(max_edit_images as u64),
+            );
+        }
+    }
     let mut input_schema = Map::new();
     for key in ["properties", "required", "type", "additionalProperties"] {
         if let Some(value) = schema.remove(key) {

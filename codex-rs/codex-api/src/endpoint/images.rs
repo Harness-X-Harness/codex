@@ -5,16 +5,34 @@ use crate::images::GROK_MAX_EDIT_IMAGES;
 use crate::images::ImageEditRequest;
 use crate::images::ImageGenerationRequest;
 use crate::images::ImageResponse;
-use crate::images::ImagesDialect;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use http::HeaderMap;
 use http::Method;
+use serde_json::Value;
 use serde_json::to_value;
 use std::sync::Arc;
 
 const X_CODEX_IMAGEGEN_REQUEST_ID_HEADER: &str = "x-codex-imagegen-request-id";
+const GROK_IMAGE_MODEL: &str = "grok-imagine-image-2.0";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ImagesDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
+impl ImagesDialect {
+    fn for_provider(provider: &Provider) -> Self {
+        if provider.name.eq_ignore_ascii_case("Grok") {
+            Self::Grok
+        } else {
+            Self::OpenAi
+        }
+    }
+}
 
 pub struct ImagesClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -23,15 +41,11 @@ pub struct ImagesClient<T: HttpTransport> {
 
 impl<T: HttpTransport> ImagesClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
+        let dialect = ImagesDialect::for_provider(&provider);
         Self {
             session: EndpointSession::new(transport, provider, auth),
-            dialect: ImagesDialect::OpenAi,
+            dialect,
         }
-    }
-
-    pub fn with_dialect(mut self, dialect: ImagesDialect) -> Self {
-        self.dialect = dialect;
-        self
     }
 
     pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
@@ -53,7 +67,7 @@ impl<T: HttpTransport> ImagesClient<T> {
                 ))
             }),
             ImagesDialect::Grok => Ok(serde_json::json!({
-                "model": request.model.as_str(),
+                "model": GROK_IMAGE_MODEL,
                 "prompt": request.prompt.as_str(),
                 "response_format": "b64_json",
             })),
@@ -85,7 +99,7 @@ impl<T: HttpTransport> ImagesClient<T> {
     async fn post_image_request(
         &self,
         path: &str,
-        body: Result<serde_json::Value, ApiError>,
+        body: Result<Value, ApiError>,
         extra_headers: HeaderMap,
         operation: &str,
     ) -> Result<(ImageResponse, Option<String>), ApiError> {
@@ -100,18 +114,28 @@ impl<T: HttpTransport> ImagesClient<T> {
             .and_then(|value| value.to_str().ok())
             .filter(|request_id| !request_id.is_empty())
             .map(str::to_string);
-        let response: ImageResponse = serde_json::from_slice(&resp.body)
-            .map_err(|e| ApiError::Stream(format!("failed to decode {operation} response: {e}")))?;
-        if self.dialect == ImagesDialect::OpenAi && response.created.is_none() {
-            return Err(ApiError::Stream(format!(
-                "failed to decode {operation} response: missing field `created`"
-            )));
+        let response = match self.dialect {
+            ImagesDialect::OpenAi => serde_json::from_slice(&resp.body),
+            ImagesDialect::Grok => {
+                let mut value: Value = serde_json::from_slice(&resp.body).map_err(|error| {
+                    ApiError::Stream(format!("failed to decode {operation} response: {error}"))
+                })?;
+                if let Some(object) = value.as_object_mut() {
+                    object
+                        .entry("created".to_string())
+                        .or_insert_with(|| serde_json::json!(0));
+                }
+                serde_json::from_value(value)
+            }
         }
+        .map_err(|error| {
+            ApiError::Stream(format!("failed to decode {operation} response: {error}"))
+        })?;
         Ok((response, imagegen_request_id))
     }
 }
 
-fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, ApiError> {
+fn grok_edit_body(request: &ImageEditRequest) -> Result<Value, ApiError> {
     if !(1..=GROK_MAX_EDIT_IMAGES).contains(&request.images.len()) {
         return Err(ApiError::Stream(format!(
             "Grok image edits require between 1 and {GROK_MAX_EDIT_IMAGES} images"
@@ -129,7 +153,7 @@ fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, ApiEr
         .collect::<Vec<_>>();
     let image_field = if images.len() == 1 { "image" } else { "images" };
     let mut body = serde_json::json!({
-        "model": request.model.as_str(),
+        "model": GROK_IMAGE_MODEL,
         "prompt": request.prompt.as_str(),
         "response_format": "b64_json",
     });
@@ -139,7 +163,7 @@ fn grok_edit_body(request: &ImageEditRequest) -> Result<serde_json::Value, ApiEr
             if images.len() == 1 {
                 images[0].clone()
             } else {
-                serde_json::Value::Array(images)
+                Value::Array(images)
             },
         );
     }
@@ -209,9 +233,9 @@ mod tests {
         }
     }
 
-    fn provider() -> Provider {
+    fn provider_named(name: &str) -> Provider {
         Provider {
-            name: "test".to_string(),
+            name: name.to_string(),
             base_url: "https://example.com/api/codex".to_string(),
             query_params: None,
             headers: HeaderMap::new(),
@@ -224,6 +248,10 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(1),
         }
+    }
+
+    fn provider() -> Provider {
+        provider_named("test")
     }
 
     fn response_body() -> Vec<u8> {
@@ -243,17 +271,24 @@ mod tests {
                 "output_tokens": 1372,
                 "output_tokens_details": {
                     "image_tokens": 1372,
-                    "text_tokens": 0
+                    "text_tokens": 0,
                 },
-                "total_tokens": 2846
+                "total_tokens": 2846,
             }
         }))
         .expect("serialize response")
     }
 
+    fn grok_response_body() -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "data": [{"b64_json": "REDACT", "mime_type": "image/jpeg"}]
+        }))
+        .expect("serialize Grok response")
+    }
+
     fn expected_response() -> ImageResponse {
         ImageResponse {
-            created: Some(1778832973),
+            created: 1778832973,
             background: Some(ImageBackground::Opaque),
             data: vec![ImageData {
                 b64_json: "REDACT".to_string(),
@@ -318,7 +353,7 @@ mod tests {
                 "background": "opaque",
                 "model": "gpt-image-1.5",
                 "quality": "medium",
-                "size": "1024x1536"
+                "size": "1024x1536",
             }))
         );
     }
@@ -356,7 +391,7 @@ mod tests {
             Some(&json!({
                 "images": [{"image_url": "data:image/png;base64,Zm9v"}],
                 "prompt": "add a red hat",
-                "model": "gpt-image-1.5"
+                "model": "gpt-image-1.5",
             }))
         );
     }
@@ -393,21 +428,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grok_generate_projects_wire_shape_and_accepts_missing_created() {
-        let response = serde_json::to_vec(&json!({
-            "data": [{"b64_json": "REDACT", "mime_type": "image/jpeg"}]
-        }))
-        .expect("serialize response");
-        let transport = CapturingTransport::new(response);
-        let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
-            .with_dialect(ImagesDialect::Grok);
+    async fn stock_image_response_still_requires_created() {
+        let transport = CapturingTransport::new(grok_response_body());
+        let client = ImagesClient::new(transport, provider(), Arc::new(DummyAuth));
+
+        let error = client
+            .generate(
+                &ImageGenerationRequest {
+                    prompt: "stock".to_string(),
+                    background: None,
+                    model: "gpt-image-2".to_string(),
+                    n: None,
+                    quality: None,
+                    size: None,
+                },
+                HeaderMap::new(),
+            )
+            .await
+            .expect_err("stock response without created should fail");
+
+        assert!(error.to_string().contains("missing field `created`"));
+    }
+
+    #[tokio::test]
+    async fn grok_generation_projects_wire_contract_and_accepts_missing_created() {
+        let transport = CapturingTransport::new(grok_response_body());
+        let client = ImagesClient::new(
+            transport.clone(),
+            provider_named("Grok"),
+            Arc::new(DummyAuth),
+        );
 
         let (response, _) = client
             .generate(
                 &ImageGenerationRequest {
-                    prompt: "draw".to_string(),
-                    background: Some(ImageBackground::Auto),
-                    model: "grok-imagine-image-2.0".to_string(),
+                    prompt: "draw a fox".to_string(),
+                    background: Some(ImageBackground::Transparent),
+                    model: "gpt-image-2".to_string(),
                     n: Some(2),
                     quality: Some(ImageQuality::High),
                     size: Some("1024x1024".to_string()),
@@ -415,9 +472,9 @@ mod tests {
                 HeaderMap::new(),
             )
             .await
-            .expect("generation should work");
+            .expect("Grok image generation should decode");
 
-        assert_eq!(response.created, None);
+        assert_eq!(response.created, 0);
         assert_eq!(response.data[0].mime_type.as_deref(), Some("image/jpeg"));
         assert_eq!(
             captured_request(&transport)
@@ -426,8 +483,8 @@ mod tests {
                 .and_then(RequestBody::json),
             Some(&json!({
                 "model": "grok-imagine-image-2.0",
-                "prompt": "draw",
-                "response_format": "b64_json"
+                "prompt": "draw a fox",
+                "response_format": "b64_json",
             }))
         );
     }
@@ -466,16 +523,19 @@ mod tests {
                 }),
             ),
         ] {
-            let transport = CapturingTransport::new(response_body());
-            let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
-                .with_dialect(ImagesDialect::Grok);
+            let transport = CapturingTransport::new(grok_response_body());
+            let client = ImagesClient::new(
+                transport.clone(),
+                provider_named("Grok"),
+                Arc::new(DummyAuth),
+            );
             client
                 .edit(
                     &ImageEditRequest {
                         images,
                         prompt: "edit".to_string(),
                         background: None,
-                        model: "grok-imagine-image-2.0".to_string(),
+                        model: "gpt-image-2".to_string(),
                         n: None,
                         quality: None,
                         size: None,
@@ -497,9 +557,12 @@ mod tests {
     #[tokio::test]
     async fn grok_edit_rejects_unsupported_cardinality_before_transport() {
         for count in [0, 4] {
-            let transport = CapturingTransport::new(response_body());
-            let client = ImagesClient::new(transport.clone(), provider(), Arc::new(DummyAuth))
-                .with_dialect(ImagesDialect::Grok);
+            let transport = CapturingTransport::new(grok_response_body());
+            let client = ImagesClient::new(
+                transport.clone(),
+                provider_named("Grok"),
+                Arc::new(DummyAuth),
+            );
             client
                 .edit(
                     &ImageEditRequest {
@@ -510,7 +573,7 @@ mod tests {
                             .collect(),
                         prompt: "edit".to_string(),
                         background: None,
-                        model: "grok-imagine-image-2.0".to_string(),
+                        model: "gpt-image-2".to_string(),
                         n: None,
                         quality: None,
                         size: None,

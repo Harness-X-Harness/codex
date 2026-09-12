@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_api::ImagesDialect;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -90,14 +89,6 @@ impl ModelProvider for GrokModelProvider {
                         | "x_thread_fetch"
                 )
         )
-    }
-
-    fn image_generation_model(&self) -> &'static str {
-        "grok-imagine-image-2.0"
-    }
-
-    fn images_dialect(&self) -> ImagesDialect {
-        ImagesDialect::Grok
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {

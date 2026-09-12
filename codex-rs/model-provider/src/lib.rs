@@ -31,6 +31,43 @@ pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::RemoteCompactionSupport;
 pub use provider::SharedModelProvider;
 
+use codex_api::GROK_MAX_EDIT_IMAGES;
+
+const DEFAULT_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 5;
+
+/// Provider-owned image-generation policy consumed by the stock image extension.
+///
+/// The policy controls only whether the extension may be exposed and the provider's
+/// edit-image cardinality. Request/response wire projection remains an API-boundary concern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageGenerationPolicy {
+    pub max_edit_images: usize,
+}
+
+/// Resolves image-generation policy without making the image extension know provider identities.
+///
+/// The stock configured-provider availability contract is preserved exactly. Grok opts into the
+/// same extension through its explicit provider capability and carries its verified three-image
+/// edit limit here; all wire differences remain in `codex-api`.
+pub fn image_generation_policy(provider: &SharedModelProvider) -> Option<ImageGenerationPolicy> {
+    let info = provider.info();
+    let is_grok = grok_provider::is_grok_provider_info(info);
+    let stock_available = info.is_openai()
+        || info.requires_openai_auth
+        || info.uses_openai_actor_authorization();
+    if !provider.capabilities().image_generation || (!stock_available && !is_grok) {
+        return None;
+    }
+
+    Some(ImageGenerationPolicy {
+        max_edit_images: if is_grok {
+            GROK_MAX_EDIT_IMAGES
+        } else {
+            DEFAULT_IMAGE_GENERATION_MAX_EDIT_IMAGES
+        },
+    })
+}
+
 /// Creates the runtime model provider for configured provider metadata.
 ///
 /// Grok is a thin product-specific wrapper around the stock configured provider:
