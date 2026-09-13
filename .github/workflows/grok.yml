@@ -8,7 +8,7 @@ on:
   pull_request:
     branches: ['grok/**']
   push:
-    branches: ['grok/**', 'work/grok-rust-v0.154.0-210']
+    branches: ['grok/**']
 
 concurrency:
   group: grok-${{ github.ref }}
@@ -117,7 +117,7 @@ jobs:
 
   identity:
     name: Resolve packaging version
-    if: github.event_name == 'push' && startsWith(github.ref_name, 'grok/rust-v')
+    if: github.event_name == 'push'
     needs: [workflow, formatting, contracts, lints]
     runs-on: ubuntu-24.04
     outputs:
