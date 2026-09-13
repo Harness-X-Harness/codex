@@ -84,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p codex-core --lib grok
+          cargo test -p codex-core --lib json_whole_number
           cargo test -p codex-guardian-v2 -p codex-memories-write --lib
           cargo test -p codex-app-server --test all mcp_server_tool_call_returns_tool_result
       - name: Grok tools, history, and image generation
