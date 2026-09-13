@@ -24,7 +24,6 @@ use pretty_assertions::assert_eq;
 use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenArgs;
-use super::MAX_EDIT_IMAGES;
 use super::imagegen_tool_spec;
 use super::normalize_image_data;
 use super::request_for_call_args;
@@ -33,6 +32,7 @@ use crate::IMAGEGEN_TOOL_NAME;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 
+const MAX_EDIT_IMAGES: usize = 5;
 const RESULT: &str = "cG5n";
 
 #[test]

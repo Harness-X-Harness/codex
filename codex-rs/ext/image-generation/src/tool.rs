@@ -57,7 +57,6 @@ use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
 const IMAGE_MODEL: &str = "gpt-image-2";
-pub(crate) const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
     MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
