@@ -1,0 +1,41 @@
+name: grok-migration-208-check
+
+on:
+  push:
+    branches:
+      - work/grok-rust-v0.154.0-208
+
+permissions:
+  contents: read
+
+env:
+  RUST_MIN_STACK: "16777216"
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Test Grok App Server lifecycle binding
+        run: cargo test -p codex-app-server --test all grok_provider_binding -- --nocapture
+      - name: Test stock fork lifecycle control
+        run: cargo test -p codex-app-server --test all thread_fork_creates_new_thread_and_emits_started -- --nocapture
+      - name: Test stock resume metadata control
+        run: cargo test -p codex-app-server --test all thread_resume_paginated_model_context_preserves_original_metadata -- --nocapture
+      - name: Test stock manual compaction control
+        run: cargo test -p codex-app-server --test all thread_compact_start_triggers_compaction_and_returns_empty_response -- --nocapture
+      - name: Compile repository-owned Go Live harness
+        working-directory: grok/live
+        env:
+          GOWORK: "off"
+        run: go test ./... -count=1 -run '^TestProxyCommandForwardsInterruptAndWaitsForChild$'
