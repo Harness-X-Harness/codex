@@ -14,7 +14,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 70
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: codex-rs
@@ -24,6 +24,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: rustfmt
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: grok/live/go.mod
+          cache: false
       - name: Check formatting
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Test Grok App Server lifecycle binding
@@ -39,3 +43,24 @@ jobs:
         env:
           GOWORK: "off"
         run: go test ./... -count=1 -run '^TestProxyCommandForwardsInterruptAndWaitsForChild$'
+      - name: Build migrated App Server binary
+        run: |
+          set -euo pipefail
+          cargo build --bin codex
+          test -x "${CARGO_TARGET_DIR}/debug/codex"
+          echo "GROK_LIVE_CODEX_BIN=${CARGO_TARGET_DIR}/debug/codex" >> "${GITHUB_ENV}"
+      - name: Materialize Grok Live profile
+        env:
+          GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
+        run: |
+          set -euo pipefail
+          test -n "${GROK_CONFIG_TOML}"
+          umask 077
+          printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
+      - name: Run #208 Grok lifecycle Live stories
+        working-directory: grok/live
+        env:
+          GROK_LIVE: "1"
+          GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GOWORK: "off"
+        run: go test ./... -count=1 -timeout 15m -run '^(TestGrokBasic|TestGrokCollaboration)$'
