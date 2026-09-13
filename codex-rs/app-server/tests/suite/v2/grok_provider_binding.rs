@@ -106,7 +106,10 @@ async fn grok_normal_continuation_keeps_provider_binding() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mock = responses::mount_response_sequence(
         &server,
-        vec![reply("seed", SEED_REPLY), reply("continued", "CONTINUED_REPLY")],
+        vec![
+            reply("seed", SEED_REPLY),
+            reply("continued", "CONTINUED_REPLY"),
+        ],
     )
     .await;
     let codex_home = TempDir::new()?;
@@ -138,8 +141,10 @@ async fn grok_normal_continuation_keeps_provider_binding() -> Result<()> {
 
     assert_all_requests_are_grok(&mock, 2);
     let continued_input = mock.requests()[1].input();
-    let seed_prompt = input_position(&continued_input, SEED_PROMPT).expect("continuation replays seed");
-    let seed_reply = input_position(&continued_input, SEED_REPLY).expect("continuation replays reply");
+    let seed_prompt =
+        input_position(&continued_input, SEED_PROMPT).expect("continuation replays seed");
+    let seed_reply =
+        input_position(&continued_input, SEED_REPLY).expect("continuation replays reply");
     let follow_up = input_position(&continued_input, "ordinary continuation")
         .expect("continuation sends follow-up");
     assert!(seed_prompt < seed_reply && seed_reply < follow_up);
