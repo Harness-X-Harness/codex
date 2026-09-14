@@ -39,6 +39,7 @@ being coupled to Grok-only behavior.
 
 ## Boundaries
 
+- Do not break the Rules in [`release.md`](./release.md).
 - Do not merge a new stock tag into an old Grok branch as the common path.
 - Do not replay complete old branch history when current semantic commits are
   sufficient.

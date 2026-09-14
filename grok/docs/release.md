@@ -11,15 +11,36 @@ push grok/rust-v*       = six target binaries + Live on Linux musl
 grok/release.py publish = the only grok-v* mutation
 ```
 
-A failed or cancelled proof does not replace the channel.
-The workflow is a proof graph, not a publication program.
-`work/*` is not the Codex tree.
-
 ```text
 commit SHA      = immutable source identity
 Actions run     = proof of six target binaries and Linux Live
 grok-vX.Y.Z     = moving channel written by grok/release.py publish
 ```
+
+## Rules
+
+A later change that breaks a rule is a regression. Instances (temporary
+branches, frozen channels, one failed run) stay in operational notes.
+
+1. Heavy work happens once per SHA. Later stages consume the result.
+2. Review, proof, and publish are the only entries. Do not add a process
+   that proves the proof.
+3. Evidence is the named executable result. Do not add ledgers, document
+   validators, or identity jobs.
+4. One fact has one authority.
+5. Prefer native platform steps. Scripts wrap only external mutation and
+   readback.
+6. Add a layer only when it prevents a current failure. Cache, sibling
+   cancel, single-target retry, and pack/unpack on the proof path are not
+   rules.
+7. A failed or cancelled proof does not replace the channel. Do not retry
+   a mutation that did not read back.
+8. The product line is the current stock fixed point. Temporary branches
+   and old lines are not publication authorities.
+9. Composition proof runs against the built binary. Packaging belongs to
+   publish.
+10. Capability text follows current code. Delete dead paths with evidence;
+    do not infer legacy from names or history.
 
 ## Proof
 
@@ -55,7 +76,7 @@ mutation that did not read back.
 
 When work moves to a new stock tag, stop pushing the old `grok/rust-v*` line.
 The old channel stops moving because nothing publishes it.
-Do not publish `grok-v0.153.4`; that channel is frozen.
+The `grok-v0.153.4` channel is frozen.
 
 ## Proof authorities
 
