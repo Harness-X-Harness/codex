@@ -89,4 +89,4 @@ the same fixed point.
 Server on a Grok-profile Home and asserts that `model/list` returns exactly
 the release-bundled `grok-4.6` `Model` DTO. The stock `model/list` suite in
 the same crate is the stock compatibility control. Both run through native
-`cargo test` in `grok-checks`.
+`cargo test` in `grok.yml`.

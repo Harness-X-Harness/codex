@@ -55,7 +55,6 @@ routing, or accounting.
 
 ### Preconditions
 
-- Artifact source SHA, archive identity, and checksum are known.
 - Native Grok and stock Cargo tests passed for that source.
 - The artifact contains the current profile and release-bundled Grok catalog.
 - One usable Grok credential is available without being written to evidence.
@@ -77,7 +76,4 @@ pass for the frozen source. This Story does not perform a ChatGPT live Turn.
 
 ## Executable contract
 
-`TestGrokBasic` in the repository-owned `grok/live` Go module. Normal Grok
-delivery runs `go test ./... -count=1 -timeout 30m -run '^TestGrok'` from
-`grok/live` against the exact current-run Linux archive. `llm-go/codexsdk` is
-the SDK dependency, not the acceptance owner. The GREEN run is the evidence.
+`TestGrokBasic` in `grok/live`. Scheduling is [`release.md`](../release.md).

@@ -80,8 +80,5 @@ the request copy. Live observation alone does not inspect Provider egress.
 
 ## Executable contract
 
-`TestGrokEncryptedReasoningContinuation` in the repository-owned `grok/live`
-Go module. Normal Grok delivery runs
-`go test ./... -count=1 -timeout 30m -run '^TestGrok'` from `grok/live` against
-the exact current-run Linux archive. `llm-go/codexsdk` is the SDK dependency,
-not the acceptance owner.
+`TestGrokEncryptedReasoningContinuation` in `grok/live`. Scheduling is
+[`release.md`](../release.md).

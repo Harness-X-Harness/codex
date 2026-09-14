@@ -81,4 +81,4 @@ lifecycle and post-compaction history layout.
 
 `grok_manual_compaction_keeps_provider_binding` in
 `codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs`. Native
-`cargo test` in `grok-checks`.
+`cargo test` in `grok.yml`.

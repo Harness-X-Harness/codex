@@ -85,4 +85,4 @@ acquiring a Grok Provider Profile, catalog, or model restrictions.
 
 `grok_cold_restart_resume_keeps_provider_binding` in
 `codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs`. Native
-`cargo test` in `grok-checks`.
+`cargo test` in `grok.yml`.

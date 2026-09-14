@@ -64,7 +64,6 @@ Grok model.
 
 ### Preconditions
 
-- Artifact source SHA, archive identity, and checksum are known.
 - Native Grok Tool Plan, flat-projection, and model-visible request tests
   passed for that source.
 - The release-bundled Grok catalog advertises free-form `apply_patch`.
@@ -90,8 +89,5 @@ This Story does not perform a ChatGPT live Turn.
 
 ## Executable contract
 
-`TestGrokCustomApplyPatch` in the repository-owned `grok/live` Go module.
-Normal Grok delivery runs
-`go test ./... -count=1 -timeout 30m -run '^TestGrok'` from `grok/live` against
-the exact current-run Linux archive. `llm-go/codexsdk` is the SDK dependency,
-not the acceptance owner.
+`TestGrokCustomApplyPatch` in `grok/live`. Scheduling is
+[`release.md`](../release.md).

@@ -9,12 +9,20 @@ sandbox and approvals, history and context, and App Server / Codex UI
 contracts. Grok-specific code exists only for verified Grok backend API
 differences.
 
-This document is the human-readable Grok product design. It is not executable
-acceptance input. Deterministic proof is native Cargo tests at the owning
-seams. Real-provider composition that those tests cannot prove is owned by the
-repository-local Go tests under `grok/live`; that harness consumes
-`github.com/ronhuafeng/llm-go/codexsdk` as its App Server SDK dependency. Git
-owns source identity as the exact commit SHA.
+This document is the product Northstar. It is not executable acceptance
+input. Delivery lives in [`release.md`](./release.md).
+
+```text
+Stock Codex owns the harness. Grok keeps only verified backend differences.
+One App Server process serves one Provider Profile.
+Durable identity is the stock model_provider id.
+wire_api = "grok_responses" is the serialized Grok selector.
+HTTP/SSE remains stock Responses.
+```
+
+Deterministic proof is native Cargo tests at the owning seams.
+Real-provider composition is `grok/live`. Git owns source identity as the
+commit SHA.
 
 ## Source of truth
 
@@ -112,10 +120,11 @@ to `xhigh` at Provider egress. This does not advertise synthetic Grok
 
 ### Tool projection
 
-Codex builds and routes canonical tools. When the complete path is verified, a
-Provider may project a canonical tool identity to a backend-safe wire form and
-retain a reversible mapping. Until that round trip is implemented and
-verified, Grok namespace-tool capability remains unavailable.
+Codex builds and routes canonical tools. Grok keeps `namespace_tools` enabled
+and projects those tools as flat functions at Provider egress. The Grok
+Responses backend does not consume the stock namespace-tool wire form. The
+reverse mapping restores a wire call to its canonical tool identity before
+dispatch.
 
 ### History projection
 
@@ -182,24 +191,16 @@ the superseded Grok mechanism. Port Grok as one semantic commit per stock
 seam. Native Grok and stock compatibility tests travel with the behavior they
 prove.
 
-The maintainer procedure lives in `grok/docs/carry-forward.md`. Canonical Grok
-refs are `grok/<stock-tag>` as described in
-[`docs/downstream-products.md`](../../docs/downstream-products.md).
+The maintainer procedure lives in [`carry-forward.md`](./carry-forward.md).
+The Grok source ref is `grok/rust-v*` for stock `rust-v*`.
 
 ## Proof
-
-```text
-native cargo fmt / clippy / test / build
-        -> deterministic Grok and stock-seam contracts
-direct go test ./... -run '^TestGrok' from grok/live
-        -> real Grok composition on the exact Linux archive
-Git SHA
-        -> source identity
-```
 
 Stories in [`stories/`](./stories/) name the user-visible claims and the Rust
 or Go test that binds each claim. Do not add documentation validators,
 keyword greps, Story inventories as tests, or a second SHA/ledger authority.
+How proof is scheduled and how `grok-v*` is written is
+[`release.md`](./release.md).
 
 Host Goal and independent `/workflow` are a sibling product. Their design is
 not this document.

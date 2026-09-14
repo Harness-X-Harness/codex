@@ -4,9 +4,6 @@ This guide owns the Grok-specific maintainer path for moving to a new stock
 Codex tag. Runtime semantics stay in [`architecture.md`](./architecture.md),
 and delivery semantics stay in [`release.md`](./release.md).
 
-Sibling-product branch topology is owned by
-[`docs/downstream-products.md`](../../docs/downstream-products.md).
-
 ## Common path
 
 ```text

@@ -1,7 +1,19 @@
 # Grok release
 
-This document is the human-readable Grok delivery design. Markdown here is
-not executable acceptance input.
+This document is the delivery Northstar. Markdown here is not executable
+acceptance input. Product semantics live in [`architecture.md`](./architecture.md).
+
+## Northstar
+
+```text
+PR to grok/rust-v*      = the Codex tree (Cargo checks only; no Live)
+push grok/rust-v*       = proof (Cargo, six archives, Live on Linux musl)
+grok/release.py publish = the only grok-v* mutation
+```
+
+A failed or cancelled proof does not replace the channel.
+The workflow is a proof graph, not a publication program.
+`work/*` is not the Codex tree.
 
 ```text
 commit SHA      = immutable source identity
@@ -45,6 +57,7 @@ mutation that did not read back.
 
 When work moves to a new stock tag, stop pushing the old `grok/rust-v*` line.
 The old channel stops moving because nothing publishes it.
+Do not publish `grok-v0.153.4`; that channel is frozen.
 
 ## Proof authorities
 
@@ -60,5 +73,3 @@ grok/release.py publish -> channel mutation and GitHub readback
 Workflow mechanics live in [`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
 Packaging, Live extract, and publication live in [`grok/release.py`](../release.py).
 Stock-tag adoption lives in [`carry-forward.md`](./carry-forward.md).
-Sibling branch topology lives in
-[`docs/downstream-products.md`](../../docs/downstream-products.md).

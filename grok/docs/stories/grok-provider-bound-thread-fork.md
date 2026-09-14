@@ -83,4 +83,4 @@ Grok Provider Profile, catalog, or model restrictions.
 
 `grok_fork_keeps_provider_binding_and_isolates_branch_failure` in
 `codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs`. Native
-`cargo test` in `grok-checks`.
+`cargo test` in `grok.yml`.

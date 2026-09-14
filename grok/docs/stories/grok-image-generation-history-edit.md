@@ -23,8 +23,7 @@ not cover Grok Build.
 
 ## Acceptance
 
-**Given** an exact packaged Grok artifact whose source, target, checksum, and
-Grok Provider profile match the deterministic prerequisite gates,
+**Given** a packaged Grok artifact with the shipped Grok Provider profile,
 
 **when** the acceptance runner submits one natural image-generation Turn and,
 after it completes, one natural edit Turn in the same Thread,
@@ -65,7 +64,6 @@ attempts.
 
 ### Preconditions
 
-- Exact product source, target triple, and archive checksum.
 - Native Grok image, catalog, projection, codec, MIME, stock history-edit, App
   Server lifecycle, and stock Provider-control tests passed for that source.
 - The release-bundled image-capable model and the supported Grok Provider
@@ -93,8 +91,5 @@ deterministic child proof; they are not the unique Live image-result oracle.
 
 ## Executable contract
 
-`TestGrokImageGenerationEdit` in the repository-owned `grok/live` Go module.
-Normal Grok delivery runs
-`go test ./... -count=1 -timeout 30m -run '^TestGrok'` from `grok/live` against
-the exact current-run Linux archive. `llm-go/codexsdk` is the SDK dependency,
-not the acceptance owner.
+`TestGrokImageGenerationEdit` in `grok/live`. Scheduling is
+[`release.md`](../release.md).
