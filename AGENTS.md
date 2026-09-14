@@ -322,10 +322,13 @@ Codex supports running connected app-server and exec-server on different operati
 ## Grok
 
 When changing `grok/`, `.github/workflows/grok.yml`, or
-`.github/actions/build-grok/`, read:
+`.github/actions/build-grok/`, read these files directly. Do not stop at
+`grok/README.md`.
 
-- `grok/docs/architecture.md` for the product boundary
-- `grok/docs/release.md` for the delivery map and anti-regression rules
+- `grok/docs/architecture.md` — product boundary
+- `grok/docs/stories/` — verification claims and the Rust or Go proof
+- `grok/docs/release.md` — delivery map and anti-regression rules
+- `grok/docs/carry-forward.md` — adopting a new stock tag
 
-Those two files are the Grok authorities. Do not add another Grok instruction
+Those four files are the Grok authorities. Do not add another Grok instruction
 file.
