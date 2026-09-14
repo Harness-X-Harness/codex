@@ -5,7 +5,7 @@ Rust or Go test that binds it.
 
 Deterministic Stories are proven by Cargo tests in this repository. Live
 Stories are proven by `grok/live` `go test -run '^TestGrok'` against the
-proof-run Linux archive. `llm-go/codexsdk` is the SDK, not the acceptance
+proof-run Linux musl binary. `llm-go/codexsdk` is the SDK, not the acceptance
 owner. A GREEN run is Live evidence. Changing an outcome-driving acceptance
 requires changing the named test. Scheduling lives in
 [`../release.md`](../release.md).

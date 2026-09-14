@@ -12,8 +12,9 @@ choose exact stock rust-vNEW
   -> replay/adapt the current Grok semantic commits
   -> drop downstream mechanisms stock now owns
   -> open the Codex PR against grok/rust-vNEW
+  -> Cargo
   -> push
-  -> Grok proof (Cargo checks, six builds, Linux Live)
+  -> six binaries + Linux Live
   -> python3 grok/release.py publish
 ```
 

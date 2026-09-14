@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package Grok archives, extract the Live binary, and publish the moving channel."""
+"""Package Grok archives and publish the moving channel."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import argparse
 import gzip
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -61,14 +60,6 @@ def archive_name(version: str, target: str) -> str:
 
 def artifact_name(sha: str, target: str) -> str:
     return f"grok-build-{sha}-{target}"
-
-
-def resolve_version(ref: str | None, version: str | None) -> str:
-    if ref:
-        return version_from_ref(ref)
-    if version and "/" not in version:
-        return version
-    raise SystemExit("need --ref or --version")
 
 
 def normalized_tar_info(info: tarfile.TarInfo) -> tarfile.TarInfo:
@@ -141,26 +132,6 @@ def package(
             write_archive(stage, output / archive_name(version, target))
 
 
-def extract_live(archives: Path, output: Path, github_env: Path | None) -> Path:
-    tars = sorted(archives.glob("*.tar.gz"))
-    if len(tars) != 1:
-        raise SystemExit(f"need exactly one archive, found {len(tars)}")
-    output.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(tars[0], "r:gz") as archive:
-        archive.extractall(output)
-    bins = list(output.glob("*/bin/grok-bin"))
-    if len(bins) != 1:
-        raise SystemExit(f"need exactly one grok-bin, found {len(bins)}")
-    binary = bins[0].resolve()
-    if not os.access(binary, os.X_OK):
-        raise SystemExit(f"grok-bin is not executable: {binary}")
-    if github_env is not None:
-        with github_env.open("a", encoding="utf-8") as handle:
-            handle.write(f"GROK_LIVE_CODEX_BIN={binary}\n")
-    print(binary)
-    return binary
-
-
 def _gh(*args: str) -> str:
     return subprocess.check_output(["gh", *args], text=True)
 
@@ -220,8 +191,9 @@ def _require_proof(repo: str, run_id: str, checkout: Path) -> tuple[str, str, st
 
 def _stage_channel(repo_root: Path, run_id: str, repo: str, sha: str, version: str) -> Path:
     staging = Path(tempfile.mkdtemp(prefix="grok-publish-"))
+    raw_root = staging / "raw"
     for target in TARGETS:
-        dest = staging / "download" / target
+        dest = raw_root / target
         dest.mkdir(parents=True)
         subprocess.check_call(
             [
@@ -237,10 +209,7 @@ def _stage_channel(repo_root: Path, run_id: str, repo: str, sha: str, version: s
                 str(dest),
             ]
         )
-        archive = dest / archive_name(version, target)
-        if not archive.is_file():
-            raise SystemExit(f"missing archive {archive.name}")
-        archive.replace(staging / archive.name)
+    package(raw_root, staging, repo_root, version)
     dist = repo_root / DIST_ROOT
     for extra in CHANNEL_FILES:
         source = dist / extra
@@ -331,36 +300,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    pkg = sub.add_parser("package")
-    pkg.add_argument("--raw-root", type=Path, required=True)
-    pkg.add_argument("--output", type=Path, required=True)
-    pkg.add_argument("--repository", type=Path, required=True)
-    pkg.add_argument("--ref")
-    pkg.add_argument("--version")
-    pkg.add_argument("--target", action="append", choices=TARGETS)
-
-    live = sub.add_parser("extract-live")
-    live.add_argument("--archives", type=Path, required=True)
-    live.add_argument("--output", type=Path, required=True)
-    live.add_argument("--github-env", type=Path)
-
     pub = sub.add_parser("publish")
     pub.add_argument("--run-id", required=True)
     pub.add_argument("--repo", required=True)
 
     args = parser.parse_args()
-    if args.cmd == "package":
-        package(
-            args.raw_root,
-            args.output,
-            args.repository,
-            resolve_version(args.ref, args.version),
-            tuple(args.target) if args.target else TARGETS,
-        )
-        return
-    if args.cmd == "extract-live":
-        extract_live(args.archives, args.output, args.github_env)
-        return
     publish(args.repo, args.run_id, Path(__file__).resolve().parent.parent)
 
 

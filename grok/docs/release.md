@@ -6,8 +6,8 @@ acceptance input. Product semantics live in [`architecture.md`](./architecture.m
 ## Northstar
 
 ```text
-PR to grok/rust-v*      = the Codex tree (Cargo checks only; no Live)
-push grok/rust-v*       = proof (Cargo, six archives, Live on Linux musl)
+PR to grok/rust-v*      = Cargo
+push grok/rust-v*       = six target binaries + Live on Linux musl
 grok/release.py publish = the only grok-v* mutation
 ```
 
@@ -17,26 +17,24 @@ The workflow is a proof graph, not a publication program.
 
 ```text
 commit SHA      = immutable source identity
-Actions run     = proof of tests, six target archives, and Linux Live
+Actions run     = proof of six target binaries and Linux Live
 grok-vX.Y.Z     = moving channel written by grok/release.py publish
 ```
 
 ## Proof
 
-A pull request to `grok/rust-v*` is the Codex tree. It runs Cargo checks.
-It does not run Live.
+A pull request to `grok/rust-v*` runs Cargo. It does not build binaries or
+run Live. Push does not repeat Cargo.
 
 ```text
 push grok/rust-vX.Y.Z
-  -> cargo fmt / clippy / tests
   -> build x86_64-unknown-linux-musl
-  -> Go Live on that archive
+  -> Go Live on that binary
   -> build the other five targets in parallel with Live
 ```
 
-Live consumes the `x86_64-unknown-linux-musl` archive from the same run.
-It does not wait for Darwin or Windows. Publication still requires all six
-archives.
+Live consumes the musl `codex` binary from the same run. It does not wait
+for Darwin or Windows. Publication packages the six binaries.
 
 GitHub Actions does not create or replace `grok-vX.Y.Z`.
 
@@ -62,14 +60,13 @@ Do not publish `grok-v0.153.4`; that channel is frozen.
 ## Proof authorities
 
 ```text
-cargo fmt/clippy    -> Rust native formatting/linting
-cargo test          -> Rust deterministic product semantics
-cargo build         -> six release targets
-go test -run '^TestGrok' -> real Grok composition on the Linux archive
-GitHub Actions      -> proof orchestration and artifacts
-grok/release.py publish -> channel mutation and GitHub readback
+cargo fmt/clippy/test     -> PR gate
+cargo build               -> six target binaries
+go test -run '^TestGrok'  -> Live on the Linux musl binary
+GitHub Actions            -> proof orchestration and artifacts
+grok/release.py publish   -> package, channel mutation, readback
 ```
 
 Workflow mechanics live in [`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
-Packaging, Live extract, and publication live in [`grok/release.py`](../release.py).
+Publication lives in [`grok/release.py`](../release.py).
 Stock-tag adoption lives in [`carry-forward.md`](./carry-forward.md).
