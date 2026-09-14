@@ -78,12 +78,9 @@ does not retry or replace either semantic Turn.
 
 ### Secret-safe evidence
 
-Record exact source SHA, target triple, archive identity and checksum,
-Provider and model labels, generation and history-edit completion booleans,
-same-Thread and history-argument verification booleans, image MIME/codec match
-booleans, and runner submission count. Negative evidence: no runner
-resubmission, no alternate Provider, no raw names, arguments, prompts,
-replies, IDs, credentials, raw traffic, paths, or image payloads.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

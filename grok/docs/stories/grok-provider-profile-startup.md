@@ -66,11 +66,9 @@ One positive semantic Grok Turn. A missing or failed terminal state is failure.
 
 ### Secret-safe evidence
 
-Record Story ID, source SHA, validation run, archive identity and checksum,
-profile identity, model and Provider labels, terminal state, and runner
-submission count. Negative evidence: no runner re-invocation, no other
-Provider, no credentials, prompts, responses, raw traffic, URLs, account
-identifiers, or Thread and Session IDs.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

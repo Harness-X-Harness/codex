@@ -14,9 +14,10 @@ choose exact stock rust-vNEW
   -> create grok/rust-vNEW from that tag
   -> replay/adapt the current Grok semantic commits
   -> drop downstream mechanisms stock now owns
+  -> open the Codex PR against grok/rust-vNEW
   -> push
   -> Grok proof (Cargo checks, six builds, Linux Live)
-  -> grok/publish.py writes grok-vNEW
+  -> python3 grok/release.py publish
 ```
 
 Choosing the stock tag and adapting Grok semantics are deliberate product
@@ -43,8 +44,9 @@ being coupled to Grok-only behavior.
 - Do not merge a new stock tag into an old Grok branch as the common path.
 - Do not replay complete old branch history when current semantic commits are
   sufficient.
+- Do not keep a second long-lived product trunk. The Codex tree is `grok/rust-v*`.
 - Do not publish from GitHub Actions. Proof stays in `grok.yml`. Channel
-  mutation stays in `grok/publish.py`.
+  mutation stays in `grok/release.py publish`.
 - Do not use Harness branch, CI, or release state as Grok acceptance.
 - Do not use Mini as a Grok source or publication coordinator.
 - Do not add branch-policy parsers, documentation validators, release ledgers,

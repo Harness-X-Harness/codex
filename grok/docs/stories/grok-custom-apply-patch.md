@@ -78,12 +78,9 @@ custom-tool item, a shell fallback, or a failed terminal result.
 
 ### Secret-safe evidence
 
-Record Story ID, source SHA, validation run, archive identity, whether
-`shell_tool` was disabled, whether the catalog advertised free-form
-`apply_patch`, custom-tool or `file_change` presence class, workspace file
-result class, Turn terminal class, and runner submission count. Negative
-evidence: no runner re-invocation, no fallback outside Grok, no shell or
-apply-patch CLI explanation, no Mini or Local Adapter result used as proof.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

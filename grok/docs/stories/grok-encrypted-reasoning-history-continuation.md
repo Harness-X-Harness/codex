@@ -67,11 +67,9 @@ is started once.
 
 ### Secret-safe evidence
 
-Record Story ID, source SHA, validation run, archive identity, Provider and
-model labels, structural completion assertions, fresh-result equality
-booleans, and runner Turn-submission count. Negative evidence: no runner
-re-invocation, no other Thread or history authority, no credentials, prompts,
-responses, raw traffic, encrypted bytes, or Thread identifiers.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

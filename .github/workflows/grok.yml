@@ -1,8 +1,8 @@
 name: grok
 
-# Proof only. PR and push run native Cargo checks. Push to grok/rust-v*
-# builds six targets and runs Go Live on the Linux musl archive.
-# Publication is outside this workflow.
+# Proof only. A PR to grok/** is the Codex tree and runs Cargo checks.
+# Push builds six targets and runs Go Live on the Linux musl archive.
+# Publication is grok/release.py publish, not this workflow.
 
 on:
   pull_request:
@@ -97,7 +97,7 @@ jobs:
 
   build-linux-x64-musl:
     name: Build x86_64-unknown-linux-musl
-    if: github.event_name == 'push' && startsWith(github.ref_name, 'grok/rust-v')
+    if: github.event_name == 'push'
     needs: [formatting, contracts, lints]
     runs-on: ubuntu-24.04
     timeout-minutes: 170
@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 grok/release.py \
+          python3 grok/release.py package \
             --raw-root "${RUNNER_TEMP}/raw" \
             --output "${RUNNER_TEMP}/archive" \
             --repository . \
@@ -132,7 +132,7 @@ jobs:
 
   build-pack:
     name: Build ${{ matrix.target }}
-    if: github.event_name == 'push' && startsWith(github.ref_name, 'grok/rust-v')
+    if: github.event_name == 'push'
     needs: [formatting, contracts, lints]
     strategy:
       fail-fast: false
@@ -167,7 +167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "${PYTHON}" grok/release.py \
+          "${PYTHON}" grok/release.py package \
             --raw-root "${RUNNER_TEMP}/raw" \
             --output "${RUNNER_TEMP}/archive" \
             --repository . \
@@ -182,7 +182,7 @@ jobs:
 
   live:
     name: Grok Live
-    if: github.event_name == 'push' && startsWith(github.ref_name, 'grok/rust-v')
+    if: github.event_name == 'push'
     needs: [build-linux-x64-musl]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -205,14 +205,7 @@ jobs:
           umask 077
           printf '%s' "${GROK_CONFIG_TOML}" > "${RUNNER_TEMP}/config.toml"
       - name: Extract the Grok binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p extracted
-          tar -xzf archives/*.tar.gz -C extracted
-          set -- extracted/*/bin/grok-bin
-          [[ $# -eq 1 && -x "$1" ]]
-          echo "GROK_LIVE_CODEX_BIN=${GITHUB_WORKSPACE}/$1" >> "${GITHUB_ENV}"
+        run: python3 grok/release.py extract-live --archives archives --output extracted --github-env "${GITHUB_ENV}"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: grok/live/go.mod

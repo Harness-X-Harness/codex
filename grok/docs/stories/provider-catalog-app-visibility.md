@@ -72,9 +72,9 @@ Server on a mock gateway.
 
 ### Secret-safe evidence
 
-Record source identity, the gate that proved it, Provider names, and model
-counts. Negative evidence: no credentials, headers, raw bodies, or account
-identifiers.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

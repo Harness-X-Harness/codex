@@ -76,13 +76,9 @@ orchestration.
 
 ### Secret-safe evidence
 
-Record Story ID, source and artifact identity, expected and observed
-Provider/model classes, semantic child-result and parent-result
-classifications, parent-link and delivery booleans, terminal classes, and
-runner submission count. Correlation identifiers compared in memory; evidence
-retains only equality booleans or digests. Negative evidence: no other
-Provider, no runner replay, no prompts, responses, credentials, raw events, or
-Thread IDs.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

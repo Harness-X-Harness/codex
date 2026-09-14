@@ -68,11 +68,9 @@ credential is required.
 
 ### Secret-safe evidence
 
-Record Story ID, source identity, Provider class before and after compaction,
-model-binding preservation, compaction and follow-up terminal classes,
-history/order preservation, and runner submissions. Negative evidence: no
-prompts, summaries, responses, credentials, Thread IDs, or durable history
-content.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 

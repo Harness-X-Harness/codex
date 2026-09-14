@@ -69,10 +69,9 @@ branch. No Live credential is required.
 
 ### Secret-safe evidence
 
-Record Story ID, source identity, lineage class, Provider class for source and
-fork, durable-prefix preservation, terminal result classes, and runner
-submissions. Negative evidence: no prompts, responses, credentials, Thread
-IDs, or durable history content.
+The GREEN proof run of the named executable contract is the evidence.
+Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+
 
 ## Stock compatibility control
 
