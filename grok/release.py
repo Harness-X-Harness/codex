@@ -26,6 +26,20 @@ DIST_FILES = (
     "install-grok.sh",
     "install-grok.ps1",
 )
+REF_PREFIX = "grok/rust-v"
+
+
+def version_from_ref(ref: str) -> str:
+    """Parse grok/rust-vX.Y.Z from a branch name or git ref."""
+    value = ref.strip()
+    if value.startswith("refs/heads/"):
+        value = value.removeprefix("refs/heads/")
+    if not value.startswith(REF_PREFIX):
+        raise SystemExit(f"ref must start with {REF_PREFIX}")
+    version = value.removeprefix(REF_PREFIX)
+    if not version or "/" in version:
+        raise SystemExit("version must be a dotted release number")
+    return version
 
 
 def tag_for(version: str) -> str:
@@ -115,15 +129,24 @@ def main() -> None:
     parser.add_argument("--raw-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repository", type=Path, required=True)
-    parser.add_argument("--version", required=True)
+    parser.add_argument("--ref")
+    parser.add_argument("--version")
     parser.add_argument("--target", action="append", choices=TARGETS)
     args = parser.parse_args()
+    if args.ref:
+        version = version_from_ref(args.ref)
+    elif args.version:
+        version = args.version
+        if not version or "/" in version:
+            raise SystemExit("version must be a dotted release number")
+    else:
+        raise SystemExit("need --ref or --version")
 
     package(
         args.raw_root,
         args.output,
         args.repository,
-        args.version,
+        version,
         tuple(args.target) if args.target else TARGETS,
     )
 

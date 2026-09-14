@@ -5,8 +5,7 @@ Codex tag. Runtime semantics stay in [`architecture.md`](./architecture.md),
 and delivery semantics stay in [`release.md`](./release.md).
 
 Sibling-product branch topology is owned by
-[`docs/downstream-products.md`](../../docs/downstream-products.md). This guide
-does not copy that cross-product policy.
+[`docs/downstream-products.md`](../../docs/downstream-products.md).
 
 ## Common path
 
@@ -16,11 +15,12 @@ choose exact stock rust-vNEW
   -> replay/adapt the current Grok semantic commits
   -> drop downstream mechanisms stock now owns
   -> push
-  -> normal Grok CI builds, runs Go Live, and publishes grok-vNEW
+  -> Grok proof (Cargo checks, six builds, Linux Live)
+  -> grok/publish.py writes grok-vNEW
 ```
 
 Choosing the stock tag and adapting Grok semantics are deliberate product
-work. Release choreography is not a separate maintainer step.
+work.
 
 ## Semantic stack
 
@@ -38,31 +38,13 @@ A fix that is independently correct for stock Codex should be upstreamed when
 practical. Until then it may be replayed as a stock-compatible fix rather than
 being coupled to Grok-only behavior.
 
-## Proof and publication
-
-The first push on a new Grok line and every later push use the same delivery
-path:
-
-```text
-Rust native checks
-  -> six target builds
-  -> Go native Grok Live on the exact Linux artifact
-  -> moving grok-v<stock-version> publication
-  -> minimum GitHub readback
-```
-
-There is no rehearsal release, `dry_run`, empty-destination preparation,
-manual publication phase, Mini gitlink/fact/locator synchronization, or
-separate freeze transaction.
-
-When development moves from `grok/rust-vOLD` to `grok/rust-vNEW`, stop pushing
-the old line. Its last GREEN `grok-vOLD` state is then historical naturally.
-
 ## Boundaries
 
 - Do not merge a new stock tag into an old Grok branch as the common path.
 - Do not replay complete old branch history when current semantic commits are
   sufficient.
+- Do not publish from GitHub Actions. Proof stays in `grok.yml`. Channel
+  mutation stays in `grok/publish.py`.
 - Do not use Harness branch, CI, or release state as Grok acceptance.
 - Do not use Mini as a Grok source or publication coordinator.
 - Do not add branch-policy parsers, documentation validators, release ledgers,

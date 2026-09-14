@@ -1,70 +1,68 @@
 # Grok release
 
-This document is the human-readable Grok delivery design. Executable
-correctness is owned by native Cargo tests and builds, direct `go test` Live
-on the exact Linux archive, the Actions run that wires those artifacts, and
-one minimum GitHub publication readback.
+This document is the human-readable Grok delivery design. Markdown here is
+not executable acceptance input.
 
 ```text
 commit SHA      = immutable source identity
-Actions run     = execution context
-grok-vX.Y.Z     = latest GREEN distribution channel for stock rust-vX.Y.Z
+Actions run     = proof of tests, six target archives, and Linux Live
+grok-vX.Y.Z     = moving channel written by the external publisher
 ```
 
-## Normal path
+## Proof
 
 ```text
 push grok/rust-vX.Y.Z
-  -> actionlint
-  -> direct Rust native checks and required target builds
-  -> Go native Live on the exact Linux artifact from that run
-  -> publish or replace grok-vX.Y.Z
-  -> one authoritative GitHub readback
+  -> cargo fmt / clippy / tests
+  -> build x86_64-unknown-linux-musl
+  -> Go Live on that archive
+  -> build the other five targets in parallel with Live
 ```
 
-A pull request to `grok/*` runs `actionlint` and the Rust native checks. It
-does not publish.
+A pull request to `grok/**` runs only the Cargo checks.
 
-An existing `grok-vX.Y.Z` channel is normal state. A failed candidate does not
-replace it. A later GREEN push on the same stock line replaces the channel.
-When work moves to a new stock tag, the old channel stops moving because
-nothing pushes it; there is no freeze operation.
+Live consumes the `x86_64-unknown-linux-musl` archive from the same run.
+It does not wait for Darwin or Windows. Publication still requires all six
+archives.
 
-Git owns source identity as the commit SHA. The published channel is a moving
-pointer to the latest GREEN SHA for that stock version. Same-name tag
-immutability, destination emptiness, one publication request ever, and rebuild
-suffixes such as `-1` / `-2` are not part of this model.
+GitHub Actions does not create or replace `grok-vX.Y.Z`.
 
-Publication starts only after required candidate, artifact, and Live proof is
-GREEN. There is no separate human publication decision after that proof.
+## Publication
 
-Push runs on the same Grok ref are serialized rather than cancelling a running
-push. Immediately before destructive channel replacement, the publisher
-requires the branch head to equal the accepted run SHA. Once replacement
-starts, a newer push cannot cancel it before authoritative readback completes.
-If a GitHub mutation returns an uncertain failure, the same run reads the
-current tag, Release, asset set, and asset digests before any retry decision.
-If that readback already proves the accepted external effect, publication is
-complete; otherwise the run fails with the observed state and does not blindly
-repeat the mutation.
+After a proof run is GREEN, from a checkout of that SHA:
+
+```text
+python3 grok/publish.py --run-id RUN --repo OWNER/NAME
+```
+
+The publisher refuses unless:
+
+- the run is the `grok` workflow on a `push` to `grok/rust-v*`
+- the run completed successfully
+- Live and all six build jobs succeeded
+- `heads/grok/rust-vX.Y.Z` equals the run SHA
+- the checkout HEAD equals the run SHA
+
+It then replaces `grok-vX.Y.Z` and reads back tag SHA, release target, asset
+names, and SHA-256 digests. A failed or cancelled proof does not replace the
+channel. The publisher does not retry a mutation that did not read back.
+
+When work moves to a new stock tag, stop pushing the old `grok/rust-v*` line.
+The old channel stops moving because nothing publishes it.
 
 ## Proof authorities
 
 ```text
-actionlint          -> GitHub Actions DSL static checking
 cargo fmt/clippy    -> Rust native formatting/linting
 cargo test          -> Rust deterministic product semantics
-cargo build         -> supported release targets
-go test -run '^TestGrok' -> real Grok composition on the exact Linux archive
-GitHub Actions      -> orchestration and artifact flow
-GitHub readback     -> publication external-effect confirmation
+cargo build         -> six release targets
+go test -run '^TestGrok' -> real Grok composition on the Linux archive
+GitHub Actions      -> proof orchestration and artifacts
+grok/publish.py     -> channel mutation and GitHub readback
 ```
 
-Markdown in this file is not executable acceptance input. Do not add tests,
-scripts, greps, schemas, Story inventories, heading/keyword checks, or
-required manual-review checklists to enforce it.
-
 Workflow mechanics live in [`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
-Stock-tag adoption lives in [`carry-forward.md`](./carry-forward.md). Sibling
-branch topology lives in
+The publisher lives in [`grok/publish.py`](../publish.py).
+Stock-tag adoption lives in [`carry-forward.md`](./carry-forward.md).
+Sibling branch topology lives in
 [`docs/downstream-products.md`](../../docs/downstream-products.md).
