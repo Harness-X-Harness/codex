@@ -165,6 +165,74 @@ fn grok_projects_replayed_history_on_request_copy_only() {
     assert!(projected.get("parallel_tool_calls").is_none());
 }
 
+fn encrypted_reasoning(
+    encrypted_content: Option<&str>,
+    content: Option<Vec<codex_protocol::models::ReasoningItemContent>>,
+) -> ResponseItem {
+    ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".to_string(),
+        }],
+        content,
+        encrypted_content: encrypted_content.map(str::to_string),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[test]
+fn grok_omits_reasoning_content_when_replaying_encrypted_blob() {
+    let canonical = request(vec![
+        user_message("你好"),
+        encrypted_reasoning(
+            Some("opaque-encrypted-reasoning"),
+            Some(vec![
+                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                    text: "first-turn trace".to_string(),
+                },
+            ]),
+        ),
+    ]);
+    let original = canonical.clone();
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("Grok should replay encrypted reasoning without a content channel");
+
+    assert_eq!(
+        canonical, original,
+        "durable/canonical request must not mutate"
+    );
+    assert_eq!(projected["input"][1]["type"], "reasoning");
+    assert_eq!(
+        projected["input"][1]["encrypted_content"],
+        "opaque-encrypted-reasoning"
+    );
+    assert!(
+        projected["input"][1].get("content").is_none(),
+        "Grok treats a content channel as a modified compaction blob: {}",
+        projected["input"][1]
+    );
+}
+
+#[test]
+fn grok_omits_null_encrypted_reasoning_blob() {
+    let canonical = request(vec![encrypted_reasoning(
+        /*encrypted_content*/ None, /*content*/ None,
+    )]);
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("Grok should omit a null reasoning blob");
+
+    assert_eq!(projected["input"][0]["type"], "reasoning");
+    assert!(
+        projected["input"][0].get("encrypted_content").is_none(),
+        "null encrypted_content is also reported as a compaction blob: {}",
+        projected["input"][0]
+    );
+    assert!(projected["input"][0].get("content").is_none());
+}
+
 #[test]
 fn grok_rejects_encrypted_collaboration_history_before_transport() {
     let request = request(vec![ResponseItem::AgentMessage {
@@ -290,6 +358,31 @@ fn contains_key(value: &serde_json::Value, key: &str) -> bool {
         serde_json::Value::Array(items) => items.iter().any(|child| contains_key(child, key)),
         _ => false,
     }
+}
+
+#[test]
+fn stock_openai_keeps_reasoning_content_with_encrypted_blob() {
+    let canonical = request(vec![encrypted_reasoning(
+        Some("openai-blob"),
+        Some(vec![
+            codex_protocol::models::ReasoningItemContent::ReasoningText {
+                text: "stock trace".to_string(),
+            },
+        ]),
+    )]);
+    let expected = serde_json::to_value(&canonical).expect("stock request serializes");
+
+    assert_eq!(
+        ResponsesDialect::OpenAi
+            .project_request(&canonical)
+            .expect("stock projection"),
+        expected
+    );
+    assert_eq!(expected["input"][0]["encrypted_content"], "openai-blob");
+    assert_eq!(
+        expected["input"][0]["content"][0]["text"], "stock trace",
+        "OpenAI binds the blob to the original content channel"
+    );
 }
 
 #[test]

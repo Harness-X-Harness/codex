@@ -95,14 +95,18 @@ impl ResponsesDialect {
                 continue;
             }
 
-            // Grok accepts encrypted reasoning replay, but not `content: null`.
+            // Grok binds encrypted reasoning to the item shape without a
+            // `content` channel. Stock serde emits `content: null` when the
+            // channel is absent and emits reasoning text when it is present.
+            // xAI reports either replay as:
+            // `Could not decode the compaction blob. Ensure it is unmodified
+            // from the compact response.`
             // `Some(Vec::new())` is intentionally omitted by ResponseItem serde.
             if let ResponseItem::Reasoning {
                 content,
                 encrypted_content: Some(_),
                 ..
             } = item
-                && content.is_none()
             {
                 *content = Some(Vec::new());
             }
@@ -155,6 +159,25 @@ impl ResponsesDialect {
         // (`Argument not supported: external_web_access`), including nested tool
         // payloads the hosted-web_search rewrite does not see.
         strip_unsupported_grok_arguments(&mut value);
+        if let Some(input) = value.get_mut("input").and_then(Value::as_array_mut) {
+            for item in input {
+                let Some(object) = item.as_object_mut() else {
+                    continue;
+                };
+                if object.get("type").and_then(Value::as_str) != Some("reasoning") {
+                    continue;
+                }
+                let usable_blob = matches!(
+                    object.get("encrypted_content"),
+                    Some(Value::String(blob)) if !blob.is_empty()
+                );
+                if usable_blob {
+                    object.remove("content");
+                } else {
+                    object.remove("encrypted_content");
+                }
+            }
+        }
         Ok(value)
     }
 }
