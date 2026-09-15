@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_api::Provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -59,6 +60,17 @@ impl GrokModelProvider {
 impl ModelProvider for GrokModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         self.inner.info()
+    }
+
+    fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
+        Box::pin(async move {
+            let mut provider = self.inner.api_provider().await?;
+            // ResponsesDialect is selected from the transport Provider name. Keep
+            // that identity aligned with GrokModelProvider, including profiles
+            // selected only by `wire_api = "grok_responses"`.
+            provider.name = GROK_PROVIDER_NAME.to_string();
+            Ok(provider)
+        })
     }
 
     fn capabilities(&self) -> ProviderCapabilities {

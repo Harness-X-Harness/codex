@@ -71,7 +71,7 @@ fn user_message(text: &str) -> ResponseItem {
 }
 
 #[test]
-fn responses_dialect_is_selected_only_for_grok_provider_identity() {
+fn responses_dialect_is_selected_for_grok_identity_or_host() {
     assert_eq!(
         ResponsesDialect::for_provider(&provider("Grok")),
         ResponsesDialect::Grok
@@ -87,6 +87,17 @@ fn responses_dialect_is_selected_only_for_grok_provider_identity() {
     assert_eq!(
         ResponsesDialect::for_provider(&provider("Custom")),
         ResponsesDialect::OpenAi
+    );
+
+    let mut xai = provider("xAI");
+    xai.base_url = "https://api.x.ai/v1".to_string();
+    assert_eq!(ResponsesDialect::for_provider(&xai), ResponsesDialect::Grok);
+
+    let mut tunnel = provider("Custom");
+    tunnel.base_url = "https://grok.trustedtunnel.app/v1".to_string();
+    assert_eq!(
+        ResponsesDialect::for_provider(&tunnel),
+        ResponsesDialect::Grok
     );
 }
 
@@ -228,6 +239,57 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
     assert_eq!(projected["tools"][2], json!({"type":"x_search"}));
     assert_eq!(projected["tool_choice"], "auto");
     assert_eq!(projected["parallel_tool_calls"], true);
+    assert!(
+        !contains_key(&projected, "external_web_access"),
+        "Grok egress must not send external_web_access"
+    );
+}
+
+#[test]
+fn grok_strips_external_web_access_from_nested_request_payloads() {
+    let mut canonical = request(vec![user_message("search")]);
+    let tools = serde_json::value::to_raw_value(&json!([
+        {
+            "type": "web_search",
+            "external_web_access": true,
+            "indexed_web_access": true
+        }
+    ]))
+    .expect("tool JSON");
+    canonical.tools = Some(ResponsesApiTools::from(std::sync::Arc::from(tools)));
+    canonical.client_metadata = Some(std::collections::HashMap::from([(
+        "note".to_string(),
+        "external_web_access".to_string(),
+    )]));
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("nested search extras should project");
+
+    assert_eq!(projected["tools"][0], json!({"type":"web_search"}));
+    assert_eq!(projected["tools"][1], json!({"type":"x_search"}));
+    assert_eq!(
+        projected["client_metadata"]["note"], "external_web_access",
+        "string metadata must keep the phrase; only JSON arguments are stripped"
+    );
+    assert!(
+        !contains_key(&projected, "external_web_access"),
+        "nested OpenAI search arguments must not reach Grok"
+    );
+    assert!(
+        !contains_key(&projected, "indexed_web_access"),
+        "nested OpenAI search arguments must not reach Grok"
+    );
+}
+
+fn contains_key(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.contains_key(key) || object.values().any(|child| contains_key(child, key))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|child| contains_key(child, key)),
+        _ => false,
+    }
 }
 
 #[test]

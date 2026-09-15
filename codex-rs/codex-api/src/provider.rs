@@ -39,7 +39,8 @@ pub(crate) enum ResponsesDialect {
 
 impl ResponsesDialect {
     pub(crate) fn for_provider(provider: &Provider) -> Self {
-        if provider.name.eq_ignore_ascii_case("Grok") {
+        if provider.name.eq_ignore_ascii_case("Grok") || is_grok_responses_host(&provider.base_url)
+        {
             Self::Grok
         } else {
             Self::OpenAi
@@ -150,7 +151,36 @@ impl ResponsesDialect {
                 }
             }
         }
+        // Grok rejects these OpenAI-only search arguments anywhere on the request
+        // (`Argument not supported: external_web_access`), including nested tool
+        // payloads the hosted-web_search rewrite does not see.
+        strip_unsupported_grok_arguments(&mut value);
         Ok(value)
+    }
+}
+
+fn is_grok_responses_host(base_url: &str) -> bool {
+    Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.x.ai" || host == "grok.trustedtunnel.app")
+}
+
+fn strip_unsupported_grok_arguments(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("external_web_access");
+            object.remove("indexed_web_access");
+            for child in object.values_mut() {
+                strip_unsupported_grok_arguments(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_unsupported_grok_arguments(item);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 

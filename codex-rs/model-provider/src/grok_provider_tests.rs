@@ -11,6 +11,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
+use crate::ModelProvider;
 use crate::RemoteCompactionSupport;
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
@@ -80,6 +81,20 @@ fn grok_provider_identity_matches_serialized_wire_selector() {
 
     let provider = create_model_provider(info, /*auth_manager*/ None);
     assert!(provider.projects_tools_as_flat_functions());
+}
+
+#[tokio::test]
+async fn grok_api_provider_uses_grok_identity_when_selected_by_wire_api() {
+    let mut info = provider_info("xAI");
+    info.wire_api = WireApi::GrokResponses;
+    info.base_url = Some("https://example.test/v1".to_string());
+    let provider = create_model_provider(info, /*auth_manager*/ None);
+
+    let api_provider = provider
+        .api_provider()
+        .await
+        .expect("Grok wire_api should construct an API provider");
+    assert_eq!(api_provider.name, "Grok");
 }
 
 #[tokio::test]
