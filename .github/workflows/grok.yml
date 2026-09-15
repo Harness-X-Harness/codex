@@ -1,0 +1,161 @@
+name: grok
+
+# PR: Cargo. Push: six target binaries and Linux Live.
+# workflow_dispatch: Live only, using musl from binary_run_id. Not a publish proof.
+# Package and grok-v* mutation are grok/release.py publish, not this workflow.
+
+on:
+  pull_request:
+    branches: ['grok/rust-v*']
+  push:
+    branches: ['grok/rust-v*']
+  workflow_dispatch:
+    inputs:
+      binary_run_id:
+        description: Existing grok run that already uploaded the musl binary
+        required: true
+        type: string
+
+concurrency:
+  group: grok-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  cargo:
+    name: Cargo
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Lint affected libraries
+        run: cargo clippy -p codex-api -p codex-config -p codex-guardian-v2 -p codex-image-generation-extension -p codex-memories-write -p codex-model-provider -p codex-model-provider-info -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
+      - name: Lint core tests
+        run: cargo clippy -p codex-core --test all -- -D warnings
+      - name: Lint App Server tests
+        run: cargo clippy -p codex-app-server --test all -- -D warnings
+      - name: Provider contracts
+        run: cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
+      - name: Stock App Server Provider projections
+        run: cargo test -p codex-app-server --test all grok
+      - name: Core Grok lib
+        run: cargo test -p codex-core --lib grok
+      - name: Core whole-number lib
+        run: cargo test -p codex-core --lib json_whole_number
+      - name: Guardian and memories
+        run: cargo test -p codex-guardian-v2 -p codex-memories-write --lib
+      - name: MCP tool result
+        run: cargo test -p codex-app-server --test all mcp_server_tool_call_returns_tool_result
+      - name: History
+        run: cargo test -p codex-history --lib
+      - name: Image generation
+        run: cargo test -p codex-image-generation-extension --lib
+
+  build-linux-x64-musl:
+    name: Build x86_64-unknown-linux-musl
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        with:
+          target: x86_64-unknown-linux-musl
+
+  build-pack:
+    name: Build ${{ matrix.target }}
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        with:
+          target: ${{ matrix.target }}
+
+  live:
+    name: Grok Live
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.build-linux-x64-musl.result == 'success')) }}
+    needs: [build-linux-x64-musl]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - if: github.event_name == 'push'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: grok-build-${{ github.sha }}-x86_64-unknown-linux-musl
+          path: archives
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: grok-build-*-x86_64-unknown-linux-musl
+          merge-multiple: true
+          path: archives
+          run-id: ${{ github.event.inputs.binary_run_id }}
+          github-token: ${{ github.token }}
+      - name: Materialize secret profile
+        env:
+          GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
+        run: |
+          umask 077
+          printf '%s' "${GROK_CONFIG_TOML:?}" > "${RUNNER_TEMP}/config.toml"
+      - name: Use the musl binary
+        run: chmod +x archives/codex archives/codex-code-mode-host archives/bwrap
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: grok/live/go.mod
+          cache: false
+      - name: Run Grok Live
+        working-directory: grok/live
+        env:
+          GROK_LIVE: "1"
+          GROK_LIVE_CODEX_BIN: ${{ github.workspace }}/archives/codex
+          GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GROK_LIVE_FAILED_SESSIONS: ${{ github.workspace }}/grok-live-failed-sessions
+          GOWORK: "off"
+        run: go test ./... -count=1 -timeout 30m -run '^TestGrok'
+      - if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-live-failed-sessions-${{ github.sha }}
+          path: grok-live-failed-sessions
+          if-no-files-found: ignore
+          retention-days: 7

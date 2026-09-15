@@ -318,3 +318,17 @@ Tests and features must support Linux, macOS and Windows unless feature is expli
 
 Codex supports running connected app-server and exec-server on different operating systems. See the
 `$remote-tests` skill for details about integration testing these configurations.
+
+## Grok
+
+When changing `grok/`, `.github/workflows/grok.yml`, or
+`.github/actions/build-grok/`, read these files directly. Do not stop at
+`grok/README.md`.
+
+- `grok/docs/architecture.md` — product boundary
+- `grok/docs/stories/` — verification claims and the Rust or Go proof
+- `grok/docs/release.md` — delivery map and anti-regression rules
+- `grok/docs/carry-forward.md` — adopting a new stock tag
+
+Those four files are the Grok authorities. Do not add another Grok instruction
+file.
