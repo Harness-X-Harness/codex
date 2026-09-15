@@ -158,6 +158,17 @@ impl ToolPlanProbe {
         }
     }
 
+    fn assert_visible_flat_projection(&self, namespace: &str) {
+        let prefix = format!("local__{namespace}__");
+        assert!(
+            self.visible_names
+                .iter()
+                .any(|visible| visible.starts_with(&prefix)),
+            "expected a flat projection of `{namespace}` in {:?}",
+            self.visible_names
+        );
+    }
+
     fn assert_visible_lacks(&self, expected_absent: &[&str]) {
         for name in expected_absent {
             assert!(
@@ -362,7 +373,7 @@ async fn grok_provider_exposes_standalone_image_generation_without_openai_auth()
         },
     )
     .await;
-    grok.assert_visible_contains(&["image_gen"]);
+    grok.assert_visible_flat_projection("image_gen");
 }
 
 struct TestNamespaceExtensionTool {
@@ -3259,7 +3270,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         },
     )
     .await;
-    grok.assert_visible_contains(&["image_gen"]);
+    grok.assert_visible_flat_projection("image_gen");
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
