@@ -11,7 +11,6 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
-use crate::ModelProvider;
 use crate::RemoteCompactionSupport;
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
