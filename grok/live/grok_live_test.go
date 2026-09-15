@@ -160,7 +160,7 @@ func TestGrokCollaboration(t *testing.T) {
 }
 
 func TestGrokImageGenerationEdit(t *testing.T) {
-	h := startGrokLive(t, liveOptions{})
+	h := startGrokLive(t, liveOptions{acceptExecForSession: true})
 	ctx := context.Background()
 	h.requireGrokCatalog(ctx)
 

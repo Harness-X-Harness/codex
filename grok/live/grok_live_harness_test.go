@@ -371,8 +371,9 @@ type liveHarness struct {
 }
 
 type liveOptions struct {
-	probeTool    bool
-	disableShell bool
+	probeTool            bool
+	disableShell         bool
+	acceptExecForSession bool
 }
 
 func skipUnlessGrokLive(t *testing.T) {
@@ -380,6 +381,50 @@ func skipUnlessGrokLive(t *testing.T) {
 	if os.Getenv(grokLiveEnv) != "1" {
 		t.Skip("set GROK_LIVE=1, GROK_LIVE_CODEX_BIN, and GROK_LIVE_CONFIG to run Grok real-provider Live tests")
 	}
+}
+
+func liveWorkspaceDir(t *testing.T) string {
+	t.Helper()
+	parent := strings.TrimSpace(os.Getenv("HOME"))
+	if parent == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			parent = home
+		}
+	}
+	var dir string
+	if parent != "" {
+		dir = filepath.Join(parent, ".codex-grok-live", strings.ReplaceAll(t.Name(), "/", "_"))
+	} else {
+		dir = filepath.Join(t.TempDir(), "workspace")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create live workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func liveCodexHome(t *testing.T, workspace string) string {
+	t.Helper()
+	home := filepath.Join(workspace, ".codex")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("create CODEX_HOME: %v", err)
+	}
+	return home
+}
+
+func commandExecutionApproval(acceptForSession bool) protocolv2.CommandExecutionApprovalDecision {
+	if acceptForSession {
+		return protocolv2.NewCommandExecutionApprovalDecisionAcceptForSession()
+	}
+	return protocolv2.NewCommandExecutionApprovalDecisionDecline()
+}
+
+func execCommandReview(acceptForSession bool) protocolv2.ReviewDecision {
+	if acceptForSession {
+		return protocolv2.NewReviewDecisionApprovedForSession()
+	}
+	return protocolv2.NewReviewDecisionDenied(protocolv2.ReviewDecisionDenied{Rejection: "grok live declines approvals"})
 }
 
 func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
@@ -397,8 +442,8 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 		}
 	}
 
-	home := t.TempDir()
-	workspace := t.TempDir()
+	workspace := liveWorkspaceDir(t)
+	home := liveCodexHome(t, workspace)
 	config, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read Grok profile config: %v", err)
@@ -419,6 +464,7 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	t.Setenv(proxyStderrEnv, stderrPath)
 
 	requests := newLiveServerRequests()
+	requests.acceptExecForSession = opts.acceptExecForSession
 	if opts.probeTool {
 		requests.toolName = probeToolName
 		requests.toolOutput = probeToolOutput
@@ -999,10 +1045,11 @@ func waitDurable(timeout time.Duration, ready func() bool) bool {
 }
 
 type liveServerRequests struct {
-	mu         sync.Mutex
-	toolName   string
-	toolOutput string
-	toolCalls  int
+	mu                   sync.Mutex
+	toolName             string
+	toolOutput           string
+	toolCalls            int
+	acceptExecForSession bool
 }
 
 func newLiveServerRequests() *liveServerRequests { return &liveServerRequests{} }
@@ -1013,7 +1060,7 @@ func (s *liveServerRequests) handler(_ context.Context, request protocolv2.Serve
 		call, _ := request.AsItemToolCall()
 		return s.answerTool(call.Params)
 	case protocolv2.ServerRequestKindItemCommandExecutionRequestApproval:
-		return codexsdk.CommandExecutionApprovalResponse(protocolv2.CommandExecutionRequestApprovalResponse{Decision: protocolv2.NewCommandExecutionApprovalDecisionDecline()}), nil
+		return codexsdk.CommandExecutionApprovalResponse(protocolv2.CommandExecutionRequestApprovalResponse{Decision: commandExecutionApproval(s.acceptExecForSession)}), nil
 	case protocolv2.ServerRequestKindItemFileChangeRequestApproval:
 		return codexsdk.FileChangeApprovalResponse(protocolv2.FileChangeRequestApprovalResponse{Decision: protocolv2.FileChangeApprovalDecisionDecline}), nil
 	case protocolv2.ServerRequestKindItemToolRequestUserInput:
@@ -1027,7 +1074,7 @@ func (s *liveServerRequests) handler(_ context.Context, request protocolv2.Serve
 	case protocolv2.ServerRequestKindApplyPatchApproval:
 		return codexsdk.ApplyPatchApprovalResponse(protocolv2.ApplyPatchApprovalResponse{Decision: protocolv2.NewReviewDecisionDenied(protocolv2.ReviewDecisionDenied{Rejection: "grok live declines approvals"})}), nil
 	case protocolv2.ServerRequestKindExecCommandApproval:
-		return codexsdk.ExecCommandApprovalResponse(protocolv2.ExecCommandApprovalResponse{Decision: protocolv2.NewReviewDecisionDenied(protocolv2.ReviewDecisionDenied{Rejection: "grok live declines approvals"})}), nil
+		return codexsdk.ExecCommandApprovalResponse(protocolv2.ExecCommandApprovalResponse{Decision: execCommandReview(s.acceptExecForSession)}), nil
 	default:
 		return codexsdk.ServerRequestResponse{}, fmt.Errorf("no answer for server request %s", request.Kind())
 	}

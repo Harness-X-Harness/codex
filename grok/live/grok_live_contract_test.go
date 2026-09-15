@@ -213,3 +213,28 @@ func TestPreserveFailedSessionsSkipsPassingTests(t *testing.T) {
 		t.Fatal("passing tests must not copy session jsonl")
 	}
 }
+
+func TestLiveCodexHomeLivesInWorkspaceUnderHOME(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("HOME", parent)
+	workspace := liveWorkspaceDir(t)
+	home := liveCodexHome(t, workspace)
+	rel, err := filepath.Rel(parent, workspace)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		t.Fatalf("workspace %q is not under HOME %q", workspace, parent)
+	}
+	if filepath.Dir(home) != workspace || filepath.Base(home) != ".codex" {
+		t.Fatalf("CODEX_HOME %q should be workspace/.codex, workspace=%q", home, workspace)
+	}
+}
+
+func TestCommandExecutionApprovalAcceptsForSession(t *testing.T) {
+	got := commandExecutionApproval(true)
+	if _, ok := got.AsAcceptForSession(); !ok {
+		t.Fatalf("decision kind = %s, want acceptForSession", got.Kind())
+	}
+	declined := commandExecutionApproval(false)
+	if _, ok := declined.AsDecline(); !ok {
+		t.Fatalf("decision kind = %s, want decline", declined.Kind())
+	}
+}
