@@ -171,9 +171,10 @@ impl ResponsesDialect {
                     object.get("encrypted_content"),
                     Some(Value::String(blob)) if !blob.is_empty()
                 );
-                if usable_blob {
+                if usable_blob || object.get("content") == Some(&Value::Null) {
                     object.remove("content");
-                } else {
+                }
+                if !usable_blob {
                     object.remove("encrypted_content");
                 }
             }

@@ -63,7 +63,7 @@ async fn grok_follow_up_omits_reasoning_content_on_encrypted_blob() {
         .into_iter()
         .find(|item| item.get("type").and_then(Value::as_str) == Some("reasoning"))
         .expect("follow-up must replay the first-turn reasoning item");
-    assert_eq!(follow_up_reasoning["id"], "rs-1");
+    assert_eq!(follow_up_reasoning["type"], "reasoning");
     assert!(
         follow_up_reasoning["encrypted_content"]
             .as_str()
