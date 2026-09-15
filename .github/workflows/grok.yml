@@ -1,6 +1,7 @@
 name: grok
 
 # PR: Cargo. Push: six target binaries and Linux Live.
+# workflow_dispatch: Live only, using musl from binary_run_id. Not a publish proof.
 # Package and grok-v* mutation are grok/release.py publish, not this workflow.
 
 on:
@@ -8,13 +9,20 @@ on:
     branches: ['grok/rust-v*']
   push:
     branches: ['grok/rust-v*']
+  workflow_dispatch:
+    inputs:
+      binary_run_id:
+        description: Existing grok run that already uploaded the musl binary
+        required: true
+        type: string
 
 concurrency:
-  group: grok-${{ github.ref }}
+  group: grok-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   cargo:
@@ -102,7 +110,7 @@ jobs:
 
   live:
     name: Grok Live
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.build-linux-x64-musl.result == 'success')) }}
     needs: [build-linux-x64-musl]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -110,10 +118,19 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - if: github.event_name == 'push'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: grok-build-${{ github.sha }}-x86_64-unknown-linux-musl
           path: archives
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: grok-build-*-x86_64-unknown-linux-musl
+          merge-multiple: true
+          path: archives
+          run-id: ${{ github.event.inputs.binary_run_id }}
+          github-token: ${{ github.token }}
       - name: Materialize secret profile
         env:
           GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
@@ -132,5 +149,13 @@ jobs:
           GROK_LIVE: "1"
           GROK_LIVE_CODEX_BIN: ${{ github.workspace }}/archives/codex
           GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GROK_LIVE_FAILED_SESSIONS: ${{ github.workspace }}/grok-live-failed-sessions
           GOWORK: "off"
         run: go test ./... -count=1 -timeout 30m -run '^TestGrok'
+      - if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-live-failed-sessions-${{ github.sha }}
+          path: grok-live-failed-sessions
+          if-no-files-found: ignore
+          retention-days: 7

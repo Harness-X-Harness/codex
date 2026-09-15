@@ -29,17 +29,18 @@ import (
 )
 
 const (
-	grokLiveEnv       = "GROK_LIVE"
-	grokLiveBinEnv    = "GROK_LIVE_CODEX_BIN"
-	grokLiveConfigEnv = "GROK_LIVE_CONFIG"
+	grokLiveEnv               = "GROK_LIVE"
+	grokLiveBinEnv            = "GROK_LIVE_CODEX_BIN"
+	grokLiveConfigEnv         = "GROK_LIVE_CONFIG"
+	grokLiveFailedSessionsEnv = "GROK_LIVE_FAILED_SESSIONS"
 
-	proxyModeEnv                    = "GROK_LIVE_APP_SERVER_PROXY"
-	proxyBinEnv                     = "GROK_LIVE_APP_SERVER_REAL_BIN"
-	proxyStderrEnv                  = "GROK_LIVE_APP_SERVER_STDERR"
-	proxyTestChildEnv               = "GROK_LIVE_PROXY_TEST_CHILD"
-	proxyChildShutdownTimeout       = 1500 * time.Millisecond
-	proxyLifecycleTestTimeout       = 5 * time.Second
-	stderrTailMax                   = 64 << 10
+	proxyModeEnv              = "GROK_LIVE_APP_SERVER_PROXY"
+	proxyBinEnv               = "GROK_LIVE_APP_SERVER_REAL_BIN"
+	proxyStderrEnv            = "GROK_LIVE_APP_SERVER_STDERR"
+	proxyTestChildEnv         = "GROK_LIVE_PROXY_TEST_CHILD"
+	proxyChildShutdownTimeout = 1500 * time.Millisecond
+	proxyLifecycleTestTimeout = 5 * time.Second
+	stderrTailMax             = 64 << 10
 
 	grokProvider = "grok"
 	grokModel    = "grok-4.6"
@@ -440,8 +441,58 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 		h.failError("app_server_start", err, codexsdk.ThreadRunResult{}, "", "", "")
 	}
 	h.client = client
-	t.Cleanup(func() { _ = client.Close() })
+	t.Cleanup(func() {
+		_ = client.Close()
+		preserveFailedSessions(t, home, redactor)
+	})
 	return h
+}
+
+func preserveFailedSessions(t *testing.T, home string, redactor *secretRedactor) {
+	if t == nil || !t.Failed() {
+		return
+	}
+	copyRedactedSessionJSONL(t, home, redactor)
+}
+
+func copyRedactedSessionJSONL(t *testing.T, home string, redactor *secretRedactor) {
+	root := strings.TrimSpace(os.Getenv(grokLiveFailedSessionsEnv))
+	if root == "" || home == "" {
+		return
+	}
+	sessions := filepath.Join(home, "sessions")
+	destRoot := filepath.Join(root, strings.ReplaceAll(t.Name(), "/", "_"))
+	err := filepath.WalkDir(sessions, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		rel, relErr := filepath.Rel(sessions, path)
+		if relErr != nil {
+			return relErr
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		text := string(data)
+		if redactor != nil {
+			text = redactor.redact(text)
+		}
+		dest := filepath.Join(destRoot, rel)
+		if mkErr := os.MkdirAll(filepath.Dir(dest), 0o700); mkErr != nil {
+			return mkErr
+		}
+		return os.WriteFile(dest, []byte(text), 0o600)
+	})
+	if err != nil {
+		t.Logf("preserve failed session jsonl: %v", err)
+	}
 }
 
 func ensureShellToolDisabled(config []byte) []byte {
@@ -991,7 +1042,7 @@ func (s *liveServerRequests) answerTool(params protocolv2.DynamicToolCallParams)
 	s.toolCalls++
 	return codexsdk.DynamicToolResponse(protocolv2.DynamicToolCallResponse{
 		ContentItems: []protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: s.toolOutput})},
-		Success: true,
+		Success:      true,
 	}), nil
 }
 

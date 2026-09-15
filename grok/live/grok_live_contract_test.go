@@ -149,3 +149,67 @@ func TestScanDurableFactsIgnoresPromptText(t *testing.T) {
 		t.Fatal("custom_tool_call named apply_patch should prove the path")
 	}
 }
+
+func TestCopyRedactedSessionJSONLKeepsOnlySessions(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions", "2026", "09", "15")
+	images := filepath.Join(home, "generated_images", "sess")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(images, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := "LIVE-SECRET-123456"
+	line := `{"api_key":"` + secret + `","type":"event"}` + "\n"
+	if err := os.WriteFile(filepath.Join(sessions, "rollout.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("api_key = \""+secret+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(images, "call.png"), []byte("PNG"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	t.Setenv(grokLiveFailedSessionsEnv, dest)
+	copyRedactedSessionJSONL(t, home, newSecretRedactor([]byte("api_key = \""+secret+"\"\n")))
+	copied := filepath.Join(dest, strings.ReplaceAll(t.Name(), "/", "_"), "2026", "09", "15", "rollout.jsonl")
+	got, err := os.ReadFile(copied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), secret) {
+		t.Fatalf("copied jsonl retained secret: %s", got)
+	}
+	if !strings.Contains(string(got), "[REDACTED]") {
+		t.Fatalf("copied jsonl missing redaction: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(dest, strings.ReplaceAll(t.Name(), "/", "_"), "config.toml")); err == nil {
+		t.Fatal("config.toml must not be copied")
+	}
+	if _, err := os.Stat(filepath.Join(dest, strings.ReplaceAll(t.Name(), "/", "_"), "generated_images", "sess", "call.png")); err == nil {
+		t.Fatal("generated images must not be copied")
+	}
+}
+
+func TestPreserveFailedSessionsSkipsPassingTests(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessions, "rollout.jsonl"), []byte("{\"type\":\"event\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	t.Setenv(grokLiveFailedSessionsEnv, dest)
+	preserveFailedSessions(t, home, newSecretRedactor(nil))
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatal("passing tests must not copy session jsonl")
+	}
+}
