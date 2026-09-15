@@ -5822,6 +5822,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "Serialized selector for the Grok Provider implementation.\n\nTransport remains the stock Responses HTTP/SSE path. This variant only identifies the Grok dialect at the Provider construction seam.",
+          "enum": [
+            "grok_responses"
+          ],
+          "type": "string"
         }
       ]
     },

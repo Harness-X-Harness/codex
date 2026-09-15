@@ -21,6 +21,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderValue;
 
@@ -152,6 +153,16 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Returns whether this provider needs canonical Codex tool declarations projected as flat functions on the wire.
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        false
+    }
+
+    /// Returns whether a completed response item is a provider-hosted tool call.
+    fn is_provider_hosted_tool_call(&self, _item: &ResponseItem) -> bool {
+        false
     }
 
     /// Returns the preferred model used for automatic approval review.

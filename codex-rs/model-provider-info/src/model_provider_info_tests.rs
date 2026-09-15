@@ -111,6 +111,23 @@ supports_standalone_web_search = true
 }
 
 #[test]
+fn test_deserialize_grok_responses_wire_api() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://example.test/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+requires_openai_auth = false
+supports_websockets = false
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::GrokResponses);
+    assert_eq!(provider.wire_api.to_string(), "grok_responses");
+    assert!(provider.wire_api.uses_responses_transport());
+}
+
+#[test]
 fn test_deserialize_chat_wire_api_shows_helpful_error() {
     let provider_toml = r#"
 name = "OpenAI using Chat Completions"
