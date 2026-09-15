@@ -12,6 +12,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
@@ -327,6 +328,41 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_grok_provider(turn: &mut TurnContext) {
+    let provider_info = ModelProviderInfo {
+        name: "Grok".to_string(),
+        wire_api: WireApi::GrokResponses,
+        ..ModelProviderInfo::default()
+    };
+    update_config(turn, |config| {
+        config.model_provider_id = "grok".to_string();
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+#[tokio::test]
+async fn grok_provider_exposes_standalone_image_generation_without_openai_auth() {
+    let grok = probe_with(
+        |turn| {
+            use_grok_provider(turn);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).input_modalities =
+                    vec![InputModality::Image];
+            });
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                namespace: "image_gen",
+                tool_name: "imagegen",
+            })],
+            ..Default::default()
+        },
+    )
+    .await;
+    grok.assert_visible_contains(&["image_gen"]);
 }
 
 struct TestNamespaceExtensionTool {
@@ -3202,12 +3238,28 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             });
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![image_generation_tool],
+            extension_tool_executors: vec![image_generation_tool.clone()],
             ..Default::default()
         },
     )
     .await;
     unsupported_provider.assert_visible_lacks(&["image_gen"]);
+
+    let grok = probe_with(
+        |turn| {
+            use_grok_provider(turn);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).input_modalities =
+                    vec![InputModality::Image];
+            });
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![image_generation_tool],
+            ..Default::default()
+        },
+    )
+    .await;
+    grok.assert_visible_contains(&["image_gen"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
