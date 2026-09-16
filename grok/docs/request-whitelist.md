@@ -453,11 +453,13 @@ feat(grok): construct Grok Responses egress from a whitelist
 Contract: for every request fixture in the existing Grok dialect tests and
 for one fixture per accepted `ResponseItem` variant and tool type,
 `grok_request::build(request)` equals the JSON the current denylist produces.
-The golden comparison is a test in `grok_request_tests.rs` that runs the old
-projection kept only in the test module until the commit lands; the old
-projection is then deleted with the commit. Stage A changes no bytes on the
-wire, so the six-target build and the Linux musl Live must be GREEN with
-identical user-visible outcomes.
+The golden comparison was a test in `grok_request_tests.rs` that ran the old
+projection, kept only in the test module while the commit landed; the
+following commit deleted that copy and kept the fixtures as
+`accepted_fixtures`, which every accepted item and tool type must build from
+without an OpenAI-only key. Stage A changes no bytes on the wire, so the
+six-target build and the Linux musl Live must be GREEN with identical
+user-visible outcomes.
 
 Stage A also adds the compile-time decision point (exhaustive match) and the
 reject-before-transport errors for items and tools that cannot appear on a
@@ -491,8 +493,9 @@ before `grok/release.py publish`; a docs-only commit does not.
 ## Tests
 
 - `codex-rs/codex-api/src/grok_request_tests.rs`: dialect identity
-  (`for_provider`), copy-only canonical request, golden equivalence per
-  fixture, one test per `ResponseItem` variant and tool type, rejections,
+  (`for_provider`), copy-only canonical request, one accepted fixture per
+  `ResponseItem` variant and tool type that must build without an
+  OpenAI-only key, rejections,
   and the stock OpenAI identity control (`stock_openai_projection_remains_identity`).
 - `codex-rs/core/tests/suite/grok_web_search.rs` and
   `codex-rs/core/tests/suite/grok_reasoning_replay.rs`: keep asserting the

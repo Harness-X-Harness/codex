@@ -23,7 +23,6 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ReasoningEffort;
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
@@ -116,190 +115,7 @@ fn contains_key(value: &Value, key: &str) -> bool {
     }
 }
 
-/// Copy of the Stage A denylist. Deleted with the commit that lands after this one.
-fn legacy_projection(request: &ResponsesApiRequest) -> serde_json::Result<Value> {
-    let mut request = request.clone();
-    for item in &mut request.input {
-        let projected_item = match item {
-            ResponseItem::AgentMessage {
-                id,
-                content,
-                internal_chat_message_metadata_passthrough,
-                ..
-            } => plaintext_agent_message_content(content).map(|text| ResponseItem::Message {
-                id: id.clone(),
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-                internal_chat_message_metadata_passthrough:
-                    internal_chat_message_metadata_passthrough.clone(),
-            }),
-            ResponseItem::FunctionCallOutput {
-                id,
-                call_id: None,
-                name: Some(name),
-                output,
-                internal_chat_message_metadata_passthrough,
-                ..
-            } if !name.is_empty() => output.text_content().map(|text| ResponseItem::Message {
-                id: id.clone(),
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: text.to_string(),
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough:
-                    internal_chat_message_metadata_passthrough.clone(),
-            }),
-            ResponseItem::AdditionalTools { .. }
-            | ResponseItem::Message { .. }
-            | ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::ConfigurationUpdate { .. }
-            | ResponseItem::CompactionTrigger { .. }
-            | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other => None,
-        };
-        if let Some(projected_item) = projected_item {
-            *item = projected_item;
-            continue;
-        }
-
-        if let ResponseItem::Reasoning {
-            content,
-            encrypted_content: Some(_),
-            ..
-        } = item
-        {
-            *content = Some(Vec::new());
-        }
-    }
-
-    for item in &request.input {
-        match item {
-            ResponseItem::AgentMessage { .. } => {
-                return Err(<serde_json::Error as serde::ser::Error>::custom(
-                    "Grok cannot replay unsupported encrypted collaboration history",
-                ));
-            }
-            ResponseItem::FunctionCallOutput { call_id, .. }
-                if call_id.as_deref().is_none_or(str::is_empty) =>
-            {
-                return Err(<serde_json::Error as serde::ser::Error>::custom(
-                    "Grok cannot replay function_call_output history without call_id",
-                ));
-            }
-            ResponseItem::AdditionalTools { .. }
-            | ResponseItem::Message { .. }
-            | ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::ConfigurationUpdate { .. }
-            | ResponseItem::CompactionTrigger { .. }
-            | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other => {}
-        }
-    }
-
-    let mut value = serde_json::to_value(&request)?;
-    if let Some(object) = value.as_object_mut() {
-        let has_no_tools = match object.get("tools") {
-            None => true,
-            Some(tools) => tools.as_array().is_some_and(Vec::is_empty),
-        };
-        if has_no_tools {
-            object.remove("tools");
-            object.remove("tool_choice");
-            object.remove("parallel_tool_calls");
-        } else if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
-            for tool in tools.iter_mut() {
-                if tool.get("type").and_then(Value::as_str) == Some("web_search") {
-                    *tool = serde_json::json!({ "type": "web_search" });
-                }
-            }
-            if !tools
-                .iter()
-                .any(|tool| tool.get("type").and_then(Value::as_str) == Some("x_search"))
-            {
-                tools.push(serde_json::json!({ "type": "x_search" }));
-            }
-        }
-    }
-    legacy_strip_denied_keys(&mut value);
-    if let Some(input) = value.get_mut("input").and_then(Value::as_array_mut) {
-        input.retain(|item| item.get("type").and_then(Value::as_str) != Some("compaction_trigger"));
-        for item in input {
-            let Some(object) = item.as_object_mut() else {
-                continue;
-            };
-            object.remove("namespace");
-            match object.get("type").and_then(Value::as_str) {
-                Some("reasoning") => {
-                    let usable_blob = matches!(
-                        object.get("encrypted_content"),
-                        Some(Value::String(blob)) if !blob.is_empty()
-                    );
-                    if usable_blob || object.get("content") == Some(&Value::Null) {
-                        object.remove("content");
-                    }
-                    if !usable_blob {
-                        object.remove("encrypted_content");
-                    }
-                }
-                Some(
-                    "function_call"
-                    | "custom_tool_call"
-                    | "tool_search_call"
-                    | "web_search_call"
-                    | "image_generation_call",
-                ) => {
-                    object.remove("status");
-                    object.remove("encrypted_function_args");
-                }
-                Some(_) | None => {}
-            }
-        }
-    }
-    Ok(value)
-}
-
-fn legacy_strip_denied_keys(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            object.remove("external_web_access");
-            object.remove("indexed_web_access");
-            object.remove("defer_loading");
-            for child in object.values_mut() {
-                legacy_strip_denied_keys(child);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                legacy_strip_denied_keys(item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
-
-fn golden_fixtures() -> Vec<(&'static str, ResponsesApiRequest)> {
+fn accepted_fixtures() -> Vec<(&'static str, ResponsesApiRequest)> {
     let envelope =
         "Message Type: NEW_TASK\nTask name: /root/child\nSender: /root\nPayload:\nreview";
     let mut function_custom_web_search = request(vec![user_message("search")]);
@@ -619,11 +435,43 @@ fn golden_fixtures() -> Vec<(&'static str, ResponsesApiRequest)> {
 }
 
 #[test]
-fn grok_request_build_matches_legacy_projection() {
-    for (name, req) in golden_fixtures() {
+fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
+    for (name, req) in accepted_fixtures() {
         let built = build(&req).unwrap_or_else(|err| panic!("{name}: {err}"));
-        let legacy = legacy_projection(&req).unwrap_or_else(|err| panic!("{name}: {err}"));
-        assert_eq!(built, legacy, "{name}");
+        let mut leaked = Vec::new();
+        for key in ["stream_options", "service_tier", "access_programs"] {
+            if built.get(key).is_some() {
+                leaked.push(key.to_string());
+            }
+        }
+        if built["reasoning"].get("context").is_some() {
+            leaked.push("reasoning.context".to_string());
+        }
+        if built["text"].get("verbosity").is_some() {
+            leaked.push("text.verbosity".to_string());
+        }
+        for (index, item) in built["input"].as_array().into_iter().flatten().enumerate() {
+            for key in ["namespace", "encrypted_function_args", "phase", "status"] {
+                if item.get(key).is_some() {
+                    leaked.push(format!("input[{index}].{key}"));
+                }
+            }
+        }
+        for (index, tool) in built["tools"].as_array().into_iter().flatten().enumerate() {
+            for key in [
+                "external_web_access",
+                "indexed_web_access",
+                "user_location",
+                "search_context_size",
+                "search_content_types",
+                "defer_loading",
+            ] {
+                if tool.get(key).is_some() {
+                    leaked.push(format!("tools[{index}].{key}"));
+                }
+            }
+        }
+        assert_eq!(leaked, Vec::<String>::new(), "{name}: {built}");
     }
 }
 
