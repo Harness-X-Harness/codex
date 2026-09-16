@@ -386,14 +386,13 @@ impl ContextManager {
         }
     }
 
-    /// Returns the history prepared for sending to the model. This applies a proper
-    /// normalization and drops un-suited items. Unsupported image and audio content
-    /// is stripped from messages and tool outputs according to `input_modalities`.
+    /// Test helper: treat every unpaired custom tool call as a client tool.
+    #[cfg(test)]
     pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.for_prompt_with_hosted_calls(input_modalities, |_| false)
     }
 
-    /// Like [`Self::for_prompt`], but leaves provider-hosted tool calls unpaired.
+    /// Leaves provider-hosted tool calls unpaired.
     ///
     /// Hosted calls are complete without a client output. Pass the provider's
     /// `is_provider_hosted_tool_call` so Grok x_search `custom_tool_call` items
@@ -409,7 +408,8 @@ impl ContextManager {
             .collect()
     }
 
-    /// Returns normalized history envelopes for internal consumers that must retain metadata.
+    /// Test helper: treat every unpaired custom tool call as a client tool.
+    #[cfg(test)]
     pub(crate) fn for_prompt_annotated(
         self,
         input_modalities: &[InputModality],
@@ -417,7 +417,7 @@ impl ContextManager {
         self.for_prompt_annotated_with_hosted_calls(input_modalities, |_| false)
     }
 
-    /// Like [`Self::for_prompt_annotated`], but leaves provider-hosted tool calls unpaired.
+    /// Leaves provider-hosted tool calls unpaired and keeps envelope metadata.
     pub(crate) fn for_prompt_annotated_with_hosted_calls(
         mut self,
         input_modalities: &[InputModality],
@@ -726,6 +726,7 @@ impl ContextManager {
     ///    entry; provider-hosted calls are complete without a client output
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
+    #[cfg(test)]
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
         self.normalize_history_with_hosted_calls(input_modalities, |_| false);
     }

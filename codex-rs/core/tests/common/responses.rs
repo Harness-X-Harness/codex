@@ -1672,6 +1672,16 @@ pub async fn mount_compact_response_sequence(
 /// - Every `tool_search_output` must match a prior `tool_search_call`.
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
 ///   `tool_search_call` in the `input` must have a matching output entry.
+/// Matches the hosted x_search names in `GrokModelProvider::is_provider_hosted_tool_call`.
+/// Egress omits `status`, so the request-body check is name-only.
+fn is_provider_hosted_custom_tool_call(item: &Value) -> bool {
+    item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+        && matches!(
+            item.get("name").and_then(Value::as_str),
+            Some("x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch")
+        )
+}
+
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
@@ -1748,7 +1758,15 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
 
     let function_calls = gather_ids(items, "function_call");
     let tool_search_calls = gather_ids(items, "tool_search_call");
-    let custom_tool_calls = gather_ids(items, "custom_tool_call");
+    let custom_tool_calls: HashSet<String> = items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && !is_provider_hosted_custom_tool_call(item)
+        })
+        .filter_map(get_call_id)
+        .map(str::to_string)
+        .collect();
     let local_shell_calls = gather_ids(items, "local_shell_call");
     let function_call_outputs = gather_output_ids(
         items,
