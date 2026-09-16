@@ -2,7 +2,8 @@
 
 Strategy and plan for constructing Grok Responses egress from a whitelist at
 the existing `ResponsesDialect::project_request` seam, replacing the denylist
-that serializes the OpenAI-shaped request and removes fields afterwards.
+that serializes the OpenAI-shaped request and removes fields afterwards, and
+for surfacing Grok backend abilities through the same Provider boundary.
 
 This is a maintainer design record. It is not executable acceptance input.
 Runtime semantics stay in [`architecture.md`](./architecture.md), delivery in
@@ -30,6 +31,61 @@ available statement of what the Grok Responses backend consumes. It is an
 authority for *shape*; the Live run on the Codex artifact is the authority for
 *acceptance*.
 
+## Direction
+
+```text
+Keep the Codex harness. Hide what Grok cannot take. Surface what Grok can do.
+```
+
+The product goal has two sides. Codex harness abilities stay available on a
+Grok Thread through stock behavior or a stock alternative. Grok backend
+abilities are surfaced through the Provider boundary. OpenAI-specific
+features that Grok cannot accept, even after a shape transform, are hidden
+before the harness plans them.
+
+The set the egress constructor emits is therefore:
+
+```text
+(Codex canonical  ∩  Grok accepts)  ∪  Grok-native extensions
+```
+
+not a subset of the OpenAI request. Grok-native extensions enter through
+stock configuration and Provider seams and have their own rows in the
+mapping tables; they are not hard-coded at egress.
+
+Three layers share this work. Each has one responsibility.
+
+| Layer | Responsibility | Where |
+|-------|----------------|-------|
+| Capability | **Hide.** Decide what the harness plans for a Grok Thread, so unsupported OpenAI features are never produced | Grok catalog `ModelInfo` flags, `ProviderCapabilities`, `ModelProviderInfo`, stock `is_openai` gates |
+| Egress whitelist | **Transform and extend.** Construct the Grok request from what the harness produced; emit Grok-native fields | `ResponsesDialect::project_request` |
+| Ingress dialect | **Recognize.** Decode Grok wire items into stock response items; mark backend-executed calls so the harness does not dispatch them | `sse/responses.rs`, `ModelProvider::is_provider_hosted_tool_call` |
+
+A rejection at egress is the guard for the capability layer, not its
+implementation. When the whitelist rejects an item, the fix is normally a
+capability-layer change that stops the harness producing it for Grok.
+
+### Capability layer today
+
+Hiding already happens at stock seams. These are the facts the egress
+whitelist relies on; a rejection row below is reachable only if one of them
+regresses.
+
+| Hidden OpenAI feature | Stock seam | Grok value | Harness ability kept through |
+|-----------------------|------------|------------|------------------------------|
+| `tool_search`, deferred tool loading | `ModelInfo.supports_search_tool` | `false` (`grok_catalog.rs`) | full tool list in the plan |
+| namespace tool wire form | `ProviderCapabilities.namespace_tools` + `projects_tools_as_flat_functions` | `true` + `true` | stock namespaces planned, flattened at egress, restored on the reverse map |
+| `local_shell` tool | `ModelInfo.shell_type` | `UnifiedExec` | `exec_command` functions |
+| OpenAI `apply_patch` function | `ModelInfo.apply_patch_tool_type` | `Freeform` | custom `apply_patch` |
+| verbosity `text.verbosity` | `ModelInfo.support_verbosity` | `false` | — |
+| `reasoning.summary` parameter | `ModelInfo.supports_reasoning_summary_parameter` | `false` | reasoning summaries stay off |
+| Responses Lite, `reasoning.context`, `configuration_update` | `ModelInfo.use_responses_lite` + stock `is_openai` gate | `false` | request-level `reasoning.effort` each Turn |
+| remote compaction, `compaction_trigger`, `compaction` items | `ProviderCapabilities.remote_compaction` | `Unsupported` | stock local compaction |
+| Responses over WebSocket | `ModelProviderInfo.supports_websockets` | `false` | HTTP SSE |
+| `stream_options`, `encrypted_function_args`, passthrough metadata | stock `client.rs` `is_openai` gate | non-OpenAI | — |
+| standalone `/alpha/search` | `Feature::StandaloneWebSearch` | default off (`Stage::UnderDevelopment`); Grok has no such route | hosted `web_search` |
+| Guardian and other Codex-backend routes | stock `uses_codex_backend` requires `is_openai` | false for Grok | Provider-owned preferred-model policy (`approval_review_preferred_model`, memory models) |
+
 ## Philosophy
 
 ```text
@@ -43,8 +99,10 @@ Same seam. Construct, do not subtract. Evidence before emission.
 2. **Construct, do not subtract.** The Grok request is built from the
    canonical `ResponsesApiRequest` into Grok-only wire types and then
    serialized. A field reaches Grok because a type declares it, not because
-   nothing removed it. Serializing the OpenAI request and deleting keys is the
-   denylist this document retires.
+   nothing removed it. The types cover the intersection with Grok plus the
+   Grok-native extensions above; they are not a copy of the OpenAI types.
+   Serializing the OpenAI request and deleting keys is the denylist this
+   document retires.
 3. **Evidence before emission.** A field is in the whitelist for one of two
    reasons, each recorded next to it: a Codex transport requirement (for
    example `stream`, `include`) or a Grok semantic (for example
@@ -163,8 +221,8 @@ Their model has no `external_web_access`, `indexed_web_access`,
 ## Whitelist mapping for Codex
 
 Decision values: **emit** (in the whitelist with evidence), **omit** (not
-constructed), **reject** (error before transport), **probe** (Stage B; keep
-today's egress until Live decides).
+constructed), **reject** (error before transport), **probe** (Stage B1 or
+B2; keep today's egress until Live decides).
 
 ### Request fields
 
@@ -204,7 +262,7 @@ request copy exactly as today:
 | `Reasoning` | `reasoning` | `id?`, `summary[]`, `encrypted_content` when non-empty; `content` only when there is no usable blob and it is well-typed | observed rejection for `content` + blob and for `content: null`; grok-build strips `status` only |
 | `FunctionCall` | `function_call` | `call_id`, `name`, `arguments`, `id?` | grok-build; Live. `namespace` and `encrypted_function_args` are not constructed |
 | `FunctionCallOutput` | `function_call_output` | `call_id`, `output` (text or content items) | grok-build; Live |
-| `CustomToolCall` | `custom_tool_call` | `call_id`, `name`, `input`, `id?` | custom `apply_patch` Story; `status` is a probe |
+| `CustomToolCall` | `custom_tool_call` | `call_id`, `name`, `input`, `id?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is; `status` is a probe |
 | `CustomToolCallOutput` | `custom_tool_call_output` | `call_id`, `output` | custom `apply_patch` Story |
 | `WebSearchCall` | `web_search_call` | `id?`, `action?`; `status` probe | grok-build replays as-is with status |
 | `ImageGenerationCall` | `image_generation_call` | `id?`, `status`, `revised_prompt?`, `result` | image-edit Story was GREEN with `status` at `c4c80eef`; dropping it is a probe |
@@ -228,7 +286,7 @@ values, maps each by `type`, and constructs Grok tool types.
 |-----------------|-----------|-------------------|
 | `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | grok-build `strict: None`; `strict` stays emitted as a probe until Live decides; `defer_loading` is not constructed |
 | `custom { name, description, format }` | `custom` as-is | custom `apply_patch` Story |
-| `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; Codex config exposes only `allowed_domains`; today filters are dropped, restoring them is Stage B |
+| `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; Codex config exposes only `allowed_domains`; today filters are dropped, restoring them is B2 |
 | `x_search` | appended once when tools are non-empty | Grok capability rule, Live GREEN; grok-build emits it only when the hosted tool is requested and Codex has no `x_search` config |
 | `namespace`, `tool_search` | reject | flat projection already flattens namespaces; reaching the whitelist is a flat-projection regression |
 | any other `type` | reject | undecided tool surface |
@@ -244,18 +302,64 @@ values, maps each by `type`, and constructs Grok tool types.
 | `x_search` | on request only | always with tools | Grok product capability |
 | reasoning `content` with blob | patched type, kept | omitted | observed Codex rejection; grok-build never sends both |
 
-### Open probes (Stage B)
+## Grok-native capability surface
+
+Grok abilities that grok-build models and that the Codex Provider boundary
+can carry. Each row names the stock entry the ability must use, the egress
+row that emits it, the ingress handling that recognizes its result, and the
+current status. `Implemented` means code and native Cargo tests exist;
+`Live` means a named Story proves it on the artifact.
+
+| Ability | grok-build shape | Codex entry | Egress | Ingress | Status |
+|---------|------------------|-------------|--------|---------|--------|
+| hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Implemented; Live-verified only as tool advertisement |
+| `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | today dropped by the bare rewrite | — | Not surfaced (B2) |
+| `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
+| hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks completed `custom_tool_call` named `x_keyword_search`, `x_semantic_search`, `x_user_search`, `x_thread_fetch` so the harness records instead of dispatching | Code present since `7f72f0825`; the ingress predicate has no native test and no Live Story exercises a real x_search Turn (P0 probe) |
+| `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | none | — | — | Not surfaced (B2) |
+| encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
+| image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
+| custom `apply_patch` | `custom` tool | `ModelInfo.apply_patch_tool_type = Freeform` | `custom` tool as-is | flat `function_call` reverse map | Live (`TestGrokCustomApplyPatch`) |
+| maximum native reasoning effort | `reasoning.effort` | catalog reasoning projection (`Ultra` → `xhigh`) | `reasoning.effort` | — | Implemented |
+| prompt-cache routing | `prompt_cache_key` | stock | emitted | — | Live |
+| hosted `code_interpreter` | `code_interpreter_call` replay | none | — | none; Codex has no response item, so it would land in `Other` | Not surfaced; not advertised, so never emitted by Grok |
+
+Ingress note: grok-build treats **every** `custom_tool_call` in a Grok
+response as a backend-executed call. Codex enumerates four names. If Grok
+adds an x_search sub-tool, the harness would dispatch it as a client tool
+and answer with an error output. Aligning to "any completed
+`custom_tool_call` on a Grok Thread is backend-executed" is a B2 candidate
+with a Live probe; client custom tools cannot collide because they are
+flattened to `function_call` for Grok.
+
+### Open probes
 
 Each probe is one commit with a GREEN Live run or an observed rejection as
 its evidence. Until then the whitelist emits today's egress.
 
+P0, decides whether a Grok-native ability already shipped works end to end:
+
+| Probe | Question | How to decide |
+|-------|----------|---------------|
+| real x_search Turn | does a Grok Turn that invokes x_search complete, record the hosted call, and continue on the next Turn? | one Live Story with a prompt that requires X content; assert a completed hosted `custom_tool_call` in the session and a terminal reply; assert Turn N+1 replays it without a `400` |
+
+B1, tighten toward grok-build:
+
 | Probe | Question | How to decide |
 |-------|----------|---------------|
 | function `strict` | does Grok accept or ignore `strict: true`? | drop it; Live GREEN on the custom `apply_patch` and dynamic-tool Stories |
-| `web_search.filters.allowed_domains` | does Grok accept Codex's `allowed_domains`? | emit filters from `web_search` config; Live with a filtered search |
 | `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | required, ignored, or rejected on input? | replay with and without; image-edit Story covers `image_generation_call` |
 | `parallel_tool_calls`, `store`, `client_metadata` | ignored or consumed? | drop one per commit; Live GREEN |
 | reasoning `content` with blob | is a well-typed `reasoning_text` channel rejected, or only `null`? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission if `400` |
+
+B2, extend with Grok-native abilities:
+
+| Probe | Question | How to decide |
+|-------|----------|---------------|
+| `web_search.filters.allowed_domains` | does Grok accept Codex's `allowed_domains`? | emit filters from the stock `web_search` config instead of the bare rewrite; Live with a filtered search |
+| `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live |
+| `x_search` date window | which config seam carries `from_date` / `to_date`? | Grok Provider config, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live |
+| any completed `custom_tool_call` is hosted | can `is_provider_hosted_tool_call` drop the name list? | widen the predicate; run the P0 Story and the custom `apply_patch` Story |
 
 ## Module plan
 
@@ -292,6 +396,9 @@ Rules for the module:
 - No changes to `spec_plan.rs`, `hosted_spec.rs`, `client.rs`, protocol
   models, rollout, `responses_websocket.rs` (Grok `supports_websockets`
   is `false`), or `compact.rs` (Grok `remote_compaction` is `Unsupported`).
+- Ingress recognition stays in `codex-rs/model-provider/src/grok_provider.rs`
+  (`is_provider_hosted_tool_call`) and `sse/responses.rs`. B2 changes there
+  travel with their own tests; the egress module does not decode responses.
 
 ## Staging
 
@@ -317,10 +424,21 @@ reject-before-transport errors for items and tools that cannot appear on a
 Grok Thread. Those are the only behavior differences, and each is a local
 error where today the request would reach xAI.
 
-### Stage B: tighten toward grok-build, one probe per commit
+### Stage B1: tighten toward grok-build, one probe per commit
 
-Each open probe above is one commit with a native test and a GREEN Live run.
-A probe that fails stays in this table with the observed error text.
+Each B1 probe is one commit with a native test and a GREEN Live run. A probe
+that fails stays in its table with the observed error text.
+
+### Stage B2: extend with Grok-native abilities, one ability per commit
+
+Each B2 row is one semantic commit that adds the stock-compatible entry
+(config or Provider seam), the whitelist emit row, any ingress recognition,
+native tests at both seams, and a Live Story when the ability is
+user-visible. The P0 x_search probe runs before any B2 work on x_search so
+the extension builds on a proven path.
+
+B1 and B2 are independent of each other and of Stage A's ordering; Stage A
+lands first because it is the surface both build on.
 
 ### Delivery
 
@@ -338,9 +456,15 @@ moves the head and needs its own GREEN run before `grok/release.py publish`.
 - `codex-rs/core/tests/suite/grok_web_search.rs` and
   `codex-rs/core/tests/suite/grok_reasoning_replay.rs`: keep asserting the
   outbound `/responses` body through the full core path.
+- `codex-rs/model-provider/src/grok_provider_tests.rs`: ingress recognition
+  (`is_provider_hosted_tool_call`) for every hosted name the capability
+  surface lists. No such test exists today; add it with the P0 probe and
+  widen it together with the B2 predicate change.
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
   encrypted-reasoning continuation, image-edit, and custom `apply_patch`
   Stories exercise the reasoning, hosted-replay, and custom-tool rows above.
+  The P0 x_search Story is the missing Live row for a Grok-native ability
+  that is already shipped.
 
 Prefer `pretty_assertions::assert_eq` on whole projected bodies over
 per-key assertions.
@@ -386,8 +510,14 @@ SHAs. A new field in `CreateResponse`, `conversation_item_to_input_items`, or
 Update the grok-build anchors.
 
 **xAI returns a new rejection.** Record the exact error text and the request
-shape in the test name. The fix is a change to a Grok type or a mapping row,
-never a new key removal on serialized JSON.
+shape in the test name. First ask whether the capability layer should have
+hidden the producing feature; if so, fix it there and keep the whitelist
+rejection as the guard. Otherwise the fix is a change to a Grok type or a
+mapping row, never a new key removal on serialized JSON.
+
+**Grok gains a native ability.** Add a row to the capability surface with
+its grok-build shape, choose the stock-compatible entry seam, and schedule it
+as a B2 commit. Do not hard-code it at egress.
 
 ## Non-goals
 
@@ -401,3 +531,6 @@ never a new key removal on serialized JSON.
   replace the binary with the published Grok artifact.
 - A second selector. `wire_api = "grok_responses"` and the resolved Provider
   identity remain the only dialect selectors.
+- Hiding a feature at egress that the capability layer can hide. Egress
+  rejection is the guard, not the policy.
+- Surfacing a Grok ability without a stock-compatible entry seam.
