@@ -18,7 +18,10 @@ use tracing::info;
 // Changing this value would change model-visible IDs and invalidate prompt caches.
 const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
-pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>) {
+pub(crate) fn ensure_call_outputs_present(
+    items: &mut Vec<ResponseItemEnvelope>,
+    is_provider_hosted_tool_call: impl Fn(&ResponseItem) -> bool,
+) {
     let mut function_output_ids = HashSet::new();
     let mut tool_search_output_ids = HashSet::new();
     let mut custom_tool_output_ids = HashSet::new();
@@ -85,7 +88,8 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItemEnvelope>)
                 ));
             }
             ResponseItem::CustomToolCall { id, call_id, .. }
-                if !custom_tool_output_ids.contains(call_id.as_str()) =>
+                if !custom_tool_output_ids.contains(call_id.as_str())
+                    && !is_provider_hosted_tool_call(&envelope.item) =>
             {
                 error_or_panic(format!(
                     "Custom tool call output is missing for call id: {call_id}"
