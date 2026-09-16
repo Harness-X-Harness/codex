@@ -32,6 +32,7 @@ Triage by stage lives in [`../release.md`](../release.md) §Triage.
 | [Hosted `web_search` Turn and replay](./grok-hosted-web-search-turn.md) | `TestGrokHostedWebSearch` |
 | [Hosted `web_search` domain allowlist](./grok-hosted-web-search-allowlist.md) | `TestGrokHostedWebSearchAllowlist` |
 | [Hosted `x_search` Turn and follow-up replay](./grok-hosted-x-search-turn.md) | `TestGrokHostedXSearch` |
+| [Hosted `x_search` date window](./grok-hosted-x-search-date-window.md) | `TestGrokHostedXSearchDateWindow` |
 
 ## Deterministic App Server
 
