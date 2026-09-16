@@ -439,7 +439,12 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
     for (name, req) in accepted_fixtures() {
         let built = build(&req).unwrap_or_else(|err| panic!("{name}: {err}"));
         let mut leaked = Vec::new();
-        for key in ["stream_options", "service_tier", "access_programs"] {
+        for key in [
+            "stream_options",
+            "service_tier",
+            "access_programs",
+            "parallel_tool_calls",
+        ] {
             if built.get(key).is_some() {
                 leaked.push(key.to_string());
             }
@@ -577,7 +582,7 @@ fn grok_projects_replayed_history_on_request_copy_only() {
     assert!(projected["input"][3].get("content").is_none());
     assert!(projected.get("tools").is_none());
     assert!(projected.get("tool_choice").is_none());
-    assert!(projected.get("parallel_tool_calls").is_none());
+    assert_eq!(projected.get("parallel_tool_calls"), None);
 }
 
 #[test]
@@ -768,7 +773,7 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
         ])
     );
     assert_eq!(projected["tool_choice"], "auto");
-    assert_eq!(projected["parallel_tool_calls"], true);
+    assert_eq!(projected.get("parallel_tool_calls"), None);
     assert!(
         !contains_key(&projected, "external_web_access"),
         "Grok egress must not send external_web_access"
