@@ -34,6 +34,7 @@ const (
 	grokLiveBinEnv            = "GROK_LIVE_CODEX_BIN"
 	grokApiKeyEnv             = "GROK_API_KEY"
 	grokLiveFailedSessionsEnv = "GROK_LIVE_FAILED_SESSIONS"
+	grokLiveWireBodiesEnv     = "GROK_LIVE_WIRE_BODIES"
 
 	proxyModeEnv              = "GROK_LIVE_APP_SERVER_PROXY"
 	proxyBinEnv               = "GROK_LIVE_APP_SERVER_REAL_BIN"
@@ -369,6 +370,7 @@ type liveHarness struct {
 	requests   *liveServerRequests
 	stderrPath string
 	redactor   *secretRedactor
+	recorder   *wireRecorder
 }
 
 type liveOptions struct {
@@ -412,16 +414,73 @@ func topLevelTomlString(data []byte, key string) string {
 		if !ok || strings.TrimSpace(name) != key {
 			continue
 		}
-		value := strings.TrimSpace(rest)
-		if n := len(value); n >= 2 {
-			quote := value[0]
-			if (quote == '"' || quote == '\'') && value[n-1] == quote {
-				return value[1 : n-1]
-			}
-		}
-		return value
+		return tomlQuotedValue(rest)
 	}
 	return ""
+}
+
+func tomlQuotedValue(rest string) string {
+	value := strings.TrimSpace(rest)
+	if n := len(value); n >= 2 {
+		quote := value[0]
+		if (quote == '"' || quote == '\'') && value[n-1] == quote {
+			return value[1 : n-1]
+		}
+	}
+	return value
+}
+
+// tableString reads `key = "value"` from a TOML `[table]`. Nested tables with a
+// different header end the scan. Surrounding quotes are stripped when present.
+func tableString(data []byte, table, key string) string {
+	want := "[" + table + "]"
+	inTable := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			inTable = line == want
+			continue
+		}
+		if !inTable {
+			continue
+		}
+		name, rest, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		return tomlQuotedValue(rest)
+	}
+	return ""
+}
+
+func setTableString(data []byte, table, key, value string) []byte {
+	want := "[" + table + "]"
+	inTable := false
+	lines := strings.Split(string(data), "\n")
+	for i, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			inTable = trimmed == want
+			continue
+		}
+		if !inTable {
+			continue
+		}
+		name, _, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		indent := raw[:len(raw)-len(strings.TrimLeft(raw, " \t"))]
+		lines[i] = indent + key + " = \"" + value + "\""
+		return []byte(strings.Join(lines, "\n"))
+	}
+	return data
 }
 
 func liveWorkspaceDir(t *testing.T) string {
@@ -491,6 +550,15 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	if opts.disableShell {
 		config = ensureShellToolDisabled(config)
 	}
+	upstream := tableString(config, "model_providers.grok", "base_url")
+	if upstream == "" {
+		t.Fatal("shipped Grok profile is missing [model_providers.grok] base_url")
+	}
+	server, rec, proxyBase := startWireProxy(t, upstream)
+	config = setTableString(config, "model_providers.grok", "base_url", proxyBase)
+	if tableString(config, "model_providers.grok", "base_url") != proxyBase {
+		t.Fatal("failed to rewrite Grok base_url onto the wire proxy")
+	}
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), config, 0o600); err != nil {
 		t.Fatalf("write isolated config: %v", err)
 	}
@@ -509,7 +577,11 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 		requests.toolName = probeToolName
 		requests.toolOutput = probeToolOutput
 	}
-	h := &liveHarness{t: t, home: home, workspace: workspace, requests: requests, stderrPath: stderrPath, redactor: redactor}
+	h := &liveHarness{t: t, home: home, workspace: workspace, requests: requests, stderrPath: stderrPath, redactor: redactor, recorder: rec}
+	t.Cleanup(func() {
+		server.Close()
+		preserveFailedSessions(t, home, redactor, rec)
+	})
 	experimental := true
 	client, err := codexsdk.New(codexsdk.ClientOptions{
 		CWD:                       workspace,
@@ -529,16 +601,16 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	h.client = client
 	t.Cleanup(func() {
 		_ = client.Close()
-		preserveFailedSessions(t, home, redactor)
 	})
 	return h
 }
 
-func preserveFailedSessions(t *testing.T, home string, redactor *secretRedactor) {
+func preserveFailedSessions(t *testing.T, home string, redactor *secretRedactor, rec *wireRecorder) {
 	if t == nil || !t.Failed() {
 		return
 	}
 	copyRedactedSessionJSONL(t, home, redactor)
+	writeFailedWire(t, rec, redactor)
 }
 
 func copyRedactedSessionJSONL(t *testing.T, home string, redactor *secretRedactor) {
@@ -759,6 +831,7 @@ func (h *liveHarness) failError(stage string, err error, result codexsdk.ThreadR
 			fmt.Fprintf(&b, "error_marker=%s\n", marker.name)
 		}
 	}
+	h.writeWireDiagnostics(&b)
 	if h.client != nil {
 		p := h.client.Provenance()
 		fmt.Fprintf(&b, "generated_baseline=repo:%s ref:%s/%s commit:%s\n", h.redact(p.GeneratedBaseline.SourceRepo), h.redact(p.GeneratedBaseline.SourceRefKind), h.redact(p.GeneratedBaseline.SourceRefName), h.redact(p.GeneratedBaseline.SourceCommit))
@@ -773,7 +846,39 @@ func (h *liveHarness) failError(stage string, err error, result codexsdk.ThreadR
 
 func (h *liveHarness) failStage(stage, reason string) {
 	h.t.Helper()
-	h.t.Fatalf("NOT_PROVEN at %s: %s", stage, h.redact(reason))
+	var b strings.Builder
+	fmt.Fprintf(&b, "NOT_PROVEN at %s: %s\n", stage, h.redact(reason))
+	fmt.Fprintf(&b, "stage=%s\n", stage)
+	h.writeWireDiagnostics(&b)
+	h.t.Fatal(b.String())
+}
+
+func (h *liveHarness) writeWireDiagnostics(b *strings.Builder) {
+	if h == nil || h.recorder == nil {
+		return
+	}
+	exchanges := h.recorder.snapshot()
+	fmt.Fprintf(b, "wire_exchanges=%d\n", len(exchanges))
+	var latest *wireExchange
+	for i := range exchanges {
+		ex := &exchanges[i]
+		if ex.status < 200 || ex.status > 299 {
+			latest = ex
+		}
+	}
+	if latest == nil {
+		return
+	}
+	fmt.Fprintf(b, "backend_status=%d\n", latest.status)
+	errText := h.redact(string(latest.responseBody))
+	errText = strings.ReplaceAll(errText, "\r\n", "\n")
+	errText = strings.ReplaceAll(errText, "\r", "\n")
+	errText = strings.ReplaceAll(errText, "\n", " ")
+	runes := []rune(errText)
+	if len(runes) > 200 {
+		errText = string(runes[:200])
+	}
+	fmt.Fprintf(b, "backend_error=%s\n", errText)
 }
 
 func (h *liveHarness) redact(value string) string {

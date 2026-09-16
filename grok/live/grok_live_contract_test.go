@@ -45,7 +45,8 @@ func TestTopLevelTomlStringReadsQuotedKeysAndIgnoresTables(t *testing.T) {
 		"[model_providers.grok]\n" +
 		"model = \"nested-model\"\n" +
 		"model_provider = \"nested-provider\"\n" +
-		"name = \"Grok\"\n"
+		"name = \"Grok\"\n" +
+		"base_url = \"https://example.invalid/v1\"\n"
 	if got := topLevelTomlString([]byte(fixture), "model"); got != "fixture-model" {
 		t.Fatalf("model = %q", got)
 	}
@@ -54,6 +55,22 @@ func TestTopLevelTomlStringReadsQuotedKeysAndIgnoresTables(t *testing.T) {
 	}
 	if got := topLevelTomlString([]byte(fixture), "name"); got != "" {
 		t.Fatalf("table key leaked as top-level: %q", got)
+	}
+	if got := tableString([]byte(fixture), "model_providers.grok", "base_url"); got != "https://example.invalid/v1" {
+		t.Fatalf("table base_url = %q", got)
+	}
+	if got := tableString([]byte(fixture), "model_providers.grok", "name"); got != "Grok" {
+		t.Fatalf("table name = %q", got)
+	}
+	if got := tableString([]byte(fixture), "model_providers.grok", "model_provider"); got != "nested-provider" {
+		t.Fatalf("table model_provider = %q", got)
+	}
+	rewritten := setTableString([]byte(fixture), "model_providers.grok", "base_url", "http://127.0.0.1:9/v1")
+	if got := tableString(rewritten, "model_providers.grok", "base_url"); got != "http://127.0.0.1:9/v1" {
+		t.Fatalf("rewritten base_url = %q", got)
+	}
+	if got := topLevelTomlString(rewritten, "model"); got != "fixture-model" {
+		t.Fatalf("rewrite changed top-level model: %q", got)
 	}
 }
 
@@ -231,13 +248,18 @@ func TestPreserveFailedSessionsSkipsPassingTests(t *testing.T) {
 	}
 	dest := t.TempDir()
 	t.Setenv(grokLiveFailedSessionsEnv, dest)
-	preserveFailedSessions(t, home, newSecretRedactor(nil))
+	rec := newWireRecorder()
+	rec.add(wireExchange{
+		method: "POST", path: "/v1/responses", status: 400,
+		requestBody: []byte(`{"tools":[{"external_web_access":true}]}`), responseBody: []byte("rejected"),
+	})
+	preserveFailedSessions(t, home, newSecretRedactor(nil), rec)
 	entries, err := os.ReadDir(dest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Fatal("passing tests must not copy session jsonl")
+		t.Fatal("passing tests must not copy session jsonl or wire captures")
 	}
 }
 

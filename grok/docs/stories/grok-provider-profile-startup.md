@@ -66,8 +66,10 @@ One positive semantic Grok Turn. A missing or failed terminal state is failure.
 
 ### Secret-safe evidence
 
-The GREEN proof run of the named executable contract is the evidence.
-Do not record credentials, prompts, responses, raw traffic, or Thread IDs.
+GREEN records nothing. A RED run preserves, for 7 days, the redacted session
+JSONL and the key-path shape of the rejected requests with the backend status
+and redacted error text; no prompt text, model output, credential, or Thread ID
+is recorded.
 
 
 ## Stock compatibility control
