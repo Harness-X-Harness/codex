@@ -15,9 +15,10 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-// hostedXSearchNames mirrors GrokModelProvider::is_provider_hosted_tool_call
-// in codex-rs/model-provider/src/grok_provider.rs. The Rust predicate is the
-// authority.
+// hostedXSearchNames is the set of x_search sub-tool names this Story accepts
+// as proof. GrokModelProvider::is_provider_hosted_tool_call treats any
+// completed custom_tool_call as hosted; this Story still requires one of
+// these names so the Turn is a real x_search path.
 var hostedXSearchNames = []string{
 	"x_keyword_search",
 	"x_semantic_search",
