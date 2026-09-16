@@ -7,6 +7,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -135,7 +136,10 @@ def package(
 
 
 def _gh(*args: str) -> str:
-    return subprocess.check_output(["gh", *args], text=True)
+    # `gh --json` obeys CLICOLOR_FORCE and then emits ANSI that json.loads rejects;
+    # agent shells commonly force color, so read gh output with color disabled.
+    env = {**os.environ, "CLICOLOR_FORCE": "0", "NO_COLOR": "1"}
+    return subprocess.check_output(["gh", *args], text=True, env=env)
 
 
 def _gh_json(*args: str):
