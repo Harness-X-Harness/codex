@@ -373,11 +373,17 @@ type liveHarness struct {
 	recorder   *wireRecorder
 }
 
+type xSearchDateWindow struct {
+	fromDate string
+	toDate   string
+}
+
 type liveOptions struct {
 	probeTool               bool
 	disableShell            bool
 	acceptExecForSession    bool
 	webSearchAllowedDomains []string
+	xSearchWindow           xSearchDateWindow
 }
 
 func skipUnlessGrokLive(t *testing.T) {
@@ -553,6 +559,9 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	}
 	if len(opts.webSearchAllowedDomains) > 0 {
 		config = overlayWebSearchAllowedDomains(config, opts.webSearchAllowedDomains)
+	}
+	if opts.xSearchWindow.fromDate != "" && opts.xSearchWindow.toDate != "" {
+		config = overlayXSearchDateWindow(config, opts.xSearchWindow)
 	}
 	upstream := tableString(config, "model_providers.grok", "base_url")
 	if upstream == "" {
