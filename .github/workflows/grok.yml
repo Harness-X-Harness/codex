@@ -73,6 +73,15 @@ jobs:
         working-directory: ${{ github.workspace }}
       - run: python3 -m unittest grok/live/summary_test.py
         working-directory: ${{ github.workspace }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: grok/live/go.mod
+          cache: false
+      - name: Live harness unit tests
+        working-directory: grok/live
+        env:
+          GOWORK: "off"
+        run: go vet ./... && go test ./... -count=1
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
