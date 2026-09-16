@@ -263,10 +263,10 @@ request copy exactly as today:
 | `Reasoning` | `reasoning` | `id?`, `summary[]`, `encrypted_content` when non-empty; `content` only when there is no usable blob and it is well-typed | observed rejection for `content` + blob and for `content: null`; grok-build strips `status` only |
 | `FunctionCall` | `function_call` | `call_id`, `name`, `arguments`, `id?` | grok-build; Live. `namespace` and `encrypted_function_args` are not constructed |
 | `FunctionCallOutput` | `function_call_output` | `call_id`, `output` (text or content items) | grok-build; Live |
-| `CustomToolCall` | `custom_tool_call` | `call_id`, `name`, `input`, `id?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is; `status` is a probe |
+| `CustomToolCall` | `custom_tool_call` | `id`, `call_id`, `name`, `input`, `status?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is. `id` is required on replay (`TestFactCustomToolCallReplayRequiresID`: `422 missing field id`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
 | `CustomToolCallOutput` | `custom_tool_call_output` | `call_id`, `output` | custom `apply_patch` Story |
-| `WebSearchCall` | `web_search_call` | `id?`, `action?`; `status` probe | grok-build replays as-is with status |
-| `ImageGenerationCall` | `image_generation_call` | `id?`, `status`, `revised_prompt?`, `result` | image-edit Story was GREEN with `status` at `c4c80eef`; dropping it is a probe |
+| `WebSearchCall` | `web_search_call` | `id?`, `action`, `status?` | grok-build replays as-is with status. `action` is required on replay (`TestFactWebSearchCallReplayRequiresAction`: `422 missing field action`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
+| `ImageGenerationCall` | `image_generation_call` | `id?`, `status`, `revised_prompt?`, `result` | image-edit Story was GREEN with `status` at `c4c80eef`; `status` is accepted (`TestFactInputStatusOnHostedItems`) |
 | `CompactionTrigger` | dropped | — | stock request control; Grok `remote_compaction` `Unsupported` |
 | `ConfigurationUpdate` | reject | — | stock records it only for OpenAI + `use_responses_lite`; cannot appear on a Grok Thread |
 | `Compaction`, `ContextCompaction` | reject | — | produced only by remote compaction, which Grok does not have |
