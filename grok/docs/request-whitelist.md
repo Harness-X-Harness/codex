@@ -295,7 +295,7 @@ values, maps each by `type`, and constructs Grok tool types.
 
 | Codex tool JSON | Grok tool | Evidence / reason |
 |-----------------|-----------|-------------------|
-| `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | grok-build `strict: None`; `strict` stays emitted as a probe until Live decides; `defer_loading` is not constructed |
+| `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | omit `strict`: grok-build `strict: None`; `TestFactFunctionStrict` (`accepted`) is not consumed; this B1 probe. `defer_loading` is not constructed |
 | `custom { name, description, format }` | `custom` as-is | custom `apply_patch` Story |
 | `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; Codex config exposes only `allowed_domains`; today filters are dropped, restoring them is B2 |
 | `x_search` | appended once when tools are non-empty | Grok capability rule, Live GREEN; grok-build emits it only when the hosted tool is requested and Codex has no `x_search` config |
@@ -384,9 +384,11 @@ What the recorded facts settle for the whitelist:
 - Reasoning: only `content: null` next to a blob is rejected. A typed
   `reasoning_text` channel is accepted, so B1 may emit it when stock records
   one; omission stays the conservative default.
-- `strict`, `parallel_tool_calls`, `store`, `client_metadata`, `text.verbosity`
-  are accepted. "Accepted" is not "consumed": B1 drops each one per commit and
-  watches Live; none can be a `400` source today.
+- Function tool `strict` is omitted by this B1 probe (`TestFactFunctionStrict`
+  `accepted` ≠ consumed; grok-build `strict: None`). `parallel_tool_calls`,
+  `store`, `client_metadata`, `text.verbosity` remain accepted probes: B1
+  drops each remaining one per commit and watches Live; none can be a `400`
+  source today.
 - `web_search.filters.allowed_domains` and the `x_search` date window are
   accepted, so B2 needs only the stock-compatible config seam, not a backend
   probe.
@@ -395,7 +397,7 @@ B1, tighten toward grok-build:
 
 | Probe | Question | How to decide | Fact |
 |-------|----------|---------------|------|
-| function `strict` | does Grok consume `strict: true` or only accept it? | drop it; Live GREEN on the custom `apply_patch` and dynamic-tool Stories | `TestFactFunctionStrict` (`accepted`) |
+| function `strict` | omit (decided) | this commit (`feat(grok): omit function tool strict on Grok Responses egress`); Live GREEN on the custom `apply_patch` and dynamic-tool Stories is the post-merge line proof | `TestFactFunctionStrict` (`accepted`) |
 | `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | keep or drop on replay? | accepted either way; keep what stock records | `TestFactInputStatusOnHostedItems` (`accepted`) |
 | `parallel_tool_calls`, `store`, `client_metadata` | consumed or only accepted? | drop one per commit; Live GREEN | `TestFactParallelToolCallsStoreClientMetadata` (`accepted`) |
 | reasoning `content` with blob | emit the typed channel or keep omitting? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission unless a Story needs the text | `TestFactReasoningTypedContentWithBlob` (`accepted`) |
@@ -480,6 +482,8 @@ error where today the request would reach xAI.
 
 Each B1 probe is one commit with a native test and a GREEN Live run. A probe
 that fails stays in its table with the observed error text.
+
+Landed by this commit: `feat(grok): omit function tool strict on Grok Responses egress` omits `strict` from `GrokTool::Function`.
 
 ### Stage B2: extend with Grok-native abilities, one ability per commit
 

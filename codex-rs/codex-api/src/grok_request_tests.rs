@@ -465,6 +465,7 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
                 "search_context_size",
                 "search_content_types",
                 "defer_loading",
+                "strict",
             ] {
                 if tool.get(key).is_some() {
                     leaked.push(format!("tools[{index}].{key}"));
@@ -748,13 +749,24 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
         .project_request(&canonical)
         .expect("tool projection");
     assert_eq!(canonical, original, "canonical request must stay unchanged");
-    assert_eq!(projected["tools"][0]["type"], "function");
     assert_eq!(
-        projected["tools"][0]["name"],
-        "local__apply_patch__deadbeefcafe"
+        projected["tools"],
+        json!([
+            {
+                "type": "function",
+                "name": "local__apply_patch__deadbeefcafe",
+                "description": "canonical `apply_patch` tool",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"patch": {"type": "string"}},
+                    "required": ["patch"],
+                    "additionalProperties": false
+                }
+            },
+            {"type": "web_search"},
+            {"type": "x_search"}
+        ])
     );
-    assert_eq!(projected["tools"][1], json!({"type":"web_search"}));
-    assert_eq!(projected["tools"][2], json!({"type":"x_search"}));
     assert_eq!(projected["tool_choice"], "auto");
     assert_eq!(projected["parallel_tool_calls"], true);
     assert!(
@@ -788,10 +800,18 @@ fn grok_strips_external_web_access_from_nested_request_payloads() {
         .project_request(&canonical)
         .expect("nested search extras should project");
 
-    assert_eq!(projected["tools"][0]["type"], "function");
-    assert_eq!(projected["tools"][0]["name"], "local__wait__deadbeefcafe");
-    assert_eq!(projected["tools"][1], json!({"type": "web_search"}));
-    assert_eq!(projected["tools"][2], json!({"type": "x_search"}));
+    assert_eq!(
+        projected["tools"],
+        json!([
+            {
+                "type": "function",
+                "name": "local__wait__deadbeefcafe",
+                "parameters": {"type": "object", "properties": {}}
+            },
+            {"type": "web_search"},
+            {"type": "x_search"}
+        ])
+    );
     assert_eq!(
         projected["client_metadata"]["note"], "external_web_access",
         "string metadata must keep the phrase; only JSON arguments are stripped"
