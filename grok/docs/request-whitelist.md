@@ -428,12 +428,12 @@ moves out so `provider.rs` shrinks instead of growing.
 codex-rs/codex-api/src/provider.rs
   ResponsesDialect::for_provider        unchanged
   ResponsesDialect::project_request     OpenAi => identity serde
-                                        Grok   => grok_request::build(request)
+                                        Grok   => grok_request::build(request, provider)
   strip_unsupported_grok_arguments      deleted
   JSON retain/remove post-processing    deleted
 
 codex-rs/codex-api/src/grok_request.rs            new, target < 500 LoC
-  pub(crate) fn build(&ResponsesApiRequest) -> Result<Value, GrokProjectionError>
+  pub(crate) fn build(&ResponsesApiRequest, &Provider) -> Result<Value, GrokProjectionError>
   GrokResponsesRequest                  Serialize only
   GrokInputItem                         #[serde(tag = "type")], exhaustive from ResponseItem
   GrokContentItem, GrokReasoningItem, GrokFunctionCallOutput

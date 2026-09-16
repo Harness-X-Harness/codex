@@ -89,10 +89,10 @@ impl RetryConfig {
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct XSearchProviderConfig {
-    /// Inclusive start of the Grok hosted `x_search` window (`YYYY-MM-DD`).
+    /// Start of the Grok hosted `x_search` window (`YYYY-MM-DD`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_date: Option<String>,
-    /// Inclusive end of the Grok hosted `x_search` window (`YYYY-MM-DD`).
+    /// End of the Grok hosted `x_search` window (`YYYY-MM-DD`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_date: Option<String>,
 }
