@@ -1661,6 +1661,14 @@ pub async fn mount_compact_response_sequence(
     response_mock
 }
 
+fn is_provider_hosted_custom_tool_call(item: &Value) -> bool {
+    item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+        && matches!(
+            item.get("name").and_then(Value::as_str),
+            Some("x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch")
+        )
+}
+
 /// Validate invariants on the request body sent to `/v1/responses`.
 ///
 /// - A `function_call_output` with missing/empty `call_id` must have a nonempty `name`.
@@ -1672,16 +1680,7 @@ pub async fn mount_compact_response_sequence(
 /// - Every `tool_search_output` must match a prior `tool_search_call`.
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
 ///   `tool_search_call` in the `input` must have a matching output entry.
-/// Matches the hosted x_search names in `GrokModelProvider::is_provider_hosted_tool_call`.
-/// Egress omits `status`, so the request-body check is name-only.
-fn is_provider_hosted_custom_tool_call(item: &Value) -> bool {
-    item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-        && matches!(
-            item.get("name").and_then(Value::as_str),
-            Some("x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch")
-        )
-}
-
+///   Hosted x_search `custom_tool_call` names are exempt (no client output).
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
