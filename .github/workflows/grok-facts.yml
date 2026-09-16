@@ -1,0 +1,31 @@
+name: grok-facts
+
+# Facts are recorded observations of the xAI Responses API, independent of the
+# shipped Codex binary. A RED result here revises a request-whitelist.md row
+# and its evidence; it never gates grok.yml or release.py publish.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  facts:
+    name: Facts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: grok/facts/go.mod
+          cache: false
+      - name: Run Grok Facts
+        working-directory: grok/facts
+        env:
+          GROK_FACTS: "1"
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GOWORK: "off"
+        run: go test ./... -count=1 -timeout 15m -run '^TestFact' -v

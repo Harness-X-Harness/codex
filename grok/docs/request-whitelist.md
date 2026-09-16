@@ -25,6 +25,7 @@ exact sources, not "current" Codex or grok-build.
 | grok-build hosted-tool entries | `crates/codegen/xai-grok-sampling-types/src/tool_overrides.rs` (blob `2abea09`) |
 | grok-build conversation model | `crates/codegen/xai-grok-sampling-types/src/conversation.rs` (blob `83e88f9`) |
 | grok-build binding tests | `crates/codegen/xai-grok-sampling-types/src/conversation/responses_tests.rs` (blob `d297def`) |
+| Backend facts | `grok/facts` `TestFact*`, recorded 2026-09-16 against `grok.trustedtunnel.app/v1` (Mini proxy to xAI) |
 
 grok-build is xAI's own harness. Its typed request constructor is the best
 available statement of what the Grok Responses backend consumes. It is an
@@ -335,7 +336,10 @@ flattened to `function_call` for Grok.
 ### Open probes
 
 Each probe is one commit with a GREEN Live run or an observed rejection as
-its evidence. Until then the whitelist emits today's egress.
+its evidence. Until then the whitelist emits today's egress. Each B1/B2
+probe names its `TestFact*`; a Facts run is the evidence for the backend
+class. Rejected classes are `rejected:<HTTP status>/<error>` with the
+backend `error` text whitespace-collapsed and cut at 160 characters.
 
 P0, decides whether a Grok-native ability already shipped works end to end:
 
@@ -343,23 +347,57 @@ P0, decides whether a Grok-native ability already shipped works end to end:
 |-------|----------|---------------|
 | real x_search Turn | does a Grok Turn that invokes x_search complete, record the hosted call, and continue on the next Turn? | one Live Story with a prompt that requires X content; assert a completed hosted `custom_tool_call` in the session and a terminal reply; assert Turn N+1 replays it without a `400` |
 
+Recorded facts (backend class, independent of the binary; `grok/facts`,
+first recorded 2026-09-16 against `grok.trustedtunnel.app`). A Facts run is
+the evidence; a flip revises the row, not a publish.
+
+| Fact | Request shape | Recorded class |
+|------|---------------|----------------|
+| `TestFactWebSearchExternalWebAccessRejected` | `tools: [{type: web_search, external_web_access: true}]` | `rejected:400/Argument not supported: external_web_access` |
+| `TestFactReasoningNullContentWithBlobRejected` | reasoning `content: null` + blob | `rejected:400/Could not decode the compaction blob. Ensure it is unmodified from the compact response.` |
+| `TestFactReasoningTypedContentWithBlob` | reasoning `content: [{type: reasoning_text, text}]` + blob | `accepted` |
+| `TestFactIncludeEncryptedReasoning` | `include: ["reasoning.encrypted_content"]` | `accepted`; a reasoning item with non-empty `encrypted_content` is returned |
+| `TestFactFunctionStrict` | function tool with `strict: true` | `accepted` |
+| `TestFactInputStatusOnHostedItems` | `status: completed` on replayed `custom_tool_call`, `web_search_call`, `image_generation_call` | `accepted` for all three |
+| `TestFactCustomToolCallReplayRequiresID` | replayed `custom_tool_call` without `id` | `rejected:422/… invalid "custom_tool_call" item: missing field \`id\`` |
+| `TestFactWebSearchCallReplayRequiresAction` | replayed `web_search_call` without `action` | `rejected:422/… invalid "web_search_call" item: missing field \`action\`` |
+| `TestFactParallelToolCallsStoreClientMetadata` | each of `parallel_tool_calls: false`, `store: false`, `client_metadata` alone | `accepted` for each |
+| `TestFactWebSearchAllowedDomains` | `tools: [{type: web_search, filters: {allowed_domains: [...]}}]` | `accepted` |
+| `TestFactXSearchDateWindow` | `tools: [{type: x_search, from_date, to_date}]` | `accepted` |
+| `TestFactTextVerbosityRejectedOrIgnored` | `text: {verbosity: low}` | `accepted`; whitelist omits it until an effect is observed |
+
+What the recorded facts settle for the whitelist:
+
+- Input items: `custom_tool_call.id` and `web_search_call.action` are
+  required on replay. The whitelist must carry both from history; dropping
+  either is a `422`, not a silent ignore.
+- Reasoning: only `content: null` next to a blob is rejected. A typed
+  `reasoning_text` channel is accepted, so B1 may emit it when stock records
+  one; omission stays the conservative default.
+- `strict`, `parallel_tool_calls`, `store`, `client_metadata`, `text.verbosity`
+  are accepted. "Accepted" is not "consumed": B1 drops each one per commit and
+  watches Live; none can be a `400` source today.
+- `web_search.filters.allowed_domains` and the `x_search` date window are
+  accepted, so B2 needs only the stock-compatible config seam, not a backend
+  probe.
+
 B1, tighten toward grok-build:
 
-| Probe | Question | How to decide |
-|-------|----------|---------------|
-| function `strict` | does Grok accept or ignore `strict: true`? | drop it; Live GREEN on the custom `apply_patch` and dynamic-tool Stories |
-| `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | required, ignored, or rejected on input? | replay with and without; image-edit Story covers `image_generation_call` |
-| `parallel_tool_calls`, `store`, `client_metadata` | ignored or consumed? | drop one per commit; Live GREEN |
-| reasoning `content` with blob | is a well-typed `reasoning_text` channel rejected, or only `null`? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission if `400` |
+| Probe | Question | How to decide | Fact |
+|-------|----------|---------------|------|
+| function `strict` | does Grok consume `strict: true` or only accept it? | drop it; Live GREEN on the custom `apply_patch` and dynamic-tool Stories | `TestFactFunctionStrict` (`accepted`) |
+| `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | keep or drop on replay? | accepted either way; keep what stock records | `TestFactInputStatusOnHostedItems` (`accepted`) |
+| `parallel_tool_calls`, `store`, `client_metadata` | consumed or only accepted? | drop one per commit; Live GREEN | `TestFactParallelToolCallsStoreClientMetadata` (`accepted`) |
+| reasoning `content` with blob | emit the typed channel or keep omitting? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission unless a Story needs the text | `TestFactReasoningTypedContentWithBlob` (`accepted`) |
 
 B2, extend with Grok-native abilities:
 
-| Probe | Question | How to decide |
-|-------|----------|---------------|
-| `web_search.filters.allowed_domains` | does Grok accept Codex's `allowed_domains`? | emit filters from the stock `web_search` config instead of the bare rewrite; Live with a filtered search |
-| `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live |
-| `x_search` date window | which config seam carries `from_date` / `to_date`? | Grok Provider config, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live |
-| any completed `custom_tool_call` is hosted | can `is_provider_hosted_tool_call` drop the name list? | widen the predicate; run the P0 Story and the custom `apply_patch` Story |
+| Probe | Question | How to decide | Fact |
+|-------|----------|---------------|------|
+| `web_search.filters.allowed_domains` | which stock config seam carries it? | emit filters from the stock `web_search` config instead of the bare rewrite; Live with a filtered search | `TestFactWebSearchAllowedDomains` (`accepted`) |
+| `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live | — |
+| `x_search` date window | which config seam carries `from_date` / `to_date`? | Grok Provider config, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live | `TestFactXSearchDateWindow` (`accepted`) |
+| any completed `custom_tool_call` is hosted | can `is_provider_hosted_tool_call` drop the name list? | widen the predicate; run the P0 Story and the custom `apply_patch` Story | — |
 
 ## Module plan
 
@@ -466,6 +504,8 @@ before `grok/release.py publish`; a docs-only commit does not.
   Stories exercise the reasoning, hosted-replay, and custom-tool rows above.
   The P0 x_search Story is the missing Live row for a Grok-native ability
   that is already shipped.
+- Facts live in `grok/facts`, run by `grok-facts.yml` on dispatch or locally,
+  and are not proof inputs.
 
 Prefer `pretty_assertions::assert_eq` on whole projected bodies over
 per-key assertions.

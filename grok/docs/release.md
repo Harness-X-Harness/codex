@@ -79,6 +79,7 @@ fix at the owner, prove again. No retry layer, no ledger (rules 2, 3, 6, 7).
 | Live `NOT_PROVEN` | `stage=`, `error_marker=`, `backend_status=`, `backend_error=`, `runtime_compatibility=`; in `grok-live-failed-sessions-<sha>`: the redacted session JSONL and `wire/NN-request.shape.json` (key paths and types of each rejected request) with `wire/NN-response.txt` (status, redacted backend error) | capability layer, egress, or ingress per `request-whitelist.md` §Direction; the harness when `runtime_compatibility` is not compatible | a whitelist row or a capability flag; never a new key removal on serialized JSON |
 | Live RED with no code change since the last GREEN | the same fields | backend nondeterminism or a backend change, not a regression until shown | one `workflow_dispatch` Live-only run on the same `binary_run_id` for diagnosis; GREEN → record the observation as a Fact, no code change; RED again → treat as a regression of the Story |
 | `release.py check` or `publish` refusal | the `SystemExit` text | the gate condition the text names | satisfy the condition; do not bypass the gate |
+| `TestFact*` flip | the fact name, recorded and observed class | the `request-whitelist.md` row the fact backs | update the row and its evidence; a Story only when the change is user-visible |
 
 Stage names in `failStage` and the `error_marker` set are stable identifiers
 owned by `grok/live/grok_live_harness_test.go`; a Story's "Partial success is
