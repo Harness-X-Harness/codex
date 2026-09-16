@@ -386,22 +386,44 @@ impl ContextManager {
         }
     }
 
-    /// Returns the history prepared for sending to the model. This applies a proper
-    /// normalization and drops un-suited items. Unsupported image and audio content
-    /// is stripped from messages and tool outputs according to `input_modalities`.
+    /// Test helper: treat every unpaired custom tool call as a client tool.
+    #[cfg(test)]
     pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        self.for_prompt_annotated(input_modalities)
+        self.for_prompt_with_hosted_calls(input_modalities, |_| false)
+    }
+
+    /// Leaves provider-hosted tool calls unpaired.
+    ///
+    /// Hosted calls are complete without a client output. Pass the provider's
+    /// `is_provider_hosted_tool_call` so Grok x_search `custom_tool_call` items
+    /// stay in the prompt without a synthesized `aborted` output.
+    pub(crate) fn for_prompt_with_hosted_calls(
+        self,
+        input_modalities: &[InputModality],
+        is_provider_hosted_tool_call: impl Fn(&ResponseItem) -> bool,
+    ) -> Vec<ResponseItem> {
+        self.for_prompt_annotated_with_hosted_calls(input_modalities, is_provider_hosted_tool_call)
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect()
     }
 
-    /// Returns normalized history envelopes for internal consumers that must retain metadata.
+    /// Test helper: treat every unpaired custom tool call as a client tool.
+    #[cfg(test)]
     pub(crate) fn for_prompt_annotated(
-        mut self,
+        self,
         input_modalities: &[InputModality],
     ) -> Vec<ResponseItemEnvelope> {
-        self.normalize_history(input_modalities);
+        self.for_prompt_annotated_with_hosted_calls(input_modalities, |_| false)
+    }
+
+    /// Leaves provider-hosted tool calls unpaired and keeps envelope metadata.
+    pub(crate) fn for_prompt_annotated_with_hosted_calls(
+        mut self,
+        input_modalities: &[InputModality],
+        is_provider_hosted_tool_call: impl Fn(&ResponseItem) -> bool,
+    ) -> Vec<ResponseItemEnvelope> {
+        self.normalize_history_with_hosted_calls(input_modalities, is_provider_hosted_tool_call);
         Arc::unwrap_or_clone(self.items)
     }
 
@@ -700,14 +722,24 @@ impl ContextManager {
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
-    /// 1. every call (function/custom) has a corresponding output entry
+    /// 1. every client-dispatched call (function/custom) has a corresponding output
+    ///    entry; provider-hosted calls are complete without a client output
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
+    #[cfg(test)]
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+        self.normalize_history_with_hosted_calls(input_modalities, |_| false);
+    }
+
+    fn normalize_history_with_hosted_calls(
+        &mut self,
+        input_modalities: &[InputModality],
+        is_provider_hosted_tool_call: impl Fn(&ResponseItem) -> bool,
+    ) {
         let items = Arc::make_mut(&mut self.items);
 
-        // all function/tool calls must have a corresponding output
-        normalize::ensure_call_outputs_present(items);
+        // Client-dispatched function/tool calls must have a corresponding output.
+        normalize::ensure_call_outputs_present(items, is_provider_hosted_tool_call);
 
         // Paired outputs must have a corresponding call; named external outputs stand alone.
         normalize::remove_orphan_outputs(items);
