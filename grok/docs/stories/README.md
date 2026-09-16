@@ -29,6 +29,7 @@ Triage by stage lives in [`../release.md`](../release.md) §Triage.
 | [Child agent inherits parent Provider authority](./grok-provider-binding-lifecycle.md) | `TestGrokCollaboration` |
 | [Image generation and same-Thread history edit](./grok-image-generation-history-edit.md) | `TestGrokImageGenerationEdit` |
 | [Custom `apply_patch` file edit](./grok-custom-apply-patch.md) | `TestGrokCustomApplyPatch` |
+| [Hosted `web_search` Turn and replay](./grok-hosted-web-search-turn.md) | `TestGrokHostedWebSearch` |
 
 ## Deterministic App Server
 
