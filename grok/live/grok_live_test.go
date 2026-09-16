@@ -18,15 +18,22 @@ func TestGrokBasic(t *testing.T) {
 	ctx := context.Background()
 	h.requireGrokCatalog(ctx)
 
+	profile, err := os.ReadFile(shippedGrokProfilePath())
+	if err != nil {
+		t.Fatalf("read shipped Grok profile: %v", err)
+	}
+	wantProvider := topLevelTomlString(profile, "model_provider")
+	wantModel := topLevelTomlString(profile, "model")
+
 	run := h.runTurn(ctx, startTurnOpts{
 		prompt:   "Reply with a short confirmation that the Grok Turn completed.",
 		deadline: 2 * time.Minute,
 	})
-	if run.Provider != grokProvider {
-		h.failStage("thread_bound_to_grok", "Thread is not bound to the Grok Provider")
+	if run.Provider != wantProvider {
+		h.failStage("thread_bound_to_grok", fmt.Sprintf("Thread Provider is %q, shipped profile binds %q", run.Provider, wantProvider))
 	}
-	if run.Model != grokModel {
-		h.failStage("thread_model_grok_4_6", "Thread model is not grok-4.6")
+	if run.Model != wantModel {
+		h.failStage("thread_model_grok_4_6", fmt.Sprintf("Thread model is %q, shipped profile sets %q", run.Model, wantModel))
 	}
 	if !run.completed() {
 		h.failStage("turn_completed", "ordinary Grok Turn did not complete")

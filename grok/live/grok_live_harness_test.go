@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -31,7 +32,7 @@ import (
 const (
 	grokLiveEnv               = "GROK_LIVE"
 	grokLiveBinEnv            = "GROK_LIVE_CODEX_BIN"
-	grokLiveConfigEnv         = "GROK_LIVE_CONFIG"
+	grokApiKeyEnv             = "GROK_API_KEY"
 	grokLiveFailedSessionsEnv = "GROK_LIVE_FAILED_SESSIONS"
 
 	proxyModeEnv              = "GROK_LIVE_APP_SERVER_PROXY"
@@ -379,8 +380,48 @@ type liveOptions struct {
 func skipUnlessGrokLive(t *testing.T) {
 	t.Helper()
 	if os.Getenv(grokLiveEnv) != "1" {
-		t.Skip("set GROK_LIVE=1, GROK_LIVE_CODEX_BIN, and GROK_LIVE_CONFIG to run Grok real-provider Live tests")
+		t.Skip("set GROK_LIVE=1, GROK_LIVE_CODEX_BIN, and GROK_API_KEY to run Grok real-provider Live tests")
 	}
+}
+
+func shippedGrokProfilePath() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return filepath.Join("..", "dist", "config.toml.example")
+	}
+	return filepath.Join(filepath.Dir(file), "..", "dist", "config.toml.example")
+}
+
+// topLevelTomlString reads a top-level `key = "value"` assignment. Keys inside
+// [tables] are ignored. Surrounding quotes are stripped when present.
+func topLevelTomlString(data []byte, key string) string {
+	inTable := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			inTable = true
+			continue
+		}
+		if inTable {
+			continue
+		}
+		name, rest, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		value := strings.TrimSpace(rest)
+		if n := len(value); n >= 2 {
+			quote := value[0]
+			if (quote == '"' || quote == '\'') && value[n-1] == quote {
+				return value[1 : n-1]
+			}
+		}
+		return value
+	}
+	return ""
 }
 
 func liveWorkspaceDir(t *testing.T) string {
@@ -432,9 +473,8 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	skipUnlessGrokLive(t)
 
 	binary := strings.TrimSpace(os.Getenv(grokLiveBinEnv))
-	configPath := strings.TrimSpace(os.Getenv(grokLiveConfigEnv))
-	if binary == "" || configPath == "" {
-		t.Fatal("GROK_LIVE_CODEX_BIN and GROK_LIVE_CONFIG are required when GROK_LIVE=1")
+	if binary == "" || strings.TrimSpace(os.Getenv(grokApiKeyEnv)) == "" {
+		t.Fatal("GROK_LIVE_CODEX_BIN and GROK_API_KEY are required when GROK_LIVE=1")
 	}
 	if _, err := os.Stat(binary); err != nil {
 		if _, pathErr := exec.LookPath(binary); pathErr != nil {
@@ -444,9 +484,9 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 
 	workspace := liveWorkspaceDir(t)
 	home := liveCodexHome(t, workspace)
-	config, err := os.ReadFile(configPath)
+	config, err := os.ReadFile(shippedGrokProfilePath())
 	if err != nil {
-		t.Fatalf("read Grok profile config: %v", err)
+		t.Fatalf("read shipped Grok profile: %v", err)
 	}
 	if opts.disableShell {
 		config = ensureShellToolDisabled(config)

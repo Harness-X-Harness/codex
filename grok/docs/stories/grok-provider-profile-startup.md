@@ -10,7 +10,7 @@ ordinary Grok Turn.
 
 ```text
 exact Grok release artifact
-  -> isolated Codex Home with the shipped Grok profile
+  -> isolated Codex Home with the shipped Grok profile grok/dist/config.toml.example
   -> stock App Server startup and model/list
   -> one Grok-bound Thread and ordinary Turn
   -> terminal completed Turn with an agent message
@@ -57,7 +57,8 @@ routing, or accounting.
 
 - Native Grok and stock Cargo tests passed for that source.
 - The artifact contains the current profile and release-bundled Grok catalog.
-- One usable Grok credential is available without being written to evidence.
+- The credential enters only as the `GROK_API_KEY` environment variable through
+  the profile's `env_key`. It is not written to evidence.
 
 ### Proof-run invocation budget
 
@@ -76,4 +77,6 @@ pass for the frozen source. This Story does not perform a ChatGPT live Turn.
 
 ## Executable contract
 
-`TestGrokBasic` in `grok/live`. Scheduling is [`release.md`](../release.md).
+`TestGrokBasic` in `grok/live`. The harness installs
+`grok/dist/config.toml.example` as the isolated Home profile. Scheduling is
+[`release.md`](../release.md).

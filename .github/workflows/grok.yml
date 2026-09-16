@@ -162,12 +162,6 @@ jobs:
           path: archives
           run-id: ${{ github.event.inputs.binary_run_id }}
           github-token: ${{ github.token }}
-      - name: Materialize secret profile
-        env:
-          GROK_CONFIG_TOML: ${{ secrets.GROK_CONFIG_TOML }}
-        run: |
-          umask 077
-          printf '%s' "${GROK_CONFIG_TOML:?}" > "${RUNNER_TEMP}/config.toml"
       - name: Use the musl binary
         run: chmod +x archives/codex archives/codex-code-mode-host archives/bwrap
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -179,7 +173,7 @@ jobs:
         env:
           GROK_LIVE: "1"
           GROK_LIVE_CODEX_BIN: ${{ github.workspace }}/archives/codex
-          GROK_LIVE_CONFIG: ${{ runner.temp }}/config.toml
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
           GROK_LIVE_FAILED_SESSIONS: ${{ github.workspace }}/grok-live-failed-sessions
           GOWORK: "off"
         run: go test ./... -count=1 -timeout 30m -run '^TestGrok'

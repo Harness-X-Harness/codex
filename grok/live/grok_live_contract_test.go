@@ -37,6 +37,33 @@ func TestNonceOfStripsCodeFence(t *testing.T) {
 	}
 }
 
+func TestTopLevelTomlStringReadsQuotedKeysAndIgnoresTables(t *testing.T) {
+	const fixture = "" +
+		"model = \"fixture-model\"\n" +
+		"model_provider = 'fixture-provider'\n" +
+		"\n" +
+		"[model_providers.grok]\n" +
+		"model = \"nested-model\"\n" +
+		"model_provider = \"nested-provider\"\n" +
+		"name = \"Grok\"\n"
+	if got := topLevelTomlString([]byte(fixture), "model"); got != "fixture-model" {
+		t.Fatalf("model = %q", got)
+	}
+	if got := topLevelTomlString([]byte(fixture), "model_provider"); got != "fixture-provider" {
+		t.Fatalf("model_provider = %q", got)
+	}
+	if got := topLevelTomlString([]byte(fixture), "name"); got != "" {
+		t.Fatalf("table key leaked as top-level: %q", got)
+	}
+}
+
+func TestShippedGrokProfilePathIsReadable(t *testing.T) {
+	path := shippedGrokProfilePath()
+	if _, err := os.ReadFile(path); err != nil {
+		t.Fatalf("shipped profile %s: %v", path, err)
+	}
+}
+
 func TestEnsureShellToolDisabledIsIdempotent(t *testing.T) {
 	first := ensureShellToolDisabled([]byte("model = \"grok-4.6\"\n"))
 	second := ensureShellToolDisabled(first)
