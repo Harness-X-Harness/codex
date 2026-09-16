@@ -7,6 +7,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 
 DIST_ROOT = "grok/dist"
 LIVE_JOB = "Grok Live"
+PROOF_WORKFLOW = ".github/workflows/grok.yml"
 REF_PREFIX = "grok/rust-v"
 TARGETS = (
     "aarch64-apple-darwin",
@@ -148,6 +150,85 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def proof_push_paths(workflow: Path) -> list[str]:
+    """Return the ordered `on.push.paths` filter of the proof workflow."""
+    patterns: list[str] = []
+    section = "on"
+    for line in workflow.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if section == "on":
+            if indent == 2 and stripped == "push:":
+                section = "push"
+        elif section == "push":
+            if indent <= 2:
+                break
+            if indent == 4 and stripped == "paths:":
+                section = "paths"
+        elif indent <= 4:
+            break
+        else:
+            patterns.append(stripped.removeprefix("-").strip().strip("'\""))
+    if not patterns:
+        raise SystemExit(f"{workflow} has no on.push.paths filter")
+    return patterns
+
+
+def _filter_regex(pattern: str) -> re.Pattern[str]:
+    parts: list[str] = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**", index):
+            parts.append(".*")
+            index += 2
+            continue
+        char = pattern[index]
+        if char == "*":
+            parts.append("[^/]*")
+        elif char == "?":
+            parts.append("[^/]")
+        else:
+            parts.append(re.escape(char))
+        index += 1
+    return re.compile("".join(parts) + r"\Z")
+
+
+def is_proof_input(path: str, patterns: list[str]) -> bool:
+    """Apply a GitHub `paths` filter: later matching patterns win."""
+    selected = False
+    for pattern in patterns:
+        negated = pattern.startswith("!")
+        if _filter_regex(pattern[1:] if negated else pattern).match(path):
+            selected = not negated
+    return selected
+
+
+def _require_head_proven(checkout: Path, sha: str) -> str:
+    head = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if head == sha:
+        return head
+    descends = subprocess.call(
+        ["git", "-C", str(checkout), "merge-base", "--is-ancestor", sha, head]
+    )
+    if descends != 0:
+        raise SystemExit(f"checkout {head} does not descend from proof SHA {sha}")
+    changed = subprocess.check_output(
+        ["git", "-C", str(checkout), "diff", "--name-only", "--no-renames", sha, head],
+        text=True,
+    ).split()
+    patterns = proof_push_paths(checkout / PROOF_WORKFLOW)
+    unproven = [path for path in changed if is_proof_input(path, patterns)]
+    if unproven:
+        raise SystemExit(
+            f"checkout {head} changes proof inputs after proof SHA {sha}: {unproven}"
+        )
+    return head
+
+
 def _require_proof(repo: str, run_id: str, checkout: Path) -> tuple[str, str, str]:
     run = _gh_json(
         "run",
@@ -169,14 +250,10 @@ def _require_proof(repo: str, run_id: str, checkout: Path) -> tuple[str, str, st
     branch = run["headBranch"]
     version = version_from_ref(branch)
     sha = run["headSha"]
-    head = subprocess.check_output(
-        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
-    ).strip()
-    if head != sha:
-        raise SystemExit(f"checkout {head} is not proof SHA {sha}")
+    head = _require_head_proven(checkout, sha)
     ref = _gh_json("api", f"repos/{repo}/git/ref/heads/{branch}")
-    if ref["object"]["sha"] != sha:
-        raise SystemExit(f"branch {branch} is {ref['object']['sha']}, proof is {sha}")
+    if ref["object"]["sha"] != head:
+        raise SystemExit(f"branch {branch} is {ref['object']['sha']}, checkout is {head}")
     jobs = {job["name"]: job for job in run.get("jobs") or []}
     live = jobs.get(LIVE_JOB)
     if live is None or live.get("conclusion") != "success":

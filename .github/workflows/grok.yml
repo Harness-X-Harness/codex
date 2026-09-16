@@ -3,12 +3,41 @@ name: grok
 # PR: Cargo. Push: six target binaries and Linux Live.
 # workflow_dispatch: Live only, using musl from binary_run_id. Not a publish proof.
 # Package and grok-v* mutation are grok/release.py publish, not this workflow.
+#
+# Both events run only when a proof input changes. Everything is a proof input
+# unless it is negated below: text nobody compiles, packages, or executes.
+# The two lists must stay identical; grok/release.py reads the push list to
+# accept a head that moved past the proof SHA by inert paths only.
 
 on:
   pull_request:
     branches: ['grok/rust-v*']
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!grok/docs/**'
+      - '!*.md'
+      - '!.codex/**'
+      - '!.devcontainer/**'
+      - '!.vscode/**'
+      - '!.github/**'
+      - '.github/workflows/grok.yml'
+      - '.github/actions/**'
+      - '.github/scripts/**'
   push:
     branches: ['grok/rust-v*']
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!grok/docs/**'
+      - '!*.md'
+      - '!.codex/**'
+      - '!.devcontainer/**'
+      - '!.vscode/**'
+      - '!.github/**'
+      - '.github/workflows/grok.yml'
+      - '.github/actions/**'
+      - '.github/scripts/**'
   workflow_dispatch:
     inputs:
       binary_run_id:

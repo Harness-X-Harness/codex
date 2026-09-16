@@ -444,8 +444,9 @@ lands first because it is the surface both build on.
 
 PR to `grok/rust-v*` runs Cargo. Push runs six targets and Live. Publish
 follows [`release.md`](./release.md): only from a GREEN run whose SHA is the
-branch head. A docs-only or whitelist commit that lands after a GREEN run
-moves the head and needs its own GREEN run before `grok/release.py publish`.
+branch head or is separated from it by inert paths alone. A whitelist commit
+that lands after a GREEN run is a proof input and needs its own GREEN run
+before `grok/release.py publish`; a docs-only commit does not.
 
 ## Tests
 

@@ -57,22 +57,33 @@ push grok/rust-vX.Y.Z
 Live consumes the musl `codex` binary from the same run. It does not wait
 for Darwin or Windows. Publication packages the six binaries.
 
+Both events run only when a proof input changes. Every path is a proof
+input unless the workflow's `paths` filter negates it; the negated set is
+text that nothing compiles, packages, or executes (repository docs, root
+Markdown, editor and agent configuration, other workflows). Live Stories,
+`grok/dist`, `LICENSE`, `grok/release.py`, Markdown under `codex-rs`, and
+the workflow itself are proof inputs. The filter in `grok.yml` is the only
+authority for that set; the publisher reads it rather than repeating it.
+
 GitHub Actions does not create or replace `grok-vX.Y.Z`.
 
 ## Publication
 
-After a proof run is GREEN, from a checkout of that SHA:
+After a proof run is GREEN, from a checkout of the branch head:
 
 ```text
 python3 grok/release.py publish --run-id RUN --repo OWNER/NAME
 ```
 
 The publisher refuses unless the run is a successful `grok` push, Live
-succeeded, each `TARGETS` artifact is present, and both the branch head and
-the checkout HEAD equal the run SHA. It then replaces `grok-vX.Y.Z` and reads
-back tag SHA, release target, asset names, and SHA-256 digests. A failed or
-cancelled proof does not replace the channel. The publisher does not retry a
-mutation that did not read back.
+succeeded, each `TARGETS` artifact is present, the checkout HEAD is the
+branch head, and that head is the run SHA or descends from it through
+commits that change no proof input under the workflow's `on.push.paths`
+filter. The tag and the release target stay at the run SHA, the commit the
+binaries were built from. It then replaces `grok-vX.Y.Z` and reads back tag
+SHA, release target, asset names, and SHA-256 digests. A failed or cancelled
+proof does not replace the channel. The publisher does not retry a mutation
+that did not read back.
 
 When work moves to a new stock tag, stop pushing the old `grok/rust-v*` line.
 The old channel stops moving because nothing publishes it.
