@@ -6,6 +6,7 @@ name: grok
 #
 # Both events run only when a proof input changes. Everything is a proof input
 # unless it is negated below: text nobody compiles, packages, or executes.
+# grok/facts/** is negated: backend Facts are not proof inputs.
 # The two lists must stay identical; grok/release.py reads the push list to
 # accept a head that moved past the proof SHA by inert paths only.
 
@@ -16,6 +17,7 @@ on:
       - '**'
       - '!docs/**'
       - '!grok/docs/**'
+      - '!grok/facts/**'
       - '!*.md'
       - '!.codex/**'
       - '!.devcontainer/**'
@@ -30,6 +32,7 @@ on:
       - '**'
       - '!docs/**'
       - '!grok/docs/**'
+      - '!grok/facts/**'
       - '!*.md'
       - '!.codex/**'
       - '!.devcontainer/**'

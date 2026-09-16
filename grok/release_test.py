@@ -140,8 +140,12 @@ class ProofPushPathsTests(unittest.TestCase):
             release.is_proof_input(".github/actions/build-grok/action.yml", patterns)
         )
         self.assertFalse(release.is_proof_input("grok/docs/release.md", patterns))
+        self.assertFalse(release.is_proof_input("grok/facts/facts.go", patterns))
         self.assertFalse(release.is_proof_input("README.md", patterns))
         self.assertFalse(release.is_proof_input(".github/workflows/other.yml", patterns))
+        self.assertFalse(
+            release.is_proof_input(".github/workflows/grok-facts.yml", patterns)
+        )
 
 
 class IsProofInputTests(unittest.TestCase):
