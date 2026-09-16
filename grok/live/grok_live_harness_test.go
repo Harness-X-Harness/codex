@@ -915,6 +915,32 @@ func lastAgentMessage(items []protocolv2.ThreadItem) string {
 	return ""
 }
 
+// streamedTextLoss reports the first completed agent message whose
+// item/agentMessage/delta notifications do not concatenate to its completed
+// text. A message that never streamed a delta is not a loss; a message that
+// streamed some of its text and then stopped is. Only lengths are returned so
+// the failure text stays secret-safe.
+func streamedTextLoss(result codexsdk.ThreadRunResult) (itemID string, streamed, completed int, lost bool) {
+	deltas := map[string]string{}
+	for _, notification := range result.Notifications {
+		if delta, ok := notification.AsItemAgentMessageDelta(); ok {
+			deltas[delta.Params.ItemID] += delta.Params.Delta
+		}
+	}
+	for _, item := range result.Turn.Items {
+		message, ok := item.AsAgentMessage()
+		if !ok {
+			continue
+		}
+		got, streamedAny := deltas[message.ID]
+		if !streamedAny || got == message.Text {
+			continue
+		}
+		return message.ID, len(got), len(message.Text), true
+	}
+	return "", 0, 0, false
+}
+
 func probeToolSpec() protocolv2.DynamicToolSpec {
 	return protocolv2.NewDynamicToolSpecFunction(protocolv2.DynamicToolSpecFunction{
 		Name: probeToolName, Description: probeToolDesc,

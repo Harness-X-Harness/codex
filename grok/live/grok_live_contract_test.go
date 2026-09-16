@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ronhuafeng/llm-go/codexsdk"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
@@ -17,6 +18,33 @@ func TestLastAgentMessageSkipsEmptyItems(t *testing.T) {
 	}
 	if got := lastAgentMessage(items); got != "visible" {
 		t.Fatalf("lastAgentMessage = %q", got)
+	}
+}
+
+func TestStreamedTextLossDetectsDroppedDeltas(t *testing.T) {
+	delta := func(itemID, text string) protocolv2.ServerNotification {
+		return protocolv2.NewServerNotificationItemAgentMessageDelta(protocolv2.ServerNotificationItemAgentMessageDelta{
+			Params: protocolv2.AgentMessageDeltaNotification{ItemID: itemID, Delta: text},
+		})
+	}
+	message := func(itemID, text string) protocolv2.ThreadItem {
+		return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: itemID, Text: text})
+	}
+	intact := codexsdk.ThreadRunResult{
+		Notifications: []protocolv2.ServerNotification{delta("msg_1", "Let me "), delta("msg_1", "check.")},
+	}
+	intact.Turn.Items = []protocolv2.ThreadItem{message("msg_0", "never streamed"), message("msg_1", "Let me check.")}
+	if id, _, _, lost := streamedTextLoss(intact); lost {
+		t.Fatalf("intact stream reported loss on %s", id)
+	}
+
+	dropped := codexsdk.ThreadRunResult{
+		Notifications: []protocolv2.ServerNotification{delta("msg_1", "Let me ")},
+	}
+	dropped.Turn.Items = []protocolv2.ThreadItem{message("msg_1", "Let me check.")}
+	id, streamed, completed, lost := streamedTextLoss(dropped)
+	if !lost || id != "msg_1" || streamed != 7 || completed != 13 {
+		t.Fatalf("dropped stream: id=%q streamed=%d completed=%d lost=%t", id, streamed, completed, lost)
 	}
 }
 
