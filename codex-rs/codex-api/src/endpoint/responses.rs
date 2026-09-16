@@ -113,10 +113,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = match ResponsesDialect::for_provider(self.session.provider()) {
+        let provider = self.session.provider();
+        let body = match ResponsesDialect::for_provider(provider) {
             ResponsesDialect::OpenAi => EncodedJsonBody::encode(&request),
             dialect @ ResponsesDialect::Grok => dialect
-                .project_request(&request)
+                .project_request(&request, provider)
                 .and_then(|request| EncodedJsonBody::encode(&request)),
         }
         .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;

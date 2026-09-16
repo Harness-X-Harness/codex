@@ -1,10 +1,14 @@
 use crate::common::ResponsesApiRequest;
+use chrono::NaiveDate;
 use codex_client::Request;
 use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use http::Method;
 use http::header::HeaderMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -47,10 +51,11 @@ impl ResponsesDialect {
     pub(crate) fn project_request(
         self,
         request: &ResponsesApiRequest,
+        provider: &Provider,
     ) -> serde_json::Result<Value> {
         match self {
             Self::OpenAi => serde_json::to_value(request),
-            Self::Grok => crate::grok_request::build(request)
+            Self::Grok => crate::grok_request::build(request, provider)
                 .map_err(|err| <serde_json::Error as serde::ser::Error>::custom(err.to_string())),
         }
     }
@@ -77,6 +82,70 @@ impl RetryConfig {
     }
 }
 
+/// Optional Grok hosted `x_search` date window.
+///
+/// Configured as `[model_providers.grok.x_search]` with calendar `YYYY-MM-DD`
+/// `from_date` / `to_date`. Other providers ignore this field.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct XSearchProviderConfig {
+    /// Inclusive start of the Grok hosted `x_search` window (`YYYY-MM-DD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_date: Option<String>,
+    /// Inclusive end of the Grok hosted `x_search` window (`YYYY-MM-DD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_date: Option<String>,
+}
+
+impl XSearchProviderConfig {
+    /// Parse a real calendar day in exactly `YYYY-MM-DD` form.
+    pub fn parse_ymd(value: &str) -> Option<String> {
+        let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+        (parsed.format("%Y-%m-%d").to_string() == value).then(|| value.to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (field, value) in [("from_date", &self.from_date), ("to_date", &self.to_date)] {
+            if let Some(value) = value
+                && Self::parse_ymd(value).is_none()
+            {
+                return Err(format!(
+                    "x_search.{field} `{value}` must be a calendar YYYY-MM-DD"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.from_date.is_none() && self.to_date.is_none()
+    }
+}
+
+impl<'de> Deserialize<'de> for XSearchProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawXSearchProviderConfig {
+            #[serde(default)]
+            from_date: Option<String>,
+            #[serde(default)]
+            to_date: Option<String>,
+        }
+
+        let raw = RawXSearchProviderConfig::deserialize(deserializer)?;
+        let config = Self {
+            from_date: raw.from_date,
+            to_date: raw.to_date,
+        };
+        config.validate().map_err(serde::de::Error::custom)?;
+        Ok(config)
+    }
+}
+
 /// HTTP endpoint configuration used to talk to a concrete API deployment.
 ///
 /// Encapsulates base URL, default headers, query params, retry policy, and
@@ -89,6 +158,9 @@ pub struct Provider {
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
+    /// Grok hosted `x_search` window copied from provider config. Ignored by
+    /// other dialects.
+    pub x_search: Option<XSearchProviderConfig>,
 }
 
 impl Provider {

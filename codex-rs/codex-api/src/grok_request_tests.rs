@@ -8,6 +8,7 @@ use crate::common::TextFormatType;
 use crate::provider::Provider;
 use crate::provider::ResponsesDialect;
 use crate::provider::RetryConfig;
+use crate::provider::XSearchProviderConfig;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::AgentMessageInputContent;
@@ -45,6 +46,7 @@ fn provider(name: &str) -> Provider {
             retry_transport: false,
         },
         stream_idle_timeout: Duration::from_secs(1),
+        x_search: None,
     }
 }
 
@@ -453,7 +455,7 @@ fn accepted_fixtures() -> Vec<(&'static str, ResponsesApiRequest)> {
 #[test]
 fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
     for (name, req) in accepted_fixtures() {
-        let built = build(&req).unwrap_or_else(|err| panic!("{name}: {err}"));
+        let built = build(&req, &provider("Grok")).unwrap_or_else(|err| panic!("{name}: {err}"));
         let mut leaked = Vec::new();
         for key in [
             "stream_options",
@@ -501,6 +503,15 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
             {
                 leaked.push(format!("tools[{index}].filters.excluded_domains"));
             }
+            if tool.get("type").and_then(Value::as_str) == Some("x_search")
+                && let Some(object) = tool.as_object()
+            {
+                for key in object.keys() {
+                    if !matches!(key.as_str(), "type" | "from_date" | "to_date") {
+                        leaked.push(format!("tools[{index}].{key}"));
+                    }
+                }
+            }
         }
         assert_eq!(leaked, Vec::<String>::new(), "{name}: {built}");
     }
@@ -509,7 +520,7 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
 #[test]
 fn grok_drops_other_input_items() {
     let req = request(vec![ResponseItem::Other, user_message("after-other")]);
-    let built = build(&req).expect("Other is dropped, not rejected");
+    let built = build(&req, &provider("Grok")).expect("Other is dropped, not rejected");
     let input = built["input"].as_array().expect("input array");
     assert_eq!(input.len(), 1, "Other must not be replayed: {built}");
     assert_eq!(input[0]["type"], "message");
@@ -583,7 +594,7 @@ fn grok_projects_replayed_history_on_request_copy_only() {
     let original = canonical.clone();
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("Grok history should project");
 
     assert_eq!(
@@ -626,7 +637,7 @@ fn grok_omits_reasoning_content_when_replaying_encrypted_blob() {
     let original = canonical.clone();
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("Grok should replay encrypted reasoning without a content channel");
 
     assert_eq!(
@@ -651,7 +662,7 @@ fn grok_omits_null_encrypted_reasoning_blob() {
         /*encrypted_content*/ None, /*content*/ None,
     )]);
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("Grok should omit a null reasoning blob");
 
     assert_eq!(projected["input"][0]["type"], "reasoning");
@@ -690,7 +701,7 @@ fn grok_strips_openai_only_history_controls_from_replay() {
     let original = canonical.clone();
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("OpenAI-only history extras should project");
 
     assert_eq!(canonical, original, "canonical request must stay unchanged");
@@ -728,7 +739,7 @@ fn grok_rejects_encrypted_collaboration_history_before_transport() {
     ]);
 
     let error = ResponsesDialect::Grok
-        .project_request(&request)
+        .project_request(&request, &provider("Grok"))
         .expect_err("encrypted collaboration history is not verified for Grok");
     let message = error.to_string();
     assert!(message.contains("encrypted collaboration history"));
@@ -750,7 +761,7 @@ fn grok_rejects_unpaired_function_output_before_transport() {
     ]);
 
     let error = ResponsesDialect::Grok
-        .project_request(&request)
+        .project_request(&request, &provider("Grok"))
         .expect_err("orphan function output must not reach Grok transport");
     let message = error.to_string();
     assert!(message.contains("without call_id"));
@@ -778,7 +789,7 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
     let original = canonical.clone();
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("tool projection");
     assert_eq!(canonical, original, "canonical request must stay unchanged");
     assert_eq!(
@@ -832,7 +843,7 @@ fn grok_projects_web_search_allowed_domains_from_stock_filters() {
     let original = canonical.clone();
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("web_search allowed_domains should project");
 
     assert_eq!(canonical, original, "canonical request must stay unchanged");
@@ -869,7 +880,7 @@ fn grok_projects_bare_web_search_when_filters_are_missing_or_empty() {
         let mut canonical = request(vec![user_message("search")]);
         canonical.tools = Some(json_tools(json!([web_search])));
         let projected = ResponsesDialect::Grok
-            .project_request(&canonical)
+            .project_request(&canonical, &provider("Grok"))
             .unwrap_or_else(|err| panic!("{name}: {err}"));
         assert_eq!(
             projected["tools"],
@@ -897,7 +908,7 @@ fn grok_caps_web_search_allowed_domains_at_five() {
     }])));
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("capped allowed_domains should project");
 
     assert_eq!(
@@ -943,7 +954,7 @@ fn grok_strips_external_web_access_from_nested_request_payloads() {
     )]));
 
     let projected = ResponsesDialect::Grok
-        .project_request(&canonical)
+        .project_request(&canonical, &provider("Grok"))
         .expect("nested search extras should project");
 
     assert_eq!(
@@ -989,7 +1000,7 @@ fn stock_openai_keeps_reasoning_content_with_encrypted_blob() {
 
     assert_eq!(
         ResponsesDialect::OpenAi
-            .project_request(&canonical)
+            .project_request(&canonical, &provider("OpenAI"))
             .expect("stock projection"),
         expected
     );
@@ -1015,7 +1026,7 @@ fn stock_openai_projection_remains_identity() {
 
     assert_eq!(
         ResponsesDialect::OpenAi
-            .project_request(&canonical)
+            .project_request(&canonical, &provider("OpenAI"))
             .expect("stock projection"),
         expected
     );
@@ -1104,7 +1115,7 @@ fn grok_rejects_unsupported_input_items_before_transport() {
 
     for (variant, item) in cases {
         let req = request(vec![user_message("keep"), item]);
-        let error = build(&req).expect_err(variant);
+        let error = build(&req, &provider("Grok")).expect_err(variant);
         let message = error.to_string();
         assert!(
             message.contains(variant),
@@ -1155,7 +1166,7 @@ fn grok_rejects_unsupported_tools_before_transport() {
     for (index, tool_type, tools) in cases {
         let mut req = request(vec![user_message("keep")]);
         req.tools = Some(json_tools(tools));
-        let error = build(&req).expect_err(tool_type);
+        let error = build(&req, &provider("Grok")).expect_err(tool_type);
         let message = error.to_string();
         assert!(
             message.contains(tool_type),
@@ -1167,4 +1178,128 @@ fn grok_rejects_unsupported_tools_before_transport() {
             "{tool_type} should name {needle} in {message}"
         );
     }
+}
+
+fn grok_x_search_window(from_date: &str, to_date: &str) -> Provider {
+    let mut grok = provider("Grok");
+    grok.x_search = Some(XSearchProviderConfig {
+        from_date: Some(from_date.to_string()),
+        to_date: Some(to_date.to_string()),
+    });
+    grok
+}
+
+#[test]
+fn grok_appends_bare_x_search_without_date_keys() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([{"type": "web_search"}])));
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical, &provider("Grok"))
+        .expect("bare x_search append");
+    assert_eq!(
+        projected["tools"],
+        json!([{"type": "web_search"}, {"type": "x_search"}])
+    );
+}
+
+#[test]
+fn grok_appends_x_search_date_window_from_provider() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([{"type": "web_search"}])));
+    let projected = ResponsesDialect::Grok
+        .project_request(
+            &canonical,
+            &grok_x_search_window("2026-01-01", "2026-01-31"),
+        )
+        .expect("provider x_search window should project");
+    assert_eq!(
+        projected["tools"],
+        json!([
+            {"type": "web_search"},
+            {
+                "type": "x_search",
+                "from_date": "2026-01-01",
+                "to_date": "2026-01-31"
+            }
+        ])
+    );
+}
+
+#[test]
+fn grok_copies_canonical_x_search_dates_over_provider_window() {
+    let mut canonical = request(vec![user_message("x")]);
+    canonical.tools = Some(json_tools(json!([{
+        "type": "x_search",
+        "from_date": "2026-02-01",
+        "to_date": "2026-02-28"
+    }])));
+    let projected = ResponsesDialect::Grok
+        .project_request(
+            &canonical,
+            &grok_x_search_window("2026-01-01", "2026-01-31"),
+        )
+        .expect("canonical x_search dates should win");
+    assert_eq!(
+        projected["tools"],
+        json!([{
+            "type": "x_search",
+            "from_date": "2026-02-01",
+            "to_date": "2026-02-28"
+        }])
+    );
+}
+
+#[test]
+fn grok_fills_provider_window_when_canonical_x_search_has_no_dates() {
+    let mut canonical = request(vec![user_message("x")]);
+    canonical.tools = Some(json_tools(json!([{"type": "x_search"}])));
+    let projected = ResponsesDialect::Grok
+        .project_request(
+            &canonical,
+            &grok_x_search_window("2026-01-01", "2026-01-31"),
+        )
+        .expect("provider window should fill a bare canonical x_search");
+    assert_eq!(
+        projected["tools"],
+        json!([{
+            "type": "x_search",
+            "from_date": "2026-01-01",
+            "to_date": "2026-01-31"
+        }])
+    );
+}
+
+#[test]
+fn grok_omits_invalid_x_search_dates_from_tool_json() {
+    let mut canonical = request(vec![user_message("x")]);
+    canonical.tools = Some(json_tools(json!([{
+        "type": "x_search",
+        "from_date": "not-a-date",
+        "to_date": "2026-13-40"
+    }])));
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical, &provider("Grok"))
+        .expect("invalid tool JSON dates should be omitted");
+    assert_eq!(projected["tools"], json!([{"type": "x_search"}]));
+}
+
+#[test]
+fn grok_omits_unexpected_keys_on_x_search() {
+    let mut canonical = request(vec![user_message("x")]);
+    canonical.tools = Some(json_tools(json!([{
+        "type": "x_search",
+        "from_date": "2026-01-01",
+        "enabled": true,
+        "filters": {"allowed_domains": ["x.com"]}
+    }])));
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical, &provider("Grok"))
+        .expect("unexpected x_search keys should be dropped");
+    assert_eq!(
+        projected["tools"],
+        json!([{
+            "type": "x_search",
+            "from_date": "2026-01-01"
+        }])
+    );
 }
