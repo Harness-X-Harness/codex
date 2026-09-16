@@ -104,16 +104,8 @@ impl ModelProvider for GrokModelProvider {
             item,
             ResponseItem::CustomToolCall {
                 status: Some(status),
-                name,
                 ..
             } if status == "completed"
-                && matches!(
-                    name.as_str(),
-                    "x_keyword_search"
-                        | "x_semantic_search"
-                        | "x_user_search"
-                        | "x_thread_fetch"
-                )
         )
     }
 
