@@ -13,6 +13,13 @@ requires changing the named test. Scheduling lives in
 These files are not executable acceptance input. Do not add tests that validate
 this directory's existence, headings, or filenames.
 
+A Live Story's "Partial success is not completion" list is the ordered stage
+list of its test: each entry corresponds to one `failStage` name
+(`thread_bound_to_grok`, `turn_completed`, …) that a RED run prints as
+`stage=`. Stage names are stable identifiers; renaming one changes the Story,
+so both move in the same commit.
+Triage by stage lives in [`../release.md`](../release.md) §Triage.
+
 ## Live composition
 
 | Story | Proof |

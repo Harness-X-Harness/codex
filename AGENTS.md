@@ -321,14 +321,48 @@ Codex supports running connected app-server and exec-server on different operati
 
 ## Grok
 
-When changing `grok/`, `.github/workflows/grok.yml`, or
-`.github/actions/build-grok/`, read these files directly. Do not stop at
+Grok is a downstream product line on `grok/rust-v*`: stock Codex plus a Grok
+Provider at the narrowest backend seams. When changing `grok/`,
+`.github/workflows/grok.yml`, `.github/actions/build-grok/`, or a seam a Grok
+Story binds under `codex-rs`, read the authorities directly. Do not stop at
 `grok/README.md`.
 
-- `grok/docs/architecture.md` — product boundary
-- `grok/docs/stories/` — verification claims and the Rust or Go proof
-- `grok/docs/release.md` — delivery map and anti-regression rules
+- `grok/docs/architecture.md` — product boundary and Northstar
+- `grok/docs/stories/` — user-visible claims and the Rust or Go test that binds each
+- `grok/docs/release.md` — delivery contract, Rules, Triage
 - `grok/docs/carry-forward.md` — adopting a new stock tag
+- `grok/docs/request-whitelist.md` — design record for Grok Responses egress
 
-Those four files are the Grok authorities. Do not add another Grok instruction
-file.
+Those files are the Grok authorities. Do not add another Grok instruction file.
+
+### Rules while changing the line
+
+- One semantic commit per fix, `type(grok): summary`; the body names the seam and the evidence.
+- Stock owns the harness. No `if grok` in `spec_plan.rs`, `hosted_spec.rs`, `client.rs`, protocol, rollout, or App Server. Grok differences are projected once at the Provider boundary (`codex-api` request dialect and response decoding, the bundled Provider catalog).
+- No history rewrite. Durable items are replayed as recorded; egress projects them at request time.
+- A Grok-native ability is emitted only through a stock-compatible entry (config or Provider seam). A Grok rejection is answered with a whitelist row or a capability flag, never by deleting keys from serialized JSON.
+- A change to a seam shared with stock carries a stock regression test at the same boundary.
+
+### Proof you can run
+
+- PR Cargo is the `cargo` job in `grok.yml`: fmt, clippy on the listed crates, `python3 -m unittest grok/release_test.py`, then curated `cargo test` steps. Run the steps your change touches before opening a PR. Do not add a step that proves a step.
+- Six-target build and Live run only on push to `grok/rust-v*`. Read a RED push with `gh run view <id> --log-failed` and the `grok-live-failed-sessions-<sha>` artifact (7 days). Owner and next action per RED class: `release.md` §Triage.
+- `python3 grok/release.py check --run-id RUN --repo OWNER/NAME` answers whether this head is publishable from that run without mutating anything.
+
+### Adding proof
+
+- A new Grok Cargo test gets its `cargo test` step in the `cargo` job in the same commit; the job is curated, not `cargo test --workspace`.
+- A Live Story is one file under `grok/docs/stories/` bound to one `TestGrok*` in `grok/live`. The `failStage` names in the test are the Story's "Partial success is not completion" list.
+
+### Commit checklist
+
+- Native test at the owning seam (`*_tests.rs` beside the module, or `core/tests/suite`).
+- Story added or updated when a user-visible acceptance changes.
+- `request-whitelist.md` row when egress changes; its revision anchors when stock or grok-build moves.
+- Keep docs-only edits in their own commit: they are not proof inputs (`grok.yml` `paths`), so a head that moved past the proof SHA by docs alone stays publishable.
+
+### Cursor Cloud specific instructions
+
+- Runs without secrets: every `cargo` job step, `python3 -m unittest grok/release_test.py`, `ruff check grok/release.py grok/release_test.py`, `go test ./...` in `grok/live` (Live tests skip without `GROK_LIVE=1`), and `release.py check`.
+- Needs the Actions runners: six-target builds and Live (the musl binary plus the `GROK_API_KEY` secret). Push the branch and read the run; do not reproduce Live in the sandbox.
+- `release.py publish` is the only `grok-v*` mutation and runs only on the line owner's explicit instruction in the same session.

@@ -67,6 +67,23 @@ authority for that set; the publisher reads it rather than repeating it.
 
 GitHub Actions does not create or replace `grok-vX.Y.Z`.
 
+## Triage
+
+A RED result is an executable fact about one owner. Read the named output,
+fix at the owner, prove again. No retry layer, no ledger (rules 2, 3, 6, 7).
+
+| RED where | Read | Owner | Next |
+|---|---|---|---|
+| PR Cargo step | step name, cargo output | the seam the failing test binds | fix at the seam with its native test |
+| Build target | compiler output for that target | `codex-rs` source, or `.github/actions/build-grok` when only the action changed | fix; no single-target retry |
+| Live `NOT_PROVEN` | `stage=`, `error_marker=`, `server_request_error=`, `runtime_compatibility=`, the preserved session JSONL in `grok-live-failed-sessions-<sha>` | capability layer, egress, or ingress per `request-whitelist.md` §Direction; the harness when `runtime_compatibility` is not compatible | a whitelist row or a capability flag; never a new key removal on serialized JSON |
+| Live RED with no code change since the last GREEN | the same fields | backend nondeterminism or a backend change, not a regression until shown | one `workflow_dispatch` Live-only run on the same `binary_run_id` for diagnosis; GREEN → record the observation as a Fact, no code change; RED again → treat as a regression of the Story |
+| `release.py check` or `publish` refusal | the `SystemExit` text | the gate condition the text names | satisfy the condition; do not bypass the gate |
+
+Stage names in `failStage` and the `error_marker` set are stable identifiers
+owned by `grok/live/grok_live_harness_test.go`; a Story's "Partial success is
+not completion" list is the stage list for its test.
+
 ## Publication
 
 After a proof run is GREEN, from a checkout of the branch head:
