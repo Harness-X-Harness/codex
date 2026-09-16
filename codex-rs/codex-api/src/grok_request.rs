@@ -196,6 +196,8 @@ enum GrokTool {
 struct GrokWebSearchFilters {
     #[serde(skip_serializing_if = "Option::is_none")]
     allowed_domains: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    excluded_domains: Option<Vec<String>>,
 }
 
 impl<'a> GrokResponsesRequest<'a> {
@@ -490,9 +492,25 @@ fn project_tools(
 }
 
 fn project_web_search_tool(tool: &Value) -> GrokTool {
-    let allowed_domains = tool
-        .get("filters")
-        .and_then(|filters| filters.get("allowed_domains"))
+    let allowed_domains = project_web_search_domains(tool, "allowed_domains");
+    let excluded_domains = project_web_search_domains(tool, "excluded_domains");
+    let filters = match (allowed_domains, excluded_domains) {
+        (None, None) | (Some(_), Some(_)) => None,
+        (Some(allowed_domains), None) => Some(GrokWebSearchFilters {
+            allowed_domains: Some(allowed_domains),
+            excluded_domains: None,
+        }),
+        (None, Some(excluded_domains)) => Some(GrokWebSearchFilters {
+            allowed_domains: None,
+            excluded_domains: Some(excluded_domains),
+        }),
+    };
+    GrokTool::WebSearch { filters }
+}
+
+fn project_web_search_domains(tool: &Value, key: &str) -> Option<Vec<String>> {
+    tool.get("filters")
+        .and_then(|filters| filters.get(key))
         .and_then(Value::as_array)
         .map(|domains| {
             domains
@@ -502,12 +520,7 @@ fn project_web_search_tool(tool: &Value) -> GrokTool {
                 .take(5)
                 .collect::<Vec<_>>()
         })
-        .filter(|domains| !domains.is_empty());
-    GrokTool::WebSearch {
-        filters: allowed_domains.map(|allowed_domains| GrokWebSearchFilters {
-            allowed_domains: Some(allowed_domains),
-        }),
-    }
+        .filter(|domains| !domains.is_empty())
 }
 
 fn project_function_tool(tool: &Value) -> GrokTool {

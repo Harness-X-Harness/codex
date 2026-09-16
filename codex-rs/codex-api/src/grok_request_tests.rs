@@ -205,8 +205,7 @@ fn accepted_fixtures() -> Vec<(&'static str, ResponsesApiRequest)> {
                 "user_location": {"type": "approximate", "country": "US"},
                 "search_content_types": ["text"],
                 "filters": {
-                    "allowed_domains": ["example.com"],
-                    "excluded_domains": ["blocked.test"]
+                    "allowed_domains": ["example.com"]
                 }
             }])));
             req
@@ -835,8 +834,7 @@ fn grok_projects_web_search_allowed_domains_from_stock_filters() {
                 "country": "US"
             },
             "filters": {
-                "allowed_domains": ["example.com"],
-                "excluded_domains": ["blocked.test"]
+                "allowed_domains": ["example.com"]
             }
         }
     ])));
@@ -861,9 +859,47 @@ fn grok_projects_web_search_allowed_domains_from_stock_filters() {
         !contains_key(&projected, "external_web_access"),
         "Grok egress must not send external_web_access"
     );
+}
+
+#[test]
+fn grok_projects_web_search_excluded_domains_from_stock_filters() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([
+        {
+            "type": "web_search",
+            "external_web_access": true,
+            "indexed_web_access": true,
+            "search_context_size": "medium",
+            "search_content_types": ["text"],
+            "user_location": {
+                "type": "approximate",
+                "country": "US"
+            },
+            "filters": {
+                "excluded_domains": ["blocked.test"]
+            }
+        }
+    ])));
+    let original = canonical.clone();
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical, &provider("Grok"))
+        .expect("web_search excluded_domains should project");
+
+    assert_eq!(canonical, original, "canonical request must stay unchanged");
+    assert_eq!(
+        projected["tools"],
+        json!([
+            {
+                "type": "web_search",
+                "filters": {"excluded_domains": ["blocked.test"]}
+            },
+            {"type": "x_search"}
+        ])
+    );
     assert!(
-        !contains_key(&projected, "excluded_domains"),
-        "Grok egress must not send excluded_domains"
+        !contains_key(&projected, "external_web_access"),
+        "Grok egress must not send external_web_access"
     );
 }
 
@@ -875,6 +911,10 @@ fn grok_projects_bare_web_search_when_filters_are_missing_or_empty() {
         (
             "empty_list",
             json!({"type": "web_search", "filters": {"allowed_domains": []}}),
+        ),
+        (
+            "empty_excluded_list",
+            json!({"type": "web_search", "filters": {"excluded_domains": []}}),
         ),
     ] {
         let mut canonical = request(vec![user_message("search")]);
@@ -918,6 +958,68 @@ fn grok_caps_web_search_allowed_domains_at_five() {
                 "type": "web_search",
                 "filters": {
                     "allowed_domains": [
+                        "a.example",
+                        "b.example",
+                        "c.example",
+                        "d.example",
+                        "e.example"
+                    ]
+                }
+            },
+            {"type": "x_search"}
+        ])
+    );
+}
+
+#[test]
+fn grok_omits_web_search_filters_when_allowed_and_excluded_domains_are_both_present() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([{
+        "type": "web_search",
+        "filters": {
+            "allowed_domains": ["example.com"],
+            "excluded_domains": ["blocked.test"]
+        }
+    }])));
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical, &provider("Grok"))
+        .expect("conflicting web_search filters should project");
+
+    assert_eq!(
+        projected["tools"],
+        json!([{"type": "web_search"}, {"type": "x_search"}])
+    );
+}
+
+#[test]
+fn grok_caps_web_search_excluded_domains_at_five() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([{
+        "type": "web_search",
+        "filters": {
+            "excluded_domains": [
+                "a.example",
+                "b.example",
+                "c.example",
+                "d.example",
+                "e.example",
+                "f.example"
+            ]
+        }
+    }])));
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical, &provider("Grok"))
+        .expect("capped excluded_domains should project");
+
+    assert_eq!(
+        projected["tools"],
+        json!([
+            {
+                "type": "web_search",
+                "filters": {
+                    "excluded_domains": [
                         "a.example",
                         "b.example",
                         "c.example",
