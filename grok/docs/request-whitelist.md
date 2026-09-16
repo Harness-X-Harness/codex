@@ -274,7 +274,7 @@ request copy exactly as today:
 | `FunctionCallOutput` | `function_call_output` | `call_id`, `output` (text or content items) | grok-build; Live |
 | `CustomToolCall` | `custom_tool_call` | `id`, `call_id`, `name`, `input`, `status?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is. `id` is required on replay (`TestFactCustomToolCallReplayRequiresID`: `422 missing field id`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
 | `CustomToolCallOutput` | `custom_tool_call_output` | `call_id`, `output` | custom `apply_patch` Story |
-| `WebSearchCall` | `web_search_call` | `id?`, `action`, `status?` | grok-build replays as-is with status. `action` is required on replay (`TestFactWebSearchCallReplayRequiresAction`: `422 missing field action`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
+| `WebSearchCall` | `web_search_call` | `id?`, `action` | Live (`TestGrokHostedWebSearch`): Turn 2 replays `id` + `action` and Grok accepts it. grok-build replays as-is with status; `status` is accepted (`TestFactInputStatusOnHostedItems`) but not constructed. `action` is required on replay (`TestFactWebSearchCallReplayRequiresAction`: `422 missing field action`) |
 | `ImageGenerationCall` | `image_generation_call` | `id?`, `status`, `revised_prompt?`, `result` | image-edit Story was GREEN with `status` at `c4c80eef`; `status` is accepted (`TestFactInputStatusOnHostedItems`) |
 | `CompactionTrigger` | dropped | — | stock request control; Grok `remote_compaction` `Unsupported` |
 | `ConfigurationUpdate` | reject | — | stock records it only for OpenAI + `use_responses_lite`; cannot appear on a Grok Thread |
@@ -322,7 +322,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 
 | Ability | grok-build shape | Codex entry | Egress | Ingress | Status |
 |---------|------------------|-------------|--------|---------|--------|
-| hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Implemented; Live-verified only as tool advertisement |
+| hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Live (`TestGrokHostedWebSearch`): a real hosted Turn records `web_search_call`, every message delta reaches the client, and Turn 2 replays it |
 | `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | today dropped by the bare rewrite | — | Not surfaced (B2) |
 | `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
 | hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks completed `custom_tool_call` named `x_keyword_search`, `x_semantic_search`, `x_user_search`, `x_thread_fetch` so the harness records instead of dispatching | Code present since `7f72f0825`; the ingress predicate has no native test and no Live Story exercises a real x_search Turn (P0 probe) |
@@ -518,8 +518,10 @@ before `grok/release.py publish`; a docs-only commit does not.
   surface lists. No such test exists today; add it with the P0 probe and
   widen it together with the B2 predicate change.
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
-  encrypted-reasoning continuation, image-edit, and custom `apply_patch`
-  Stories exercise the reasoning, hosted-replay, and custom-tool rows above.
+  encrypted-reasoning continuation, image-edit, custom `apply_patch`, and
+  hosted web_search Turn (`grok-hosted-web-search-turn.md` /
+  `TestGrokHostedWebSearch`) Stories exercise the reasoning, hosted-replay,
+  custom-tool, and `WebSearchCall` rows above.
   The P0 x_search Story is the missing Live row for a Grok-native ability
   that is already shipped.
 - Facts live in `grok/facts`, run by `grok-facts.yml` on dispatch or locally,
