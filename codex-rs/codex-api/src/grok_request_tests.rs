@@ -444,6 +444,7 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
             "service_tier",
             "access_programs",
             "parallel_tool_calls",
+            "store",
         ] {
             if built.get(key).is_some() {
                 leaked.push(key.to_string());
@@ -583,6 +584,7 @@ fn grok_projects_replayed_history_on_request_copy_only() {
     assert!(projected.get("tools").is_none());
     assert!(projected.get("tool_choice").is_none());
     assert_eq!(projected.get("parallel_tool_calls"), None);
+    assert_eq!(projected.get("store"), None);
 }
 
 #[test]
@@ -774,6 +776,7 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
     );
     assert_eq!(projected["tool_choice"], "auto");
     assert_eq!(projected.get("parallel_tool_calls"), None);
+    assert_eq!(projected.get("store"), None);
     assert!(
         !contains_key(&projected, "external_web_access"),
         "Grok egress must not send external_web_access"
@@ -879,6 +882,7 @@ fn stock_openai_projection_remains_identity() {
     assert_eq!(expected["tools"].as_array().map(Vec::len), Some(1));
     assert_eq!(expected["tool_choice"], json!("auto"));
     assert_eq!(expected["parallel_tool_calls"], json!(true));
+    assert_eq!(expected["store"], json!(false));
 }
 
 fn local_shell_call() -> ResponseItem {
