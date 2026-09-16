@@ -379,11 +379,12 @@ type xSearchDateWindow struct {
 }
 
 type liveOptions struct {
-	probeTool               bool
-	disableShell            bool
-	acceptExecForSession    bool
-	webSearchAllowedDomains []string
-	xSearchWindow           xSearchDateWindow
+	probeTool                bool
+	disableShell             bool
+	acceptExecForSession     bool
+	webSearchAllowedDomains  []string
+	webSearchExcludedDomains []string
+	xSearchWindow            xSearchDateWindow
 }
 
 func skipUnlessGrokLive(t *testing.T) {
@@ -557,8 +558,14 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	if opts.disableShell {
 		config = ensureShellToolDisabled(config)
 	}
+	if len(opts.webSearchAllowedDomains) > 0 && len(opts.webSearchExcludedDomains) > 0 {
+		t.Fatal("webSearchAllowedDomains and webSearchExcludedDomains overlays are mutually exclusive")
+	}
 	if len(opts.webSearchAllowedDomains) > 0 {
 		config = overlayWebSearchAllowedDomains(config, opts.webSearchAllowedDomains)
+	}
+	if len(opts.webSearchExcludedDomains) > 0 {
+		config = overlayWebSearchExcludedDomains(config, opts.webSearchExcludedDomains)
 	}
 	if opts.xSearchWindow.fromDate != "" && opts.xSearchWindow.toDate != "" {
 		config = overlayXSearchDateWindow(config, opts.xSearchWindow)

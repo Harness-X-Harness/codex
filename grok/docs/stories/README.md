@@ -31,6 +31,7 @@ Triage by stage lives in [`../release.md`](../release.md) §Triage.
 | [Custom `apply_patch` file edit](./grok-custom-apply-patch.md) | `TestGrokCustomApplyPatch` |
 | [Hosted `web_search` Turn and replay](./grok-hosted-web-search-turn.md) | `TestGrokHostedWebSearch` |
 | [Hosted `web_search` domain allowlist](./grok-hosted-web-search-allowlist.md) | `TestGrokHostedWebSearchAllowlist` |
+| [Hosted `web_search` domain blocklist](./grok-hosted-web-search-excluded-domains.md) | `TestGrokHostedWebSearchExcludedDomains` |
 | [Hosted `x_search` Turn and follow-up replay](./grok-hosted-x-search-turn.md) | `TestGrokHostedXSearch` |
 | [Hosted `x_search` date window](./grok-hosted-x-search-date-window.md) | `TestGrokHostedXSearchDateWindow` |
 
