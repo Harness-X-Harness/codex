@@ -273,7 +273,7 @@ request copy exactly as today:
 | `Reasoning` | `reasoning` | `id?`, `summary[]`, `encrypted_content` when non-empty; `content` only when there is no usable blob and it is well-typed | observed rejection for `content` + blob and for `content: null`; grok-build strips `status` only |
 | `FunctionCall` | `function_call` | `call_id`, `name`, `arguments`, `id?` | grok-build; Live. `namespace` and `encrypted_function_args` are not constructed |
 | `FunctionCallOutput` | `function_call_output` | `call_id`, `output` (text or content items) | grok-build; Live |
-| `CustomToolCall` | `custom_tool_call` | `id`, `call_id`, `name`, `input`, `status?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is. `id` is required on replay (`TestFactCustomToolCallReplayRequiresID`: `422 missing field id`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
+| `CustomToolCall` | `custom_tool_call` | `id`, `call_id`, `name`, `input`, `status?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is. Live (`TestGrokHostedXSearch`). `id` is required on replay (`TestFactCustomToolCallReplayRequiresID`: `422 missing field id`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
 | `CustomToolCallOutput` | `custom_tool_call_output` | `call_id`, `output` | custom `apply_patch` Story |
 | `WebSearchCall` | `web_search_call` | `id?`, `action` | Live (`TestGrokHostedWebSearch`): Turn 2 replays `id` + `action` and Grok accepts it. grok-build replays as-is with status; `status` is accepted (`TestFactInputStatusOnHostedItems`) but not constructed. `action` is required on replay (`TestFactWebSearchCallReplayRequiresAction`: `422 missing field action`) |
 | `ImageGenerationCall` | `image_generation_call` | `id?`, `status`, `revised_prompt?`, `result` | image-edit Story was GREEN with `status` at `c4c80eef`; `status` is accepted (`TestFactInputStatusOnHostedItems`) |
@@ -326,7 +326,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 | hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Live (`TestGrokHostedWebSearch`): a real hosted Turn records `web_search_call`, every message delta reaches the client, and Turn 2 replays it |
 | `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | today dropped by the bare rewrite | — | Not surfaced (B2) |
 | `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
-| hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks completed `custom_tool_call` named `x_keyword_search`, `x_semantic_search`, `x_user_search`, `x_thread_fetch` so the harness records instead of dispatching | Code present since `7f72f0825`; the ingress predicate has no native test and no Live Story exercises a real x_search Turn (P0 probe) |
+| hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks completed `custom_tool_call` named `x_keyword_search`, `x_semantic_search`, `x_user_search`, `x_thread_fetch` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
 | `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | none | — | — | Not surfaced (B2) |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
 | image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
@@ -355,7 +355,7 @@ P0, decides whether a Grok-native ability already shipped works end to end:
 
 | Probe | Question | How to decide |
 |-------|----------|---------------|
-| real x_search Turn | does a Grok Turn that invokes x_search complete, record the hosted call, and continue on the next Turn? | one Live Story with a prompt that requires X content; assert a completed hosted `custom_tool_call` in the session and a terminal reply; assert Turn N+1 replays it without a `400` |
+| real x_search Turn | does a Grok Turn that invokes x_search complete, record the hosted call, and continue on the next Turn? | one Live Story with a prompt that requires X content; assert a completed hosted `custom_tool_call` in the session and a terminal reply; assert Turn N+1 replays it without a `400`. Live (`TestGrokHostedXSearch`): Turn 1 records a completed hosted `custom_tool_call`; Turn 2 replays it and Grok accepts it (pairing skip: #249). |
 
 Recorded facts (backend class, independent of the binary; `grok/facts`,
 first recorded 2026-09-16 against `grok.trustedtunnel.app`). A Facts run is
@@ -519,15 +519,13 @@ before `grok/release.py publish`; a docs-only commit does not.
   outbound `/responses` body through the full core path.
 - `codex-rs/model-provider/src/grok_provider_tests.rs`: ingress recognition
   (`is_provider_hosted_tool_call`) for every hosted name the capability
-  surface lists. No such test exists today; add it with the P0 probe and
-  widen it together with the B2 predicate change.
+  surface lists, plus incomplete status and an unknown name. Widen it
+  together with the B2 predicate change.
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
   encrypted-reasoning continuation, image-edit, custom `apply_patch`, and
-  hosted web_search Turn (`grok-hosted-web-search-turn.md` /
-  `TestGrokHostedWebSearch`) Stories exercise the reasoning, hosted-replay,
-  custom-tool, and `WebSearchCall` rows above.
-  The P0 x_search Story is the missing Live row for a Grok-native ability
-  that is already shipped.
+  hosted `web_search` (`TestGrokHostedWebSearch`) and hosted `x_search`
+  (`TestGrokHostedXSearch`) Stories exercise the reasoning, hosted-replay,
+  custom-tool, `WebSearchCall`, and Grok-native x_search rows above.
 - Facts live in `grok/facts`, run by `grok-facts.yml` on dispatch or locally,
   and are not proof inputs.
 
