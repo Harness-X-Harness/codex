@@ -160,22 +160,38 @@ impl ResponsesDialect {
         // payloads the hosted-web_search rewrite does not see.
         strip_unsupported_grok_arguments(&mut value);
         if let Some(input) = value.get_mut("input").and_then(Value::as_array_mut) {
+            input.retain(|item| {
+                item.get("type").and_then(Value::as_str) != Some("compaction_trigger")
+            });
             for item in input {
                 let Some(object) = item.as_object_mut() else {
                     continue;
                 };
-                if object.get("type").and_then(Value::as_str) != Some("reasoning") {
-                    continue;
-                }
-                let usable_blob = matches!(
-                    object.get("encrypted_content"),
-                    Some(Value::String(blob)) if !blob.is_empty()
-                );
-                if usable_blob || object.get("content") == Some(&Value::Null) {
-                    object.remove("content");
-                }
-                if !usable_blob {
-                    object.remove("encrypted_content");
+                object.remove("namespace");
+                match object.get("type").and_then(Value::as_str) {
+                    Some("reasoning") => {
+                        let usable_blob = matches!(
+                            object.get("encrypted_content"),
+                            Some(Value::String(blob)) if !blob.is_empty()
+                        );
+                        if usable_blob || object.get("content") == Some(&Value::Null) {
+                            object.remove("content");
+                        }
+                        if !usable_blob {
+                            object.remove("encrypted_content");
+                        }
+                    }
+                    Some(
+                        "function_call"
+                        | "custom_tool_call"
+                        | "tool_search_call"
+                        | "web_search_call"
+                        | "image_generation_call",
+                    ) => {
+                        object.remove("status");
+                        object.remove("encrypted_function_args");
+                    }
+                    Some(_) | None => {}
                 }
             }
         }
@@ -195,6 +211,7 @@ fn strip_unsupported_grok_arguments(value: &mut Value) {
         Value::Object(object) => {
             object.remove("external_web_access");
             object.remove("indexed_web_access");
+            object.remove("defer_loading");
             for child in object.values_mut() {
                 strip_unsupported_grok_arguments(child);
             }

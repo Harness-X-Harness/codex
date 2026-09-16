@@ -234,6 +234,55 @@ fn grok_omits_null_encrypted_reasoning_blob() {
 }
 
 #[test]
+fn grok_strips_openai_only_history_controls_from_replay() {
+    let canonical = request(vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "local__exec_command__deadbeef".to_string(),
+            namespace: Some("local".to_string()),
+            arguments: "{}".to_string(),
+            encrypted_function_args: Some(vec!["enc".to_string()]),
+            call_id: "call_1".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: Some("completed".to_string()),
+            call_id: "call_2".to_string(),
+            name: "x_keyword_search".to_string(),
+            namespace: Some("x".to_string()),
+            input: "{}".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::CompactionTrigger {},
+        user_message("continue"),
+    ]);
+    let original = canonical.clone();
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("OpenAI-only history extras should project");
+
+    assert_eq!(canonical, original, "canonical request must stay unchanged");
+    let input = projected["input"].as_array().expect("input array");
+    assert_eq!(
+        input.len(),
+        3,
+        "compaction_trigger is not a Grok input item"
+    );
+    assert_eq!(input[0]["type"], "function_call");
+    assert_eq!(input[0]["name"], "local__exec_command__deadbeef");
+    assert_eq!(input[0]["call_id"], "call_1");
+    assert!(input[0].get("namespace").is_none());
+    assert!(input[0].get("encrypted_function_args").is_none());
+    assert_eq!(input[1]["type"], "custom_tool_call");
+    assert_eq!(input[1]["name"], "x_keyword_search");
+    assert!(input[1].get("namespace").is_none());
+    assert!(input[1].get("status").is_none());
+    assert_eq!(input[2]["type"], "message");
+}
+
+#[test]
 fn grok_rejects_encrypted_collaboration_history_before_transport() {
     let request = request(vec![ResponseItem::AgentMessage {
         id: None,
@@ -318,6 +367,12 @@ fn grok_strips_external_web_access_from_nested_request_payloads() {
     let mut canonical = request(vec![user_message("search")]);
     let tools = serde_json::value::to_raw_value(&json!([
         {
+            "type": "function",
+            "name": "local__wait__deadbeefcafe",
+            "defer_loading": true,
+            "parameters": {"type":"object","properties":{}}
+        },
+        {
             "type": "web_search",
             "external_web_access": true,
             "indexed_web_access": true
@@ -334,8 +389,10 @@ fn grok_strips_external_web_access_from_nested_request_payloads() {
         .project_request(&canonical)
         .expect("nested search extras should project");
 
-    assert_eq!(projected["tools"][0], json!({"type":"web_search"}));
-    assert_eq!(projected["tools"][1], json!({"type":"x_search"}));
+    assert_eq!(projected["tools"][0]["type"], "function");
+    assert_eq!(projected["tools"][0]["name"], "local__wait__deadbeefcafe");
+    assert_eq!(projected["tools"][1], json!({"type": "web_search"}));
+    assert_eq!(projected["tools"][2], json!({"type": "x_search"}));
     assert_eq!(
         projected["client_metadata"]["note"], "external_web_access",
         "string metadata must keep the phrase; only JSON arguments are stripped"
@@ -347,6 +404,10 @@ fn grok_strips_external_web_access_from_nested_request_payloads() {
     assert!(
         !contains_key(&projected, "indexed_web_access"),
         "nested OpenAI search arguments must not reach Grok"
+    );
+    assert!(
+        !contains_key(&projected, "defer_loading"),
+        "OpenAI deferred-tool extras must not reach Grok"
     );
 }
 
