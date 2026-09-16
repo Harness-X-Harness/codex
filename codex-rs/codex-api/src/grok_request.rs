@@ -16,7 +16,6 @@ use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ReasoningEffort;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Why a Grok Responses request cannot be constructed from the canonical input.
 #[derive(Debug, thiserror::Error)]
@@ -56,8 +55,6 @@ struct GrokResponsesRequest<'a> {
     prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<GrokTextControls<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    client_metadata: Option<&'a HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -214,7 +211,6 @@ impl<'a> GrokResponsesRequest<'a> {
                 .as_ref()
                 .and_then(|text| text.format.as_ref())
                 .map(|format| GrokTextControls { format }),
-            client_metadata: request.client_metadata.as_ref(),
         })
     }
 }
