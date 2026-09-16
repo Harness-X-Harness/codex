@@ -49,8 +49,6 @@ struct GrokResponsesRequest<'a> {
     tools: Option<Vec<GrokTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parallel_tool_calls: Option<bool>,
     reasoning: Option<GrokReasoning<'a>>,
     store: bool,
     stream: bool,
@@ -197,13 +195,7 @@ struct GrokWebSearchFilters {
 impl<'a> GrokResponsesRequest<'a> {
     fn try_from_request(request: &'a ResponsesApiRequest) -> Result<Self, GrokProjectionError> {
         let tools = project_tools(request.tools.as_ref())?;
-        let (tool_choice, parallel_tool_calls) = match &tools {
-            Some(_) => (
-                Some(request.tool_choice.as_str()),
-                Some(request.parallel_tool_calls),
-            ),
-            None => (None, None),
-        };
+        let tool_choice = tools.is_some().then_some(request.tool_choice.as_str());
         Ok(Self {
             model: &request.model,
             instructions: (!request.instructions.is_empty())
@@ -211,7 +203,6 @@ impl<'a> GrokResponsesRequest<'a> {
             input: project_input(&request.input)?,
             tools,
             tool_choice,
-            parallel_tool_calls,
             reasoning: request.reasoning.as_ref().map(|reasoning| GrokReasoning {
                 effort: reasoning.effort.as_ref(),
                 summary: reasoning.summary.as_ref(),
