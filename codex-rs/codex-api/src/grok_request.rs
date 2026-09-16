@@ -448,7 +448,7 @@ fn project_tools(
         match tool_type {
             "function" => projected.push(project_function_tool(tool)),
             "custom" => projected.push(project_custom_tool(tool)),
-            "web_search" => projected.push(GrokTool::WebSearch { filters: None }),
+            "web_search" => projected.push(project_web_search_tool(tool)),
             "x_search" => {
                 has_x_search = true;
                 projected.push(GrokTool::XSearch {});
@@ -465,6 +465,27 @@ fn project_tools(
         projected.push(GrokTool::XSearch {});
     }
     Ok(Some(projected))
+}
+
+fn project_web_search_tool(tool: &Value) -> GrokTool {
+    let allowed_domains = tool
+        .get("filters")
+        .and_then(|filters| filters.get("allowed_domains"))
+        .and_then(Value::as_array)
+        .map(|domains| {
+            domains
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .take(5)
+                .collect::<Vec<_>>()
+        })
+        .filter(|domains| !domains.is_empty());
+    GrokTool::WebSearch {
+        filters: allowed_domains.map(|allowed_domains| GrokWebSearchFilters {
+            allowed_domains: Some(allowed_domains),
+        }),
+    }
 }
 
 fn project_function_tool(tool: &Value) -> GrokTool {

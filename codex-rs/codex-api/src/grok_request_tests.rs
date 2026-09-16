@@ -193,6 +193,22 @@ fn accepted_fixtures() -> Vec<(&'static str, ResponsesApiRequest)> {
             "function_custom_web_search_tools",
             function_custom_web_search,
         ),
+        ("web_search_allowed_domains", {
+            let mut req = request(vec![user_message("search")]);
+            req.tools = Some(json_tools(json!([{
+                "type": "web_search",
+                "external_web_access": true,
+                "indexed_web_access": true,
+                "search_context_size": "medium",
+                "user_location": {"type": "approximate", "country": "US"},
+                "search_content_types": ["text"],
+                "filters": {
+                    "allowed_domains": ["example.com"],
+                    "excluded_domains": ["blocked.test"]
+                }
+            }])));
+            req
+        }),
         (
             "message_input_text",
             request(vec![user_message("input_text")]),
@@ -477,6 +493,13 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
                 if tool.get(key).is_some() {
                     leaked.push(format!("tools[{index}].{key}"));
                 }
+            }
+            if tool
+                .get("filters")
+                .and_then(|filters| filters.get("excluded_domains"))
+                .is_some()
+            {
+                leaked.push(format!("tools[{index}].filters.excluded_domains"));
             }
         }
         assert_eq!(leaked, Vec::<String>::new(), "{name}: {built}");
@@ -783,6 +806,117 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
     assert!(
         !contains_key(&projected, "external_web_access"),
         "Grok egress must not send external_web_access"
+    );
+}
+
+#[test]
+fn grok_projects_web_search_allowed_domains_from_stock_filters() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([
+        {
+            "type": "web_search",
+            "external_web_access": true,
+            "indexed_web_access": true,
+            "search_context_size": "medium",
+            "search_content_types": ["text"],
+            "user_location": {
+                "type": "approximate",
+                "country": "US"
+            },
+            "filters": {
+                "allowed_domains": ["example.com"],
+                "excluded_domains": ["blocked.test"]
+            }
+        }
+    ])));
+    let original = canonical.clone();
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("web_search allowed_domains should project");
+
+    assert_eq!(canonical, original, "canonical request must stay unchanged");
+    assert_eq!(
+        projected["tools"],
+        json!([
+            {
+                "type": "web_search",
+                "filters": {"allowed_domains": ["example.com"]}
+            },
+            {"type": "x_search"}
+        ])
+    );
+    assert!(
+        !contains_key(&projected, "external_web_access"),
+        "Grok egress must not send external_web_access"
+    );
+    assert!(
+        !contains_key(&projected, "excluded_domains"),
+        "Grok egress must not send excluded_domains"
+    );
+}
+
+#[test]
+fn grok_projects_bare_web_search_when_filters_are_missing_or_empty() {
+    for (name, web_search) in [
+        ("missing", json!({"type": "web_search"})),
+        ("empty_object", json!({"type": "web_search", "filters": {}})),
+        (
+            "empty_list",
+            json!({"type": "web_search", "filters": {"allowed_domains": []}}),
+        ),
+    ] {
+        let mut canonical = request(vec![user_message("search")]);
+        canonical.tools = Some(json_tools(json!([web_search])));
+        let projected = ResponsesDialect::Grok
+            .project_request(&canonical)
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
+        assert_eq!(
+            projected["tools"],
+            json!([{"type": "web_search"}, {"type": "x_search"}]),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn grok_caps_web_search_allowed_domains_at_five() {
+    let mut canonical = request(vec![user_message("search")]);
+    canonical.tools = Some(json_tools(json!([{
+        "type": "web_search",
+        "filters": {
+            "allowed_domains": [
+                "a.example",
+                "b.example",
+                "c.example",
+                "d.example",
+                "e.example",
+                "f.example"
+            ]
+        }
+    }])));
+
+    let projected = ResponsesDialect::Grok
+        .project_request(&canonical)
+        .expect("capped allowed_domains should project");
+
+    assert_eq!(
+        projected["tools"],
+        json!([
+            {
+                "type": "web_search",
+                "filters": {
+                    "allowed_domains": [
+                        "a.example",
+                        "b.example",
+                        "c.example",
+                        "d.example",
+                        "e.example"
+                    ]
+                }
+            },
+            {"type": "x_search"}
+        ])
     );
 }
 
