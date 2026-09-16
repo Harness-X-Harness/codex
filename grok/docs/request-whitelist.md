@@ -254,7 +254,7 @@ B2; keep today's egress until Live decides).
 | `service_tier` | omit | OpenAI tiering |
 | `prompt_cache_key` | emit | grok-build; Live |
 | `text` | emit only `format: json_schema`; omit verbosity | grok-build; Grok catalog does not support verbosity |
-| `client_metadata` | probe | Live GREEN today; Codex-backend telemetry with no Grok function |
+| `client_metadata` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `client_metadata` alone) ≠ consumed; Codex-backend telemetry with no Grok function; grok-build does not send it; this B1 probe |
 | `access_programs` | omit | OpenAI cyber access program |
 
 ### Input items
@@ -388,11 +388,12 @@ What the recorded facts settle for the whitelist:
   consumed; grok-build `strict: None`). `parallel_tool_calls` is omitted
   (`TestFactParallelToolCallsStoreClientMetadata` `accepted` for
   `parallel_tool_calls: false` ≠ consumed; grok-build `None`). `store` is
+  omitted (`TestFactParallelToolCallsStoreClientMetadata` `accepted` for
+  `store: false` ≠ consumed; grok-build `None`). `client_metadata` is
   omitted by this B1 probe (`TestFactParallelToolCallsStoreClientMetadata`
-  `accepted` for `store: false` ≠ consumed; grok-build `None`). Remaining
-  accepted probes are `client_metadata`, `text.verbosity`: B1 drops
-  each remaining one per commit and watches Live; none can be a `400`
-  source today.
+  `accepted` for `client_metadata` alone ≠ consumed; Codex-backend
+  telemetry with no Grok function; grok-build does not send it). Remaining
+  accepted-but-unconsumed note is `text.verbosity` (already omitted).
 - `web_search.filters.allowed_domains` and the `x_search` date window are
   accepted, so B2 needs only the stock-compatible config seam, not a backend
   probe.
@@ -404,8 +405,8 @@ B1, tighten toward grok-build:
 | function `strict` | omit (decided) | `feat(grok): omit function tool strict on Grok Responses egress`; Live GREEN on the custom `apply_patch` and dynamic-tool Stories is the post-merge line proof | `TestFactFunctionStrict` (`accepted`) |
 | `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | keep or drop on replay? | accepted either way; keep what stock records | `TestFactInputStatusOnHostedItems` (`accepted`) |
 | `parallel_tool_calls` | omit (decided) | `feat(grok): omit parallel_tool_calls on Grok Responses egress`; Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) |
-| `store` | omit (decided) | this commit (`feat(grok): omit store on Grok Responses egress`); Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) |
-| `client_metadata` | consumed or only accepted? | drop one per commit; Live GREEN | `TestFactParallelToolCallsStoreClientMetadata` (`accepted`) |
+| `store` | omit (decided) | `feat(grok): omit store on Grok Responses egress`; Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) |
+| `client_metadata` | omit (decided) | this commit (`feat(grok): omit client_metadata on Grok Responses egress`); Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `client_metadata` alone) |
 | reasoning `content` with blob | emit the typed channel or keep omitting? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission unless a Story needs the text | `TestFactReasoningTypedContentWithBlob` (`accepted`) |
 
 B2, extend with Grok-native abilities:
@@ -489,7 +490,7 @@ error where today the request would reach xAI.
 Each B1 probe is one commit with a native test and a GREEN Live run. A probe
 that fails stays in its table with the observed error text.
 
-Landed by this commit: `feat(grok): omit store on Grok Responses egress` omits `store` from `GrokResponsesRequest`.
+Landed by this commit: `feat(grok): omit client_metadata on Grok Responses egress` omits `client_metadata` from `GrokResponsesRequest`.
 
 ### Stage B2: extend with Grok-native abilities, one ability per commit
 

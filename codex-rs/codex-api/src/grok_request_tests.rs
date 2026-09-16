@@ -445,6 +445,7 @@ fn grok_builds_every_accepted_fixture_without_openai_only_keys() {
             "access_programs",
             "parallel_tool_calls",
             "store",
+            "client_metadata",
         ] {
             if built.get(key).is_some() {
                 leaked.push(key.to_string());
@@ -585,6 +586,7 @@ fn grok_projects_replayed_history_on_request_copy_only() {
     assert!(projected.get("tool_choice").is_none());
     assert_eq!(projected.get("parallel_tool_calls"), None);
     assert_eq!(projected.get("store"), None);
+    assert_eq!(projected.get("client_metadata"), None);
 }
 
 #[test]
@@ -777,6 +779,7 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
     assert_eq!(projected["tool_choice"], "auto");
     assert_eq!(projected.get("parallel_tool_calls"), None);
     assert_eq!(projected.get("store"), None);
+    assert_eq!(projected.get("client_metadata"), None);
     assert!(
         !contains_key(&projected, "external_web_access"),
         "Grok egress must not send external_web_access"
@@ -786,6 +789,7 @@ fn grok_projects_web_and_x_search_contract_without_touching_flat_functions() {
 #[test]
 fn grok_strips_external_web_access_from_nested_request_payloads() {
     let mut canonical = request(vec![user_message("search")]);
+    canonical.instructions = "external_web_access".to_string();
     canonical.tools = Some(json_tools(json!([
         {
             "type": "function",
@@ -821,9 +825,10 @@ fn grok_strips_external_web_access_from_nested_request_payloads() {
         ])
     );
     assert_eq!(
-        projected["client_metadata"]["note"], "external_web_access",
-        "string metadata must keep the phrase; only JSON arguments are stripped"
+        projected["instructions"], "external_web_access",
+        "string fields must keep the phrase; only JSON arguments are stripped"
     );
+    assert_eq!(projected.get("client_metadata"), None);
     assert!(
         !contains_key(&projected, "external_web_access"),
         "nested OpenAI search arguments must not reach Grok"
@@ -871,6 +876,7 @@ fn stock_openai_projection_remains_identity() {
         "parameters": {"type":"object","properties":{},"additionalProperties":false},
         "strict": true
     }])));
+    canonical.client_metadata = Some(HashMap::from([("app".to_string(), "codex".to_string())]));
     let expected = serde_json::to_value(&canonical).expect("stock request serializes");
 
     assert_eq!(
@@ -883,6 +889,7 @@ fn stock_openai_projection_remains_identity() {
     assert_eq!(expected["tool_choice"], json!("auto"));
     assert_eq!(expected["parallel_tool_calls"], json!(true));
     assert_eq!(expected["store"], json!(false));
+    assert_eq!(expected["client_metadata"], json!({"app": "codex"}));
 }
 
 fn local_shell_call() -> ResponseItem {
