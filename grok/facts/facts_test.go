@@ -254,6 +254,23 @@ func TestFactWebSearchAllowedDomains(t *testing.T) {
 	assertRecorded(t, recorded, classify(status, body))
 }
 
+func TestFactWebSearchExcludedDomains(t *testing.T) {
+	const recorded class = "accepted"
+	client := requireFactsClient(t)
+	status, body := postFact(t, client, map[string]any{
+		"input": userInput(),
+		"tools": []any{
+			map[string]any{
+				"type": "web_search",
+				"filters": map[string]any{
+					"excluded_domains": []string{"x.ai"},
+				},
+			},
+		},
+	})
+	assertRecorded(t, recorded, classify(status, body))
+}
+
 func TestFactXSearchDateWindow(t *testing.T) {
 	const recorded class = "accepted"
 	client := requireFactsClient(t)

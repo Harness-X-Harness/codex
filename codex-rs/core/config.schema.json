@@ -5796,6 +5796,12 @@
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
         },
+        "excluded_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"
         }
@@ -5849,11 +5855,11 @@
       "description": "Optional Grok hosted `x_search` date window.\n\nConfigured as `[model_providers.grok.x_search]` with calendar `YYYY-MM-DD` `from_date` / `to_date`. Other providers ignore this field.",
       "properties": {
         "from_date": {
-          "description": "Inclusive start of the Grok hosted `x_search` window (`YYYY-MM-DD`).",
+          "description": "Start of the Grok hosted `x_search` window (`YYYY-MM-DD`).",
           "type": "string"
         },
         "to_date": {
-          "description": "Inclusive end of the Grok hosted `x_search` window (`YYYY-MM-DD`).",
+          "description": "End of the Grok hosted `x_search` window (`YYYY-MM-DD`).",
           "type": "string"
         }
       },

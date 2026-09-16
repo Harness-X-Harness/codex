@@ -297,7 +297,7 @@ values, maps each by `type`, and constructs Grok tool types.
 |-----------------|-----------|-------------------|
 | `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | omit `strict`: grok-build `strict: None`; `TestFactFunctionStrict` (`accepted`) is not consumed; this B1 probe. `defer_loading` is not constructed |
 | `custom { name, description, format }` | `custom` as-is | custom `apply_patch` Story |
-| `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; emit `filters.allowed_domains` from stock when present (max 5); omit `filters` when missing or empty. Live (`TestGrokHostedWebSearchAllowlist`). Restoring `excluded_domains` remains B2 later |
+| `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` or `{ filters: { excluded_domains }? }` | grok-build `to_tool_entry`; emit `filters.allowed_domains` or `filters.excluded_domains` from stock when present (max 5); omit `filters` when missing, empty, or both lists are non-empty. Live (`TestGrokHostedWebSearchAllowlist`). Live for `excluded_domains` is the next Story |
 | `x_search` | appended once when tools are non-empty; `from_date` / `to_date` copied from canonical tool JSON when they parse as `YYYY-MM-DD`, otherwise from the Grok Provider window (tool JSON wins when both are present) | Grok capability rule, Live GREEN for bare `x_search`; Live (`TestGrokHostedXSearchDateWindow`) for Provider `from_date` / `to_date`. grok-build emits dates when the hosted tool is requested |
 | `namespace`, `tool_search` | reject | flat projection already flattens namespaces; reaching the whitelist is a flat-projection regression |
 | any other `type` | reject | undecided tool surface |
@@ -325,7 +325,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 |---------|------------------|-------------|--------|---------|--------|
 | hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Live (`TestGrokHostedWebSearch`): a real hosted Turn records `web_search_call`, every message delta reaches the client, and Turn 2 replays it |
 | `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Live (`TestGrokHostedWebSearchAllowlist`): shipped profile plus stock `[tools.web_search] allowed_domains` advertises the filter, a hosted search Turn completes, and Turn 2 replays `web_search_call` |
-| `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
+| `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | stock `[tools.web_search] excluded_domains` | `filters.excluded_domains` from stock when present (max 5); omit `filters` when both lists are non-empty | — | Implemented (native egress); Live Story still open |
 | hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks any completed `custom_tool_call` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
 | `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | Grok Provider `[model_providers.grok.x_search]` | copied onto the `x_search` tool (canonical tool JSON wins when present) | — | Live (`TestGrokHostedXSearchDateWindow`): shipped profile plus `[model_providers.grok.x_search]` `from_date` / `to_date` advertises the window, a hosted X search Turn completes, and Turn 2 replays the hosted `custom_tool_call` |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
@@ -371,6 +371,7 @@ the evidence; a flip revises the row, not a publish.
 | `TestFactWebSearchCallReplayRequiresAction` | replayed `web_search_call` without `action` | `rejected:422/… invalid "web_search_call" item: missing field \`action\`` |
 | `TestFactParallelToolCallsStoreClientMetadata` | each of `parallel_tool_calls: false`, `store: false`, `client_metadata` alone | `accepted` for each |
 | `TestFactWebSearchAllowedDomains` | `tools: [{type: web_search, filters: {allowed_domains: [...]}}]` | `accepted` |
+| `TestFactWebSearchExcludedDomains` | `tools: [{type: web_search, filters: {excluded_domains: [...]}}]` | `accepted` |
 | `TestFactXSearchDateWindow` | `tools: [{type: x_search, from_date, to_date}]` | `accepted` |
 | `TestFactTextVerbosityRejectedOrIgnored` | `text: {verbosity: low}` | `accepted`; whitelist omits it until an effect is observed |
 
@@ -395,7 +396,10 @@ What the recorded facts settle for the whitelist:
 - `web_search.filters.allowed_domains` is accepted, native egress emits it
   from the stock tool JSON (max 5), and Live
   (`TestGrokHostedWebSearchAllowlist`) proves a filtered hosted search Turn
-  and replay. The `x_search` date window is accepted; native egress emits
+  and replay. Native egress also emits `filters.excluded_domains` from the
+  stock tool JSON (max 5), exclusive with the allowlist at config load;
+  Live for the blocklist is the next Story. The `x_search` date window is
+  accepted; native egress emits
   validated Provider `[model_providers.grok.x_search]` `from_date` / `to_date`
   on the `x_search` tool (canonical tool JSON wins). Live
   (`TestGrokHostedXSearchDateWindow`) proves a windowed hosted X search Turn
@@ -417,7 +421,7 @@ B2, extend with Grok-native abilities:
 | Probe | Question | How to decide | Fact |
 |-------|----------|---------------|------|
 | `web_search.filters.allowed_domains` | emit (decided) | Live (`TestGrokHostedWebSearchAllowlist`) | `TestFactWebSearchAllowedDomains` (`accepted`) |
-| `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live | — |
+| `web_search.filters.excluded_domains` | emit (decided); Live next | this commit (`feat(grok): emit web_search excluded_domains from stock filters`); native tests; Live is the next Story | `TestFactWebSearchExcludedDomains` (`accepted`; first Facts CI run is the observation) |
 | `x_search` date window | emit (decided) | Live (`TestGrokHostedXSearchDateWindow`) | `TestFactXSearchDateWindow` (`accepted`) |
 | any completed `custom_tool_call` is hosted | hosted (decided) | this commit (`feat(grok): treat every completed custom_tool_call as hosted`); native test; Live remains existing `TestGrokHostedXSearch` and `TestGrokCustomApplyPatch` (post-merge line proof) | — |
 
@@ -440,7 +444,7 @@ codex-rs/codex-api/src/grok_request.rs            new, target < 500 LoC
   GrokInputItem                         #[serde(tag = "type")], exhaustive from ResponseItem
   GrokContentItem, GrokReasoningItem, GrokFunctionCallOutput
   GrokTool                              function | custom | web_search | x_search { from_date?, to_date? }
-  GrokWebSearchFilters                  allowed_domains?
+  GrokWebSearchFilters                  allowed_domains? excluded_domains?
   GrokProjectionError                   rejected item / tool, mapped to serde::ser::Error at the seam
 
 codex-rs/codex-api/src/grok_request_tests.rs      Grok dialect tests move here
@@ -503,7 +507,7 @@ native tests at both seams, and a Live Story when the ability is
 user-visible. The P0 x_search probe runs before any B2 work on x_search so
 the extension builds on a proven path.
 
-Landed by this commit: `test(grok): Live Story for x_search date window` proves Provider `[model_providers.grok.x_search]` `from_date` / `to_date` on a hosted Turn (`TestGrokHostedXSearchDateWindow`). Native emit remains `feat(grok): emit x_search from_date/to_date from Provider config`. Default remains bare `x_search` without the overlay. The hosted `web_search` allowlist Live (`TestGrokHostedWebSearchAllowlist`) remains `test(grok): Live Story for web_search allowed_domains`; native emit remains `feat(grok): emit web_search allowed_domains from stock filters`.
+Landed by this commit: `feat(grok): emit web_search excluded_domains from stock filters` adds stock `[tools.web_search] excluded_domains`, rejects both lists at config load, and emits `filters.excluded_domains` (max 5). Live remains the next Story. Native allowlist emit remains `feat(grok): emit web_search allowed_domains from stock filters`; its Live remains `test(grok): Live Story for web_search allowed_domains`.
 
 B1 and B2 are independent of each other and of Stage A's ordering; Stage A
 lands first because it is the surface both build on.
