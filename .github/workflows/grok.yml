@@ -102,6 +102,8 @@ jobs:
         run: cargo test -p codex-app-server --test all grok
       - name: Core Grok lib
         run: cargo test -p codex-core --lib grok
+      - name: Core Grok suite
+        run: cargo test -p codex-core --test all grok
       - name: Core whole-number lib
         run: cargo test -p codex-core --lib json_whole_number
       - name: Guardian and memories
