@@ -192,6 +192,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            ResponsesDialect::for_provider(self.session.provider()),
         ))
     }
 }
