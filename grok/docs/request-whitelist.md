@@ -18,8 +18,8 @@ exact sources, not "current" Codex or grok-build.
 | Anchor | Value |
 |--------|-------|
 | Stock Codex | `rust-v0.154.0` (`6b9826e3a`) |
-| Grok source | `grok/rust-v0.154.0` @ `707c5c322` (2026-09-16) |
-| Seam | `codex-rs/codex-api/src/provider.rs` `ResponsesDialect::project_request`, called only from `codex-rs/codex-api/src/endpoint/responses.rs` `stream_request` |
+| Grok source | `grok/rust-v0.154.0` @ `439c47384` (2026-09-16) |
+| Seam | `codex-rs/codex-api/src/provider.rs` `ResponsesDialect::project_request` (OpenAi identity; Grok → `grok_request::build`), called only from `codex-rs/codex-api/src/endpoint/responses.rs` `stream_request` |
 | grok-build | [`xai-org/grok-build`](https://github.com/xai-org/grok-build) `main` @ `4827113` (2026-09-15) |
 | grok-build request constructor | `crates/codegen/xai-grok-sampling-types/src/conversation/responses.rs` (blob `abe5cda`) |
 | grok-build hosted-tool entries | `crates/codegen/xai-grok-sampling-types/src/tool_overrides.rs` (blob `2abea09`) |
@@ -441,6 +441,8 @@ Rules for the module:
 ## Staging
 
 ### Stage A: whitelist layer, behavior-preserving
+
+Landed by this commit: `feat(grok): construct Grok Responses egress from a whitelist` replaces the denylist in `project_request` with `grok_request::build`.
 
 One semantic commit:
 
