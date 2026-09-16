@@ -247,7 +247,7 @@ B2; keep today's egress until Live decides).
 | `parallel_tool_calls` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) ≠ consumed; grok-build `None`; this B1 probe |
 | `reasoning.effort`, `reasoning.summary` | emit | grok-build; Live |
 | `reasoning.context` | omit | stock sets it only for `use_responses_lite`, which the Grok catalog disables |
-| `store: false` | probe | Live GREEN today; grok-build `None` |
+| `store: false` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) ≠ consumed; grok-build `None`; this B1 probe |
 | `stream: true` | emit | Codex SSE transport requirement |
 | `stream_options` | omit | stock sets it only for OpenAI |
 | `include: ["reasoning.encrypted_content"]` | emit | encrypted-reasoning continuation Story; Codex must receive blobs to replay them |
@@ -385,10 +385,12 @@ What the recorded facts settle for the whitelist:
   `reasoning_text` channel is accepted, so B1 may emit it when stock records
   one; omission stays the conservative default.
 - Function tool `strict` is omitted (`TestFactFunctionStrict` `accepted` ≠
-  consumed; grok-build `strict: None`). `parallel_tool_calls` is omitted by
-  this B1 probe (`TestFactParallelToolCallsStoreClientMetadata` `accepted` for
-  `parallel_tool_calls: false` ≠ consumed; grok-build `None`). Remaining
-  accepted probes are `store`, `client_metadata`, `text.verbosity`: B1 drops
+  consumed; grok-build `strict: None`). `parallel_tool_calls` is omitted
+  (`TestFactParallelToolCallsStoreClientMetadata` `accepted` for
+  `parallel_tool_calls: false` ≠ consumed; grok-build `None`). `store` is
+  omitted by this B1 probe (`TestFactParallelToolCallsStoreClientMetadata`
+  `accepted` for `store: false` ≠ consumed; grok-build `None`). Remaining
+  accepted probes are `client_metadata`, `text.verbosity`: B1 drops
   each remaining one per commit and watches Live; none can be a `400`
   source today.
 - `web_search.filters.allowed_domains` and the `x_search` date window are
@@ -401,8 +403,9 @@ B1, tighten toward grok-build:
 |-------|----------|---------------|------|
 | function `strict` | omit (decided) | `feat(grok): omit function tool strict on Grok Responses egress`; Live GREEN on the custom `apply_patch` and dynamic-tool Stories is the post-merge line proof | `TestFactFunctionStrict` (`accepted`) |
 | `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | keep or drop on replay? | accepted either way; keep what stock records | `TestFactInputStatusOnHostedItems` (`accepted`) |
-| `parallel_tool_calls` | omit (decided) | this commit (`feat(grok): omit parallel_tool_calls on Grok Responses egress`); Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) |
-| `store`, `client_metadata` | consumed or only accepted? | drop one per commit; Live GREEN | `TestFactParallelToolCallsStoreClientMetadata` (`accepted`) |
+| `parallel_tool_calls` | omit (decided) | `feat(grok): omit parallel_tool_calls on Grok Responses egress`; Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) |
+| `store` | omit (decided) | this commit (`feat(grok): omit store on Grok Responses egress`); Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) |
+| `client_metadata` | consumed or only accepted? | drop one per commit; Live GREEN | `TestFactParallelToolCallsStoreClientMetadata` (`accepted`) |
 | reasoning `content` with blob | emit the typed channel or keep omitting? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission unless a Story needs the text | `TestFactReasoningTypedContentWithBlob` (`accepted`) |
 
 B2, extend with Grok-native abilities:
@@ -486,7 +489,7 @@ error where today the request would reach xAI.
 Each B1 probe is one commit with a native test and a GREEN Live run. A probe
 that fails stays in its table with the observed error text.
 
-Landed by this commit: `feat(grok): omit parallel_tool_calls on Grok Responses egress` omits `parallel_tool_calls` from `GrokResponsesRequest`.
+Landed by this commit: `feat(grok): omit store on Grok Responses egress` omits `store` from `GrokResponsesRequest`.
 
 ### Stage B2: extend with Grok-native abilities, one ability per commit
 

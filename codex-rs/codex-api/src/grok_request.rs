@@ -50,7 +50,6 @@ struct GrokResponsesRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
     reasoning: Option<GrokReasoning<'a>>,
-    store: bool,
     stream: bool,
     include: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,7 +206,6 @@ impl<'a> GrokResponsesRequest<'a> {
                 effort: reasoning.effort.as_ref(),
                 summary: reasoning.summary.as_ref(),
             }),
-            store: request.store,
             stream: request.stream,
             include: &request.include,
             prompt_cache_key: request.prompt_cache_key.as_deref(),
