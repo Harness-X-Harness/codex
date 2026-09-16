@@ -298,7 +298,7 @@ values, maps each by `type`, and constructs Grok tool types.
 | `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | omit `strict`: grok-build `strict: None`; `TestFactFunctionStrict` (`accepted`) is not consumed; this B1 probe. `defer_loading` is not constructed |
 | `custom { name, description, format }` | `custom` as-is | custom `apply_patch` Story |
 | `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; emit `filters.allowed_domains` from stock when present (max 5); omit `filters` when missing or empty. Live (`TestGrokHostedWebSearchAllowlist`). Restoring `excluded_domains` remains B2 later |
-| `x_search` | appended once when tools are non-empty | Grok capability rule, Live GREEN; grok-build emits it only when the hosted tool is requested and Codex has no `x_search` config |
+| `x_search` | appended once when tools are non-empty; `from_date` / `to_date` copied from canonical tool JSON when they parse as `YYYY-MM-DD`, otherwise from the Grok Provider window (tool JSON wins when both are present) | Grok capability rule, Live GREEN for bare `x_search`; date window native emit this commit; Live next. grok-build emits dates when the hosted tool is requested |
 | `namespace`, `tool_search` | reject | flat projection already flattens namespaces; reaching the whitelist is a flat-projection regression |
 | any other `type` | reject | undecided tool surface |
 
@@ -327,7 +327,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 | `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Live (`TestGrokHostedWebSearchAllowlist`): shipped profile plus stock `[tools.web_search] allowed_domains` advertises the filter, a hosted search Turn completes, and Turn 2 replays `web_search_call` |
 | `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
 | hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks any completed `custom_tool_call` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
-| `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | none | — | — | Not surfaced (B2) |
+| `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | Grok Provider `[model_providers.grok.x_search]` | copied onto the `x_search` tool (canonical tool JSON wins when present) | — | Implemented (native egress); Live Story still open |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
 | image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
 | custom `apply_patch` | `custom` tool | `ModelInfo.apply_patch_tool_type = Freeform` | `custom` tool as-is | flat `function_call` reverse map | Live (`TestGrokCustomApplyPatch`) |
@@ -395,8 +395,9 @@ What the recorded facts settle for the whitelist:
 - `web_search.filters.allowed_domains` is accepted, native egress emits it
   from the stock tool JSON (max 5), and Live
   (`TestGrokHostedWebSearchAllowlist`) proves a filtered hosted search Turn
-  and replay. The `x_search` date window is accepted, so B2 needs only the
-  stock-compatible config seam, not a backend probe.
+  and replay. The `x_search` date window is accepted; native egress emits
+  validated Provider `[model_providers.grok.x_search]` `from_date` / `to_date`
+  on the `x_search` tool (canonical tool JSON wins). Live is the next commit.
 
 B1, tighten toward grok-build:
 
@@ -415,7 +416,7 @@ B2, extend with Grok-native abilities:
 |-------|----------|---------------|------|
 | `web_search.filters.allowed_domains` | emit (decided) | Live (`TestGrokHostedWebSearchAllowlist`) | `TestFactWebSearchAllowedDomains` (`accepted`) |
 | `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live | — |
-| `x_search` date window | which config seam carries `from_date` / `to_date`? | Grok Provider config, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live | `TestFactXSearchDateWindow` (`accepted`) |
+| `x_search` date window | emit (decided / this commit); Live next | Grok Provider `[model_providers.grok.x_search]`, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live is the next commit | `TestFactXSearchDateWindow` (`accepted`) |
 | any completed `custom_tool_call` is hosted | hosted (decided) | this commit (`feat(grok): treat every completed custom_tool_call as hosted`); native test; Live remains existing `TestGrokHostedXSearch` and `TestGrokCustomApplyPatch` (post-merge line proof) | — |
 
 ## Module plan
@@ -427,16 +428,16 @@ moves out so `provider.rs` shrinks instead of growing.
 codex-rs/codex-api/src/provider.rs
   ResponsesDialect::for_provider        unchanged
   ResponsesDialect::project_request     OpenAi => identity serde
-                                        Grok   => grok_request::build(request)
+                                        Grok   => grok_request::build(request, provider)
   strip_unsupported_grok_arguments      deleted
   JSON retain/remove post-processing    deleted
 
 codex-rs/codex-api/src/grok_request.rs            new, target < 500 LoC
-  pub(crate) fn build(&ResponsesApiRequest) -> Result<Value, GrokProjectionError>
+  pub(crate) fn build(&ResponsesApiRequest, &Provider) -> Result<Value, GrokProjectionError>
   GrokResponsesRequest                  Serialize only
   GrokInputItem                         #[serde(tag = "type")], exhaustive from ResponseItem
   GrokContentItem, GrokReasoningItem, GrokFunctionCallOutput
-  GrokTool                              function | custom | web_search | x_search
+  GrokTool                              function | custom | web_search | x_search { from_date?, to_date? }
   GrokWebSearchFilters                  allowed_domains?
   GrokProjectionError                   rejected item / tool, mapped to serde::ser::Error at the seam
 
@@ -500,7 +501,7 @@ native tests at both seams, and a Live Story when the ability is
 user-visible. The P0 x_search probe runs before any B2 work on x_search so
 the extension builds on a proven path.
 
-Landed by this commit: `test(grok): Live Story for web_search allowed_domains` proves stock `filters.allowed_domains` on the packaged artifact (`TestGrokHostedWebSearchAllowlist`). Native emit remains `feat(grok): emit web_search allowed_domains from stock filters`.
+Landed by this commit: `feat(grok): emit x_search from_date/to_date from Provider config` copies a validated Grok Provider `[model_providers.grok.x_search]` window onto the whitelist `x_search` tool (canonical tool JSON wins when present). Default remains bare `x_search`. Live is the next commit. The hosted `web_search` allowlist Live (`TestGrokHostedWebSearchAllowlist`) remains `test(grok): Live Story for web_search allowed_domains`; native emit remains `feat(grok): emit web_search allowed_domains from stock filters`.
 
 B1 and B2 are independent of each other and of Stage A's ordering; Stage A
 lands first because it is the surface both build on.

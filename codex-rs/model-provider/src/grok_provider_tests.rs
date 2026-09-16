@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_api::XSearchProviderConfig;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
@@ -95,6 +96,30 @@ async fn grok_api_provider_uses_grok_identity_when_selected_by_wire_api() {
         .await
         .expect("Grok wire_api should construct an API provider");
     assert_eq!(api_provider.name, "Grok");
+}
+
+#[tokio::test]
+async fn grok_api_provider_keeps_x_search_window_when_setting_identity() {
+    let mut info = provider_info("xAI");
+    info.wire_api = WireApi::GrokResponses;
+    info.x_search = Some(XSearchProviderConfig {
+        from_date: Some("2026-01-01".to_string()),
+        to_date: Some("2026-01-31".to_string()),
+    });
+    let provider = create_model_provider(info, /*auth_manager*/ None);
+
+    let api_provider = provider
+        .api_provider()
+        .await
+        .expect("Grok wire_api should construct an API provider");
+    assert_eq!(api_provider.name, "Grok");
+    assert_eq!(
+        api_provider.x_search,
+        Some(XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        })
+    );
 }
 
 #[tokio::test]
