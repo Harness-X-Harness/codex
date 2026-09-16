@@ -258,9 +258,9 @@ fn grok_ultra_resolves_to_xhigh_only_at_request_normalization() {
 }
 
 #[test]
-fn grok_is_provider_hosted_tool_call_accepts_completed_x_search_names() {
+fn grok_is_provider_hosted_tool_call_accepts_completed_custom_tool_calls() {
     let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
-    let cases: [(&str, Option<&str>); 7] = [
+    let cases: [(&str, Option<&str>); 8] = [
         ("x_keyword_search", Some("completed")),
         ("x_semantic_search", Some("completed")),
         ("x_user_search", Some("completed")),
@@ -268,6 +268,7 @@ fn grok_is_provider_hosted_tool_call_accepts_completed_x_search_names() {
         ("x_keyword_search", Some("in_progress")),
         ("x_semantic_search", None),
         ("apply_patch", Some("completed")),
+        ("x_new_subtool", Some("completed")),
     ];
     let decisions: Vec<(&str, Option<&str>, bool)> = cases
         .into_iter()
@@ -296,7 +297,8 @@ fn grok_is_provider_hosted_tool_call_accepts_completed_x_search_names() {
             ("x_thread_fetch", Some("completed"), true),
             ("x_keyword_search", Some("in_progress"), false),
             ("x_semantic_search", None, false),
-            ("apply_patch", Some("completed"), false),
+            ("apply_patch", Some("completed"), true),
+            ("x_new_subtool", Some("completed"), true),
         ]
     );
 }

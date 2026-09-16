@@ -1661,12 +1661,16 @@ pub async fn mount_compact_response_sequence(
     response_mock
 }
 
-fn is_provider_hosted_custom_tool_call(item: &Value) -> bool {
+fn is_provider_hosted_custom_tool_call(item: &Value, body: &Value) -> bool {
     item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-        && matches!(
-            item.get("name").and_then(Value::as_str),
-            Some("x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch")
-        )
+        && body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.get("type").and_then(Value::as_str) == Some("x_search"))
+            })
 }
 
 /// Validate invariants on the request body sent to `/v1/responses`.
@@ -1680,7 +1684,10 @@ fn is_provider_hosted_custom_tool_call(item: &Value) -> bool {
 /// - Every `tool_search_output` must match a prior `tool_search_call`.
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
 ///   `tool_search_call` in the `input` must have a matching output entry.
-///   Hosted x_search `custom_tool_call` names are exempt (no client output).
+///   Grok hosted `custom_tool_call` items are exempt (no client output).
+///   Detect Grok by `tools` containing `x_search` (Grok appends it whenever
+///   tools are non-empty). Do not skip ChatGPT `custom_tool_call` pairing:
+///   those items omit `status` too.
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
@@ -1761,7 +1768,7 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         .iter()
         .filter(|item| {
             item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
-                && !is_provider_hosted_custom_tool_call(item)
+                && !is_provider_hosted_custom_tool_call(item, &body)
         })
         .filter_map(get_call_id)
         .map(str::to_string)

@@ -326,7 +326,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 | hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Live (`TestGrokHostedWebSearch`): a real hosted Turn records `web_search_call`, every message delta reaches the client, and Turn 2 replays it |
 | `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Live (`TestGrokHostedWebSearchAllowlist`): shipped profile plus stock `[tools.web_search] allowed_domains` advertises the filter, a hosted search Turn completes, and Turn 2 replays `web_search_call` |
 | `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
-| hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks completed `custom_tool_call` named `x_keyword_search`, `x_semantic_search`, `x_user_search`, `x_thread_fetch` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
+| hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks any completed `custom_tool_call` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
 | `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | none | — | — | Not surfaced (B2) |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
 | image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
@@ -336,12 +336,10 @@ current status. `Implemented` means code and native Cargo tests exist;
 | hosted `code_interpreter` | `code_interpreter_call` replay | none | — | none; Codex has no response item, so it would land in `Other` | Not surfaced; not advertised, so never emitted by Grok |
 
 Ingress note: grok-build treats **every** `custom_tool_call` in a Grok
-response as a backend-executed call. Codex enumerates four names. If Grok
-adds an x_search sub-tool, the harness would dispatch it as a client tool
-and answer with an error output. Aligning to "any completed
-`custom_tool_call` on a Grok Thread is backend-executed" is a B2 candidate
-with a Live probe; client custom tools cannot collide because they are
-flattened to `function_call` for Grok.
+response as a backend-executed call. Codex now marks any completed
+`custom_tool_call` as hosted (`feat(grok): treat every completed
+custom_tool_call as hosted`). Client custom tools cannot collide because they
+are flattened to `function_call` for Grok (`projects_tools_as_flat_functions`).
 
 ### Open probes
 
@@ -418,7 +416,7 @@ B2, extend with Grok-native abilities:
 | `web_search.filters.allowed_domains` | emit (decided) | Live (`TestGrokHostedWebSearchAllowlist`) | `TestFactWebSearchAllowedDomains` (`accepted`) |
 | `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live | — |
 | `x_search` date window | which config seam carries `from_date` / `to_date`? | Grok Provider config, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live | `TestFactXSearchDateWindow` (`accepted`) |
-| any completed `custom_tool_call` is hosted | can `is_provider_hosted_tool_call` drop the name list? | widen the predicate; run the P0 Story and the custom `apply_patch` Story | — |
+| any completed `custom_tool_call` is hosted | hosted (decided) | this commit (`feat(grok): treat every completed custom_tool_call as hosted`); native test; Live remains existing `TestGrokHostedXSearch` and `TestGrokCustomApplyPatch` (post-merge line proof) | — |
 
 ## Module plan
 
@@ -533,9 +531,9 @@ before `grok/release.py publish`; a docs-only commit does not.
   `codex-rs/core/tests/suite/grok_reasoning_replay.rs`: keep asserting the
   outbound `/responses` body through the full core path.
 - `codex-rs/model-provider/src/grok_provider_tests.rs`: ingress recognition
-  (`is_provider_hosted_tool_call`) for every hosted name the capability
-  surface lists, plus incomplete status and an unknown name. Widen it
-  together with the B2 predicate change.
+  (`is_provider_hosted_tool_call`) for completed `custom_tool_call` of any
+  name, including an unknown completed name (`apply_patch` / `x_new_subtool`),
+  plus incomplete status (`in_progress`, `None`).
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
   encrypted-reasoning continuation, image-edit, custom `apply_patch`,
   hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`

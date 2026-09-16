@@ -395,8 +395,8 @@ impl ContextManager {
     /// Leaves provider-hosted tool calls unpaired.
     ///
     /// Hosted calls are complete without a client output. Pass the provider's
-    /// `is_provider_hosted_tool_call` so Grok x_search `custom_tool_call` items
-    /// stay in the prompt without a synthesized `aborted` output.
+    /// `is_provider_hosted_tool_call` so a completed Grok `custom_tool_call`
+    /// stays in the prompt without a synthesized `aborted` output.
     pub(crate) fn for_prompt_with_hosted_calls(
         self,
         input_modalities: &[InputModality],
