@@ -139,6 +139,9 @@ Normalize Provider wire responses into stock Codex response items as early as
 practical. Wire-level differences (tool declarations, tool-choice, hosted-tool
 fields, response-item shapes, streaming events) belong in the Provider/API
 boundary. The dialect is internal implementation state, not a second selector.
+The Grok request is constructed from a whitelist of verified fields, not
+derived by removing keys from the OpenAI request; the strategy and mapping
+live in [`request-whitelist.md`](./request-whitelist.md).
 
 ## Capabilities
 
