@@ -30,6 +30,7 @@ Triage by stage lives in [`../release.md`](../release.md) §Triage.
 | [Image generation and same-Thread history edit](./grok-image-generation-history-edit.md) | `TestGrokImageGenerationEdit` |
 | [Custom `apply_patch` file edit](./grok-custom-apply-patch.md) | `TestGrokCustomApplyPatch` |
 | [Hosted `web_search` Turn and replay](./grok-hosted-web-search-turn.md) | `TestGrokHostedWebSearch` |
+| [Hosted `web_search` domain allowlist](./grok-hosted-web-search-allowlist.md) | `TestGrokHostedWebSearchAllowlist` |
 | [Hosted `x_search` Turn and follow-up replay](./grok-hosted-x-search-turn.md) | `TestGrokHostedXSearch` |
 
 ## Deterministic App Server

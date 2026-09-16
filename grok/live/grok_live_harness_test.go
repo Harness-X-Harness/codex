@@ -374,9 +374,10 @@ type liveHarness struct {
 }
 
 type liveOptions struct {
-	probeTool            bool
-	disableShell         bool
-	acceptExecForSession bool
+	probeTool               bool
+	disableShell            bool
+	acceptExecForSession    bool
+	webSearchAllowedDomains []string
 }
 
 func skipUnlessGrokLive(t *testing.T) {
@@ -549,6 +550,9 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	}
 	if opts.disableShell {
 		config = ensureShellToolDisabled(config)
+	}
+	if len(opts.webSearchAllowedDomains) > 0 {
+		config = overlayWebSearchAllowedDomains(config, opts.webSearchAllowedDomains)
 	}
 	upstream := tableString(config, "model_providers.grok", "base_url")
 	if upstream == "" {

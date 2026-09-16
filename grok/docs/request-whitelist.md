@@ -297,7 +297,7 @@ values, maps each by `type`, and constructs Grok tool types.
 |-----------------|-----------|-------------------|
 | `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | omit `strict`: grok-build `strict: None`; `TestFactFunctionStrict` (`accepted`) is not consumed; this B1 probe. `defer_loading` is not constructed |
 | `custom { name, description, format }` | `custom` as-is | custom `apply_patch` Story |
-| `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; emit `filters.allowed_domains` from stock when present (max 5); omit `filters` when missing or empty. Restoring `excluded_domains` remains B2 later |
+| `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` | grok-build `to_tool_entry`; emit `filters.allowed_domains` from stock when present (max 5); omit `filters` when missing or empty. Live (`TestGrokHostedWebSearchAllowlist`). Restoring `excluded_domains` remains B2 later |
 | `x_search` | appended once when tools are non-empty | Grok capability rule, Live GREEN; grok-build emits it only when the hosted tool is requested and Codex has no `x_search` config |
 | `namespace`, `tool_search` | reject | flat projection already flattens namespaces; reaching the whitelist is a flat-projection regression |
 | any other `type` | reject | undecided tool surface |
@@ -324,7 +324,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 | Ability | grok-build shape | Codex entry | Egress | Ingress | Status |
 |---------|------------------|-------------|--------|---------|--------|
 | hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Live (`TestGrokHostedWebSearch`): a real hosted Turn records `web_search_call`, every message delta reaches the client, and Turn 2 replays it |
-| `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Implemented (native egress); Live Story still open |
+| `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Live (`TestGrokHostedWebSearchAllowlist`): shipped profile plus stock `[tools.web_search] allowed_domains` advertises the filter, a hosted search Turn completes, and Turn 2 replays `web_search_call` |
 | `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | none; stock config has no `excluded_domains` | — | — | Not surfaced; needs a config seam first (B2) |
 | hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks completed `custom_tool_call` named `x_keyword_search`, `x_semantic_search`, `x_user_search`, `x_thread_fetch` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
 | `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | none | — | — | Not surfaced (B2) |
@@ -394,10 +394,11 @@ What the recorded facts settle for the whitelist:
   `accepted` for `client_metadata` alone ≠ consumed; Codex-backend
   telemetry with no Grok function; grok-build does not send it). Remaining
   accepted-but-unconsumed note is `text.verbosity` (already omitted).
-- `web_search.filters.allowed_domains` is accepted and this B2 commit emits
-  it from the stock tool JSON (max 5). The `x_search` date window is
-  accepted, so B2 needs only the stock-compatible config seam, not a backend
-  probe.
+- `web_search.filters.allowed_domains` is accepted, native egress emits it
+  from the stock tool JSON (max 5), and Live
+  (`TestGrokHostedWebSearchAllowlist`) proves a filtered hosted search Turn
+  and replay. The `x_search` date window is accepted, so B2 needs only the
+  stock-compatible config seam, not a backend probe.
 
 B1, tighten toward grok-build:
 
@@ -414,7 +415,7 @@ B2, extend with Grok-native abilities:
 
 | Probe | Question | How to decide | Fact |
 |-------|----------|---------------|------|
-| `web_search.filters.allowed_domains` | emit (decided) | this commit (`feat(grok): emit web_search allowed_domains from stock filters`); Live with a filtered search is the next commit | `TestFactWebSearchAllowedDomains` (`accepted`) |
+| `web_search.filters.allowed_domains` | emit (decided) | Live (`TestGrokHostedWebSearchAllowlist`) | `TestFactWebSearchAllowedDomains` (`accepted`) |
 | `web_search.filters.excluded_domains` | which stock-compatible config seam carries a blocklist? | add the config field through the stock `web_search` config path, validate exclusivity and the cap of 5, then emit; Live | — |
 | `x_search` date window | which config seam carries `from_date` / `to_date`? | Grok Provider config, validated `YYYY-MM-DD`; emit on the `x_search` entry; Live | `TestFactXSearchDateWindow` (`accepted`) |
 | any completed `custom_tool_call` is hosted | can `is_provider_hosted_tool_call` drop the name list? | widen the predicate; run the P0 Story and the custom `apply_patch` Story | — |
@@ -501,7 +502,7 @@ native tests at both seams, and a Live Story when the ability is
 user-visible. The P0 x_search probe runs before any B2 work on x_search so
 the extension builds on a proven path.
 
-Landed by this commit: `feat(grok): emit web_search allowed_domains from stock filters` emits `filters.allowed_domains` from the stock `web_search` tool JSON (max 5).
+Landed by this commit: `test(grok): Live Story for web_search allowed_domains` proves stock `filters.allowed_domains` on the packaged artifact (`TestGrokHostedWebSearchAllowlist`). Native emit remains `feat(grok): emit web_search allowed_domains from stock filters`.
 
 B1 and B2 are independent of each other and of Stage A's ordering; Stage A
 lands first because it is the surface both build on.
@@ -536,10 +537,12 @@ before `grok/release.py publish`; a docs-only commit does not.
   surface lists, plus incomplete status and an unknown name. Widen it
   together with the B2 predicate change.
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
-  encrypted-reasoning continuation, image-edit, custom `apply_patch`, and
-  hosted `web_search` (`TestGrokHostedWebSearch`) and hosted `x_search`
+  encrypted-reasoning continuation, image-edit, custom `apply_patch`,
+  hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`
+  allowlist (`TestGrokHostedWebSearchAllowlist`), and hosted `x_search`
   (`TestGrokHostedXSearch`) Stories exercise the reasoning, hosted-replay,
-  custom-tool, `WebSearchCall`, and Grok-native x_search rows above.
+  custom-tool, `WebSearchCall`, allowlist filter, and Grok-native x_search
+  rows above.
 - Facts live in `grok/facts`, run by `grok-facts.yml` on dispatch or locally,
   and are not proof inputs.
 
