@@ -75,6 +75,11 @@ After a proof run is GREEN, from a checkout of the branch head:
 python3 grok/release.py publish --run-id RUN --repo OWNER/NAME
 ```
 
+An agent runs `python3 grok/release.py check --run-id RUN --repo OWNER/NAME`
+before asking for publish. `check` applies the same proof gate without
+downloading artifacts or writing `grok-v*` and prints
+`publishable grok-vX.Y.Z from SHA at HEAD` or the refusal.
+
 The publisher refuses unless the run is a successful `grok` push, Live
 succeeded, each `TARGETS` artifact is present, the checkout HEAD is the
 branch head, and that head is the run SHA or descends from it through

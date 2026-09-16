@@ -373,6 +373,14 @@ def publish(repo: str, run_id: str, checkout: Path) -> None:
     print(f"published grok-v{version} at {sha}")
 
 
+def check(repo: str, run_id: str, checkout: Path) -> None:
+    _branch, version, sha = _require_proof(repo, run_id, checkout)
+    head = subprocess.check_output(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    print(f"publishable grok-v{version} from {sha} at {head}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -381,8 +389,16 @@ def main() -> None:
     pub.add_argument("--run-id", required=True)
     pub.add_argument("--repo", required=True)
 
+    chk = sub.add_parser("check")
+    chk.add_argument("--run-id", required=True)
+    chk.add_argument("--repo", required=True)
+
     args = parser.parse_args()
-    publish(args.repo, args.run_id, Path(__file__).resolve().parent.parent)
+    checkout = Path(__file__).resolve().parent.parent
+    if args.cmd == "publish":
+        publish(args.repo, args.run_id, checkout)
+    else:
+        check(args.repo, args.run_id, checkout)
 
 
 if __name__ == "__main__":
