@@ -3,8 +3,24 @@ name: grok-facts
 # Facts are recorded observations of the xAI Responses API, independent of the
 # shipped Codex binary. A RED result here revises a request-whitelist.md row
 # and its evidence; it never gates grok.yml or release.py publish.
+#
+# Runs when the Facts suite itself changes (so a recorded class is checked
+# against the endpoint before it lands) and on demand. The workflow file is not
+# on the default branch, so `workflow_dispatch` must address it by id:
+#   gh workflow run <id> --ref grok/rust-v0.154.0
+#   gh api repos/<owner>/<repo>/actions/workflows --jq '.workflows[] | select(.path | endswith("grok-facts.yml")) | .id'
 
 on:
+  pull_request:
+    paths:
+      - 'grok/facts/**'
+      - '.github/workflows/grok-facts.yml'
+  push:
+    branches:
+      - 'grok/rust-v*'
+    paths:
+      - 'grok/facts/**'
+      - '.github/workflows/grok-facts.yml'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +38,11 @@ jobs:
         with:
           go-version-file: grok/facts/go.mod
           cache: false
+      - name: Facts unit tests
+        working-directory: grok/facts
+        env:
+          GOWORK: "off"
+        run: go vet ./... && go test ./... -count=1
       - name: Run Grok Facts
         working-directory: grok/facts
         env:
