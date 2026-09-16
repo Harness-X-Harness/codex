@@ -7,6 +7,7 @@ use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::cache::ModelsCacheEntry;
 use codex_models_manager::cache::ModelsCacheError;
 use codex_models_manager::cache::ModelsCacheFuture;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -253,5 +254,49 @@ fn grok_ultra_resolves_to_xhigh_only_at_request_normalization() {
         model.resolve_reasoning_effort(ReasoningEffort::Ultra),
         ReasoningEffort::XHigh,
         "stock 0.154 request normalization projects logical Ultra to Grok xhigh"
+    );
+}
+
+#[test]
+fn grok_is_provider_hosted_tool_call_accepts_completed_x_search_names() {
+    let provider = create_model_provider(provider_info("Grok"), /*auth_manager*/ None);
+    let cases: [(&str, Option<&str>); 7] = [
+        ("x_keyword_search", Some("completed")),
+        ("x_semantic_search", Some("completed")),
+        ("x_user_search", Some("completed")),
+        ("x_thread_fetch", Some("completed")),
+        ("x_keyword_search", Some("in_progress")),
+        ("x_semantic_search", None),
+        ("apply_patch", Some("completed")),
+    ];
+    let decisions: Vec<(&str, Option<&str>, bool)> = cases
+        .into_iter()
+        .map(|(name, status)| {
+            (
+                name,
+                status,
+                provider.is_provider_hosted_tool_call(&ResponseItem::CustomToolCall {
+                    id: None,
+                    status: status.map(str::to_string),
+                    call_id: "call".to_string(),
+                    name: name.to_string(),
+                    namespace: None,
+                    input: String::new(),
+                    internal_chat_message_metadata_passthrough: None,
+                }),
+            )
+        })
+        .collect();
+    assert_eq!(
+        decisions,
+        vec![
+            ("x_keyword_search", Some("completed"), true),
+            ("x_semantic_search", Some("completed"), true),
+            ("x_user_search", Some("completed"), true),
+            ("x_thread_fetch", Some("completed"), true),
+            ("x_keyword_search", Some("in_progress"), false),
+            ("x_semantic_search", None, false),
+            ("apply_patch", Some("completed"), false),
+        ]
     );
 }
