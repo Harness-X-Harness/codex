@@ -60,7 +60,16 @@ Three layers share this work. Each has one responsibility.
 |-------|----------------|-------|
 | Capability | **Hide.** Decide what the harness plans for a Grok Thread, so unsupported OpenAI features are never produced | Grok catalog `ModelInfo` flags, `ProviderCapabilities`, `ModelProviderInfo`, stock `is_openai` gates |
 | Egress whitelist | **Transform and extend.** Construct the Grok request from what the harness produced; emit Grok-native fields | `ResponsesDialect::project_request` |
-| Ingress dialect | **Recognize.** Decode Grok wire items into stock response items; mark backend-executed calls so the harness does not dispatch them | `sse/responses.rs`, `ModelProvider::is_provider_hosted_tool_call` |
+| Ingress dialect | **Recognize.** Decode Grok wire items into stock response items; mark backend-executed calls so the harness does not dispatch them | `sse/responses.rs`, `grok_stream.rs`, `ModelProvider::is_provider_hosted_tool_call` |
+
+### Ingress
+
+Streaming-event differences are sequenced at this layer before stock
+`process_responses_event`. Stock OpenAI is the identity path.
+
+| Difference | Grok wire | Adaptation | Tests |
+|------------|-----------|------------|-------|
+| Stream order | Grok interleaves output items (message stays open across hosted calls); stock consumes one active item | `grok_stream.rs` sequences frames by `output_index`; stock OpenAI is identity | `grok_stream_tests.rs`, `grok_hosted_stream.rs`, `sse/responses.rs` OpenAI identity |
 
 A rejection at egress is the guard for the capability layer, not its
 implementation. When the whitelist rejects an item, the fix is normally a
@@ -497,6 +506,10 @@ before `grok/release.py publish`; a docs-only commit does not.
   `ResponseItem` variant and tool type that must build without an
   OpenAI-only key, rejections,
   and the stock OpenAI identity control (`stock_openai_projection_remains_identity`).
+- `codex-rs/codex-api/src/grok_stream_tests.rs` and
+  `codex-rs/core/tests/suite/grok_hosted_stream.rs`: Grok interleaved
+  output streams are sequenced by `output_index` at ingress; stock OpenAI
+  remains identity in `sse/responses.rs`.
 - `codex-rs/core/tests/suite/grok_web_search.rs` and
   `codex-rs/core/tests/suite/grok_reasoning_replay.rs`: keep asserting the
   outbound `/responses` body through the full core path.
