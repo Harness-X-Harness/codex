@@ -173,8 +173,6 @@ enum GrokTool {
         description: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         parameters: Option<Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        strict: Option<bool>,
     },
     Custom {
         name: String,
@@ -489,7 +487,6 @@ fn project_function_tool(tool: &Value) -> GrokTool {
         name: json_string(tool, "name").unwrap_or_default(),
         description: json_string(tool, "description"),
         parameters: json_value(tool, "parameters"),
-        strict: tool.get("strict").and_then(Value::as_bool),
     }
 }
 
