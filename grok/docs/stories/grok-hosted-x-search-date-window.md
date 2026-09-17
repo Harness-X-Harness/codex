@@ -33,7 +33,8 @@ Story and does not complete an `excluded_domains` Story.
 App Server Turn that cannot be answered from memory and names X search, then
 one follow-up Turn on the same Thread, **then**:
 
-- Turn 1 reaches terminal `completed` with an agent message;
+- Turn 1 reaches terminal `completed` with an agent message (windowed
+  search may issue several hosted sub-tools; the Live deadline is 5 minutes);
 - every agent message that streamed a delta streamed all of its text: the
   `item/agentMessage/delta` notifications concatenate to the completed item's
   text (Grok keeps the message open across the hosted call and resumes it; no
@@ -46,8 +47,8 @@ one follow-up Turn on the same Thread, **then**:
 - no client-side dispatch (`dynamic_tool_call`, error
   `custom_tool_call_output` / `function_call_output`) explains that call;
 - Turn 2 on the same Thread reaches terminal `completed`;
-- the last `/responses` request replays that `custom_tool_call` and Grok
-  accepts it (2xx); and
+- the last `/responses` request replays a hosted `custom_tool_call` from
+  that Turn (one of the four x_search names) and Grok accepts it (2xx); and
 - the runner submits each semantic Turn once. A Turn that completes without a
   hosted X search is a failed invocation, not a retry.
 
@@ -68,7 +69,7 @@ one follow-up Turn on the same Thread, **then**:
 - `follow_up_turn_completed`: Turn 2 does not reach terminal `completed` on
   the same Thread.
 - `hosted_call_replayed_accepted`: the last `/responses` request does not
-  replay that `custom_tool_call`, or Grok rejects it (non-2xx).
+  replay a hosted `custom_tool_call` from Turn 1, or Grok rejects it (non-2xx).
 
 ## Material failure boundaries
 

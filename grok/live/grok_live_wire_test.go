@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -39,7 +40,7 @@ type wireExchange struct {
 
 type wireRecorder struct {
 	mu              sync.Mutex
-	exchanges       []wireExchange
+	exchanges       []*wireExchange
 	ringSize        int
 	requestBodyCap  int
 	responseBodyCap int
@@ -72,10 +73,8 @@ func startWireProxy(t *testing.T, upstreamRaw string) (*httptest.Server, *wireRe
 		// ModifyResponse never runs when the upstream is unreachable; record the
 		// transport failure as the exchange's status so RED output does not show 0.
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
-			if ex, _ := req.Context().Value(wireExchangeContextKey{}).(*wireExchange); ex != nil {
-				ex.status = http.StatusBadGateway
-				ex.responseBody = []byte("wire proxy: " + err.Error())
-			}
+			ex, _ := req.Context().Value(wireExchangeContextKey{}).(*wireExchange)
+			rec.updateExchange(ex, http.StatusBadGateway, []byte("wire proxy: "+err.Error()))
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	}
@@ -96,8 +95,8 @@ func startWireProxy(t *testing.T, upstreamRaw string) (*httptest.Server, *wireRe
 func (r *wireRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ex := r.captureRequest(req)
 	req = req.WithContext(context.WithValue(req.Context(), wireExchangeContextKey{}, ex))
+	r.add(ex)
 	r.proxy.ServeHTTP(w, req)
-	r.add(*ex)
 }
 
 func (r *wireRecorder) captureRequest(req *http.Request) *wireExchange {
@@ -137,10 +136,8 @@ func (r *wireRecorder) captureRequest(req *http.Request) *wireExchange {
 
 func (r *wireRecorder) modifyResponse(resp *http.Response) error {
 	ex, _ := resp.Request.Context().Value(wireExchangeContextKey{}).(*wireExchange)
-	if ex != nil {
-		ex.status = resp.StatusCode
-	}
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		r.updateExchange(ex, resp.StatusCode, nil)
 		return nil
 	}
 	capn := r.responseBodyCap
@@ -148,6 +145,7 @@ func (r *wireRecorder) modifyResponse(resp *http.Response) error {
 		capn = wireResponseBodyCap
 	}
 	if resp.Body == nil {
+		r.updateExchange(ex, resp.StatusCode, nil)
 		return nil
 	}
 	body, _, err := readCapped(resp.Body, capn)
@@ -159,13 +157,14 @@ func (r *wireRecorder) modifyResponse(resp *http.Response) error {
 	resp.ContentLength = int64(len(body))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	resp.TransferEncoding = nil
-	if ex != nil {
-		ex.responseBody = body
-	}
+	r.updateExchange(ex, resp.StatusCode, body)
 	return nil
 }
 
-func (r *wireRecorder) add(ex wireExchange) {
+func (r *wireRecorder) add(ex *wireExchange) {
+	if ex == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	size := r.ringSize
@@ -175,9 +174,21 @@ func (r *wireRecorder) add(ex wireExchange) {
 	r.exchanges = append(r.exchanges, ex)
 	if len(r.exchanges) > size {
 		keep := r.exchanges[len(r.exchanges)-size:]
-		next := make([]wireExchange, len(keep))
+		next := make([]*wireExchange, len(keep))
 		copy(next, keep)
 		r.exchanges = next
+	}
+}
+
+func (r *wireRecorder) updateExchange(ex *wireExchange, status int, body []byte) {
+	if ex == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ex.status = status
+	if body != nil {
+		ex.responseBody = body
 	}
 }
 
@@ -188,7 +199,11 @@ func (r *wireRecorder) snapshot() []wireExchange {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]wireExchange, len(r.exchanges))
-	copy(out, r.exchanges)
+	for i, ex := range r.exchanges {
+		if ex != nil {
+			out[i] = *ex
+		}
+	}
 	return out
 }
 
@@ -363,13 +378,13 @@ func TestShapeExtractsKeyPathTypes(t *testing.T) {
 
 func TestWriteWireSelectsNon2xxAndNumbers(t *testing.T) {
 	rec := newWireRecorder()
-	rec.add(wireExchange{method: "POST", path: "/ok", status: 200, requestBody: []byte(`{"ok":true}`), responseBody: []byte("STREAM")})
-	rec.add(wireExchange{
+	rec.add(&wireExchange{method: "POST", path: "/ok", status: 200, requestBody: []byte(`{"ok":true}`), responseBody: []byte("STREAM")})
+	rec.add(&wireExchange{
 		method: "POST", path: "/v1/responses", status: 400,
 		requestBody:  []byte(`{"tools":[{"external_web_access":true}]}`),
 		responseBody: []byte("Argument not supported: external_web_access"),
 	})
-	rec.add(wireExchange{method: "GET", path: "/b", status: 500, requestBody: []byte(`{"n":1}`), responseBody: []byte("nope")})
+	rec.add(&wireExchange{method: "GET", path: "/b", status: 500, requestBody: []byte(`{"n":1}`), responseBody: []byte("nope")})
 	dir := filepath.Join(t.TempDir(), "wire")
 	if err := writeWireDir(dir, rec.non2xx(), nil, false); err != nil {
 		t.Fatal(err)
@@ -423,7 +438,7 @@ func TestWriteWireSelectsNon2xxAndNumbers(t *testing.T) {
 func TestWireRecorderRingKeepsLastEight(t *testing.T) {
 	rec := newWireRecorder()
 	for i := 1; i <= 9; i++ {
-		rec.add(wireExchange{status: 200 + i, path: fmt.Sprintf("/%d", i)})
+		rec.add(&wireExchange{status: 200 + i, path: fmt.Sprintf("/%d", i)})
 	}
 	got := rec.snapshot()
 	want := make([]wireExchange, 8)
@@ -432,6 +447,56 @@ func TestWireRecorderRingKeepsLastEight(t *testing.T) {
 	}
 	if fmt.Sprintf("%v", got) != fmt.Sprintf("%v", want) {
 		t.Fatalf("ring = %#v, want %#v", got, want)
+	}
+}
+
+func TestWireRecorderSnapshotIncludesInFlightExchange(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(upstream.Close)
+	server, rec, _ := startWireProxy(t, upstream.URL)
+	t.Cleanup(server.Close)
+
+	done := make(chan error, 1)
+	go func() {
+		resp, err := http.Post(server.URL+"/v1/responses", "application/json", bytes.NewReader([]byte(`{"tools":[{"type":"x_search","from_date":"2026-08-01"}]}`)))
+		if err != nil {
+			done <- err
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		done <- nil
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream did not see the proxied request")
+	}
+	got := rec.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("in-flight exchanges = %d, want 1", len(got))
+	}
+	if got[0].status != 0 {
+		t.Fatalf("in-flight status = %d, want 0", got[0].status)
+	}
+	if !bytes.Contains(got[0].requestBody, []byte(`"x_search"`)) {
+		t.Fatalf("in-flight body missing x_search: %q", got[0].requestBody)
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxied request did not finish")
 	}
 }
 

@@ -156,6 +156,14 @@ func TestSecretRedactorRemovesConfigEnvAndHeaderCredentials(t *testing.T) {
 	}
 }
 
+func TestSecretRedactorLeavesUnquotedBooleans(t *testing.T) {
+	redactor := newSecretRedactor([]byte("requires_openai_auth = false\nsupports_websockets = false\nenv_key = \"GROK_API_KEY\"\n"))
+	got := redactor.redact("present=false advertises=true")
+	if got != "present=false advertises=true" {
+		t.Fatalf("boolean diagnostic facts were redacted: %s", got)
+	}
+}
+
 func TestSensitiveNameIsNarrowlyCredentialOriented(t *testing.T) {
 	for _, name := range []string{"GROK_API_KEY", "AUTH_TOKEN", "client_secret", "PASSWORD", "credential_file"} {
 		if !sensitiveName(name) {
@@ -277,7 +285,7 @@ func TestPreserveFailedSessionsSkipsPassingTests(t *testing.T) {
 	dest := t.TempDir()
 	t.Setenv(grokLiveFailedSessionsEnv, dest)
 	rec := newWireRecorder()
-	rec.add(wireExchange{
+	rec.add(&wireExchange{
 		method: "POST", path: "/v1/responses", status: 400,
 		requestBody: []byte(`{"tools":[{"external_web_access":true}]}`), responseBody: []byte("rejected"),
 	})

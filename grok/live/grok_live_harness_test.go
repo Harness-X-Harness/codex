@@ -295,6 +295,9 @@ func newSecretRedactor(config []byte) *secretRedactor {
 		if len(value) < 4 {
 			return
 		}
+		if strings.EqualFold(value, "true") || strings.EqualFold(value, "false") {
+			return
+		}
 		seen[value] = struct{}{}
 	}
 	for _, entry := range os.Environ() {
@@ -879,6 +882,9 @@ func (h *liveHarness) writeWireDiagnostics(b *strings.Builder) {
 	}
 	exchanges := h.recorder.snapshot()
 	fmt.Fprintf(b, "wire_exchanges=%d\n", len(exchanges))
+	if last := lastResponsesExchange(exchanges); last != nil {
+		fmt.Fprintf(b, "last_responses status=%d path=%s input=%s\n", last.status, last.path, inputItemSummary(last.requestBody))
+	}
 	var latest *wireExchange
 	for i := range exchanges {
 		ex := &exchanges[i]

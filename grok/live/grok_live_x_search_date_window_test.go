@@ -27,8 +27,8 @@ func TestGrokHostedXSearchDateWindow(t *testing.T) {
 	h.requireGrokCatalog(ctx)
 
 	first := h.runTurn(ctx, startTurnOpts{
-		prompt:        "Use X search to find the most recent post from the @xai account on X and reply with its date and the first sentence. Do not answer from memory and do not use a shell.",
-		deadline:      3 * time.Minute,
+		prompt:        "Use X search once to find one recent post from the @xai account on X. Reply with its date and the first sentence. Do not run extra searches, do not use web search, do not answer from memory, and do not use a shell.",
+		deadline:      5 * time.Minute,
 		approvalNever: true,
 		disableShell:  true,
 	})
@@ -72,13 +72,21 @@ func TestGrokHostedXSearchDateWindow(t *testing.T) {
 	}
 
 	ex := lastResponsesExchange(h.recorder.snapshot())
-	replayed := ex != nil && requestReplaysHostedCustomToolCall(ex.requestBody, hosted.Name)
+	replayed := false
+	if ex != nil {
+		for _, name := range hostedNames(scan) {
+			if requestReplaysHostedCustomToolCall(ex.requestBody, name) {
+				replayed = true
+				break
+			}
+		}
+	}
 	if ex == nil || ex.status < 200 || ex.status > 299 || !replayed {
 		status := 0
 		if ex != nil {
 			status = ex.status
 		}
-		h.failStage("hosted_call_replayed_accepted", fmt.Sprintf("last /responses present=%t status=%d replayed_hosted_custom_tool_call=%t, expected 2xx with type custom_tool_call name %s", ex != nil, status, replayed, hosted.Name))
+		h.failStage("hosted_call_replayed_accepted", fmt.Sprintf("last /responses present=%t status=%d replayed_hosted_custom_tool_call=%t names=%v, expected 2xx with a replayed custom_tool_call in %v", ex != nil, status, replayed, hostedNames(scan), hostedXSearchNames))
 	}
 }
 
