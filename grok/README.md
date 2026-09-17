@@ -8,6 +8,7 @@ Current human-readable authorities:
 - [Architecture](./docs/architecture.md) — Grok Provider and host boundary
 - [Release](./docs/release.md) — moving-channel delivery contract
 - [Carry-forward](./docs/carry-forward.md) — adopting a new stock Codex tag
+- [Request whitelist](./docs/request-whitelist.md) — Grok Responses emit / omit / reject map and recorded Facts
 - [Stories](./docs/stories/) — user-visible Grok claims and their Rust/Go proof
 - [Install](./dist/INSTALL.md) — packaged `grok` command and `~/.grok` home
 
