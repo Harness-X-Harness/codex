@@ -154,6 +154,30 @@ func lastResponsesExchange(exchanges []wireExchange) *wireExchange {
 	return last
 }
 
+func inputItemSummary(body []byte) string {
+	var parsed struct {
+		Input []struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		} `json:"input"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return "unparsed"
+	}
+	parts := make([]string, 0, len(parsed.Input))
+	for _, item := range parsed.Input {
+		if item.Name != "" {
+			parts = append(parts, item.Type+":"+item.Name)
+			continue
+		}
+		parts = append(parts, item.Type)
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ",")
+}
+
 func firstInputItemByType(body []byte, typ string) map[string]any {
 	var parsed struct {
 		Input []json.RawMessage `json:"input"`
@@ -243,5 +267,18 @@ func TestLastResponsesWebSearchCallKeyPresence(t *testing.T) {
 	call := firstInputItemByType(last.requestBody, "web_search_call")
 	if got := hostedCallKeyPresence(call); got != "id present, action present, status absent" {
 		t.Fatalf("keys = %q", got)
+	}
+}
+
+func TestInputItemSummaryNamesCustomToolCalls(t *testing.T) {
+	got := inputItemSummary([]byte(`{"input":[{"type":"message"},{"type":"custom_tool_call","name":"x_keyword_search"},{"type":"web_search_call"}]}`))
+	if got != "message,custom_tool_call:x_keyword_search,web_search_call" {
+		t.Fatalf("summary = %q", got)
+	}
+	if inputItemSummary([]byte(`{"tools":[]}`)) != "none" {
+		t.Fatal("empty input must summarize as none")
+	}
+	if inputItemSummary([]byte(`{`)) != "unparsed" {
+		t.Fatal("invalid JSON must summarize as unparsed")
 	}
 }
