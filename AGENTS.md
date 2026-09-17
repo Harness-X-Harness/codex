@@ -334,14 +334,7 @@ Story binds under `codex-rs`, read the authorities directly. Do not stop at
 - `grok/docs/request-whitelist.md` — design record for Grok Responses egress
 
 Those files are the Grok authorities. Do not add another Grok instruction file.
-
-### Rules while changing the line
-
-- One semantic commit per fix, `type(grok): summary`; the body names the seam and the evidence.
-- Stock owns the harness. No `if grok` in `spec_plan.rs`, `hosted_spec.rs`, `client.rs`, protocol, rollout, or App Server. Grok differences are projected once at the Provider boundary (`codex-api` request dialect and response decoding, the bundled Provider catalog).
-- No history rewrite. Durable items are replayed as recorded; egress projects them at request time.
-- A Grok-native ability is emitted only through a stock-compatible entry (config or Provider seam). A Grok rejection is answered with a whitelist row or a capability flag, never by deleting keys from serialized JSON.
-- A change to a seam shared with stock carries a stock regression test at the same boundary.
+Follow them instead of copying their rules here.
 
 ### Proof you can run
 
