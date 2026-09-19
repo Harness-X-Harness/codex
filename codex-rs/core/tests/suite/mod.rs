@@ -71,6 +71,7 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
+mod grok_hosted_stream;
 mod grok_reasoning_replay;
 mod grok_web_search;
 mod guardian_authorization;

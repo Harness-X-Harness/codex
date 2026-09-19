@@ -3,6 +3,8 @@ use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
+use crate::grok_stream::GrokOutputSequencer;
+use crate::provider::ResponsesDialect;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
@@ -33,11 +35,12 @@ const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
-pub fn spawn_response_stream(
+pub(crate) fn spawn_response_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    dialect: ResponsesDialect,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -91,6 +94,7 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             safety_buffering_treatment,
+            dialect,
         )
         .await;
     });
@@ -179,6 +183,8 @@ pub struct ResponsesStreamEvent {
     text: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    #[serde(default)]
+    pub(crate) output_index: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_present_value")]
     safety_buffering: Option<Value>,
 }
@@ -561,6 +567,7 @@ pub async fn process_sse(
         idle_timeout,
         telemetry,
         SafetyBufferingTreatment::default(),
+        ResponsesDialect::OpenAi,
     )
     .await;
 }
@@ -571,10 +578,15 @@ async fn process_sse_with_treatment(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    dialect: ResponsesDialect,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut sequencer = match dialect {
+        ResponsesDialect::Grok => Some(GrokOutputSequencer::default()),
+        ResponsesDialect::OpenAi => None,
+    };
 
     loop {
         let start = Instant::now();
@@ -623,62 +635,68 @@ async fn process_sse_with_treatment(
                 continue;
             }
         };
-        let model_verifications = event.model_verifications();
-        let turn_moderation_metadata = event.turn_moderation_metadata();
-        let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
+        let ready = match sequencer.as_mut() {
+            Some(sequencer) => sequencer.push(event),
+            None => vec![event],
+        };
+        for event in ready {
+            let model_verifications = event.model_verifications();
+            let turn_moderation_metadata = event.turn_moderation_metadata();
+            let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
 
-        if let Some(model) = event.response_model()
-            && last_server_model.as_deref() != Some(model.as_str())
-        {
-            if tx_event
-                .send(Ok(ResponseEvent::ServerModel(model.clone())))
-                .await
-                .is_err()
+            if let Some(model) = event.response_model()
+                && last_server_model.as_deref() != Some(model.as_str())
+            {
+                if tx_event
+                    .send(Ok(ResponseEvent::ServerModel(model.clone())))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                last_server_model = Some(model);
+            }
+            if let Some(verifications) = model_verifications
+                && tx_event
+                    .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                    .await
+                    .is_err()
             {
                 return;
             }
-            last_server_model = Some(model);
-        }
-        if let Some(verifications) = model_verifications
-            && tx_event
-                .send(Ok(ResponseEvent::ModelVerifications(verifications)))
-                .await
-                .is_err()
-        {
-            return;
-        }
-        if let Some(metadata) = turn_moderation_metadata
-            && tx_event
-                .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
-                .await
-                .is_err()
-        {
-            return;
-        }
-        if let Some(buffering) = safety_buffering
-            && tx_event
-                .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
-                .await
-                .is_err()
-        {
-            return;
-        }
+            if let Some(metadata) = turn_moderation_metadata
+                && tx_event
+                    .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
+                    .await
+                    .is_err()
+            {
+                return;
+            }
+            if let Some(buffering) = safety_buffering
+                && tx_event
+                    .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
+                    .await
+                    .is_err()
+            {
+                return;
+            }
 
-        match process_responses_event(event) {
-            Ok(Some(event)) => {
-                let is_completed = matches!(event, ResponseEvent::Completed { .. });
-                if tx_event.send(Ok(event)).await.is_err() {
-                    return;
+            match process_responses_event(event) {
+                Ok(Some(event)) => {
+                    let is_completed = matches!(event, ResponseEvent::Completed { .. });
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                    if is_completed {
+                        return;
+                    }
                 }
-                if is_completed {
-                    return;
+                Ok(None) => {}
+                Err(error) => {
+                    response_error = Some(error.into_api_error());
                 }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                response_error = Some(error.into_api_error());
-            }
-        };
+            };
+        }
     }
 }
 
@@ -792,6 +810,13 @@ mod tests {
     }
 
     async fn run_sse(events: Vec<serde_json::Value>) -> Vec<ResponseEvent> {
+        run_sse_with_dialect(events, ResponsesDialect::OpenAi).await
+    }
+
+    async fn run_sse_with_dialect(
+        events: Vec<serde_json::Value>,
+        dialect: ResponsesDialect,
+    ) -> Vec<ResponseEvent> {
         let mut body = String::new();
         for e in events {
             let kind = e
@@ -805,14 +830,16 @@ mod tests {
             }
         }
 
-        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(64);
         let stream = ReaderStream::new(std::io::Cursor::new(body))
             .map_err(|err| TransportError::Network(err.to_string()));
-        tokio::spawn(process_sse(
+        tokio::spawn(process_sse_with_treatment(
             Box::pin(stream),
             tx,
             idle_timeout(),
             /*telemetry*/ None,
+            SafetyBufferingTreatment::default(),
+            dialect,
         ));
 
         let mut out = Vec::new();
@@ -1512,6 +1539,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ResponsesDialect::OpenAi,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1552,6 +1580,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ResponsesDialect::OpenAi,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {
@@ -2062,4 +2091,180 @@ mod tests {
     }
 
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum BoundaryKind {
+        Created,
+        Added(&'static str),
+        Done(&'static str),
+        Delta,
+        Completed,
+    }
+
+    fn response_item_type(item: &ResponseItem) -> &'static str {
+        match item {
+            ResponseItem::Reasoning { .. } => "reasoning",
+            ResponseItem::Message { .. } => "message",
+            ResponseItem::WebSearchCall { .. } => "web_search_call",
+            other => panic!("unexpected item in fixture: {other:?}"),
+        }
+    }
+
+    fn boundary_kind(event: &ResponseEvent) -> BoundaryKind {
+        match event {
+            ResponseEvent::Created { .. } => BoundaryKind::Created,
+            ResponseEvent::OutputItemAdded(item) => BoundaryKind::Added(response_item_type(item)),
+            ResponseEvent::OutputItemDone(item) => BoundaryKind::Done(response_item_type(item)),
+            ResponseEvent::OutputTextDelta(_) => BoundaryKind::Delta,
+            ResponseEvent::Completed { .. } => BoundaryKind::Completed,
+            other => panic!("unexpected event in fixture: {other:?}"),
+        }
+    }
+
+    fn item_event(kind: &str, index: u64, item: serde_json::Value) -> serde_json::Value {
+        json!({"type": kind, "output_index": index, "item": item})
+    }
+
+    fn text_delta(delta: &str) -> serde_json::Value {
+        json!({"type": "response.output_text.delta", "output_index": 1, "delta": delta})
+    }
+
+    fn reasoning_item(id: &str, blob: Option<&str>) -> serde_json::Value {
+        match blob {
+            Some(blob) => {
+                json!({"type": "reasoning", "id": id, "summary": [], "encrypted_content": blob})
+            }
+            None => json!({"type": "reasoning", "id": id, "summary": []}),
+        }
+    }
+
+    fn message_item(content: serde_json::Value) -> serde_json::Value {
+        json!({"type": "message", "id": "msg_1", "role": "assistant", "content": content})
+    }
+
+    fn web_search_item(id: &str, action: serde_json::Value) -> serde_json::Value {
+        json!({"type": "web_search_call", "id": id, "status": "completed", "action": action})
+    }
+
+    fn interleaved_hosted_sse_events() -> Vec<serde_json::Value> {
+        let added = "response.output_item.added";
+        let done = "response.output_item.done";
+        vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            item_event(added, 0, reasoning_item("rs_1", None)),
+            item_event(done, 0, reasoning_item("rs_1", Some("enc-0"))),
+            item_event(added, 1, message_item(json!([]))),
+            text_delta("A"),
+            text_delta("B"),
+            item_event(
+                added,
+                2,
+                web_search_item(
+                    "ws_1-0",
+                    json!({"type": "search", "query": "q", "sources": []}),
+                ),
+            ),
+            item_event(
+                done,
+                2,
+                web_search_item("ws_1-0", json!({"type": "search", "query": "q"})),
+            ),
+            item_event(
+                added,
+                3,
+                web_search_item(
+                    "ws_1-1",
+                    json!({"type": "open_page", "url": "https://example.com/"}),
+                ),
+            ),
+            item_event(
+                done,
+                3,
+                web_search_item(
+                    "ws_1-1",
+                    json!({"type": "open_page", "url": "https://example.com/"}),
+                ),
+            ),
+            item_event(added, 4, reasoning_item("tco_1-0", Some("enc-tco-0"))),
+            item_event(done, 4, reasoning_item("tco_1-0", Some("enc-tco-0"))),
+            item_event(added, 5, reasoning_item("tco_1-1", Some("enc-tco-1"))),
+            item_event(done, 5, reasoning_item("tco_1-1", Some("enc-tco-1"))),
+            item_event(added, 6, reasoning_item("rs_1", None)),
+            item_event(done, 6, reasoning_item("rs_1", Some("enc-6"))),
+            text_delta("C"),
+            text_delta("D"),
+            item_event(
+                done,
+                1,
+                message_item(json!([{"type": "output_text", "text": "ABCD"}])),
+            ),
+            json!({"type": "response.completed", "response": {"id": "resp-1"}}),
+        ]
+    }
+
+    fn hosted_item_kinds() -> [BoundaryKind; 10] {
+        [
+            BoundaryKind::Added("web_search_call"),
+            BoundaryKind::Done("web_search_call"),
+            BoundaryKind::Added("web_search_call"),
+            BoundaryKind::Done("web_search_call"),
+            BoundaryKind::Added("reasoning"),
+            BoundaryKind::Done("reasoning"),
+            BoundaryKind::Added("reasoning"),
+            BoundaryKind::Done("reasoning"),
+            BoundaryKind::Added("reasoning"),
+            BoundaryKind::Done("reasoning"),
+        ]
+    }
+
+    fn interleaved_boundary_kinds(dialect: ResponsesDialect) -> Vec<BoundaryKind> {
+        let mut kinds = vec![
+            BoundaryKind::Created,
+            BoundaryKind::Added("reasoning"),
+            BoundaryKind::Done("reasoning"),
+            BoundaryKind::Added("message"),
+            BoundaryKind::Delta,
+            BoundaryKind::Delta,
+        ];
+        match dialect {
+            ResponsesDialect::OpenAi => {
+                kinds.extend(hosted_item_kinds());
+                kinds.extend([
+                    BoundaryKind::Delta,
+                    BoundaryKind::Delta,
+                    BoundaryKind::Done("message"),
+                ]);
+            }
+            ResponsesDialect::Grok => {
+                kinds.extend([
+                    BoundaryKind::Delta,
+                    BoundaryKind::Delta,
+                    BoundaryKind::Done("message"),
+                ]);
+                kinds.extend(hosted_item_kinds());
+            }
+        }
+        kinds.push(BoundaryKind::Completed);
+        kinds
+    }
+
+    #[tokio::test]
+    async fn openai_dialect_keeps_interleaved_hosted_stream_in_wire_order() {
+        let events =
+            run_sse_with_dialect(interleaved_hosted_sse_events(), ResponsesDialect::OpenAi).await;
+        assert_eq!(
+            events.iter().map(boundary_kind).collect::<Vec<_>>(),
+            interleaved_boundary_kinds(ResponsesDialect::OpenAi)
+        );
+    }
+
+    #[tokio::test]
+    async fn grok_dialect_sequences_message_deltas_before_hosted_items() {
+        let events =
+            run_sse_with_dialect(interleaved_hosted_sse_events(), ResponsesDialect::Grok).await;
+        assert_eq!(
+            events.iter().map(boundary_kind).collect::<Vec<_>>(),
+            interleaved_boundary_kinds(ResponsesDialect::Grok)
+        );
+    }
 }
