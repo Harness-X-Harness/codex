@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+pub(crate) const GROK_MAX_EDIT_IMAGES: usize = 3;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
     pub prompt: String,
@@ -67,6 +69,8 @@ pub struct ImageResponse {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ImageData {
     pub b64_json: String,
+    #[serde(default)]
+    pub mime_type: Option<String>,
     #[serde(default)]
     pub generation_id: Option<String>,
 }

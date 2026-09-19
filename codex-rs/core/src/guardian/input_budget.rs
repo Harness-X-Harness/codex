@@ -87,7 +87,9 @@ pub(crate) async fn finalize(
     let model = &step.settings.model_info;
     let history = session.clone_history().await;
     let prompt = build_prompt(
-        history.for_prompt(&model.input_modalities),
+        history.for_prompt_with_hosted_calls(&model.input_modalities, |item| {
+            step.turn.provider.is_provider_hosted_tool_call(item)
+        }),
         step,
         session.get_prompt_base_instructions().await,
     );
