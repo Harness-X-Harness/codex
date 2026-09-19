@@ -1501,47 +1501,6 @@ pub async fn mount_response_sequence(
     response_mock
 }
 
-<<<<<<< HEAD
-=======
-/// Mounts a sequence of responses for each POST to `/v1/responses/compact`.
-/// Panics if more requests are received than responses provided.
-pub async fn mount_compact_response_sequence(
-    server: &MockServer,
-    responses: Vec<ResponseTemplate>,
-) -> ResponseMock {
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
-
-    struct SeqResponder {
-        num_calls: AtomicUsize,
-        responses: Vec<ResponseTemplate>,
-    }
-
-    impl Respond for SeqResponder {
-        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
-            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
-            self.responses
-                .get(call_num)
-                .expect("missing response for compact call")
-                .clone()
-        }
-    }
-
-    let num_calls = responses.len();
-    let responder = SeqResponder {
-        num_calls: AtomicUsize::new(0),
-        responses,
-    };
-
-    let (mock, response_mock) = compact_mock();
-    mock.respond_with(responder)
-        .up_to_n_times(num_calls as u64)
-        .expect(num_calls as u64)
-        .mount(server)
-        .await;
-    response_mock
-}
-
 fn is_provider_hosted_custom_tool_call(item: &Value, body: &Value) -> bool {
     item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
         && body
@@ -1554,7 +1513,6 @@ fn is_provider_hosted_custom_tool_call(item: &Value, body: &Value) -> bool {
             })
 }
 
->>>>>>> 2f073d76e (feat(grok): skip hosted custom_tool_call pairing in prompt history)
 /// Validate invariants on the request body sent to `/v1/responses`.
 ///
 /// - A `function_call_output` with missing/empty `call_id` must have a nonempty `name`.
