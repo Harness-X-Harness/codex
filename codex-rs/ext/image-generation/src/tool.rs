@@ -194,8 +194,14 @@ impl ImageGenerationTool {
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
                 .and_then(|data| {
                     let generation_id = data.generation_id;
-                    normalize_image_data(data, self.save_root.is_none())
-                        .map(|image| (image, transparent_background, imagegen_request_id, generation_id))
+                    normalize_image_data(data, self.save_root.is_none()).map(|image| {
+                        (
+                            image,
+                            transparent_background,
+                            imagegen_request_id,
+                            generation_id,
+                        )
+                    })
                 })
         });
         let (image, transparent_background, imagegen_request_id, generation_id) = match result {
