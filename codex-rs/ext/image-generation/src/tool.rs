@@ -193,7 +193,7 @@ impl ImageGenerationTool {
                 .next()
                 .ok_or_else(|| ("image generation returned no image data".to_string(), None))
                 .and_then(|data| {
-                    let generation_id = data.generation_id;
+                    let generation_id = data.generation_id.clone();
                     normalize_image_data(data, self.save_root.is_none()).map(|image| {
                         (
                             image,
