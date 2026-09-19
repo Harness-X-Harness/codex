@@ -387,10 +387,8 @@ impl ContextManager {
         }
     }
 
-    /// Treat every unpaired custom tool call as a client tool.
-    ///
-    /// Production Grok sites use [`Self::for_prompt_with_hosted_calls`] with the
-    /// provider predicate. Stock 0.155 still calls this from Guardian review.
+    /// Test helper: treat every unpaired custom tool call as a client tool.
+    #[cfg(test)]
     pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.for_prompt_with_hosted_calls(input_modalities, |_| false)
     }
