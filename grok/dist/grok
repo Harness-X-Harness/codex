@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+: "${GROK_HOME:=${HOME}/.grok}"
+export CODEX_HOME="${GROK_HOME}"
+exec "${script_dir}/grok-bin" "$@"
