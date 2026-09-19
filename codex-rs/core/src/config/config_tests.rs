@@ -84,6 +84,9 @@ use codex_network_proxy::NetworkMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::WebSearchConfig;
+use codex_protocol::config_types::WebSearchFilters;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
@@ -479,6 +482,121 @@ web_search = false
             update_plan: None,
         })
     );
+}
+
+#[test]
+fn tools_web_search_excluded_domains_deserializes() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.web_search]
+excluded_domains = ["example.com"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: Some(WebSearchToolConfig {
+                context_size: None,
+                allowed_domains: None,
+                excluded_domains: Some(vec!["example.com".to_string()]),
+                location: None,
+            }),
+            experimental_request_user_input: None,
+            update_plan: None,
+        })
+    );
+}
+
+#[tokio::test]
+async fn load_config_resolves_web_search_excluded_domains() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[tools.web_search]
+excluded_domains = ["example.com"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.web_search_config,
+        Some(WebSearchConfig {
+            filters: Some(WebSearchFilters {
+                allowed_domains: None,
+                excluded_domains: Some(vec!["example.com".to_string()]),
+            }),
+            user_location: None,
+            search_context_size: None,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_web_search_allowed_and_excluded_domains() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[tools.web_search]
+allowed_domains = ["example.com"]
+excluded_domains = ["blocked.test"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let err = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("conflicting web_search domain lists should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "tools.web_search.allowed_domains and tools.web_search.excluded_domains are mutually exclusive"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_treats_empty_web_search_domain_lists_as_absent() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[tools.web_search]
+allowed_domains = []
+excluded_domains = ["blocked.test"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.web_search_config,
+        Some(WebSearchConfig {
+            filters: Some(WebSearchFilters {
+                allowed_domains: Some(Vec::new()),
+                excluded_domains: Some(vec!["blocked.test".to_string()]),
+            }),
+            user_location: None,
+            search_context_size: None,
+        })
+    );
+    Ok(())
 }
 
 #[test]

@@ -2652,13 +2652,32 @@ fn resolve_web_search_mode(config_toml: &ConfigToml, features: &Features) -> Opt
     None
 }
 
-fn resolve_web_search_config(config_toml: &ConfigToml) -> Option<WebSearchConfig> {
-    config_toml
+fn resolve_web_search_config(config_toml: &ConfigToml) -> std::io::Result<Option<WebSearchConfig>> {
+    let Some(tool_config) = config_toml
         .tools
         .as_ref()
         .and_then(|tools| tools.web_search.as_ref())
         .cloned()
-        .map(Into::into)
+    else {
+        return Ok(None);
+    };
+
+    let allowed_present = tool_config
+        .allowed_domains
+        .as_ref()
+        .is_some_and(|domains| !domains.is_empty());
+    let excluded_present = tool_config
+        .excluded_domains
+        .as_ref()
+        .is_some_and(|domains| !domains.is_empty());
+    if allowed_present && excluded_present {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "tools.web_search.allowed_domains and tools.web_search.excluded_domains are mutually exclusive",
+        ));
+    }
+
+    Ok(Some(tool_config.into()))
 }
 
 fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> bool {
@@ -3698,7 +3717,7 @@ impl Config {
         }
         let web_search_mode =
             resolve_web_search_mode(&cfg, &features).unwrap_or(WebSearchMode::Cached);
-        let web_search_config = resolve_web_search_config(&cfg);
+        let web_search_config = resolve_web_search_config(&cfg)?;
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
         let update_plan_enabled = resolve_update_plan_enabled(&cfg);
