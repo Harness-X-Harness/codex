@@ -1501,6 +1501,60 @@ pub async fn mount_response_sequence(
     response_mock
 }
 
+<<<<<<< HEAD
+=======
+/// Mounts a sequence of responses for each POST to `/v1/responses/compact`.
+/// Panics if more requests are received than responses provided.
+pub async fn mount_compact_response_sequence(
+    server: &MockServer,
+    responses: Vec<ResponseTemplate>,
+) -> ResponseMock {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<ResponseTemplate>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            self.responses
+                .get(call_num)
+                .expect("missing response for compact call")
+                .clone()
+        }
+    }
+
+    let num_calls = responses.len();
+    let responder = SeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses,
+    };
+
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+fn is_provider_hosted_custom_tool_call(item: &Value, body: &Value) -> bool {
+    item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+        && body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.get("type").and_then(Value::as_str) == Some("x_search"))
+            })
+}
+
+>>>>>>> 2f073d76e (feat(grok): skip hosted custom_tool_call pairing in prompt history)
 /// Validate invariants on the request body sent to `/v1/responses`.
 ///
 /// - A `function_call_output` with missing/empty `call_id` must have a nonempty `name`.
@@ -1512,6 +1566,10 @@ pub async fn mount_response_sequence(
 /// - Every `tool_search_output` must match a prior `tool_search_call`.
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
 ///   `tool_search_call` in the `input` must have a matching output entry.
+///   Grok hosted `custom_tool_call` items are exempt (no client output).
+///   Detect Grok by `tools` containing `x_search` (Grok appends it whenever
+///   tools are non-empty). Do not skip ChatGPT `custom_tool_call` pairing:
+///   those items omit `status` too.
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
@@ -1588,7 +1646,15 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
 
     let function_calls = gather_ids(items, "function_call");
     let tool_search_calls = gather_ids(items, "tool_search_call");
-    let custom_tool_calls = gather_ids(items, "custom_tool_call");
+    let custom_tool_calls: HashSet<String> = items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && !is_provider_hosted_custom_tool_call(item, &body)
+        })
+        .filter_map(get_call_id)
+        .map(str::to_string)
+        .collect();
     let local_shell_calls = gather_ids(items, "local_shell_call");
     let function_call_outputs = gather_output_ids(
         items,

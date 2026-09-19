@@ -2240,6 +2240,31 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
     h.normalize_history(&default_input_modalities());
 }
 
+#[test]
+fn normalize_leaves_hosted_custom_tool_call_unpaired() {
+    let call = ResponseItem::CustomToolCall {
+        id: None,
+        status: Some("completed".to_string()),
+        call_id: "xs_call-1".to_string(),
+        name: "hosted_search".to_string(),
+        namespace: None,
+        input: "{}".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut history = create_history_with_items(vec![call.clone()]);
+    history.normalize_history_with_hosted_calls(&default_input_modalities(), |item| {
+        matches!(
+            item,
+            ResponseItem::CustomToolCall {
+                name,
+                status: Some(status),
+                ..
+            } if name == "hosted_search" && status == "completed"
+        )
+    });
+    assert_eq!(raw_items(&history), vec![call]);
+}
+
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic]
