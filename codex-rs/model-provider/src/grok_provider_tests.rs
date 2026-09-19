@@ -61,6 +61,8 @@ impl ModelsCache for PanicCache {
     fn refresh_ttl<'a>(
         &'a self,
         _client_version: &'a str,
+        _identity: &'a str,
+        _etag: &'a str,
     ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
         panic!("Grok static catalog must not refresh the shared models cache")
     }
