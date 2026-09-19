@@ -606,3 +606,17 @@ async fn write_stdin_post_tool_use_payload_keeps_parallel_session_metadata_separ
         ]
     );
 }
+
+#[test]
+fn grok_exec_yield_time_ms_accepts_whole_json_float() {
+    let args: ExecCommandArgs =
+        parse_arguments(r#"{"cmd":"true","yield_time_ms":10000.0}"#).expect("yield_time_ms");
+    assert_eq!(args.yield_time_ms, 10_000);
+}
+
+#[test]
+fn grok_exec_max_output_tokens_accepts_whole_json_float() {
+    let args: ExecCommandArgs = parse_arguments(r#"{"cmd":"true","max_output_tokens":10000.0}"#)
+        .expect("max_output_tokens");
+    assert_eq!(args.max_output_tokens, Some(10_000));
+}
