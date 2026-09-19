@@ -308,6 +308,7 @@ fn generated_image_normalization_detects_actual_mime() {
         ImageData {
             b64_json: BASE64_STANDARD.encode(jpeg),
             mime_type: Some("image/jpeg".to_string()),
+            generation_id: None,
         },
         false,
     )
@@ -324,6 +325,7 @@ fn generated_image_normalization_rejects_mismatched_mime_metadata() {
         ImageData {
             b64_json: BASE64_STANDARD.encode(jpeg),
             mime_type: Some("image/png".to_string()),
+            generation_id: None,
         },
         false,
     );
