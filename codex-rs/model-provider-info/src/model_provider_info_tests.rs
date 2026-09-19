@@ -884,13 +884,15 @@ fn test_validate_rejects_invalid_x_search_date() {
 
 #[test]
 fn test_to_api_provider_copies_x_search_window() {
-    let mut provider = ModelProviderInfo::default();
-    provider.name = "Grok".to_string();
-    provider.base_url = Some("https://example.test/v1".to_string());
-    provider.x_search = Some(codex_api::XSearchProviderConfig {
-        from_date: Some("2026-01-01".to_string()),
-        to_date: Some("2026-01-31".to_string()),
-    });
+    let provider = ModelProviderInfo {
+        name: "Grok".to_string(),
+        base_url: Some("https://example.test/v1".to_string()),
+        x_search: Some(codex_api::XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        }),
+        ..ModelProviderInfo::default()
+    };
 
     let api_provider = provider
         .to_api_provider(/*auth_mode*/ None)
