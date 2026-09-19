@@ -30,6 +30,7 @@ base_url = "http://localhost:11434/v1"
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -65,6 +66,7 @@ query_params = { api-version = "2025-04-01-preview" }
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -104,10 +106,28 @@ supports_standalone_web_search = true
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: true,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
     assert_eq!(expected_provider, provider);
+}
+
+#[test]
+fn test_deserialize_grok_responses_wire_api() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://example.test/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+requires_openai_auth = false
+supports_websockets = false
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.wire_api, WireApi::GrokResponses);
+    assert_eq!(provider.wire_api.to_string(), "grok_responses");
+    assert!(provider.wire_api.uses_responses_transport());
 }
 
 #[test]
@@ -281,6 +301,7 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            x_search: None,
         }
     );
 }
@@ -663,4 +684,124 @@ refresh_interval_ms = 0
     let auth = provider.auth.expect("auth config should deserialize");
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
+}
+
+#[test]
+fn test_deserialize_x_search_date_window() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://example.test/v1"
+
+[x_search]
+from_date = "2026-01-01"
+to_date = "2026-01-31"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(
+        provider.x_search,
+        Some(codex_api::XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        })
+    );
+}
+
+#[test]
+fn test_deserialize_empty_x_search_table_is_none() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://example.test/v1"
+
+[x_search]
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.x_search, None);
+}
+
+#[test]
+fn test_deserialize_x_search_allows_one_sided_window() {
+    let provider_toml = r#"
+name = "Grok"
+base_url = "https://example.test/v1"
+
+[x_search]
+from_date = "2026-01-01"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(
+        provider.x_search,
+        Some(codex_api::XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: None,
+        })
+    );
+}
+
+#[test]
+fn test_deserialize_invalid_x_search_date_fails() {
+    for (field, value) in [
+        ("from_date", "2026-02-30"),
+        ("to_date", "01/01/2026"),
+        ("from_date", "not-a-date"),
+    ] {
+        let provider_toml = format!(
+            r#"
+name = "Grok"
+base_url = "https://example.test/v1"
+
+[x_search]
+{field} = "{value}"
+        "#
+        );
+        let err = toml::from_str::<ModelProviderInfo>(&provider_toml).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("YYYY-MM-DD"),
+            "{field}={value} should name YYYY-MM-DD in {message}"
+        );
+        assert!(
+            message.contains(value),
+            "{field}={value} should name the invalid value in {message}"
+        );
+    }
+}
+
+#[test]
+fn test_validate_rejects_invalid_x_search_date() {
+    let provider = ModelProviderInfo {
+        x_search: Some(codex_api::XSearchProviderConfig {
+            from_date: Some("2026-13-01".to_string()),
+            to_date: None,
+        }),
+        ..ModelProviderInfo::default()
+    };
+    assert_eq!(
+        provider.validate(),
+        Err("x_search.from_date `2026-13-01` must be a calendar YYYY-MM-DD".to_string())
+    );
+}
+
+#[test]
+fn test_to_api_provider_copies_x_search_window() {
+    let mut provider = ModelProviderInfo::default();
+    provider.name = "Grok".to_string();
+    provider.base_url = Some("https://example.test/v1".to_string());
+    provider.x_search = Some(codex_api::XSearchProviderConfig {
+        from_date: Some("2026-01-01".to_string()),
+        to_date: Some("2026-01-31".to_string()),
+    });
+
+    let api_provider = provider
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("Grok provider should build API provider");
+    assert_eq!(
+        api_provider.x_search,
+        Some(codex_api::XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        })
+    );
 }
