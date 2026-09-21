@@ -6464,6 +6464,7 @@ class WebSearchToolConfig(BaseModel):
     )
     allowed_domains: list[str] | None = None
     context_size: WebSearchContextSize | None = None
+    excluded_domains: list[str] | None = None
     location: WebSearchLocation | None = None
 
 
