@@ -72,6 +72,8 @@ fn test_provider(base_url: String) -> Provider {
             retry_transport: false,
         },
         stream_idle_timeout: Duration::from_secs(5),
+        dialect: codex_api::ApiDialect::OpenAi,
+        x_search: None,
     }
 }
 

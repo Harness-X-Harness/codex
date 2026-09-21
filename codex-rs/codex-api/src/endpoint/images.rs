@@ -157,6 +157,8 @@ mod tests {
                 retry_transport: true,
             },
             stream_idle_timeout: Duration::from_secs(1),
+            dialect: crate::ApiDialect::OpenAi,
+            x_search: None,
         }
     }
 
