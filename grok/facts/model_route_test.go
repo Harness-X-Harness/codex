@@ -5,23 +5,38 @@ import (
 	"testing"
 )
 
-// Model-route Facts probe the production Grok Responses surface.
-// They record acceptance only. They do not change the product catalog
-// or assume grok-build resolves to one physical model.
+// Model-route Facts probe the production Grok Responses surface through
+// TrustedTunnel. They record acceptance only. They do not change the product
+// catalog or request projection.
+//
+// Observed route contract (run 35709826215 / recorded classes below):
+//
+//   request model   response.model     reasoning.effort
+//   grok-build      grok-build         rejected (reasoningEffort unsupported)
+//   grok-4.7        grok-4.7-build     accepted (low|medium|high|xhigh)
+//   grok-4.6        grok-4.6-build     accepted
+//
+// `reasoning: { "effort": "..." }` is the correct Responses JSON for the
+// models that support it. grok-build is a special Grok Build route: effort
+// there is model-catalog / CLI routing (may rewrite the model id), not a
+// field the client may attach to model "grok-build". Do not treat
+// grok-*-build response ids as request slugs. Do not assert that grok-build
+// permanently resolves to one physical model.
 
 const modelRouteTextPrompt = "Reply with the single word ok."
 
 func TestFactModelRouteGrokBuild(t *testing.T) {
-	// grok-build accepts the route, tool round trip, and history replay.
-	// reasoning.effort is rejected; that is the recorded shape, not a client rewrite.
-	// response.model is not pinned: this run returned grok-build.
+	// Text, tool, and history are accepted. Attaching reasoning.effort is
+	// rejected by this route; that rejection is the fact. Catalog metadata
+	// must not advertise effort for grok-build until the route accepts it.
 	const recorded class = "requested=grok-build;response_model=present;text=accepted;reasoning=rejected:400/Model grok-build does not support parameter reasoningEffort.;tool=accepted;history=accepted"
 	client := requireFactsClient(t)
 	assertRecorded(t, recorded, probeModelRoute(t, client, "grok-build", false))
 }
 
 func TestFactModelRouteGrok47(t *testing.T) {
-	// Requested id and response.model differ. grok-4.7-build is observation, not the client id.
+	// Requested id stays grok-4.7. response.model grok-4.7-build is a
+	// backend-resolved identifier, not a public request slug.
 	const recorded class = "requested=grok-4.7;response_model=grok-4.7-build;text=accepted;reasoning=accepted;tool=accepted;history=accepted;encrypted_replay=accepted"
 	client := requireFactsClient(t)
 	assertRecorded(t, recorded, probeModelRoute(t, client, "grok-4.7", true))

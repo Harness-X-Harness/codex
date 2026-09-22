@@ -248,7 +248,7 @@ B2; keep today's egress until Live decides).
 | `tools` | emit when non-empty; omit `tools` and `tool_choice` together when empty | Live-verified no-tool request |
 | `tool_choice` (`"auto"`) | emit with tools | Live |
 | `parallel_tool_calls` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) ≠ consumed; grok-build `None`; this B1 probe |
-| `reasoning.effort`, `reasoning.summary` | emit | grok-build; Live |
+| `reasoning.effort`, `reasoning.summary` | emit for versioned models (`grok-4.6`, `grok-4.7`) | Live on `grok-4.6`; `TestFactModelRouteGrok46` / `TestFactModelRouteGrok47`. Model id `grok-build` rejects `reasoning.effort` (`TestFactModelRouteGrokBuild`: `400/Model grok-build does not support parameter reasoningEffort.`). That id is a Grok Build route, not a drop-in synonym for a versioned slug; CLI `--effort` may rewrite the model id before serialization. Do not confuse the model id with the `xai-org/grok-build` harness named in other evidence cells. |
 | `reasoning.context` | omit | stock sets it only for `use_responses_lite`, which the Grok catalog disables |
 | `store: false` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) ≠ consumed; grok-build `None`; this B1 probe |
 | `stream: true` | emit | Codex SSE transport requirement |
@@ -533,6 +533,15 @@ before `grok/release.py publish`; a docs-only commit does not.
 
 ## Tests
 
+- `grok/facts` `TestFactModelRouteGrokBuild` /
+  `TestFactModelRouteGrok47` / `TestFactModelRouteGrok46`: production
+  Responses route accepts request ids `grok-build`, `grok-4.7`, and
+  `grok-4.6` for text, function-tool round trip, and history replay.
+  `grok-4.7` also replays encrypted reasoning. Observed `response.model`
+  values `grok-4.7-build` / `grok-4.6-build` are backend-resolved ids, not
+  request slugs. Attaching `reasoning: { "effort": "high" }` to
+  `model: "grok-build"` is rejected; that JSON shape remains correct for
+  versioned models.
 - `codex-rs/codex-api/src/grok_request_tests.rs`: dialect identity from
   `WireApi` (name and hostname are not selectors), copy-only canonical
   request, one accepted fixture per `ResponseItem` variant and tool type
