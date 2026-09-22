@@ -193,11 +193,11 @@ func TestModelRouteClassPinsOnlyExactModels(t *testing.T) {
 		t.Fatalf("build class = %q", got)
 	}
 	pinned := modelRouteObservation{
-		requested: "grok-4.7", responseModel: "grok-4.7", pinResponse: true,
+		requested: "grok-4.7", responseModel: "grok-4.7-build", pinResponse: true,
 		text: "accepted", reasoning: "accepted", tool: "accepted", history: "accepted",
 		encryptedReplay: "accepted",
 	}
-	if got, want := pinned.asClass(), class("requested=grok-4.7;response_model=grok-4.7;text=accepted;reasoning=accepted;tool=accepted;history=accepted;encrypted_replay=accepted"); got != want {
+	if got, want := pinned.asClass(), class("requested=grok-4.7;response_model=grok-4.7-build;text=accepted;reasoning=accepted;tool=accepted;history=accepted;encrypted_replay=accepted"); got != want {
 		t.Fatalf("pinned class = %q", got)
 	}
 }
