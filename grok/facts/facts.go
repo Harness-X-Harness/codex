@@ -155,7 +155,7 @@ func (c *factClient) post(ctx context.Context, payload map[string]any) (int, []b
 	for k, v := range payload {
 		body[k] = v
 	}
-	body["model"] = c.model
+	applyProfileModel(body, c.model)
 	body["stream"] = false
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -177,6 +177,44 @@ func (c *factClient) post(ctx context.Context, payload map[string]any) (int, []b
 		return resp.StatusCode, nil, err
 	}
 	return resp.StatusCode, limited, nil
+}
+
+// applyProfileModel keeps an explicit probe model. Facts that omit model
+// still use the shipped profile, which is the control route.
+func applyProfileModel(body map[string]any, profileModel string) {
+	if model, ok := body["model"].(string); ok && model != "" {
+		return
+	}
+	body["model"] = profileModel
+}
+
+func responseModel(body []byte) string {
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	return payload.Model
+}
+
+func outputItems(body []byte) []map[string]any {
+	var payload struct {
+		Output []map[string]any `json:"output"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return nil
+	}
+	return payload.Output
+}
+
+func firstFunctionCall(body []byte) map[string]any {
+	for _, item := range outputItems(body) {
+		if jsonString(item["type"]) == "function_call" {
+			return item
+		}
+	}
+	return nil
 }
 
 func classify(status int, body []byte) class {

@@ -157,6 +157,51 @@ func TestObserveEncryptedReasoning(t *testing.T) {
 	}
 }
 
+func TestApplyProfileModelKeepsExplicitProbeModel(t *testing.T) {
+	body := map[string]any{"model": "grok-build"}
+	applyProfileModel(body, "grok-4.6")
+	if body["model"] != "grok-build" {
+		t.Fatalf("explicit model replaced: %#v", body["model"])
+	}
+	omitted := map[string]any{}
+	applyProfileModel(omitted, "grok-4.6")
+	if omitted["model"] != "grok-4.6" {
+		t.Fatalf("profile model = %#v", omitted["model"])
+	}
+}
+
+func TestResponseModelAndFunctionCallFixture(t *testing.T) {
+	body := readTestdata(t, "output_function_call.json")
+	if got := responseModel(body); got != "grok-4.7" {
+		t.Fatalf("response model = %q", got)
+	}
+	call := firstFunctionCall(body)
+	if call == nil || jsonString(call["call_id"]) != "call_fact" || jsonString(call["name"]) != "fact_echo" {
+		t.Fatalf("function call = %#v", call)
+	}
+	if got := responseModel([]byte(`{"output":[]}`)); got != "" {
+		t.Fatalf("missing model = %q", got)
+	}
+}
+
+func TestModelRouteClassPinsOnlyExactModels(t *testing.T) {
+	build := modelRouteObservation{
+		requested: "grok-build", responseModel: "grok-4.7", pinResponse: false,
+		text: "accepted", reasoning: "accepted", tool: "accepted", history: "accepted",
+	}
+	if got, want := build.asClass(), class("requested=grok-build;response_model=present;text=accepted;reasoning=accepted;tool=accepted;history=accepted"); got != want {
+		t.Fatalf("build class = %q", got)
+	}
+	pinned := modelRouteObservation{
+		requested: "grok-4.7", responseModel: "grok-4.7", pinResponse: true,
+		text: "accepted", reasoning: "accepted", tool: "accepted", history: "accepted",
+		encryptedReplay: "accepted",
+	}
+	if got, want := pinned.asClass(), class("requested=grok-4.7;response_model=grok-4.7;text=accepted;reasoning=accepted;tool=accepted;history=accepted;encrypted_replay=accepted"); got != want {
+		t.Fatalf("pinned class = %q", got)
+	}
+}
+
 func TestRedactReplacesSecret(t *testing.T) {
 	if got := redact("err key=abc remaining", "abc"); got != "err key=[REDACTED] remaining" {
 		t.Fatalf("got %q", got)
