@@ -7,13 +7,13 @@ acceptance input. Product semantics live in [`architecture.md`](./architecture.m
 
 ```text
 PR to grok/main         = Cargo
-push grok/main          = six target binaries + Live on Linux musl
+push grok/main          = linux x64 musl + mac arm64 binaries + Live on Linux musl
 grok/release.py publish = the only grok-v* mutation
 ```
 
 ```text
 commit SHA      = immutable source identity
-Actions run     = proof of six target binaries and Linux Live
+Actions run     = proof of linux x64 musl + mac arm64 binaries and Linux Live
 grok-vX.Y.Z     = moving channel written by grok/release.py publish
 ```
 
@@ -52,11 +52,15 @@ the same workflow.
 push grok/main
   -> build x86_64-unknown-linux-musl
   -> Go Live on that binary
-  -> build the other five targets in parallel with Live
+  -> build aarch64-apple-darwin in parallel with Live
 ```
 
+Shipped proof and publication targets are `x86_64-unknown-linux-musl`
+(servers and Live) and `aarch64-apple-darwin` (macOS ARM). Other triples
+stay out of `TARGETS` until they have users.
+
 Live consumes the musl `codex` binary from the same run. It does not wait
-for Darwin or Windows. Publication packages the six binaries.
+for Darwin. Publication packages those two binaries.
 
 Both events run only when a proof input changes. Every path is a proof
 input unless the workflow's `paths` filter negates it; the negated set is
@@ -119,7 +123,7 @@ because nothing publishes it. The `grok-v0.153.4` channel is frozen.
 
 ```text
 cargo fmt/clippy/test     -> PR gate
-cargo build               -> six target binaries
+cargo build               -> linux x64 musl and mac arm64 binaries
 go test -run '^TestGrok'  -> Live on the Linux musl binary
 GitHub Actions            -> proof orchestration and artifacts
 grok/release.py publish   -> package, channel mutation, readback

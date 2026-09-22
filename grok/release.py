@@ -22,13 +22,11 @@ PROOF_WORKFLOW = ".github/workflows/grok.yml"
 PRODUCT_BRANCH = "grok/main"
 PRODUCT_VERSION = "main"
 REF_PREFIX = "grok/rust-v"
+# Shipped proof and publication targets. Linux x64 musl is Live and servers;
+# macOS ARM64 is the maintainer desktop. Do not add unused triples.
 TARGETS = (
     "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
-    "aarch64-unknown-linux-musl",
     "x86_64-unknown-linux-musl",
-    "aarch64-pc-windows-msvc",
-    "x86_64-pc-windows-msvc",
 )
 DIST_FILES = (
     "config.toml.example",

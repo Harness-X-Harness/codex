@@ -1,5 +1,6 @@
 """Unit tests for the grok publish gate."""
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,11 @@ def _gh_json(run: dict, ref_sha: str, artifacts: list[dict[str, str]]):
 
 
 class ProofPushPathsTests(unittest.TestCase):
+    def test_proof_workflow_builds_each_publish_target(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        built = set(re.findall(r"(?m)^\s+(?:- )?target: ([a-z0-9_-]+)$", text))
+        self.assertEqual(built, set(release.TARGETS))
+
     def test_reads_real_grok_yml(self) -> None:
         # The workflow is the authority for the list; assert its shape, not its rows.
         patterns = release.proof_push_paths(WORKFLOW)

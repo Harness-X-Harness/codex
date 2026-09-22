@@ -15,7 +15,7 @@ choose exact upstream SHA
   -> open the Codex PR against grok/main
   -> Cargo
   -> push
-  -> six binaries + Linux Live
+  -> linux x64 musl + mac arm64 binaries + Linux Live
   -> python3 grok/release.py publish
 ```
 
@@ -97,7 +97,7 @@ Every step is a command or an existing proof; none needs a new tool.
    asserts a Grok difference.
 5. **Open the PR against `grok/main`.** Cargo runs on the PR. Merge by
    fast-forward when the semantic stack is reviewable.
-6. **Push `grok/main`.** Six target binaries and Linux Live run on push.
+6. **Push `grok/main`.** Linux x64 musl, macOS ARM64, and Linux Live run on push.
 7. **Publish.** `python3 grok/release.py publish` writes `grok-vmain`.
 
 Historical `grok/rust-v*` lines stay readable as development history. They
