@@ -573,10 +573,10 @@ before `grok/release.py publish`; a docs-only commit does not.
   name, including an unknown completed name (`apply_patch` / `x_new_subtool`),
   plus incomplete status (`in_progress`, `None`).
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
-  default Turn uses the shipped profile model, and
-  `TestGrokPinnedPreviousModel` smokes `grok-4.6` with the requested model on
-  `/responses`, a named tool round trip, encrypted reasoning, and a second
-  Turn on that history. The
+  default Turn uses the shipped profile model and records that slug on
+  `/responses`. `TestGrokPinnedPreviousModel` smokes `grok-4.6` with the
+  requested model on `/responses`, a named tool round trip, encrypted
+  reasoning, and a second Turn on that history. The
   encrypted-reasoning continuation, image-edit, custom `apply_patch`,
   hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`
   allowlist (`TestGrokHostedWebSearchAllowlist`), hosted `web_search`

@@ -42,6 +42,7 @@ func TestGrokBasic(t *testing.T) {
 	if run.reply() == "" {
 		h.failStage("agent_message_persisted", "Turn completed without an agent message")
 	}
+	requireResponsesModel(h, "thread_model_on_responses", wantModel)
 }
 
 func TestGrokPinnedPreviousModel(t *testing.T) {
@@ -91,7 +92,12 @@ func TestGrokPinnedPreviousModel(t *testing.T) {
 	if !waitDurable(rolloutSettle, func() bool { return durableHasEncryptedReasoning(h.home) }) {
 		h.failStage("pinned_reasoning_observed", "durable Thread state has no encrypted reasoning")
 	}
-	sawModel := false
+	requireResponsesModel(h, "pinned_model_on_responses", pinned)
+}
+
+func requireResponsesModel(h *liveHarness, stage, model string) {
+	h.t.Helper()
+	saw := false
 	for _, ex := range h.recorder.snapshot() {
 		if !strings.Contains(ex.path, "/responses") {
 			continue
@@ -102,13 +108,13 @@ func TestGrokPinnedPreviousModel(t *testing.T) {
 		if json.Unmarshal(ex.requestBody, &payload) != nil || payload.Model == "" {
 			continue
 		}
-		if payload.Model != pinned {
-			h.failStage("pinned_model_on_responses", fmt.Sprintf("/responses model is %q, pinned catalog model is %q", payload.Model, pinned))
+		if payload.Model != model {
+			h.failStage(stage, fmt.Sprintf("/responses model is %q, want %q", payload.Model, model))
 		}
-		sawModel = true
+		saw = true
 	}
-	if !sawModel {
-		h.failStage("pinned_model_on_responses", "no /responses request carried model "+pinned)
+	if !saw {
+		h.failStage(stage, "no /responses request carried model "+model)
 	}
 }
 
