@@ -1,140 +1,120 @@
-# Grok release
+# Grok delivery
 
-This document is the delivery Northstar. Markdown here is not executable
-acceptance input. Product semantics live in [`architecture.md`](./architecture.md).
+This document owns the Grok delivery contract. Product semantics live in
+[`architecture.md`](./architecture.md).
 
 ## Northstar
 
 ```text
-PR to grok/main         = Cargo
-push grok/main          = linux x64 musl + mac arm64 binaries + Live on Linux musl
-grok/release.py publish = the only grok-v* mutation
+PR to grok/main        = Cargo
+push grok/main         = complete target distributions + Linux Live
+workflow_dispatch      = Live only from an existing Linux distribution artifact
+GitHub Actions artifact = delivery output for one exact commit SHA and target
 ```
 
+GitHub Actions artifacts are the current delivery output.
+
+Historical `grok-v*` GitHub releases remain historical outputs.
+
+## Distribution artifact
+
+Each target artifact is named:
+
 ```text
-commit SHA      = immutable source identity
-Actions run     = proof of linux x64 musl + mac arm64 binaries and Linux Live
-grok-vX.Y.Z     = moving channel written by grok/release.py publish
+grok-<commit-sha>-<target>
 ```
+
+The artifact is the complete per-target distribution. It contains:
+
+```text
+config.toml.example
+models.json
+INSTALL.md
+LICENSE
+
+bin/grok / bin/grok.ps1
+bin/grok-bin / bin/grok-bin.exe
+bin/codex-code-mode-host / bin/codex-code-mode-host.exe
+bin/bwrap                         # Linux only
+```
+
+The distribution assets are readable without an installer. GitHub Actions
+artifacts do not preserve Unix executable bits, so `INSTALL.md` includes the
+small `chmod` step required after download. A human or agent then chooses a
+dedicated product `CODEX_HOME` and does not reuse the normal `~/.codex` or
+`~/.grok` Home.
 
 ## Rules
 
-A later change that breaks a rule is a regression. Instances (temporary
-branches, frozen channels, one failed run) stay in operational notes.
-
-1. Heavy work happens once per SHA. Later stages consume the result.
-2. Review, proof, and publish are the only entries. Do not add a process
-   that proves the proof.
-3. Evidence is the named executable result. Do not add ledgers, document
-   validators, or identity jobs.
-4. One fact has one authority.
-5. Prefer native platform steps. Scripts wrap only external mutation and
-   readback.
-6. Add a layer only when it prevents a current failure. Cache, sibling
-   cancel, single-target retry, and pack/unpack on the proof path are not
-   rules.
-7. A failed or cancelled proof does not replace the channel. Do not retry
-   a mutation that did not read back.
-8. The product line is the current stock fixed point. Temporary branches
-   and old lines are not publication authorities.
-9. Composition proof runs against the built binary. Packaging belongs to
-   publish.
-10. Capability text follows current code. Delete dead paths with evidence;
-    do not infer legacy from names or history.
+1. PR review proves Cargo formatting, lint, deterministic tests, and harness
+   unit tests.
+2. A push proof builds each shipped target once for that SHA.
+3. Linux Live consumes the Linux distribution artifact from the same push run.
+4. A failed or cancelled proof is a failed proof.
+5. The commit SHA and Actions run are the source and proof identities.
+6. The artifact from that run is the delivery output.
+7. Facts remain independent backend evidence.
+8. Installation is document-driven through `INSTALL.md`.
 
 ## Proof
 
-A pull request to `grok/main` runs Cargo. It does not build binaries or
-run Live. Push does not repeat Cargo. Historical `grok/rust-v*` lines use
-the same workflow.
+A pull request to `grok/main` runs Cargo on GitHub's default pull-request merge
+ref. It does not build distribution binaries or run real-provider Live.
+
+A push to `grok/main` runs:
 
 ```text
-push grok/main
-  -> build x86_64-unknown-linux-musl
-  -> Go Live on that binary
-  -> build aarch64-apple-darwin in parallel with Live
+x86_64-unknown-linux-musl
+    -> complete Grok distribution artifact
+    -> Grok Live on grok-bin from that artifact
+
+aarch64-apple-darwin
+    -> complete Grok distribution artifact
 ```
 
-Shipped proof and publication targets are `x86_64-unknown-linux-musl`
-(servers and Live) and `aarch64-apple-darwin` (macOS ARM). Other triples
-stay out of `TARGETS` until they have users.
+Current shipped targets are:
 
-Live consumes the musl `codex` binary from the same run. It does not wait
-for Darwin. Publication packages those two binaries.
+- `x86_64-unknown-linux-musl`
+- `aarch64-apple-darwin`
 
-The package and moving channel also expose the readable product configuration
-contract: `config.toml.example`, complete `models.json`, and `INSTALL.md`.
-There is no release installer. Publication never writes a user Home. A human or
-agent follows `INSTALL.md`, chooses a dedicated product `CODEX_HOME`, and
-must not reuse the normal `~/.codex` or `~/.grok` Home.
+Other targets stay out until they have users.
 
-Both events run only when a proof input changes. Every path is a proof
-input unless the workflow's `paths` filter negates it; the negated set is
-text that nothing compiles, packages, or executes (repository docs, root
-Markdown, editor and agent configuration, other workflows). Live Stories,
-`grok/dist`, `LICENSE`, `grok/release.py`, Markdown under `codex-rs`, and
-the workflow itself are proof inputs. The filter in `grok.yml` is the only
-authority for that set; the publisher reads it rather than repeating it.
+`workflow_dispatch` can run Live against an existing Linux distribution
+artifact selected by `binary_run_id`. It is diagnostic proof only; it does not
+create another delivery artifact.
 
-GitHub Actions does not create or replace `grok-vX.Y.Z`.
+Live runs `go test -v` directly. The Go harness owns failure diagnostics such as
+`NOT_PROVEN`, stage names, and redacted wire evidence; the workflow does not
+parse or reinterpret test results.
 
 ## Triage
 
-A RED result is an executable fact about one owner. Read the named output,
-fix at the owner, prove again. No retry layer, no ledger (rules 2, 3, 6, 7).
-
 | RED where | Read | Owner | Next |
 |---|---|---|---|
-| PR Cargo step | step name, cargo output | the seam the failing test binds | fix at the seam with its native test |
-| Build target | compiler output for that target | `codex-rs` source, or `.github/actions/build-grok` when only the action changed | fix; no single-target retry |
-| Live `NOT_PROVEN` | `stage=`, `error_marker=`, `backend_status=`, `backend_error=`, `runtime_compatibility=`; in `grok-live-failed-sessions-<sha>`: the redacted session JSONL and `wire/NN-request.shape.json` (key paths and types of each rejected request) with `wire/NN-response.txt` (status, redacted backend error) | capability layer, egress, or ingress per `request-whitelist.md` §Direction; the harness when `runtime_compatibility` is not compatible | a whitelist row or a capability flag; never a new key removal on serialized JSON |
-| Live RED with no code change since the last GREEN | the same fields | backend nondeterminism or a backend change, not a regression until shown | one `workflow_dispatch` Live-only run on the same `binary_run_id` for diagnosis; GREEN → record the observation as a Fact, no code change; RED again → treat as a regression of the Story |
-| `release.py check` or `publish` refusal | the `SystemExit` text | the gate condition the text names | satisfy the condition; do not bypass the gate |
-| `TestFact*` flip | the fact name, recorded and observed class | the `request-whitelist.md` row the fact backs | update the row and its evidence; a Story only when the change is user-visible |
+| PR Cargo | failing step and native test | owning seam | fix the seam and its native test |
+| target build | compiler/staging output | source or `.github/actions/build-grok` | fix and prove on a new PR/push |
+| Grok Live | `NOT_PROVEN` stage and redacted wire evidence | capability, egress, ingress, or harness | fix the actual owner; do not add a blind retry |
+| `TestFact*` | recorded vs observed class | corresponding whitelist row | update evidence and product behavior only when user-visible |
 
-Stage names in `failStage` and the `error_marker` set are stable identifiers
-owned by `grok/live/grok_live_harness_test.go`; a Story's "Partial success is
-not completion" list is the stage list for its test.
+A GREEN build with a RED Live is not a completed Grok proof.
 
-## Publication
+## Delivery
 
-After a proof run is GREEN, from a checkout of the branch head:
-
-```text
-python3 grok/release.py publish --run-id RUN --repo OWNER/NAME
-```
-
-An agent runs `python3 grok/release.py check --run-id RUN --repo OWNER/NAME`
-before asking for publish. `check` applies the same proof gate without
-downloading artifacts or writing `grok-v*` and prints
-`publishable grok-vX.Y.Z from SHA at HEAD` or the refusal.
-
-The publisher refuses unless the run is a successful `grok` push, Live
-succeeded, each `TARGETS` artifact is present, the checkout HEAD is the
-branch head, and that head is the run SHA or descends from it through
-commits that change no proof input under the workflow's `on.push.paths`
-filter. The tag and the release target stay at the run SHA, the commit the
-binaries were built from. It then replaces `grok-vX.Y.Z` and reads back tag
-SHA, release target, asset names, and SHA-256 digests. A failed or cancelled
-proof does not replace the channel. The publisher does not retry a mutation
-that did not read back.
-
-`grok/main` publishes the moving `grok-vmain` channel. A historical
-`grok/rust-vX.Y.Z` line still publishes `grok-vX.Y.Z` if that line is
-pushed. When work moves to a new upstream fixed point on `grok/main`,
-stop pushing the old `grok/rust-v*` line. The old channel stops moving
-because nothing publishes it. The `grok-v0.153.4` channel is frozen.
+After a GREEN push proof, use the artifact from that exact run and target.
+The artifact already contains the complete distribution.
 
 ## Proof authorities
 
 ```text
 cargo fmt/clippy/test     -> PR gate
-cargo build               -> linux x64 musl and mac arm64 binaries
-go test -run '^TestGrok'  -> Live on the Linux musl binary
-GitHub Actions            -> proof orchestration and artifacts
-grok/release.py publish   -> package, channel mutation, readback
+build-grok action         -> complete per-target distribution artifact
+go test -run '^TestGrok'  -> Live on the Linux distribution artifact
+GitHub Actions run        -> proof orchestration and immutable run context
+INSTALL.md                -> human/agent installation procedure
 ```
 
-Workflow mechanics live in [`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
-Publication lives in [`grok/release.py`](../release.py).
-Stock-tag adoption lives in [`carry-forward.md`](./carry-forward.md).
+Workflow mechanics live in
+[`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
+Target staging lives in
+[`.github/actions/build-grok/action.yml`](../../.github/actions/build-grok/action.yml).
+Stock adoption lives in [`carry-forward.md`](./carry-forward.md).

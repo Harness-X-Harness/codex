@@ -1,10 +1,10 @@
 # Install Grok
 
-This release is a downstream Codex product with the Grok Provider adaptations.
+This distribution is a downstream Codex product with the Grok Provider adaptations.
 It is not the default Codex installation and it is not the xAI grok-build
 installation.
 
-The release ships the complete configuration contract as readable files:
+The Actions distribution artifact ships the complete configuration contract as readable files:
 
 ```text
 config.toml.example
@@ -37,7 +37,7 @@ refuses the two common shared-home paths above.
 
 ## Fresh setup
 
-Choose a dedicated directory. The release intentionally does not prescribe one
+Choose a dedicated directory. The distribution intentionally does not prescribe one
 fixed name.
 
 For example, in a shell:
@@ -74,28 +74,36 @@ Set credentials:
 export GROK_API_KEY=...
 ```
 
-Run directly from the extracted archive:
+GitHub Actions artifacts do not preserve Unix executable bits. After download,
+mark the Unix programs executable:
+
+```sh
+chmod +x bin/grok bin/grok-bin bin/codex-code-mode-host
+[ ! -f bin/bwrap ] || chmod +x bin/bwrap
+```
+
+Then run directly from the downloaded distribution artifact:
 
 ```sh
 ./bin/grok
 ```
 
-or put the extracted `bin` directory on `PATH` and run `grok`.
+or put the artifact's `bin` directory on `PATH` and run `grok`.
 
-Published archives currently target:
+Current distribution artifacts target:
 
 - `x86_64-unknown-linux-musl` for servers, CI, and Linux use;
 - `aarch64-apple-darwin` for macOS ARM.
 
-Windows is not currently a publication target. The packaged PowerShell wrapper
-uses the same explicit-`CODEX_HOME` contract when a Windows archive is built.
+Windows is not currently a delivery target. The PowerShell wrapper keeps the
+same explicit-`CODEX_HOME` contract for any future Windows artifact.
 
 ## Updating an existing product Home
 
-A new release may contain changed `config.toml.example` or `models.json`.
-The release does not overwrite either file in your Home.
+A new distribution may contain changed `config.toml.example` or `models.json`.
+The distribution does not automatically overwrite either file in your Home.
 
-Inspect the new release assets first.
+Inspect the new distribution assets first.
 
 - Treat your existing `config.toml` as user-owned. Compare it with the new
   example and merge desired changes deliberately.
@@ -125,10 +133,10 @@ Before writing:
 5. Prefer creating a new dedicated Home when ownership is unclear.
 
 For a fresh approved Home, copy `config.toml.example` to `config.toml` and
-copy the complete release `models.json` beside it. Then set/use `CODEX_HOME`
+copy the complete distribution `models.json` beside it. Then set/use `CODEX_HOME`
 for every invocation of this product.
 
-For an update, show the human the material differences in the release assets
+For an update, show the human the material differences in the distribution assets
 before replacing or merging user state.
 
 ## Model catalog contract

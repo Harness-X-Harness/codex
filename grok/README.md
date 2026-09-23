@@ -6,7 +6,7 @@ at the narrowest backend seams.
 Current human-readable authorities:
 
 - [Architecture](./docs/architecture.md) — Grok Provider and host boundary
-- [Release](./docs/release.md) — moving-channel delivery contract
+- [Delivery](./docs/release.md) — Actions artifact and proof contract
 - [Carry-forward](./docs/carry-forward.md) — adopting a new upstream fixed point onto `grok/main`
 - [Stories](./docs/stories/) — user-visible Grok claims and their Rust/Go proof
 - [Install](./dist/INSTALL.md) — release assets and the dedicated product `CODEX_HOME` contract

@@ -15,8 +15,7 @@ choose exact upstream SHA
   -> open the Codex PR against grok/main
   -> Cargo
   -> push
-  -> linux x64 musl + mac arm64 binaries + Linux Live
-  -> python3 grok/release.py publish
+  -> complete linux x64 musl + mac arm64 distributions + Linux Live
 ```
 
 Choosing the upstream fixed point and adapting Grok semantics are
@@ -59,10 +58,9 @@ product authority. Keep the Rust catalog only as the explicit no-catalog
 compatibility fallback. Keep request whitelist, flat tools, hosted calls, SSE
 sequencing, images, and x_search as dialect-boundary behavior.
 
-Preserve the installation boundary too: the release ships
-`config.toml.example`, `models.json`, and `INSTALL.md`; it does not install
-or migrate a Home. The product requires a dedicated `CODEX_HOME` rather than
-sharing `~/.codex` or `~/.grok`.
+Preserve the installation boundary too: each distribution contains
+`config.toml.example`, `models.json`, and `INSTALL.md`. The product uses a
+dedicated `CODEX_HOME` rather than sharing `~/.codex` or `~/.grok`.
 
 A fix that is independently correct for stock Codex should stay
 provider-neutral so it can be upstreamed later. Whole-number JSON integer
@@ -104,7 +102,8 @@ Every step is a command or an existing proof; none needs a new tool.
 5. **Open the PR against `grok/main`.** Cargo runs on the PR. Merge by
    fast-forward when the semantic stack is reviewable.
 6. **Push `grok/main`.** Linux x64 musl, macOS ARM64, and Linux Live run on push.
-7. **Publish.** `python3 grok/release.py publish` writes `grok-vmain`.
+7. **Consume the proven artifacts.** The successful push run owns the complete
+   per-target distributions.
 
 Historical `grok/rust-v*` lines stay readable as development history. They
 are not the publication authority after `grok/main` exists.
