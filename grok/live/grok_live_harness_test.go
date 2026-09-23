@@ -45,7 +45,6 @@ const (
 	stderrTailMax             = 64 << 10
 
 	grokProvider = "grok"
-	grokModel    = "grok-4.6"
 
 	probeToolName   = "grok_live_probe"
 	probeToolOutput = "GROK_LIVE_TOOL_OK"
@@ -369,11 +368,17 @@ type liveHarness struct {
 	t          *testing.T
 	home       string
 	workspace  string
+	model      string
 	client     *codexsdk.Client
 	requests   *liveServerRequests
 	stderrPath string
 	redactor   *secretRedactor
 	recorder   *wireRecorder
+}
+
+type shippedCatalogModel struct {
+	Slug     string `json:"slug"`
+	Priority int    `json:"priority"`
 }
 
 type xSearchDateWindow struct {
@@ -403,6 +408,66 @@ func shippedGrokProfilePath() string {
 		return filepath.Join("..", "dist", "config.toml.example")
 	}
 	return filepath.Join(filepath.Dir(file), "..", "dist", "config.toml.example")
+}
+
+func readShippedCatalog(t *testing.T) []shippedCatalogModel {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(shippedGrokProfilePath()), "models.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read shipped catalog: %v", err)
+	}
+	var catalog struct {
+		Models []shippedCatalogModel `json:"models"`
+	}
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatalf("parse shipped catalog: %v", err)
+	}
+	if len(catalog.Models) == 0 {
+		t.Fatal("shipped catalog is empty")
+	}
+	return catalog.Models
+}
+
+func nonDefaultCatalogSlug(t *testing.T, configured string) string {
+	t.Helper()
+	var chosen *shippedCatalogModel
+	for _, model := range readShippedCatalog(t) {
+		if model.Slug == configured {
+			continue
+		}
+		if chosen == nil || model.Priority < chosen.Priority {
+			candidate := model
+			chosen = &candidate
+		}
+	}
+	if chosen == nil {
+		t.Fatal("shipped catalog has no model besides the configured default")
+	}
+	return chosen.Slug
+}
+
+func copyShippedModelCatalog(t *testing.T, home string, config []byte) {
+	t.Helper()
+	rel := topLevelTomlString(config, "model_catalog_json")
+	if rel == "" {
+		t.Fatal("shipped Grok profile is missing model_catalog_json")
+	}
+	if filepath.IsAbs(rel) || strings.Contains(rel, "..") {
+		t.Fatalf("shipped model_catalog_json must be a relative file name, got %q", rel)
+	}
+	source := filepath.Join(filepath.Dir(shippedGrokProfilePath()), rel)
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("read shipped model catalog: %v", err)
+	}
+	dest := filepath.Join(home, rel)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		t.Fatalf("create catalog directory: %v", err)
+	}
+	if err := os.WriteFile(dest, data, 0o600); err != nil {
+		t.Fatalf("install shipped model catalog: %v", err)
+	}
 }
 
 // topLevelTomlString reads a top-level `key = "value"` assignment. Keys inside
@@ -582,9 +647,14 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 	if tableString(config, "model_providers.grok", "base_url") != proxyBase {
 		t.Fatal("failed to rewrite Grok base_url onto the wire proxy")
 	}
+	model := topLevelTomlString(config, "model")
+	if model == "" {
+		t.Fatal("shipped Grok profile is missing model")
+	}
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), config, 0o600); err != nil {
 		t.Fatalf("write isolated config: %v", err)
 	}
+	copyShippedModelCatalog(t, home, config)
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("NO_COLOR", "1")
 
@@ -600,7 +670,7 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 		requests.toolName = probeToolName
 		requests.toolOutput = probeToolOutput
 	}
-	h := &liveHarness{t: t, home: home, workspace: workspace, requests: requests, stderrPath: stderrPath, redactor: redactor, recorder: rec}
+	h := &liveHarness{t: t, home: home, workspace: workspace, model: model, requests: requests, stderrPath: stderrPath, redactor: redactor, recorder: rec}
 	t.Cleanup(func() {
 		server.Close()
 		preserveFailedSessions(t, home, redactor, rec)
@@ -691,17 +761,21 @@ func ensureShellToolDisabled(config []byte) []byte {
 }
 
 func (h *liveHarness) requireGrokCatalog(ctx context.Context) {
+	h.requireListedModel(ctx, h.model)
+}
+
+func (h *liveHarness) requireListedModel(ctx context.Context, id string) {
 	h.t.Helper()
 	listed, err := h.client.Models().List(ctx, protocolv2.ModelListParams{})
 	if err != nil {
 		h.failError("catalog_listed", err, codexsdk.ThreadRunResult{}, "", "", "")
 	}
 	for _, model := range listed.Data {
-		if model.ID != grokModel {
+		if model.ID != id {
 			continue
 		}
 		if model.MultiAgentVersion == nil || model.MultiAgentVersion.Value == nil || *model.MultiAgentVersion.Value != protocolv2.MultiAgentVersionV2 {
-			h.failStage("catalog_multi_agent_metadata", "grok-4.6 is missing Multi-Agent V2 metadata")
+			h.failStage("catalog_multi_agent_metadata", id+" is missing Multi-Agent V2 metadata")
 		}
 		hasUltra := false
 		for _, option := range model.SupportedReasoningEfforts {
@@ -711,17 +785,18 @@ func (h *liveHarness) requireGrokCatalog(ctx context.Context) {
 			}
 		}
 		if !hasUltra {
-			h.failStage("catalog_ultra_metadata", "grok-4.6 is missing Ultra reasoning metadata")
+			h.failStage("catalog_ultra_metadata", id+" is missing Ultra reasoning metadata")
 		}
 		return
 	}
-	h.failStage("catalog_lists_grok_4_6", "model/list does not list grok-4.6")
+	h.failStage("catalog_lists_model", "model/list does not list "+id)
 }
 
 type startTurnOpts struct {
 	prompt        string
 	deadline      time.Duration
 	effort        string
+	model         string
 	probeTool     bool
 	approvalNever bool
 	dangerFull    bool
@@ -733,6 +808,9 @@ func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn 
 	h.t.Helper()
 	if opts.deadline <= 0 {
 		opts.deadline = 2 * time.Minute
+	}
+	if opts.model == "" {
+		opts.model = h.model
 	}
 	runCtx, cancel := context.WithTimeout(ctx, opts.deadline)
 	defer cancel()
@@ -750,7 +828,7 @@ func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn 
 	if opts.threadID == "" {
 		thread := protocolv2.ThreadStartParams{
 			CWD:           protocolv2.Value(h.workspace),
-			Model:         protocolv2.Value(grokModel),
+			Model:         protocolv2.Value(opts.model),
 			ModelProvider: protocolv2.Value(grokProvider),
 			Ephemeral:     protocolv2.Value(false),
 		}

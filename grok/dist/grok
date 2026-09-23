@@ -2,6 +2,20 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-: "${GROK_HOME:=${HOME}/.grok}"
-export CODEX_HOME="${GROK_HOME}"
+
+if [ -z "${CODEX_HOME:-}" ]; then
+  echo "CODEX_HOME is required for this product. Choose a dedicated product home; do not use the default Codex or Grok home. See ../INSTALL.md." >&2
+  exit 2
+fi
+
+if [ -n "${HOME:-}" ]; then
+  case "${CODEX_HOME}" in
+    "${HOME}/.codex"|"${HOME}/.grok")
+      echo "Refusing CODEX_HOME=${CODEX_HOME}: this product must not share the default Codex (~/.codex) or Grok (~/.grok) home. See ../INSTALL.md." >&2
+      exit 2
+      ;;
+  esac
+fi
+
+export CODEX_HOME
 exec "${script_dir}/grok-bin" "$@"

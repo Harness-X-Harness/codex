@@ -80,7 +80,7 @@ Keep provider identity and model identity separate:
 
 ```text
 provider = grok
-model    = grok-4.6
+model    = grok-4.7
 ```
 
 For a Thread bound to the stock OpenAI/ChatGPT Provider, authentication, model
@@ -122,13 +122,38 @@ whether a projection is implemented.
 
 ### Model catalog
 
-The exact release-bundled Grok catalog is the sole runtime catalog authority
-for Grok. It contains only models and fields verified for that release. An
-explicit config catalog, when supplied through the supported stock seam,
-replaces the bundle for that Provider instance; catalogs are never merged.
+Product model metadata lives in `grok/dist/models.json`. The shipped profile
+points at it with `model_catalog_json = "models.json"`, resolved relative to
+the config file, and stock Config deserializes that file as `ModelsResponse`.
+The Rust catalog in `grok_catalog.rs` is the compatibility fallback when
+`model_catalog_json` is unset. It stays on `grok-4.6` and is not the product
+picker. Catalogs are never merged, and remote `/models` stays evidence.
+
+Shipped request slugs are `grok-4.7` (priority 0, the profile default) and
+`grok-4.6` (priority 1). `response.model` values such as `grok-4.7-build` are
+backend-resolved ids, not request slugs. `grok-build` is not a shipped request
+slug: that route rejects `reasoning.effort`, and supporting effort there would
+require rewriting the model id before the stock request. Versioned slugs keep
+the verified reasoning, tool, and history contract.
+
+Default model selection and background memory models live in
+`grok/dist/config.toml.example`. Installation is a deliberate human/agent
+operation described by `grok/dist/INSTALL.md`: the product uses a dedicated
+`CODEX_HOME` and must not share the normal `~/.codex` or `~/.grok` Home.
+The release does not install or migrate user state automatically. Wire protocol
+stays in the dialect Rust.
 
 A new or changed remote model becomes selectable only after a release verifies
-and bundles its stock model projection.
+it and adds that request slug to `models.json`.
+
+### Where a product change goes
+
+```text
+model metadata              -> grok/dist/models.json
+default and background ids  -> grok/dist/config.toml.example
+installation / Home setup    -> grok/dist/INSTALL.md
+wire protocol               -> dialect Rust
+```
 
 ### Reasoning projection
 

@@ -9,7 +9,7 @@ Current human-readable authorities:
 - [Release](./docs/release.md) — moving-channel delivery contract
 - [Carry-forward](./docs/carry-forward.md) — adopting a new upstream fixed point onto `grok/main`
 - [Stories](./docs/stories/) — user-visible Grok claims and their Rust/Go proof
-- [Install](./dist/INSTALL.md) — packaged `grok` command and `~/.grok` home
+- [Install](./dist/INSTALL.md) — release assets and the dedicated product `CODEX_HOME` contract
 
 Implementation stays in the stock Codex modules that own each seam. This tree
 does not relocate Rust for directory symmetry.
