@@ -496,7 +496,7 @@ async fn start_if_idle(
             if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
                 session
                     .input_queue
-                    .extend_open_pending_input_for_turn_state(
+                    .extend_pending_input_for_turn_state(
                         turn_state.as_ref(),
                         vec![pending_turn_input(session, input, &turn_context.sub_id).await],
                     )
