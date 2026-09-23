@@ -11727,8 +11727,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
             turn_state.as_ref(),
             vec![TurnInput::ResponseItem(pending_item.clone().into())],
         )
-        .await
-        .expect("open queue accepts pending input");
+        .await;
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 

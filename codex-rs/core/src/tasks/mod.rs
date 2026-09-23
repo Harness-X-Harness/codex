@@ -320,7 +320,7 @@ impl Session {
         };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         self.input_queue
-            .extend_open_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
+            .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
             .await;
         self.emit_turn_start_lifecycle(
             turn_context.as_ref(),
@@ -526,7 +526,7 @@ impl Session {
             .await;
         // Task completion must still save this mail if pre-turn compaction fails.
         self.input_queue
-            .extend_open_pending_input_for_turn_state(turn_state.as_ref(), input)
+            .extend_pending_input_for_turn_state(turn_state.as_ref(), input)
             .await;
         self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
