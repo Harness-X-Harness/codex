@@ -574,7 +574,9 @@ before `grok/release.py publish`; a docs-only commit does not.
   plus incomplete status (`in_progress`, `None`).
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
   default Turn uses the shipped profile model, and
-  `TestGrokPinnedPreviousModel` smokes the other versioned slug. The
+  `TestGrokPinnedPreviousModel` smokes `grok-4.6` with the requested model on
+  `/responses`, a named tool round trip, encrypted reasoning, and a second
+  Turn on that history. The
   encrypted-reasoning continuation, image-edit, custom `apply_patch`,
   hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`
   allowlist (`TestGrokHostedWebSearchAllowlist`), hosted `web_search`
