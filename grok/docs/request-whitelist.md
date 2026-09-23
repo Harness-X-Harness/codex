@@ -327,10 +327,10 @@ current status. `Implemented` means code and native Cargo tests exist;
 | Ability | grok-build shape | Codex entry | Egress | Ingress | Status |
 |---------|------------------|-------------|--------|---------|--------|
 | hosted `web_search` | `{type: web_search}` | `web_search` config / `WebSearchMode` | bare `web_search` | stock `web_search_call` | Live (`TestGrokHostedWebSearch`): a real hosted Turn records `web_search_call`, every message delta reaches the client, and Turn 2 replays it |
-| `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Live (`TestGrokHostedWebSearchAllowlist`): shipped profile plus stock `[tools.web_search] allowed_domains` advertises the filter, a hosted search Turn completes, and Turn 2 replays `web_search_call` |
-| `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | stock `[tools.web_search] excluded_domains` | `filters.excluded_domains` from stock when present (max 5); reject before transport when both lists are non-empty | — | Live (`TestGrokHostedWebSearchExcludedDomains`): shipped profile plus stock `[tools.web_search] excluded_domains` advertises the filter, a hosted search Turn completes, and Turn 2 replays `web_search_call` |
+| `web_search` domain allowlist | `filters.allowed_domains` (max 5) | stock `web_search.filters.allowed_domains` | `filters.allowed_domains` from stock when present (max 5) | — | Live (`TestGrokHostedWebSearchAllowlist`): shipped profile plus stock `[tools.web_search] allowed_domains` advertises the filter on an accepted `/responses` |
+| `web_search` domain blocklist | `filters.excluded_domains` (max 5, exclusive with allowlist) | stock `[tools.web_search] excluded_domains` | `filters.excluded_domains` from stock when present (max 5); reject before transport when both lists are non-empty | — | Live (`TestGrokHostedWebSearchExcludedDomains`): shipped profile plus stock `[tools.web_search] excluded_domains` advertises the filter on an accepted `/responses` |
 | hosted `x_search` | `{type: x_search}` | none; Grok product rule appends it with any tools | `x_search` appended | `is_provider_hosted_tool_call` marks any completed `custom_tool_call` so the harness records instead of dispatching | Live (`TestGrokHostedXSearch`); predicate has a native test |
-| `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | Grok Provider `[model_providers.grok.x_search]` | copied onto the `x_search` tool when the tool key is valid or absent (Provider window fills an absent key); a present invalid date fails closed | — | Live (`TestGrokHostedXSearchDateWindow`): shipped profile plus `[model_providers.grok.x_search]` `from_date` / `to_date` advertises the window, a hosted X search Turn completes, and Turn 2 replays the hosted `custom_tool_call` |
+| `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | Grok Provider `[model_providers.grok.x_search]` | copied onto the `x_search` tool when the tool key is valid or absent (Provider window fills an absent key); a present invalid date fails closed | — | Live (`TestGrokHostedXSearchDateWindow`): shipped profile plus `[model_providers.grok.x_search]` `from_date` / `to_date` advertises the window on an accepted `/responses` |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
 | image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
 | custom `apply_patch` | `custom` tool | `ModelInfo.apply_patch_tool_type = Freeform` | `custom` tool as-is | flat `function_call` reverse map | Live (`TestGrokCustomApplyPatch`) |
@@ -400,16 +400,18 @@ What the recorded facts settle for the whitelist:
   accepted-but-unconsumed note is `text.verbosity` (already omitted).
 - `web_search.filters.allowed_domains` is accepted, native egress emits it
   from the stock tool JSON (max 5), and Live
-  (`TestGrokHostedWebSearchAllowlist`) proves a filtered hosted search Turn
-  and replay. Native egress also emits `filters.excluded_domains` from the
+  (`TestGrokHostedWebSearchAllowlist`) proves the filter is on an accepted
+  `/responses`. Native egress also emits `filters.excluded_domains` from the
   stock tool JSON (max 5), exclusive with the allowlist at config load, and
-  Live (`TestGrokHostedWebSearchExcludedDomains`) proves a blocklisted hosted
-  search Turn and replay. The `x_search` date window is accepted; native
+  Live (`TestGrokHostedWebSearchExcludedDomains`) proves that filter is on an
+  accepted `/responses`. The hosted search Turn and replay stay on
+  `TestGrokHostedWebSearch`. The `x_search` date window is accepted; native
   egress emits
   validated Provider `[model_providers.grok.x_search]` `from_date` / `to_date`
   on the `x_search` tool (canonical tool JSON wins). Live
-  (`TestGrokHostedXSearchDateWindow`) proves a windowed hosted X search Turn
-  and replay.
+  (`TestGrokHostedXSearchDateWindow`) proves the window is on an accepted
+  `/responses`. The hosted X search Turn and replay stay on
+  `TestGrokHostedXSearch`.
 
 B1, tighten toward grok-build:
 
