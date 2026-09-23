@@ -285,6 +285,23 @@ impl InputQueue {
         turn_state.lock().await.pending_input.extend_if_open(input)
     }
 
+    /// Appends to a turn whose queue is still open.
+    ///
+    /// Start and wakeup paths reserve a fresh queue. Closing happens only when
+    /// completion snapshots pending input, so rejection here is a broken turn.
+    pub(crate) async fn extend_open_pending_input_for_turn_state(
+        &self,
+        turn_state: &Mutex<TurnState>,
+        input: Vec<TurnInput>,
+    ) {
+        assert!(
+            self.extend_pending_input_for_turn_state(turn_state, input)
+                .await
+                .is_ok(),
+            "pending turn input was already closed"
+        );
+    }
+
     pub(super) fn signal_steer(&self) {
         self.activity_tx.send_replace(InputQueueActivity::Steer);
     }
