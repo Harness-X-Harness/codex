@@ -630,13 +630,16 @@ func startGrokLive(t *testing.T, opts liveOptions) *liveHarness {
 		t.Fatal("webSearchAllowedDomains and webSearchExcludedDomains overlays are mutually exclusive")
 	}
 	if len(opts.webSearchAllowedDomains) > 0 {
-		config = overlayWebSearchAllowedDomains(config, opts.webSearchAllowedDomains)
+		config = appendConfigTable(config, "tools.web_search", "allowed_domains = "+tomlStringList(opts.webSearchAllowedDomains))
 	}
 	if len(opts.webSearchExcludedDomains) > 0 {
-		config = overlayWebSearchExcludedDomains(config, opts.webSearchExcludedDomains)
+		config = appendConfigTable(config, "tools.web_search", "excluded_domains = "+tomlStringList(opts.webSearchExcludedDomains))
 	}
 	if opts.xSearchWindow.fromDate != "" && opts.xSearchWindow.toDate != "" {
-		config = overlayXSearchDateWindow(config, opts.xSearchWindow)
+		config = appendConfigTable(config, "model_providers.grok.x_search",
+			`from_date = "`+opts.xSearchWindow.fromDate+`"`,
+			`to_date = "`+opts.xSearchWindow.toDate+`"`,
+		)
 	}
 	upstream := tableString(config, "model_providers.grok", "base_url")
 	if upstream == "" {
@@ -758,6 +761,52 @@ func ensureShellToolDisabled(config []byte) []byte {
 	copy(out, config)
 	copy(out[len(config):], extra)
 	return out
+}
+
+func tomlStringList(values []string) string {
+	quoted := make([]string, len(values))
+	for i, value := range values {
+		quoted[i] = `"` + value + `"`
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+func appendConfigTable(config []byte, table string, assignments ...string) []byte {
+	var b strings.Builder
+	b.WriteString("\n[")
+	b.WriteString(table)
+	b.WriteString("]\n")
+	for _, assignment := range assignments {
+		b.WriteString(assignment)
+		b.WriteByte('\n')
+	}
+	extra := []byte(b.String())
+	out := make([]byte, len(config)+len(extra))
+	copy(out, config)
+	copy(out[len(config):], extra)
+	return out
+}
+
+func (h *liveHarness) acceptedResponses(ctx context.Context) *wireExchange {
+	h.t.Helper()
+	h.requireGrokCatalog(ctx)
+	h.runTurn(ctx, startTurnOpts{
+		prompt:        "Reply with a short confirmation.",
+		deadline:      2 * time.Minute,
+		approvalNever: true,
+		disableShell:  true,
+	})
+	last := lastResponsesExchange(h.recorder.snapshot())
+	if last == nil || last.status < 200 || last.status > 299 {
+		status := 0
+		detail := "no /responses exchange recorded"
+		if last != nil {
+			status = last.status
+			detail = collapsedBackendError(string(last.responseBody))
+		}
+		h.failStage("responses_accepted", fmt.Sprintf("last /responses present=%t status=%d (%s), expected HTTP 2xx", last != nil, status, detail))
+	}
+	return last
 }
 
 func (h *liveHarness) requireGrokCatalog(ctx context.Context) {
