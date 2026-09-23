@@ -1,8 +1,10 @@
 """Unit tests for the grok publish gate."""
 
+import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from io import StringIO
@@ -399,6 +401,108 @@ class CheckTests(unittest.TestCase):
         ):
             release.main()
         mocked.assert_called_once_with(REPO, "9", checkout)
+
+
+class CatalogPackagingTests(unittest.TestCase):
+    def _package_linux_archive(self, root: Path) -> Path:
+        raw = root / "raw" / "x86_64-unknown-linux-musl"
+        raw.mkdir(parents=True)
+        for name in ("codex", "codex-code-mode-host", "bwrap"):
+            (raw / name).write_bytes(b"bin")
+        output = root / "out"
+        release.package(
+            root / "raw",
+            output,
+            ROOT,
+            "main",
+            ("x86_64-unknown-linux-musl",),
+        )
+        return output / release.archive_name("main", "x86_64-unknown-linux-musl")
+
+    def test_archive_contains_config_catalog_and_install_guide(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = self._package_linux_archive(Path(temporary))
+            with tarfile.open(archive, "r:gz") as packed:
+                names = set(packed.getnames())
+            prefix = f"{release.tag_for('main')}/"
+            self.assertIn(prefix + "config.toml.example", names)
+            self.assertIn(prefix + "models.json", names)
+            self.assertIn(prefix + "INSTALL.md", names)
+            self.assertNotIn(prefix + "install-grok.sh", names)
+            self.assertNotIn(prefix + "install-grok.ps1", names)
+
+    def test_channel_publishes_the_readable_configuration_contract(self) -> None:
+        self.assertEqual(
+            set(release.CHANNEL_FILES),
+            {"config.toml.example", "models.json", "INSTALL.md"},
+        )
+        self.assertNotIn("install-grok.sh", release.DIST_FILES)
+        self.assertNotIn("install-grok.ps1", release.DIST_FILES)
+
+    def test_install_guide_requires_a_dedicated_product_home(self) -> None:
+        text = (ROOT / "grok" / "dist" / "INSTALL.md").read_text(encoding="utf-8")
+        self.assertIn("CODEX_HOME", text)
+        self.assertIn("~/.codex", text)
+        self.assertIn("~/.grok", text)
+        self.assertIn("There is no installer", text)
+        self.assertIn("assisting agent", text)
+
+    def test_posix_wrapper_requires_explicit_isolated_codex_home(self) -> None:
+        wrapper_text = (ROOT / "grok" / "dist" / "grok").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "human-home"
+            product_home = root / "product-home"
+            bindir = root / "bin"
+            home.mkdir()
+            product_home.mkdir()
+            bindir.mkdir()
+            wrapper = bindir / "grok"
+            binary = bindir / "grok-bin"
+            wrapper.write_text(wrapper_text, encoding="utf-8")
+            binary.write_text(
+                '#!/bin/sh\nprintf "CODEX_HOME=%s\\n" "$CODEX_HOME"\n',
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            binary.chmod(0o755)
+
+            base_env = {**os.environ, "HOME": str(home)}
+            missing_env = dict(base_env)
+            missing_env.pop("CODEX_HOME", None)
+            missing = subprocess.run(
+                ["sh", str(wrapper)],
+                env=missing_env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(missing.returncode, 2)
+            self.assertIn("CODEX_HOME is required", missing.stderr)
+
+            for shared in (home / ".codex", home / ".grok"):
+                blocked = subprocess.run(
+                    ["sh", str(wrapper)],
+                    env={**base_env, "CODEX_HOME": str(shared)},
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(blocked.returncode, 2)
+                self.assertIn("must not share", blocked.stderr)
+
+            allowed = subprocess.run(
+                ["sh", str(wrapper)],
+                env={**base_env, "CODEX_HOME": str(product_home)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+            self.assertEqual(
+                allowed.stdout.strip(),
+                f"CODEX_HOME={product_home}",
+            )
 
 
 if __name__ == "__main__":

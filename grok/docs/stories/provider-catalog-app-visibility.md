@@ -27,14 +27,15 @@ runtime catalog.
 **when** the agent reads App Server `model/list`,
 **then**:
 
-- the response contains exactly the release-bundled Grok catalog (currently the
-  single `grok-4.6` entry) through the stock `Model` DTO;
+- the response contains exactly the shipped Grok catalog (`grok-4.7`, then
+  `grok-4.6`) through the stock `Model` DTO, with `grok-4.7` as the default;
 - the release-bundled identity, reasoning efforts, default effort, and
   Multi-Agent version reach `model/list` unchanged;
 - no model from another Provider Profile appears;
 - runtime availability of a remote `/models` route does not change the
   catalog; and
-- a Home with only the stock OpenAI/ChatGPT profile does not list `grok-4.6`.
+- a Home with only the stock OpenAI/ChatGPT profile does not list `grok-4.7`
+  or `grok-4.6`.
 
 ## Partial success is not completion
 
@@ -84,9 +85,11 @@ the same fixed point.
 
 ## Executable contract
 
-`list_models_uses_grok_release_catalog_through_stock_model_dto` in
-`codex-rs/app-server/tests/suite/v2/grok_model_list.rs` starts a real App
-Server on a Grok-profile Home and asserts that `model/list` returns exactly
-the release-bundled `grok-4.6` `Model` DTO. The stock `model/list` suite in
-the same crate is the stock compatibility control. Both run through native
-`cargo test` in `grok.yml`.
+`list_models_uses_shipped_catalog_json` in
+`codex-rs/app-server/tests/suite/v2/grok_model_list.rs` copies
+`grok/dist/config.toml.example` and `grok/dist/models.json` into a Home and
+asserts that `model/list` returns `grok-4.7` then `grok-4.6`.
+`list_models_uses_grok_release_catalog_through_stock_model_dto` keeps the
+no-`model_catalog_json` Rust fallback on `grok-4.6`. The stock `model/list`
+suite in the same crate is the stock compatibility control. Both Grok tests
+run through native `cargo test` in `grok.yml`.

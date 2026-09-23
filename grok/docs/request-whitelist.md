@@ -248,7 +248,7 @@ B2; keep today's egress until Live decides).
 | `tools` | emit when non-empty; omit `tools` and `tool_choice` together when empty | Live-verified no-tool request |
 | `tool_choice` (`"auto"`) | emit with tools | Live |
 | `parallel_tool_calls` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) ≠ consumed; grok-build `None`; this B1 probe |
-| `reasoning.effort`, `reasoning.summary` | emit for versioned models (`grok-4.6`, `grok-4.7`) | Live on `grok-4.6`; `TestFactModelRouteGrok46` / `TestFactModelRouteGrok47`. Model id `grok-build` rejects `reasoning.effort` (`TestFactModelRouteGrokBuild`: `400/Model grok-build does not support parameter reasoningEffort.`). That id is a Grok Build route, not a drop-in synonym for a versioned slug; CLI `--effort` may rewrite the model id before serialization. Do not confuse the model id with the `xai-org/grok-build` harness named in other evidence cells. |
+| `reasoning.effort`, `reasoning.summary` | emit for versioned models (`grok-4.6`, `grok-4.7`) | Live on the shipped default (`TestGrokBasic`) and the pinned previous slug (`TestGrokPinnedPreviousModel`); `TestFactModelRouteGrok46` / `TestFactModelRouteGrok47`. Model id `grok-build` rejects `reasoning.effort` (`TestFactModelRouteGrokBuild`: `400/Model grok-build does not support parameter reasoningEffort.`). That route is not a shipped request slug. CLI `--effort` may rewrite the model id before serialization. Do not confuse the model id with the `xai-org/grok-build` harness named in other evidence cells. |
 | `reasoning.context` | omit | stock sets it only for `use_responses_lite`, which the Grok catalog disables |
 | `store: false` | omit | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) ≠ consumed; grok-build `None`; this B1 probe |
 | `stream: true` | emit | Codex SSE transport requirement |
@@ -541,7 +541,7 @@ before `grok/release.py publish`; a docs-only commit does not.
   values `grok-4.7-build` / `grok-4.6-build` are backend-resolved ids, not
   request slugs. Attaching `reasoning: { "effort": "high" }` to
   `model: "grok-build"` is rejected; that JSON shape remains correct for
-  versioned models.
+  versioned models. The product catalog does not advertise `grok-build`.
 - `codex-rs/codex-api/src/grok_request_tests.rs`: dialect identity from
   `WireApi` (name and hostname are not selectors), copy-only canonical
   request, one accepted fixture per `ResponseItem` variant and tool type
@@ -557,7 +557,8 @@ before `grok/release.py publish`; a docs-only commit does not.
   unpaired `custom_tool_call`, fail-closed search tools, and encrypted
   reasoning without a content channel.
 - `codex-rs/app-server/tests/suite/v2/grok_model_list.rs` and
-  `grok_provider_binding.rs`: one process serves the bundled Grok catalog
+  `grok_provider_binding.rs`: one process serves either the Rust fallback
+  catalog or the shipped `models.json` catalog through `model_catalog_json`,
   and keeps `model_provider` bound across continuation, fork, resume, and
   compaction.
 - `codex-rs/core/src/context_manager/history_tests.rs`:
@@ -570,6 +571,8 @@ before `grok/release.py publish`; a docs-only commit does not.
   name, including an unknown completed name (`apply_patch` / `x_new_subtool`),
   plus incomplete status (`in_progress`, `None`).
 - Live: `grok/live` `go test -run '^TestGrok'` on the musl binary. The
+  default Turn uses the shipped profile model, and
+  `TestGrokPinnedPreviousModel` smokes the other versioned slug. The
   encrypted-reasoning continuation, image-edit, custom `apply_patch`,
   hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`
   allowlist (`TestGrokHostedWebSearchAllowlist`), hosted `web_search`

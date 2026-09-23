@@ -62,6 +62,12 @@ stay out of `TARGETS` until they have users.
 Live consumes the musl `codex` binary from the same run. It does not wait
 for Darwin. Publication packages those two binaries.
 
+The package and moving channel also expose the readable product configuration
+contract: `config.toml.example`, complete `models.json`, and `INSTALL.md`.
+There is no release installer. Publication never writes a user Home. A human or
+agent follows `INSTALL.md`, chooses a dedicated product `CODEX_HOME`, and
+must not reuse the normal `~/.codex` or `~/.grok` Home.
+
 Both events run only when a proof input changes. Every path is a proof
 input unless the workflow's `paths` filter negates it; the negated set is
 text that nothing compiles, packages, or executes (repository docs, root

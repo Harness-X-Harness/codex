@@ -53,10 +53,16 @@ reuse when they reduce glue:
 - `ToolPolicy`
 - provider `model_catalog_url`
 
-Those seams are not substitutes for Grok wire semantics. Keep the bundled
-Grok catalog as the release authority. Keep request whitelist, flat tools,
-hosted calls, SSE sequencing, images, and x_search as dialect-boundary
-behavior.
+Those seams are not substitutes for Grok wire semantics. Keep the release
+`grok/dist/models.json` catalog through stock `model_catalog_json` as the
+product authority. Keep the Rust catalog only as the explicit no-catalog
+compatibility fallback. Keep request whitelist, flat tools, hosted calls, SSE
+sequencing, images, and x_search as dialect-boundary behavior.
+
+Preserve the installation boundary too: the release ships
+`config.toml.example`, `models.json`, and `INSTALL.md`; it does not install
+or migrate a Home. The product requires a dedicated `CODEX_HOME` rather than
+sharing `~/.codex` or `~/.grok`.
 
 A fix that is independently correct for stock Codex should stay
 provider-neutral so it can be upstreamed later. Whole-number JSON integer
@@ -109,4 +115,7 @@ are not the publication authority after `grok/main` exists.
 - Merge an old Grok line into a new stock tag.
 - Advance the upstream fixed point without recording it.
 - Add TrustedTunnel hostname capability profiles.
-- Replace the bundled catalog with live `/models`.
+- Replace the shipped catalog with live `/models`.
+- Reintroduce an installer that mutates a user Home.
+- Default this product to `~/.codex` or `~/.grok`.
+- Reproduce grok-build effort-to-model-id routing inside Codex.
