@@ -525,7 +525,7 @@ lands first because it is the surface both build on.
 
 ### Delivery
 
-PR to `grok/main` runs Cargo. Push runs six targets and Live. Publish
+PR to `grok/main` runs Cargo. Push runs linux x64 musl, macOS ARM64, and Live. Publish
 follows [`release.md`](./release.md): only from a GREEN run whose SHA is the
 branch head or is separated from it by inert paths alone. A whitelist commit
 that lands after a GREEN run is a proof input and needs its own GREEN run
