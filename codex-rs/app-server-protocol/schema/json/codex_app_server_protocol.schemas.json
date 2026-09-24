@@ -25905,6 +25905,15 @@
               }
             ]
           },
+          "excluded_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "location": {
             "anyOf": [
               {
