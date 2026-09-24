@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::provider::ApiDialect;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
@@ -80,8 +81,19 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = EncodedJsonBody::encode(&request)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let provider = self.session.provider();
+        let body = match provider.dialect {
+            ApiDialect::OpenAi => EncodedJsonBody::encode(&request).map_err(|e| {
+                ApiError::Stream(format!("failed to encode responses request: {e}"))
+            })?,
+            ApiDialect::Grok => {
+                let projected = crate::grok_request::build(&request, provider)
+                    .map_err(|e| ApiError::Stream(e.to_string()))?;
+                EncodedJsonBody::encode(&projected).map_err(|e| {
+                    ApiError::Stream(format!("failed to encode responses request: {e}"))
+                })?
+            }
+        };
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
