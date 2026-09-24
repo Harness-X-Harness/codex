@@ -1,5 +1,5 @@
 name: Build Grok target
-description: Build and stage one Grok release target with the shared release contract.
+description: Build and stage one complete Grok distribution artifact.
 
 inputs:
   target:
@@ -65,7 +65,7 @@ runs:
           export AWS_LC_SYS_NO_JITTER_ENTROPY=1
         fi
         cargo build --release --target "${TARGET}" --bin codex --bin codex-code-mode-host
-    - name: Stage raw binaries
+    - name: Stage Grok distribution
       env:
         TARGET: ${{ inputs.target }}
       working-directory: codex-rs
@@ -73,19 +73,28 @@ runs:
       run: |
         set -euo pipefail
         release_dir="${CARGO_TARGET_DIR:-target}/${TARGET}/release"
-        output="${RUNNER_TEMP}/raw/${TARGET}"
-        mkdir -p "${output}"
+        output="${RUNNER_TEMP}/dist/${TARGET}"
+        bin_dir="${output}/bin"
+        mkdir -p "${bin_dir}"
+        cp "${GITHUB_WORKSPACE}/grok/dist/config.toml.example" "${output}/config.toml.example"
+        cp "${GITHUB_WORKSPACE}/grok/dist/models.json" "${output}/models.json"
+        cp "${GITHUB_WORKSPACE}/grok/dist/INSTALL.md" "${output}/INSTALL.md"
+        cp "${GITHUB_WORKSPACE}/LICENSE" "${output}/LICENSE"
         if [[ "${TARGET}" == *windows* ]]; then
-          cp "${release_dir}/codex.exe" "${release_dir}/codex-code-mode-host.exe" "${output}/"
+          cp "${release_dir}/codex.exe" "${bin_dir}/grok-bin.exe"
+          cp "${release_dir}/codex-code-mode-host.exe" "${bin_dir}/codex-code-mode-host.exe"
+          cp "${GITHUB_WORKSPACE}/grok/dist/grok.ps1" "${bin_dir}/grok.ps1"
         else
-          cp "${release_dir}/codex" "${release_dir}/codex-code-mode-host" "${output}/"
+          cp "${release_dir}/codex" "${bin_dir}/grok-bin"
+          cp "${release_dir}/codex-code-mode-host" "${bin_dir}/codex-code-mode-host"
+          cp "${GITHUB_WORKSPACE}/grok/dist/grok" "${bin_dir}/grok"
         fi
         if [[ "${TARGET}" == *linux* ]]; then
-          cp "${release_dir}/bwrap" "${output}/"
+          cp "${release_dir}/bwrap" "${bin_dir}/bwrap"
         fi
     - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
-        name: grok-build-${{ github.sha }}-${{ inputs.target }}
-        path: ${{ runner.temp }}/raw/${{ inputs.target }}
+        name: grok-${{ github.sha }}-${{ inputs.target }}
+        path: ${{ runner.temp }}/dist/${{ inputs.target }}
         if-no-files-found: error
         retention-days: 90

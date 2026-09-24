@@ -527,11 +527,10 @@ lands first because it is the surface both build on.
 
 ### Delivery
 
-PR to `grok/main` runs Cargo. Push runs linux x64 musl, macOS ARM64, and Live. Publish
-follows [`release.md`](./release.md): only from a GREEN run whose SHA is the
-branch head or is separated from it by inert paths alone. A whitelist commit
-that lands after a GREEN run is a proof input and needs its own GREEN run
-before `grok/release.py publish`; a docs-only commit does not.
+PR to `grok/main` runs Cargo. Push produces the complete Linux x64 musl and
+macOS ARM64 distribution artifacts and runs Live on the Linux artifact. Delivery
+follows [`release.md`](./release.md). A whitelist commit is a proof input and
+needs its own GREEN PR/push proof; a docs-only commit does not.
 
 ## Tests
 
@@ -651,7 +650,7 @@ as a B2 commit. Do not hard-code it at egress.
 - Touching `CompactClient` or `RemoteCompactionV2`; the compaction-blob `400`
   was reasoning replay, not a compact RPC.
 - Making the official stock Codex app speak Grok; it has no dialect and users
-  replace the binary with the published Grok artifact.
+  replace the binary with the proven Grok distribution artifact.
 - A second selector. `wire_api = "grok_responses"` and the resolved Provider
   identity remain the only dialect selectors.
 - Hiding a feature at egress that the capability layer can hide. Egress

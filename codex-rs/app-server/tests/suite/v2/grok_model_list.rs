@@ -11,11 +11,11 @@ use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-/// A Grok-bound App Server process serves exactly the release-bundled Grok
-/// catalog through the stock `Model` DTO: one process, one Provider, one
-/// catalog. Nothing from another Provider is merged in.
+/// A Grok-bound App Server process without `model_catalog_json` serves the
+/// Rust compatibility fallback through the stock `Model` DTO: one process,
+/// one Provider, one catalog. Nothing from another Provider is merged in.
 #[tokio::test]
-async fn list_models_uses_grok_release_catalog_through_stock_model_dto() -> Result<()> {
+async fn list_models_uses_grok_compatibility_fallback_through_stock_model_dto() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -48,7 +48,7 @@ supports_websockets = false
         .await?;
 
     let [model] = data.as_slice() else {
-        panic!("expected the single release-bundled Grok model, got {data:?}");
+        panic!("expected the single Grok compatibility fallback model, got {data:?}");
     };
     assert_eq!(model.id, "grok-4.6");
     assert_eq!(model.model, "grok-4.6");

@@ -2,7 +2,7 @@ name: grok-facts
 
 # Facts are recorded observations of the xAI Responses API, independent of the
 # shipped Codex binary. A RED result here revises a request-whitelist.md row
-# and its evidence; it never gates grok.yml or release.py publish.
+# and its evidence; it does not gate the grok.yml delivery proof.
 #
 # Runs when the Facts suite itself changes (so a recorded class is checked
 # against the endpoint before it lands) and on demand. The workflow file is not
