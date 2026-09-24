@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn remote_thread_config_rejects_x_search_without_lossy_conversion() {
         let mut provider = expected_provider();
-        provider.x_search = Some(codex_api::XSearchProviderConfig {
+        provider.x_search = Some(codex_model_provider_info::XSearchProviderConfig {
             from_date: Some("2026-01-01".to_string()),
             to_date: None,
         });
