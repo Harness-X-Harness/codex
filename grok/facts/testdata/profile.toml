@@ -1,0 +1,12 @@
+# comment ignored
+model = "fixture-model"
+model_provider = 'fixture-provider'
+
+[model_providers.grok]
+model = "nested-model"
+model_provider = "nested-provider"
+name = "Grok"
+base_url = "https://example.invalid/v1/"
+
+[other]
+base_url = "https://other.invalid/"
