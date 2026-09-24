@@ -1,0 +1,264 @@
+# Grok architecture
+
+Grok adds a third-party Responses API Provider to stock Codex without replacing
+the stock harness.
+
+Stock Codex owns session and Thread lifecycle, model selection and Turn
+execution, prompts, tools and MCP, Code Mode, Multi-Agent V2 and Ultra,
+sandbox and approvals, history and context, and App Server / Codex UI
+contracts. Grok-specific code exists only for verified Grok backend API
+differences.
+
+This document is the product Northstar. It is not executable acceptance
+input. Delivery lives in [`release.md`](./release.md).
+
+```text
+Stock Codex owns the harness. Grok keeps only verified backend differences.
+One App Server process serves one Provider Profile.
+Durable identity is the stock model_provider id.
+wire_api = "grok_responses" is the serialized Grok selector.
+ApiDialect is the runtime HOW, mapped once from WireApi.
+HTTP/SSE remains stock Responses.
+```
+
+Keep the responsibility split explicit:
+
+```text
+WHO   = model_provider / runtime ModelProvider
+HOW   = explicit ApiDialect { OpenAi, Grok }
+WHERE = resolved base_url / WorkspaceRoutingContext
+```
+
+`WireApi::GrokResponses` maps to `ApiDialect::Grok` exactly once in
+`ModelProviderInfo::to_api_provider()`. Responses request projection, SSE
+sequencing, and Images consume that dialect. Display name and hostname do
+not select dialect. `responses_api_provider()` may change destination; it
+must not mutate dialect.
+
+TrustedTunnel is a transparent transport and Facts evidence path implemented
+by Mini. It is not a Grok capability profile and must not be keyed as
+`grok.trustedtunnel.app` or `xai.trustedtunnel.app` runtime behavior.
+
+Deterministic proof is native Cargo tests at the owning seams.
+Real-provider composition is `grok/live`. Git owns source identity as the
+commit SHA.
+
+## Source of truth
+
+Use three current sources with distinct roles:
+
+1. The exact stock Codex tag this line is built from — harness architecture
+   and stock behavior.
+2. Current Grok source in this repository — implemented Codex behavior and the
+   release-bundled Grok catalog.
+3. xAI/Grok API behavior — backend protocol semantics.
+
+Working rule: stock Codex owns the harness. Current Provider facts own only
+verified backend differences.
+
+Remote Grok Gateway `/models` observations are revalidation input for a future
+release. They are not a runtime catalog, cache, fallback, or availability
+authority.
+
+## Session and process model
+
+A Codex Thread is bound to one Provider Profile for its lifetime. Model
+selection may change only within that Provider through stock behavior.
+
+An App Server process serves one Provider Profile: the `model_provider` it was
+started with. Its `model/list` is that Provider's catalog, every Thread it
+starts is bound to that Provider, and its resume list is that Provider's
+Threads. Using another Provider means starting another process (a
+`model_provider` override or a separate `CODEX_HOME`). Catalogs from different
+Providers are never merged.
+
+`wire_api = "grok_responses"` is the only serialized selector for the Grok
+Provider implementation. The Thread's existing `model_provider` binding
+selects the Profile; that Profile constructs one stock Provider instance.
+
+Keep provider identity and model identity separate:
+
+```text
+provider = grok
+model    = grok-4.7
+```
+
+For a Thread bound to the stock OpenAI/ChatGPT Provider, authentication, model
+facts, tools, requests, events, durable history, Thread lifecycle, App Server
+behavior, and UI behavior remain stock Codex. A process started with the stock
+OpenAI/ChatGPT profile is a stock Codex process; Grok adds nothing to its
+picker.
+
+## Provider boundary
+
+Codex core operates on canonical Codex concepts. Grok projects at the
+narrowest backend boundary:
+
+```text
+Codex UI / App Server
+        |
+        v
+Stock Model / Thread contracts
+        |
+        v
+Codex Harness
+        |
+        v
+Stock Provider boundary
+        |
+        +-- model catalog
+        +-- auth / endpoint
+        +-- reasoning projection
+        +-- request/history projection
+        +-- tool wire projection
+        +-- response dialect
+        |
+        v
+Grok Responses API
+```
+
+A listed projection is the allowed target. Current source and Stories own
+whether a projection is implemented.
+
+### Model catalog
+
+Product model metadata lives in `grok/dist/models.json`. The shipped profile
+points at it with `model_catalog_json = "models.json"`, resolved relative to
+the config file, and stock Config deserializes that file as `ModelsResponse`.
+The Rust catalog in `grok_catalog.rs` is the compatibility fallback when
+`model_catalog_json` is unset. It stays on `grok-4.6` and is not the product
+picker. Catalogs are never merged, and remote `/models` stays evidence.
+
+Shipped request slugs are `grok-4.7` (priority 0, the profile default) and
+`grok-4.6` (priority 1). `response.model` values such as `grok-4.7-build` are
+backend-resolved ids, not request slugs. `grok-build` is not a shipped request
+slug: that route rejects `reasoning.effort`, and supporting effort there would
+require rewriting the model id before the stock request. Versioned slugs keep
+the verified reasoning, tool, and history contract.
+
+Default model selection and background memory models live in
+`grok/dist/config.toml.example`. Installation is a deliberate human/agent
+operation described by `grok/dist/INSTALL.md`: the product uses a dedicated
+`CODEX_HOME` and must not share the normal `~/.codex` or `~/.grok` Home.
+The release does not install or migrate user state automatically. Wire protocol
+stays in the dialect Rust.
+
+A new or changed remote model becomes selectable only after a release verifies
+it and adds that request slug to `models.json`.
+
+### Where a product change goes
+
+```text
+model metadata              -> grok/dist/models.json
+default and background ids  -> grok/dist/config.toml.example
+installation / Home setup    -> grok/dist/INSTALL.md
+wire protocol               -> dialect Rust
+```
+
+### Reasoning projection
+
+Keep logical Codex execution state separate from the backend wire value.
+Preserve logical `Ultra` in Codex state and project only the Grok wire effort
+to `xhigh` at Provider egress. This does not advertise synthetic Grok
+`Ultra` or make an OpenAI-specific internal request valid for Grok.
+
+### Tool projection
+
+Codex builds and routes canonical tools. Grok keeps `namespace_tools` enabled
+and projects those tools as flat functions at Provider egress. The Grok
+Responses backend does not consume the stock namespace-tool wire form. The
+reverse mapping restores a wire call to its canonical tool identity before
+dispatch.
+
+### History projection
+
+Before model input is sent, Grok may project canonical Codex response/history
+items into the representation its Responses implementation accepts. Stock
+OpenAI remains the identity path. Projection encodes only verified backend
+requirements and does not mutate durable history.
+
+### Response decoding and request dialect
+
+Normalize Provider wire responses into stock Codex response items as early as
+practical. Wire-level differences (tool declarations, tool-choice, hosted-tool
+fields, response-item shapes, streaming events, image request/response)
+belong in the API dialect boundary. `ApiDialect` is that boundary; it is not
+a second serialized selector. The Grok request is constructed from a
+whitelist of verified fields plus Grok-native extensions, not derived by
+removing keys from the OpenAI request; the strategy, the capability-layer
+facts it relies on, and the mapping live in
+[`request-whitelist.md`](./request-whitelist.md). Invalid search
+restrictions fail closed. Remote thread config rejects `GrokResponses`
+instead of converting it to `Responses`.
+
+## Capabilities
+
+Capabilities describe semantics available to Codex after Provider adaptation.
+A capability is enabled only after its complete Codex-to-Provider path is
+verified. Every other Grok capability remains unavailable.
+
+Any stock internal task that selects a Provider-private model must use
+Provider-owned policy. If Grok has no verified model and transport for that
+task, fail before Provider egress.
+
+## Ultra and Multi-Agent V2
+
+Multi-Agent V2 remains a stock Codex harness feature. After the complete
+history, tool, dialect, capability, and Multi-Agent V2 path is verified for a
+Grok model, the target composition is:
+
+```text
+Grok Ultra
+=
+logical Codex Ultra
++ Grok maximum native reasoning effort
++ stock Proactive Multi-Agent V2
+```
+
+Reuse the complete stock collaboration lifecycle and controls.
+
+## Stock compatibility
+
+A Thread bound to the stock OpenAI/ChatGPT Provider must remain externally
+equivalent to the declared upstream Codex fixed point. Allowed application-level
+differences are the selected Provider's stock model projection and Provider
+labels in existing App Server and picker fields. Those differences must not
+change a ChatGPT-bound Turn's Tool Plan, request admission, transport
+lifecycle, durable history, resume/fork/compaction, App Server item shape, or
+error behavior.
+
+A change to a seam shared by stock Codex and Grok requires both Grok evidence
+and a stock regression at the same observable boundary.
+
+## Upstream adoption
+
+Treat each official upstream Codex tag as the architecture authority for that
+candidate. Preserve this design and the verified user-visible outcomes. Do not
+preserve a previous Grok implementation shape merely because an earlier stock
+version required it.
+
+When stock Codex now owns a required capability, use the stock seam and remove
+the superseded Grok mechanism. Port Grok as one semantic commit per stock
+seam. Native Grok and stock compatibility tests travel with the behavior they
+prove.
+
+The maintainer procedure lives in [`carry-forward.md`](./carry-forward.md).
+`grok/main` is the latest validated product head. Candidate version lines such
+as `grok/rust-v0.156.1` receive review work from a matching `carry/*` branch,
+then receive their own build and Live proof. Promotion of a proven version-line
+head to `grok/main` is a separate action.
+
+## Proof
+
+Stories in [`stories/`](./stories/) name the user-visible claims and the Rust
+or Go test that binds each claim. Do not add documentation validators,
+keyword greps, Story inventories as tests, or a second SHA/ledger authority.
+How proof is scheduled and how `grok-v*` is written is
+[`release.md`](./release.md).
+
+Host Goal and independent `/workflow` are a sibling product. Their design is
+not this document.
+
+Mini Proxy authorization, grants, credits, routing, credentials, transport,
+and accounting are not Grok product contracts. Traffic may pass through Mini;
+that does not move those Mini contracts here.

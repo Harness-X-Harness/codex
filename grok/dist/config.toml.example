@@ -1,0 +1,18 @@
+model = "grok-4.7"
+model_provider = "grok"
+# Stock catalog seam. Relative paths resolve against this file's directory.
+model_catalog_json = "models.json"
+
+[model_providers.grok]
+name = "Grok"
+# TrustedTunnel is a transparent transport/evidence path. Dialect is
+# selected by wire_api, not this hostname.
+base_url = "https://grok.trustedtunnel.app/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[memories]
+extract_model = "grok-4.7"
+consolidation_model = "grok-4.7"
