@@ -92,9 +92,11 @@ fn web_search_config_converts_to_responses_api_types() {
     assert_eq!(
         ResponsesApiWebSearchFilters::from(ConfigWebSearchFilters {
             allowed_domains: Some(vec!["example.com".to_string()]),
+            excluded_domains: None,
         }),
         ResponsesApiWebSearchFilters {
             allowed_domains: Some(vec!["example.com".to_string()]),
+            excluded_domains: None,
         }
     );
     assert_eq!(
@@ -112,6 +114,24 @@ fn web_search_config_converts_to_responses_api_types() {
             city: Some("San Francisco".to_string()),
             timezone: Some("America/Los_Angeles".to_string()),
         }
+    );
+    assert_eq!(
+        ResponsesApiWebSearchFilters::from(ConfigWebSearchFilters {
+            allowed_domains: None,
+            excluded_domains: Some(vec!["blocked.test".to_string()]),
+        }),
+        ResponsesApiWebSearchFilters {
+            allowed_domains: None,
+            excluded_domains: Some(vec!["blocked.test".to_string()]),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(ResponsesApiWebSearchFilters {
+            allowed_domains: None,
+            excluded_domains: Some(vec!["blocked.test".to_string()]),
+        })
+        .expect("serialize excluded_domains filters"),
+        json!({"excluded_domains": ["blocked.test"]})
     );
 }
 
@@ -345,6 +365,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
             indexed_web_access: Some(true),
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
+                excluded_domains: None,
             }),
             user_location: Some(ResponsesApiWebSearchUserLocation {
                 r#type: WebSearchUserLocationType::Approximate,

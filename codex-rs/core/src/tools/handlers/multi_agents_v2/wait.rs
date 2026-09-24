@@ -1,5 +1,6 @@
 use super::*;
 use crate::session::InputQueueActivity;
+use crate::tools::handlers::json_whole_number::deserialize_option_whole_i64;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
@@ -126,6 +127,7 @@ impl CoreToolRuntime for Handler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WaitArgs {
+    #[serde(default, deserialize_with = "deserialize_option_whole_i64")]
     timeout_ms: Option<i64>,
 }
 
