@@ -15,8 +15,7 @@ pub(crate) const GROK_4_6_MODEL_ID: &str = "grok-4.6";
 const GROK_CONTEXT_WINDOW: i64 = 500_000;
 const GROK_AUTO_COMPACT_TOKEN_LIMIT: i64 = 400_000;
 
-/// Verified Grok image-edit cardinality. Images and Responses share this limit.
-pub const GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 3;
+pub use codex_api::GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES;
 
 /// Returns the complete Grok model catalog bundled with this release.
 ///

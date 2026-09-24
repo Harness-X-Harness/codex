@@ -55,8 +55,8 @@ pub struct ImageGenerationPolicy {
 /// Resolves image-generation policy without making the image extension guess identity.
 ///
 /// Stock availability stays OpenAI-auth-or-actor. Grok opts in only through
-/// `WireApi::GrokResponses` plus its image capability. Images later consume the
-/// same `ApiDialect` as Responses.
+/// `WireApi::GrokResponses` plus its image capability. Images consume the same
+/// `ApiDialect` as Responses.
 pub fn image_generation_policy(provider: &SharedModelProvider) -> Option<ImageGenerationPolicy> {
     let info = provider.info();
     let is_grok = grok_provider::is_grok_provider_info(info);
