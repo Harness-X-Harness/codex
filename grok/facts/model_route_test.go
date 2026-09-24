@@ -12,19 +12,23 @@ import (
 const modelRouteTextPrompt = "Reply with the single word ok."
 
 func TestFactModelRouteGrokBuild(t *testing.T) {
-	const recorded class = "requested=grok-build;response_model=present;text=accepted;reasoning=accepted;tool=accepted;history=accepted"
+	// grok-build accepts the route, tool round trip, and history replay.
+	// reasoning.effort is rejected; that is the recorded shape, not a client rewrite.
+	// response.model is not pinned: this run returned grok-build.
+	const recorded class = "requested=grok-build;response_model=present;text=accepted;reasoning=rejected:400/Model grok-build does not support parameter reasoningEffort.;tool=accepted;history=accepted"
 	client := requireFactsClient(t)
 	assertRecorded(t, recorded, probeModelRoute(t, client, "grok-build", false))
 }
 
 func TestFactModelRouteGrok47(t *testing.T) {
-	const recorded class = "requested=grok-4.7;response_model=grok-4.7;text=accepted;reasoning=accepted;tool=accepted;history=accepted;encrypted_replay=accepted"
+	// Requested id and response.model differ. grok-4.7-build is observation, not the client id.
+	const recorded class = "requested=grok-4.7;response_model=grok-4.7-build;text=accepted;reasoning=accepted;tool=accepted;history=accepted;encrypted_replay=accepted"
 	client := requireFactsClient(t)
 	assertRecorded(t, recorded, probeModelRoute(t, client, "grok-4.7", true))
 }
 
 func TestFactModelRouteGrok46(t *testing.T) {
-	const recorded class = "requested=grok-4.6;response_model=grok-4.6;text=accepted;reasoning=accepted;tool=accepted;history=accepted"
+	const recorded class = "requested=grok-4.6;response_model=grok-4.6-build;text=accepted;reasoning=accepted;tool=accepted;history=accepted"
 	client := requireFactsClient(t)
 	assertRecorded(t, recorded, probeModelRoute(t, client, "grok-4.6", false))
 }
