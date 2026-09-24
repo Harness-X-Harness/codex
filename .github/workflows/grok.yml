@@ -9,7 +9,7 @@ name: grok
 
 on:
   pull_request:
-    branches: ['grok/main', 'grok/rust-v*']
+    branches: ['grok/rust-v*']
     paths-ignore:
       - 'docs/**'
       - 'grok/docs/**'
@@ -19,7 +19,7 @@ on:
       - '.devcontainer/**'
       - '.vscode/**'
   push:
-    branches: ['grok/main', 'grok/rust-v*']
+    branches: ['grok/rust-v*']
     paths-ignore:
       - 'docs/**'
       - 'grok/docs/**'

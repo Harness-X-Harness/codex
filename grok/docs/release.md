@@ -6,8 +6,8 @@ This document owns the Grok delivery contract. Product semantics live in
 ## Northstar
 
 ```text
-PR to grok/main or grok/rust-v*   = Cargo
-push grok/main or grok/rust-v*     = complete target distributions + Linux Live
+PR to grok/rust-v*                = Cargo
+push grok/rust-v*                  = complete target distributions + Linux Live
 workflow_dispatch                  = Live only from an existing Linux distribution artifact
 GitHub Actions artifact            = delivery output for one exact commit SHA and target
 ```
@@ -58,18 +58,11 @@ dedicated product `CODEX_HOME` and does not reuse the normal `~/.codex` or
 
 ## Proof
 
-A pull request to either `grok/main` or a `grok/rust-v*` line runs Cargo on
-GitHub's default pull-request merge ref. For this adoption the head is
-`carry/grok-rust-v0.156.1` and the base is `grok/rust-v0.156.1`. PR proof
-does not build distribution binaries or run real-provider Live.
+A pull request to a `grok/rust-v*` line runs Cargo on GitHub's default
+pull-request merge ref. PR proof does not build distribution binaries or run
+real-provider Live.
 
-The branch roles remain distinct: `grok/main` is the active integration and
-experimentation head on the stock main line; `grok/rust-v*` is the release
-authority for an exact stock tag after its proof succeeds. Neither branch
-family is a promotion stage for the other. Release lessons may later be
-re-expressed on `grok/main` at the current stock-main seam.
-
-A push to either branch family runs:
+A push to a `grok/rust-v*` line runs:
 
 ```text
 x86_64-unknown-linux-musl
@@ -125,4 +118,3 @@ Workflow mechanics live in
 [`.github/workflows/grok.yml`](../../.github/workflows/grok.yml).
 Target staging lives in
 [`.github/actions/build-grok/action.yml`](../../.github/actions/build-grok/action.yml).
-Stock adoption lives in [`carry-forward.md`](./carry-forward.md).

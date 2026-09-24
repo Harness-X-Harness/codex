@@ -4,20 +4,21 @@ name: grok-facts
 # shipped Codex binary. A RED result here revises a request-whitelist.md row
 # and its evidence; it does not gate the grok.yml delivery proof.
 #
-# Runs when the Facts suite itself changes (so a recorded class is checked
-# against the endpoint before it lands) and on demand. The workflow file is not
-# on the default branch, so `workflow_dispatch` must address it by id:
-#   gh workflow run <id> --ref grok/main
+# Runs when the Facts suite itself changes on a Grok release line and on demand.
+# The workflow file is not on the default branch, so `workflow_dispatch` must
+# address the intended release ref by id:
+#   gh workflow run <id> --ref grok/rust-vX.Y.Z
 #   gh api repos/<owner>/<repo>/actions/workflows --jq '.workflows[] | select(.path | endswith("grok-facts.yml")) | .id'
 
 on:
   pull_request:
+    branches:
+      - 'grok/rust-v*'
     paths:
       - 'grok/facts/**'
       - '.github/workflows/grok-facts.yml'
   push:
     branches:
-      - grok/main
       - 'grok/rust-v*'
     paths:
       - 'grok/facts/**'

@@ -1,14 +1,11 @@
 # Grok request whitelist
 
-Strategy and plan for constructing Grok Responses egress from a whitelist at
-the existing `ApiDialect` seam, replacing the denylist that serializes the
-OpenAI-shaped request and removes fields afterwards, and for surfacing Grok
-backend abilities through the same Provider boundary.
+This document records the current Grok Responses projection contract at the
+existing `ApiDialect` / Provider boundary and the evidence that justifies it.
 
 This is a maintainer design record. It is not executable acceptance input.
-Runtime semantics stay in [`architecture.md`](./architecture.md), delivery in
-[`release.md`](./release.md), and stock-tag adoption in
-[`carry-forward.md`](./carry-forward.md).
+Runtime semantics stay in [`architecture.md`](./architecture.md), and delivery stays in
+[`release.md`](./release.md).
 
 ## Revision anchors
 
@@ -18,7 +15,7 @@ exact sources, not "current" Codex or grok-build.
 | Anchor | Value |
 |--------|-------|
 | Stock Codex | `openai/codex@b412ff32c417f855c2b2d1581b77058eed87c84b` (`rust-v0.156.1`) |
-| Grok source | semantics from `grok/main@82d62fe575707988d23bf629017a26c357714e58`, carried on `carry/grok-rust-v0.156.1` and targeting `grok/rust-v0.156.1` |
+| Grok release | branch-local `grok/rust-v0.156.1` runtime, reconstructed from the latest previously proven `grok/rust-v0.155.0@fccb0576f36dd4e74e3f1716df473082108382c7` product semantics plus intentional 0.156.1 changes |
 | Seam | `codex-rs/codex-api/src/endpoint/responses.rs` encodes by `ApiDialect` (OpenAI identity; Grok → `grok_request::build`). Images use the same dialect in `grok_images.rs`. |
 | grok-build | [`xai-org/grok-build`](https://github.com/xai-org/grok-build) `main` @ `4827113` (2026-09-15) |
 | grok-build request constructor | `crates/codegen/xai-grok-sampling-types/src/conversation/responses.rs` (blob `abe5cda`) |
@@ -344,19 +341,7 @@ response as a backend-executed call. Codex now marks any completed
 custom_tool_call as hosted`). Client custom tools cannot collide because they
 are flattened to `function_call` for Grok (`projects_tools_as_flat_functions`).
 
-### Open probes
-
-Each probe is one commit with a GREEN Live run or an observed rejection as
-its evidence. Until then the whitelist emits today's egress. Each B1/B2
-probe names its `TestFact*`; a Facts run is the evidence for the backend
-class. Rejected classes are `rejected:<HTTP status>/<error>` with the
-backend `error` text whitespace-collapsed and cut at 160 characters.
-
-P0, decides whether a Grok-native ability already shipped works end to end:
-
-| Probe | Question | How to decide |
-|-------|----------|---------------|
-| real x_search Turn | does a Grok Turn that invokes x_search complete, record the hosted call, and continue on the next Turn? | one Live Story with a prompt that requires X content; assert a completed hosted `custom_tool_call` in the session and a terminal reply; assert Turn N+1 replays it without a `400`. Live (`TestGrokHostedXSearch`): Turn 1 records a completed hosted `custom_tool_call`; Turn 2 replays it and Grok accepts it (pairing skip: #249). |
+### Backend evidence
 
 Recorded facts (backend class, independent of the binary; `grok/facts`).
 Assertion owner is the Grok/xAI backend; TrustedTunnel is the transparent
@@ -386,7 +371,7 @@ What the recorded facts settle for the whitelist:
   required on replay. The whitelist must carry both from history; dropping
   either is a `422`, not a silent ignore.
 - Reasoning: only `content: null` next to a blob is rejected. A typed
-  `reasoning_text` channel is accepted, so B1 may emit it when stock records
+  `reasoning_text` channel is accepted, so the projection may emit it when stock records
   one; omission stays the conservative default.
 - Function tool `strict` is omitted (`TestFactFunctionStrict` `accepted` ≠
   consumed; grok-build `strict: None`). `parallel_tool_calls` is omitted
@@ -394,7 +379,7 @@ What the recorded facts settle for the whitelist:
   `parallel_tool_calls: false` ≠ consumed; grok-build `None`). `store` is
   omitted (`TestFactParallelToolCallsStoreClientMetadata` `accepted` for
   `store: false` ≠ consumed; grok-build `None`). `client_metadata` is
-  omitted by this B1 probe (`TestFactParallelToolCallsStoreClientMetadata`
+  omitted (`TestFactParallelToolCallsStoreClientMetadata`
   `accepted` for `client_metadata` alone ≠ consumed; Codex-backend
   telemetry with no Grok function; grok-build does not send it). Remaining
   accepted-but-unconsumed note is `text.verbosity` (already omitted).
@@ -413,25 +398,6 @@ What the recorded facts settle for the whitelist:
   `/responses`. The hosted X search Turn and replay stay on
   `TestGrokHostedXSearch`.
 
-B1, tighten toward grok-build:
-
-| Probe | Question | How to decide | Fact |
-|-------|----------|---------------|------|
-| function `strict` | omit (decided) | `feat(grok): omit function tool strict on Grok Responses egress`; Live GREEN on the custom `apply_patch` and dynamic-tool Stories is the post-merge line proof | `TestFactFunctionStrict` (`accepted`) |
-| `status` on `custom_tool_call`, `web_search_call`, `image_generation_call` | keep or drop on replay? | accepted either way; keep what stock records | `TestFactInputStatusOnHostedItems` (`accepted`) |
-| `parallel_tool_calls` | omit (decided) | `feat(grok): omit parallel_tool_calls on Grok Responses egress`; Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `parallel_tool_calls: false`) |
-| `store` | omit (decided) | `feat(grok): omit store on Grok Responses egress`; Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `store: false`) |
-| `client_metadata` | omit (decided) | this commit (`feat(grok): omit client_metadata on Grok Responses egress`); Live GREEN is the post-merge line proof | `TestFactParallelToolCallsStoreClientMetadata` (`accepted` for `client_metadata` alone) |
-| reasoning `content` with blob | emit the typed channel or keep omitting? | one Live Turn N+1 with `[{type: reasoning_text, text}]` + blob; keep omission unless a Story needs the text | `TestFactReasoningTypedContentWithBlob` (`accepted`) |
-
-B2, extend with Grok-native abilities:
-
-| Probe | Question | How to decide | Fact |
-|-------|----------|---------------|------|
-| `web_search.filters.allowed_domains` | emit (decided) | Live (`TestGrokHostedWebSearchAllowlist`) | `TestFactWebSearchAllowedDomains` (`accepted`) |
-| `web_search.filters.excluded_domains` | emit (decided) | Live (`TestGrokHostedWebSearchExcludedDomains`) | `TestFactWebSearchExcludedDomains` (`accepted`) |
-| `x_search` date window | emit (decided) | Live (`TestGrokHostedXSearchDateWindow`) | `TestFactXSearchDateWindow` (`accepted`) |
-| any completed `custom_tool_call` is hosted | hosted (decided) | this commit (`feat(grok): treat every completed custom_tool_call as hosted`); native test; Live remains existing `TestGrokHostedXSearch` and `TestGrokCustomApplyPatch` (post-merge line proof) | — |
 
 ## Module plan
 
@@ -474,63 +440,8 @@ Rules for the module:
   models, rollout, `responses_websocket.rs` (Grok `supports_websockets`
   is `false`), or `compact.rs` (Grok `remote_compaction` is `Unsupported`).
 - Ingress recognition stays in `codex-rs/model-provider/src/grok_provider.rs`
-  (`is_provider_hosted_tool_call`) and `sse/responses.rs`. B2 changes there
+  (`is_provider_hosted_tool_call`) and `sse/responses.rs`. Ingress changes there
   travel with their own tests; the egress module does not decode responses.
-
-## Staging
-
-### Stage A: whitelist layer, behavior-preserving
-
-Landed by this commit: `feat(grok): construct Grok Responses egress from a whitelist` replaces the denylist in `project_request` with `grok_request::build`.
-
-One semantic commit:
-
-```text
-feat(grok): construct Grok Responses egress from a whitelist
-```
-
-Contract: for every request fixture in the existing Grok dialect tests and
-for one fixture per accepted `ResponseItem` variant and tool type,
-`grok_request::build(request)` equals the JSON the current denylist produces.
-The golden comparison was a test in `grok_request_tests.rs` that ran the old
-projection, kept only in the test module while the commit landed; the
-following commit deleted that copy and kept the fixtures as
-`accepted_fixtures`, which every accepted item and tool type must build from
-without an OpenAI-only key. Stage A changes no bytes on the wire, so the
-six-target build and the Linux musl Live must be GREEN with identical
-user-visible outcomes.
-
-Stage A also adds the compile-time decision point (exhaustive match) and the
-reject-before-transport errors for items and tools that cannot appear on a
-Grok Thread. Those are the only behavior differences, and each is a local
-error where today the request would reach xAI.
-
-### Stage B1: tighten toward grok-build, one probe per commit
-
-Each B1 probe is one commit with a native test and a GREEN Live run. A probe
-that fails stays in its table with the observed error text.
-
-Landed by this commit: `feat(grok): omit client_metadata on Grok Responses egress` omits `client_metadata` from `GrokResponsesRequest`.
-
-### Stage B2: extend with Grok-native abilities, one ability per commit
-
-Each B2 row is one semantic commit that adds the stock-compatible entry
-(config or Provider seam), the whitelist emit row, any ingress recognition,
-native tests at both seams, and a Live Story when the ability is
-user-visible. The P0 x_search probe runs before any B2 work on x_search so
-the extension builds on a proven path.
-
-Landed by this commit: `test(grok): Live Story for web_search excluded_domains` proves stock `filters.excluded_domains` on the packaged artifact (`TestGrokHostedWebSearchExcludedDomains`). Native emit remains `feat(grok): emit web_search excluded_domains from stock filters`. Native allowlist emit remains `feat(grok): emit web_search allowed_domains from stock filters`; its Live remains `test(grok): Live Story for web_search allowed_domains`.
-
-B1 and B2 are independent of each other and of Stage A's ordering; Stage A
-lands first because it is the surface both build on.
-
-### Delivery
-
-PR to `grok/rust-v0.156.1` runs Cargo. Push of that version line produces the complete Linux x64 musl and
-macOS ARM64 distribution artifacts and runs Live on the Linux artifact. Delivery
-follows [`release.md`](./release.md). A whitelist commit is a proof input and
-needs its own GREEN PR/push proof; a docs-only commit does not.
 
 ## Tests
 
@@ -590,34 +501,6 @@ needs its own GREEN PR/push proof; a docs-only commit does not.
 
 Prefer `pretty_assertions::assert_eq` on whole projected bodies over
 per-key assertions.
-
-## Semantic stack placement
-
-The 0.154 line at `707c5c322`:
-
-```text
-a58e61e66 feat(grok): add Provider identity and bundled catalog
-147f35ce5 feat(grok): project Responses history and reasoning at the API boundary
-7f72f0825 feat(grok): project tools as flat functions and accept whole-number JSON
-1fdec9205 feat(grok): advertise and generate images through provider policy
-8fee98f33 feat(grok): bind App Server lifecycle to the Grok Provider
-47c1c86ba ci(grok): prove six-target binaries and Live; publish via release.py
-4a65aafb0 fix(grok): drop unsupported external_web_access on Responses egress
-dd6a73fb0 test(grok): drop unused ModelProvider import
-6dac577a8 fix(grok): omit reasoning content when replaying encrypted blobs
-6f5f6003a test(grok): drop follow-up reasoning id assertion
-707c5c322 fix(grok): drop OpenAI-only history and deferred-tool extras
-```
-
-On this line the whitelist layer is an additional semantic commit after the
-fixes. At the next stock adoption it becomes the request-projection semantic
-itself: the egress half of `147f35ce5` and the five fix/test commits fold into
-one commit, "project Responses history, reasoning, and tools at the API
-boundary through a whitelist". The flat-tool projection (`7f72f0825`) stays
-separate; it changes the tool plan and the reverse mapping, not egress.
-
-Estimated size: new module and tests around 500 to 700 changed lines,
-`provider.rs` shrinks by about 150. Within the 800-line review guidance.
 
 ## Revision procedure
 
