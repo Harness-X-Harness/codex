@@ -75,8 +75,9 @@ pub(crate) enum InputQueueActivity {
 ///
 /// `closed` is set when the turn snapshots this queue. The active-turn slot can
 /// stay occupied after that so the session remains busy until its terminal
-/// event is visible. Appends after the snapshot are rejected; callers record or
-/// return the items instead of leaving them on a queue nothing will read.
+/// event is visible. The turn that reserved the queue appends directly until
+/// that snapshot. Inject and steer that arrive afterward are rejected; those
+/// callers record or return the items instead of leaving them unread.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
     items: Vec<TurnInput>,
@@ -277,29 +278,15 @@ impl InputQueue {
         accepted
     }
 
+    /// Appends onto the queue reserved for this turn.
+    ///
+    /// Start and wakeup paths call this before completion snapshots the queue.
     pub(crate) async fn extend_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
-    ) -> Result<(), Vec<TurnInput>> {
-        turn_state.lock().await.pending_input.extend_if_open(input)
-    }
-
-    /// Appends to a turn whose queue is still open.
-    ///
-    /// Start and wakeup paths reserve a fresh queue. Closing happens only when
-    /// completion snapshots pending input, so rejection here is a broken turn.
-    pub(crate) async fn extend_open_pending_input_for_turn_state(
-        &self,
-        turn_state: &Mutex<TurnState>,
-        input: Vec<TurnInput>,
     ) {
-        assert!(
-            self.extend_pending_input_for_turn_state(turn_state, input)
-                .await
-                .is_ok(),
-            "pending turn input was already closed"
-        );
+        turn_state.lock().await.pending_input.items.extend(input);
     }
 
     pub(super) fn signal_steer(&self) {
@@ -562,8 +549,7 @@ mod tests {
         .unwrap();
         input_queue
             .extend_pending_input_for_turn_state(&turn_state, vec![passive_output])
-            .await
-            .expect("open queue accepts passive output");
+            .await;
         assert_eq!(
             input_queue.subscribe_activity(Some(&turn_state)).await.1,
             None
@@ -729,8 +715,7 @@ mod tests {
         let original = TurnInput::ResponseItem(ResponseItem::Other.into());
         input_queue
             .extend_pending_input_for_turn_state(&turn_state, vec![original.clone()])
-            .await
-            .expect("open queue accepts the original item");
+            .await;
 
         assert_eq!(
             input_queue
