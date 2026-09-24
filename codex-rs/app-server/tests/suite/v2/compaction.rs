@@ -394,7 +394,7 @@ async fn send_turn_and_wait(
     Ok(turn.id)
 }
 
-async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Result<()> {
+pub(super) async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Result<()> {
     loop {
         let completed: TurnCompletedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -407,7 +407,7 @@ async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Resu
     }
 }
 
-async fn wait_for_context_compaction_started(
+pub(super) async fn wait_for_context_compaction_started(
     mcp: &mut TestAppServer,
 ) -> Result<ItemStartedNotification> {
     loop {
@@ -419,7 +419,7 @@ async fn wait_for_context_compaction_started(
     }
 }
 
-async fn wait_for_context_compaction_completed(
+pub(super) async fn wait_for_context_compaction_completed(
     mcp: &mut TestAppServer,
 ) -> Result<ItemCompletedNotification> {
     loop {
