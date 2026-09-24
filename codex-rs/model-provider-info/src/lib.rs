@@ -103,12 +103,33 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// Serialized selector for the Grok Provider implementation.
+    ///
+    /// Transport remains the stock Responses HTTP/SSE path. This variant is the
+    /// only serialized selector that maps to `ApiDialect::Grok`.
+    #[serde(rename = "grok_responses")]
+    GrokResponses,
+}
+
+impl WireApi {
+    /// Whether this dialect uses the stock Responses HTTP/SSE transport.
+    pub fn uses_responses_transport(self) -> bool {
+        matches!(self, Self::Responses | Self::GrokResponses)
+    }
+
+    fn to_api_dialect(self) -> codex_api::ApiDialect {
+        match self {
+            Self::Responses => codex_api::ApiDialect::OpenAi,
+            Self::GrokResponses => codex_api::ApiDialect::Grok,
+        }
+    }
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::GrokResponses => "grok_responses",
         };
         f.write_str(value)
     }
@@ -122,8 +143,12 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
+            "grok_responses" => Ok(Self::GrokResponses),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["responses", "grok_responses"],
+            )),
         }
     }
 }
@@ -191,6 +216,10 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the standalone web-search endpoint.
     #[serde(default)]
     pub supports_standalone_web_search: bool,
+    /// Optional Grok hosted `x_search` date window (`from_date` / `to_date` as
+    /// calendar `YYYY-MM-DD`). Other providers ignore this field.
+    #[serde(default, deserialize_with = "deserialize_x_search_window")]
+    pub x_search: Option<codex_api::XSearchProviderConfig>,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -261,6 +290,16 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
     }
 }
 
+fn deserialize_x_search_window<'de, D>(
+    deserializer: D,
+) -> Result<Option<codex_api::XSearchProviderConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let window = Option::<codex_api::XSearchProviderConfig>::deserialize(deserializer)?;
+    Ok(window.filter(|window| !window.is_empty()))
+}
+
 impl ModelProviderInfo {
     /// Checks that a configured Bedrock entry only customizes supported fields.
     /// Call this on the override before merging it with the built-in provider.
@@ -283,6 +322,9 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if let Some(x_search) = &self.x_search {
+            x_search.validate()?;
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
@@ -457,6 +499,8 @@ other non-default provider fields are not supported"
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            dialect: self.wire_api.to_api_dialect(),
+            x_search: self.x_search.clone().filter(|window| !window.is_empty()),
         })
     }
 
@@ -546,6 +590,7 @@ other non-default provider fields are not supported"
             requires_openai_auth: true,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            x_search: None,
         }
     }
 
@@ -584,6 +629,7 @@ other non-default provider fields are not supported"
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            x_search: None,
         }
     }
 
@@ -757,6 +803,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     }
 }
 

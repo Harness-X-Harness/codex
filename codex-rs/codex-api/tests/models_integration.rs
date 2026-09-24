@@ -45,6 +45,8 @@ fn provider(base_url: &str) -> Provider {
             retry_transport: true,
         },
         stream_idle_timeout: std::time::Duration::from_secs(1),
+        dialect: codex_api::ApiDialect::OpenAi,
+        x_search: None,
     }
 }
 
