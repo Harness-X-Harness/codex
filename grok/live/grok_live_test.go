@@ -33,13 +33,38 @@ func TestGrokBasic(t *testing.T) {
 		h.failStage("thread_bound_to_grok", fmt.Sprintf("Thread Provider is %q, shipped profile binds %q", run.Provider, wantProvider))
 	}
 	if run.Model != wantModel {
-		h.failStage("thread_model_grok_4_6", fmt.Sprintf("Thread model is %q, shipped profile sets %q", run.Model, wantModel))
+		h.failStage("thread_model_matches_profile", fmt.Sprintf("Thread model is %q, shipped profile sets %q", run.Model, wantModel))
 	}
 	if !run.completed() {
 		h.failStage("turn_completed", "ordinary Grok Turn did not complete")
 	}
 	if run.reply() == "" {
 		h.failStage("agent_message_persisted", "Turn completed without an agent message")
+	}
+}
+
+func TestGrokPinnedPreviousModel(t *testing.T) {
+	h := startGrokLive(t, liveOptions{})
+	ctx := context.Background()
+	pinned := shippedPreviousModel
+	if h.model != shippedDefaultModel {
+		h.failStage("shipped_default_model", fmt.Sprintf("Live profile model is %q, want %q", h.model, shippedDefaultModel))
+	}
+	h.requireListedModel(ctx, pinned)
+
+	run := h.runTurn(ctx, startTurnOpts{
+		prompt:   "Reply with a short confirmation that the pinned Grok model completed.",
+		model:    pinned,
+		deadline: 2 * time.Minute,
+	})
+	if run.Model != pinned {
+		h.failStage("thread_model_matches_pin", fmt.Sprintf("Thread model is %q, pinned catalog model is %q", run.Model, pinned))
+	}
+	if !run.completed() {
+		h.failStage("pinned_turn_completed", "pinned Grok Turn did not complete")
+	}
+	if run.reply() == "" {
+		h.failStage("pinned_agent_message_persisted", "pinned Turn completed without an agent message")
 	}
 }
 

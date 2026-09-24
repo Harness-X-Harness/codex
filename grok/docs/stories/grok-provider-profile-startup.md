@@ -3,7 +3,7 @@
 ## User story
 
 As a Grok user, I can start an exact release artifact with the shipped Grok
-Provider profile, see the release-bundled `grok-4.6` model, and complete one
+Provider profile, see the product default `grok-4.7`, and complete one
 ordinary Grok Turn.
 
 ## Real path
@@ -17,18 +17,20 @@ exact Grok release artifact
 ```
 
 The profile uses the current config authority only: `model_provider`, raw model
-ID, endpoint and authentication fields, and `wire_api = "grok_responses"`.
+ID, `model_catalog_json`, endpoint and authentication fields, and
+`wire_api = "grok_responses"`.
 
 ## Acceptance
 
 **Given** an isolated Home containing the shipped profile, **when** the user
-starts the exact artifact, reads `model/list`, starts a `grok-4.6` Thread, and
-sends one ordinary input, **then**:
+starts the exact artifact, reads `model/list`, starts a Thread on the profile
+model, and sends one ordinary input, **then**:
 
 - App Server starts through the stock protocol;
-- `model/list` returns the release-bundled `grok-4.6` stock `Model` DTO with
-  its current Ultra and Multi-Agent V2 metadata;
-- the Thread reports Provider `grok` and model `grok-4.6`;
+- `model/list` returns the shipped catalog, including the profile default
+  `grok-4.7` stock `Model` DTO with its current Ultra and Multi-Agent V2
+  metadata;
+- the Thread reports Provider `grok` and the profile model `grok-4.7`;
 - the Turn reaches terminal `completed` with an agent message; and
 - the acceptance runner submits the semantic Turn once.
 
@@ -80,5 +82,7 @@ pass for the frozen source. This Story does not perform a ChatGPT live Turn.
 ## Executable contract
 
 `TestGrokBasic` in `grok/live`. The harness installs
-`grok/dist/config.toml.example` as the isolated Home profile. Scheduling is
+`grok/dist/config.toml.example` as the isolated Home profile and copies
+`grok/dist/models.json` beside it. `TestGrokPinnedPreviousModel` runs one
+ordinary Turn on the other shipped slug. Scheduling is
 [`release.md`](../release.md).

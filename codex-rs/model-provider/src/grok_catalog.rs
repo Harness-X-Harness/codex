@@ -17,11 +17,12 @@ const GROK_AUTO_COMPACT_TOKEN_LIMIT: i64 = 400_000;
 
 pub use codex_api::GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES;
 
-/// Returns the complete Grok model catalog bundled with this release.
+/// Compatibility catalog used when `model_catalog_json` is unset.
 ///
-/// The bundled catalog is the runtime/release authority. Remote `/models`
-/// observations are revalidation/evidence input and must not replace this
-/// catalog for an already published build.
+/// The shipped product catalog is `grok/dist/models.json`, loaded through the
+/// stock config seam. This fallback stays on `grok-4.6` and does not add new
+/// model-id constants. Remote `/models` observations remain evidence and must
+/// not replace either catalog.
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     ModelsResponse {
         models: vec![ModelInfo {

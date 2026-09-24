@@ -31,13 +31,12 @@ TARGETS = (
 DIST_FILES = (
     "config.toml.example",
     "INSTALL.md",
-    "install-grok.sh",
-    "install-grok.ps1",
+    "models.json",
 )
 CHANNEL_FILES = (
     "config.toml.example",
-    "install-grok.sh",
-    "install-grok.ps1",
+    "INSTALL.md",
+    "models.json",
 )
 
 
@@ -126,7 +125,6 @@ def package(
                     bin_dir / "grok",
                     bin_dir / "grok-bin",
                     bin_dir / "codex-code-mode-host",
-                    stage / "install-grok.sh",
                 ):
                     executable.chmod(0o755)
             if "linux" in target:

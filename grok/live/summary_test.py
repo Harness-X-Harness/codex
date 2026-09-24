@@ -94,8 +94,8 @@ class SummaryTest(unittest.TestCase):
     def test_not_proven_without_backend_status(self) -> None:
         lines = [
             _event("run", "TestGrokBasic"),
-            _output("TestGrokBasic", "NOT_PROVEN at catalog_lists_grok_4_6: missing\n"),
-            _output("TestGrokBasic", "stage=catalog_lists_grok_4_6\n"),
+            _output("TestGrokBasic", "NOT_PROVEN at catalog_lists_model: missing\n"),
+            _output("TestGrokBasic", "stage=catalog_lists_model\n"),
             _output("TestGrokBasic", "wire_exchanges=1\n"),
             _event("fail", "TestGrokBasic", Elapsed=0.4),
         ]
@@ -104,7 +104,7 @@ class SummaryTest(unittest.TestCase):
 
 | Story | Result | Stage | Error marker | Backend status | Duration |
 | --- | --- | --- | --- | --- | --- |
-| TestGrokBasic | NOT_PROVEN | catalog_lists_grok_4_6 | — | — | 0.40s |
+| TestGrokBasic | NOT_PROVEN | catalog_lists_model | — | — | 0.40s |
 """
         self.assertEqual(got, want)
 
