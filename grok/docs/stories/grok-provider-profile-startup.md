@@ -83,6 +83,8 @@ pass for the frozen source. This Story does not perform a ChatGPT live Turn.
 
 `TestGrokBasic` in `grok/live`. The harness installs
 `grok/dist/config.toml.example` as the isolated Home profile and copies
-`grok/dist/models.json` beside it. `TestGrokPinnedPreviousModel` runs one
-ordinary Turn on the other shipped slug. Scheduling is
+`grok/dist/models.json` beside it. `TestGrokPinnedPreviousModel` starts a
+Thread on `grok-4.6`, records that slug on `/responses`, completes a named
+tool round trip and encrypted reasoning, then continues that history on a
+second Turn. Scheduling is
 [`release.md`](../release.md).

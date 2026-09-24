@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,7 +45,7 @@ func TestGrokBasic(t *testing.T) {
 }
 
 func TestGrokPinnedPreviousModel(t *testing.T) {
-	h := startGrokLive(t, liveOptions{})
+	h := startGrokLive(t, liveOptions{probeTool: true})
 	ctx := context.Background()
 	pinned := shippedPreviousModel
 	if h.model != shippedDefaultModel {
@@ -52,19 +53,62 @@ func TestGrokPinnedPreviousModel(t *testing.T) {
 	}
 	h.requireListedModel(ctx, pinned)
 
-	run := h.runTurn(ctx, startTurnOpts{
-		prompt:   "Reply with a short confirmation that the pinned Grok model completed.",
-		model:    pinned,
-		deadline: 2 * time.Minute,
+	first := h.runTurn(ctx, startTurnOpts{
+		prompt:    "Use the " + probeToolName + " tool. After it returns, include its result in your reply and then stop.",
+		model:     pinned,
+		deadline:  2 * time.Minute,
+		probeTool: true,
 	})
-	if run.Model != pinned {
-		h.failStage("thread_model_matches_pin", fmt.Sprintf("Thread model is %q, pinned catalog model is %q", run.Model, pinned))
+	if first.Model != pinned {
+		h.failStage("thread_model_matches_pin", fmt.Sprintf("Thread model is %q, pinned catalog model is %q", first.Model, pinned))
 	}
-	if !run.completed() {
+	if !first.completed() {
 		h.failStage("pinned_turn_completed", "pinned Grok Turn did not complete")
 	}
-	if run.reply() == "" {
-		h.failStage("pinned_agent_message_persisted", "pinned Turn completed without an agent message")
+	if h.requests.toolCalls < 1 && !hasCompletedProbe(first.Items) {
+		h.failStage("pinned_tool_completed", "named dynamic tool did not complete")
+	}
+	if !durableContainsToken(h.home, probeToolOutput) && !strings.Contains(first.reply(), probeToolOutput) {
+		if !waitDurable(rolloutSettle, func() bool { return durableContainsToken(h.home, probeToolOutput) }) {
+			h.failStage("pinned_tool_result_in_history", "fresh tool result is missing from durable history")
+		}
+	}
+
+	history := h.runTurn(ctx, startTurnOpts{
+		threadID: first.ThreadID,
+		prompt:   "Reply with exactly the result returned by " + probeToolName + " in the previous Turn. Do not call any tool.",
+		deadline: 2 * time.Minute,
+	})
+	if history.ThreadID != first.ThreadID {
+		h.failStage("pinned_same_thread_continuation", "continuation ran on another Thread")
+	}
+	if !history.completed() {
+		h.failStage("pinned_history_turn_completed", "continuation Turn did not complete")
+	}
+	if !strings.Contains(history.reply(), probeToolOutput) {
+		h.failStage("pinned_history_reply_contains_tool_result", "continuation reply does not contain the earlier tool result")
+	}
+	if !waitDurable(rolloutSettle, func() bool { return durableHasEncryptedReasoning(h.home) }) {
+		h.failStage("pinned_reasoning_observed", "durable Thread state has no encrypted reasoning")
+	}
+	sawModel := false
+	for _, ex := range h.recorder.snapshot() {
+		if !strings.Contains(ex.path, "/responses") {
+			continue
+		}
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(ex.requestBody, &payload) != nil || payload.Model == "" {
+			continue
+		}
+		if payload.Model != pinned {
+			h.failStage("pinned_model_on_responses", fmt.Sprintf("/responses model is %q, pinned catalog model is %q", payload.Model, pinned))
+		}
+		sawModel = true
+	}
+	if !sawModel {
+		h.failStage("pinned_model_on_responses", "no /responses request carried model "+pinned)
 	}
 }
 
