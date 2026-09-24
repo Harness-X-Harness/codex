@@ -243,10 +243,13 @@ seam. Native Grok and stock compatibility tests travel with the behavior they
 prove.
 
 The maintainer procedure lives in [`carry-forward.md`](./carry-forward.md).
-`grok/main` is the latest validated product head. Candidate version lines such
-as `grok/rust-v0.156.1` receive review work from a matching `carry/*` branch,
-then receive their own build and Live proof. Promotion of a proven version-line
-head to `grok/main` is a separate action.
+`grok/main` is the latest working Grok head on the stock Codex main line and
+is the semantic reference for future carry-forward work. Version lines such as
+`grok/rust-v0.156.1` are parallel, version-specific product lines anchored to
+an exact stock tag. A matching `carry/*` branch carries the required current
+Grok semantics onto that fixed point, and the version line receives its own
+build and Live proof. A proven version line is not promoted into `grok/main`;
+the working head continues independently on the stock main line.
 
 ## Proof
 

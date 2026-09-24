@@ -6,10 +6,10 @@ This document owns the Grok delivery contract. Product semantics live in
 ## Northstar
 
 ```text
-PR to grok/rust-v*     = Cargo
-push grok/rust-v*       = complete target distributions + Linux Live
-workflow_dispatch       = Live only from an existing Linux distribution artifact
-GitHub Actions artifact = delivery output for one exact commit SHA and target
+PR to grok/main or grok/rust-v*   = Cargo
+push grok/main or grok/rust-v*     = complete target distributions + Linux Live
+workflow_dispatch                  = Live only from an existing Linux distribution artifact
+GitHub Actions artifact            = delivery output for one exact commit SHA and target
 ```
 
 GitHub Actions artifacts are the current delivery output.
@@ -58,13 +58,17 @@ dedicated product `CODEX_HOME` and does not reuse the normal `~/.codex` or
 
 ## Proof
 
-A pull request to a candidate `grok/rust-v*` line runs Cargo on GitHub's
-default pull-request merge ref. For this adoption the head is
-`carry/grok-rust-v0.156.1` and the base is `grok/rust-v0.156.1`. It does not
-build distribution binaries or run real-provider Live. `grok/main` remains the
-latest validated product until a separate promotion.
+A pull request to either `grok/main` or a `grok/rust-v*` line runs Cargo on
+GitHub's default pull-request merge ref. For this adoption the head is
+`carry/grok-rust-v0.156.1` and the base is `grok/rust-v0.156.1`. PR proof
+does not build distribution binaries or run real-provider Live.
 
-A push to the candidate version line runs:
+The branch roles remain distinct: `grok/main` is the latest working Grok head
+and semantic reference on the stock main line; `grok/rust-v*` is an exact
+version-specific product line. Neither branch family is a promotion stage for
+the other.
+
+A push to either branch family runs:
 
 ```text
 x86_64-unknown-linux-musl

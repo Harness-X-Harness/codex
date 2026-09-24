@@ -1,8 +1,9 @@
 # Grok stock adoption
 
-This guide owns the Grok-specific maintainer path for carrying the latest
-validated Grok product onto a new stock Codex fixed point. Runtime semantics
-stay in [`architecture.md`](./architecture.md), and delivery semantics stay in
+This guide owns the Grok-specific maintainer path for carrying the current
+Grok semantics from the latest working head onto an exact stock Codex fixed
+point for a parallel version line. Runtime semantics stay in
+[`architecture.md`](./architecture.md), and delivery semantics stay in
 [`release.md`](./release.md).
 
 ## Branch authority
@@ -11,11 +12,12 @@ For the `rust-v0.156.1` adoption:
 
 ```text
 grok/main
-    = latest validated product
+    = latest working Grok head on the stock Codex main line
+    = current semantic reference
     = 82d62fe575707988d23bf629017a26c357714e58
 
 grok/rust-v0.156.1
-    = candidate/version line
+    = version-specific Grok line on exact stock rust-v0.156.1
     = b412ff32c417f855c2b2d1581b77058eed87c84b before this carry-forward merges
 
 carry/grok-rust-v0.156.1
@@ -23,12 +25,13 @@ carry/grok-rust-v0.156.1
     = targets grok/rust-v0.156.1
 ```
 
-Do not move `grok/main` while building or reviewing the candidate. Promotion
-of a proven version-line head to `grok/main` is a separate action.
+These branches have parallel roles. The version line does not replace or
+promote into `grok/main`. Keep `grok/main` unchanged during this
+carry-forward; it continues independently as the working semantic head.
 
 ## Fixed points
 
-The current validated Grok semantics come from:
+The current Grok semantic reference comes from:
 
 ```text
 grok/main@82d62fe575707988d23bf629017a26c357714e58
@@ -124,5 +127,6 @@ Do not add an installer or automatic migration of `~/.codex` or `~/.grok`.
    `grok/rust-v0.156.1`.
 8. After review and merge, the version-line push builds complete target
    artifacts and runs Linux Live from the exact Linux artifact.
-9. Promotion of that proven version-line head to `grok/main` is separate and
-   is not part of the carry-forward PR.
+9. Stop at the proven version line. Do not rewrite `grok/main` from the
+   version-line head; `grok/main` continues independently on the stock main
+   line and remains the semantic reference for later carry-forward work.
