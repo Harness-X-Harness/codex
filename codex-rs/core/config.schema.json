@@ -6325,6 +6325,12 @@
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
         },
+        "excluded_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"
         }

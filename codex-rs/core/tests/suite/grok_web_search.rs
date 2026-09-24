@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_model_provider_info::WireApi;
+use codex_protocol::config_types::WebSearchConfig;
+use codex_protocol::config_types::WebSearchFilters;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::PermissionProfile;
 use core_test_support::responses;
@@ -72,5 +74,63 @@ async fn grok_live_web_search_omits_external_web_access() {
     assert!(
         !contains_key(&body, "external_web_access"),
         "Grok Responses rejects Argument not supported: external_web_access: {body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_emits_web_search_excluded_domains_from_stock_config() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.model_provider.name = "xAI".to_string();
+        config.model_provider.wire_api = WireApi::GrokResponses;
+        config.model_provider.requires_openai_auth = false;
+        config
+            .web_search_mode
+            .set(WebSearchMode::Live)
+            .expect("test web_search_mode should satisfy constraints");
+        config.web_search_config = Some(WebSearchConfig {
+            filters: Some(WebSearchFilters {
+                allowed_domains: None,
+                excluded_domains: Some(vec!["en.wikipedia.org".to_string()]),
+            }),
+            user_location: None,
+            search_context_size: None,
+        });
+    });
+    let test = builder
+        .build_with_auto_env(&server)
+        .await
+        .expect("create Grok Codex conversation");
+
+    test.submit_turn_with_permission_profile(
+        "hello grok excluded domains",
+        PermissionProfile::read_only(),
+    )
+    .await
+    .expect("submit turn");
+
+    let body = resp_mock.single_request().body_json();
+    let tools = body["tools"]
+        .as_array()
+        .expect("Grok request should include tools");
+    let web_search = tools
+        .iter()
+        .find(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search"))
+        .expect("Grok should advertise hosted web_search");
+
+    assert_eq!(
+        web_search,
+        &json!({
+            "type": "web_search",
+            "filters": {"excluded_domains": ["en.wikipedia.org"]}
+        })
     );
 }
