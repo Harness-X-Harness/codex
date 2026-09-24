@@ -17,8 +17,8 @@ exact sources, not "current" Codex or grok-build.
 
 | Anchor | Value |
 |--------|-------|
-| Stock Codex | `openai/codex@40eeb6e8a89ef421c25d4c40e06fa1d40ce66b4f` |
-| Grok source | `grok/main`, carried from `grok/rust-v0.155.0` @ `fccb0576f` |
+| Stock Codex | `openai/codex@b412ff32c417f855c2b2d1581b77058eed87c84b` (`rust-v0.156.1`) |
+| Grok source | this product line, carried from validated `grok/main` @ `82d62fe5` |
 | Seam | `codex-rs/codex-api/src/endpoint/responses.rs` encodes by `ApiDialect` (OpenAI identity; Grok → `grok_request::build`). Images use the same dialect in `grok_images.rs`. |
 | grok-build | [`xai-org/grok-build`](https://github.com/xai-org/grok-build) `main` @ `4827113` (2026-09-15) |
 | grok-build request constructor | `crates/codegen/xai-grok-sampling-types/src/conversation/responses.rs` (blob `abe5cda`) |

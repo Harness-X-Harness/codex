@@ -9,13 +9,14 @@ onto a new upstream Codex fixed point. Runtime semantics stay in
 
 ```text
 choose exact upstream SHA
-  -> reset grok/main to that SHA
-  -> rebuild the current Grok semantic stack
+  -> create grok/rust-vX.Y.Z at that SHA
+  -> rebuild the current Grok semantic stack on a carry branch
   -> drop downstream mechanisms stock now owns
-  -> open the Codex PR against grok/main
+  -> open the carry PR against grok/rust-vX.Y.Z
   -> Cargo
-  -> push
+  -> merge to the version line
   -> complete linux x64 musl + mac arm64 distributions + Linux Live
+  -> promote that validated version-line head to grok/main
 ```
 
 Choosing the upstream fixed point and adapting Grok semantics are
@@ -30,12 +31,14 @@ the previous Grok line. Each retained commit should represent a Grok
 semantic that stock Codex does not yet provide, together with the native
 tests that prove that semantic and the stock seam it changes.
 
-The current line is `grok/main` based on
-`openai/codex@40eeb6e8a89ef421c25d4c40e06fa1d40ce66b4f`, carried from
-`grok/rust-v0.155.0` @ `fccb0576f36dd4e74e3f1716df473082108382c7`.
+The current candidate line is `grok/rust-v0.156.1`, based on
+`openai/codex@b412ff32c417f855c2b2d1581b77058eed87c84b` (`rust-v0.156.1`), and
+carried from the validated `grok/main` @
+`82d62fe575707988d23bf629017a26c357714e58`. `grok/main` remains on that
+validated head until this candidate line passes its push proof.
 
 ```text
-git log --oneline --reverse 40eeb6e8..HEAD
+git log --oneline --reverse b412ff32..HEAD
 ```
 
 Read oldest first. Each commit is one semantic with its tests, and its body
@@ -90,23 +93,28 @@ TrustedTunnel remains a transparent transport/evidence path only.
 Every step is a command or an existing proof; none needs a new tool.
 
 1. **Choose the SHA.** Fetch the exact upstream commit:
-   `git fetch https://github.com/openai/codex 40eeb6e8a89ef421c25d4c40e06fa1d40ce66b4f`.
-2. **Create or reset the line.** `grok/main` starts at that SHA.
-3. **Rebuild the stack in order.** Port one semantic at a time from the
-   previous Grok line. On conflict, resolve at the current stock seam:
-   read what stock now does at that seam and keep the Grok semantic on top.
-   A clean cherry-pick is not acceptance evidence.
+   `git fetch https://github.com/openai/codex b412ff32c417f855c2b2d1581b77058eed87c84b`.
+2. **Create the candidate line.** Create `grok/rust-vX.Y.Z` at that exact
+   upstream SHA. Keep `grok/main` on the last validated product head.
+3. **Rebuild the stack in order.** Create a carry branch from the candidate
+   line and port one semantic at a time from the previous Grok line. On
+   conflict, resolve at the current stock seam: read what stock now does at
+   that seam and keep the Grok semantic on top. A clean cherry-pick is not
+   acceptance evidence.
 4. **Drop stock-owned mechanisms.** If upstream now owns the behavior,
-   delete the downstream copy and keep only a regression that still
-   asserts a Grok difference.
-5. **Open the PR against `grok/main`.** Cargo runs on the PR. Merge by
-   fast-forward when the semantic stack is reviewable.
-6. **Push `grok/main`.** Linux x64 musl, macOS ARM64, and Linux Live run on push.
-7. **Consume the proven artifacts.** The successful push run owns the complete
-   per-target distributions.
+   delete the downstream copy and keep only a regression that still asserts
+   a Grok difference.
+5. **Open the PR against the candidate version line.** Cargo runs on the PR.
+   Merge when the semantic stack is reviewable.
+6. **Prove the version line.** The merge push on `grok/rust-vX.Y.Z` builds
+   Linux x64 musl and macOS ARM64 distributions and runs Linux Live.
+7. **Promote the validated head.** After the version-line push proof is GREEN,
+   move `grok/main` to that exact version-line head. The same commit is both
+   the validated candidate result and the new current product head.
 
-Historical `grok/rust-v*` lines stay readable as development history. They
-are not the publication authority after `grok/main` exists.
+Once a candidate is promoted, its `grok/rust-v*` line stays readable as the
+version-specific development and proof history. `grok/main` names the latest
+validated product head.
 
 ## Do not
 
