@@ -70,6 +70,8 @@ fn provider(name: &str) -> Provider {
             retry_transport: true,
         },
         stream_idle_timeout: Duration::from_millis(50),
+        dialect: codex_api::ApiDialect::OpenAi,
+        x_search: None,
     }
 }
 
