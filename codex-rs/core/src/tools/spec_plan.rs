@@ -66,6 +66,7 @@ use codex_features::Feature;
 use codex_features::SleepToolMode;
 use codex_login::AuthManager;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_model_provider::image_generation_policy;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
@@ -481,14 +482,16 @@ pub(crate) fn finalize_tool_router(
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    Ok(ToolRouter::from_parts(
+    ToolRouter::from_parts_with_projection(
         registry,
         model_visible_specs,
         tool_mode,
         code_mode_tool_names,
         tool_namespaces_info,
         &child_management_tools,
-    ))
+        turn_context.provider.projects_tools_as_flat_functions(),
+    )
+    .map_err(|wire_name| CodexErrorDetails::ToolCollision(wire_name).into())
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -720,13 +723,11 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
         return false;
     }
 
-    let provider = turn_context.provider.info();
-    provider.uses_openai_actor_authorization()
-        || (provider.requires_openai_auth
-            && turn_context
-                .auth_manager
-                .as_deref()
-                .is_some_and(AuthManager::current_auth_uses_codex_backend))
+    // Advertise the canonical namespace tool only when the provider policy
+    // already installs the extension. Do not re-encode a narrower OpenAI-auth
+    // gate here; that hid Grok while the extension was still registered.
+    turn_context.provider.capabilities().namespace_tools
+        && image_generation_policy(&turn_context.provider).is_some()
 }
 
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
