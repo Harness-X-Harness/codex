@@ -63,10 +63,11 @@ GitHub's default pull-request merge ref. For this adoption the head is
 `carry/grok-rust-v0.156.1` and the base is `grok/rust-v0.156.1`. PR proof
 does not build distribution binaries or run real-provider Live.
 
-The branch roles remain distinct: `grok/main` is the latest working Grok head
-and semantic reference on the stock main line; `grok/rust-v*` is an exact
-version-specific product line. Neither branch family is a promotion stage for
-the other.
+The branch roles remain distinct: `grok/main` is the active integration and
+experimentation head on the stock main line; `grok/rust-v*` is the release
+authority for an exact stock tag after its proof succeeds. Neither branch
+family is a promotion stage for the other. Release lessons may later be
+re-expressed on `grok/main` at the current stock-main seam.
 
 A push to either branch family runs:
 
