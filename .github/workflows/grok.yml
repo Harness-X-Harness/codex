@@ -120,7 +120,6 @@ jobs:
           echo "Release provenance OK: PR #${pr_number}, Cargo run ${run_id}."
 
   cargo:
-  cargo:
     name: Cargo
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
