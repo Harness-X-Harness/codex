@@ -92,7 +92,7 @@ struct ClientSetup {
 }
 
 enum Connection {
-    Websocket(PooledConnection),
+    Websocket(Box<PooledConnection>),
     Http(Box<ResponsesClient<ReqwestTransport>>),
 }
 
@@ -215,7 +215,11 @@ impl ConnectionPool {
             Some(connection) => {
                 let thread_id = connection.thread_id.clone();
                 let request_kind = connection.request_kind;
-                (Connection::Websocket(connection), thread_id, request_kind)
+                (
+                    Connection::Websocket(Box::new(connection)),
+                    thread_id,
+                    request_kind,
+                )
             }
             None => {
                 self.replenish();
@@ -504,7 +508,7 @@ impl ConnectionLease {
                 .idle_connections
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(connection);
+                .push(*connection);
         }
     }
 }

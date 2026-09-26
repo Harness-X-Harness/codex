@@ -94,12 +94,12 @@ impl<T: HttpTransport> ImagesClient<T> {
                 error: ApiError::Stream(format!("failed to encode image edit request: {error}")),
                 imagegen_request_id: None,
             }),
-            ApiDialect::Grok => grok_images::edit_body(request).map_err(|error| {
-                ImageRequestError {
+            ApiDialect::Grok => {
+                grok_images::edit_body(request).map_err(|error| ImageRequestError {
                     error,
                     imagegen_request_id: None,
-                }
-            }),
+                })
+            }
         }?;
         self.post_image_request("images/edits", body, extra_headers, "image edit")
             .await
@@ -119,20 +119,22 @@ impl<T: HttpTransport> ImagesClient<T> {
             .map_err(ImageRequestError::from_api_error)?;
         let imagegen_request_id = imagegen_request_id_from_headers(&resp.headers);
         let response = match self.session.provider().dialect {
-            ApiDialect::OpenAi => serde_json::from_slice(&resp.body).map_err(|error| {
-                ImageRequestError {
+            ApiDialect::OpenAi => {
+                serde_json::from_slice(&resp.body).map_err(|error| ImageRequestError {
                     error: ApiError::Stream(format!(
                         "failed to decode {operation} response: {error}"
                     )),
                     imagegen_request_id: imagegen_request_id.clone(),
-                }
-            }),
-            ApiDialect::Grok => grok_images::decode_response(&resp.body, operation).map_err(
-                |error| ImageRequestError {
-                    error,
-                    imagegen_request_id: imagegen_request_id.clone(),
-                },
-            ),
+                })
+            }
+            ApiDialect::Grok => {
+                grok_images::decode_response(&resp.body, operation).map_err(|error| {
+                    ImageRequestError {
+                        error,
+                        imagegen_request_id: imagegen_request_id.clone(),
+                    }
+                })
+            }
         }?;
         Ok((response, imagegen_request_id))
     }

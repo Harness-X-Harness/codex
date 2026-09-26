@@ -43,8 +43,82 @@ concurrency:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 
 jobs:
+  release-provenance:
+    name: Release provenance
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require merged PR with green Cargo proof
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          prs="$(gh api             -H 'Accept: application/vnd.github+json'             "/repos/${REPO}/commits/${SHA}/pulls")"
+
+          pr_number="$(jq -r --arg branch "${BRANCH}" '
+            [.[] | select(.base.ref == $branch and .merged_at != null)]
+            | sort_by(.merged_at)
+            | last
+            | .number // empty
+          ' <<<"${prs}")"
+
+          if [[ -z "${pr_number}" ]]; then
+            echo "::error::Release head ${SHA} is not associated with a merged PR into ${BRANCH}."
+            exit 1
+          fi
+
+          pr="$(gh api "/repos/${REPO}/pulls/${pr_number}")"
+          head_sha="$(jq -r '.head.sha' <<<"${pr}")"
+          head_ref="$(jq -r '.head.ref' <<<"${pr}")"
+
+          runs="$(gh api             "/repos/${REPO}/actions/workflows/grok.yml/runs?event=pull_request&head_sha=${head_sha}&per_page=100")"
+
+          run_id="$(jq -r --arg head_ref "${head_ref}" '
+            [.workflow_runs[]
+              | select(
+                  .head_branch == $head_ref
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+            ]
+            | sort_by(.created_at)
+            | last
+            | .id // empty
+          ' <<<"${runs}")"
+
+          if [[ -z "${run_id}" ]]; then
+            echo "::error::PR #${pr_number} has no successful grok pull_request workflow for head ${head_sha}."
+            exit 1
+          fi
+
+          jobs="$(gh api "/repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100")"
+          cargo_ok="$(jq -r '
+            [.jobs[]
+              | select(
+                  .name == "Cargo"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+            ]
+            | length
+          ' <<<"${jobs}")"
+
+          if [[ "${cargo_ok}" != "1" ]]; then
+            echo "::error::PR #${pr_number} workflow run ${run_id} did not complete Cargo successfully."
+            exit 1
+          fi
+
+          echo "Release provenance OK: PR #${pr_number}, Cargo run ${run_id}."
+
   cargo:
     name: Cargo
     if: github.event_name == 'pull_request'
@@ -81,6 +155,24 @@ jobs:
         run: cargo clippy -p codex-app-server --test all -- -D warnings
       - name: Provider contracts
         run: cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
+      - name: Detect App Server schema closure scope
+        id: app_server_schema
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          files="$(gh api --paginate             "/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100"             --jq '.[].filename')"
+          if grep -Eq '^(codex-rs/app-server-protocol/|codex-rs/protocol/src/|sdk/python/src/openai_codex/generated/)' <<<"${files}"; then
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "required=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: App Server schema and precomputed export closure
+        if: steps.app_server_schema.outputs.required == 'true'
+        run: cargo test -p codex-app-server-protocol --lib
       - name: Stock App Server Provider projections
         run: cargo test -p codex-app-server --test all grok
       - name: Core Grok lib
@@ -101,6 +193,7 @@ jobs:
   build-linux-x64-musl:
     name: Build x86_64-unknown-linux-musl
     if: github.event_name == 'push'
+    needs: [release-provenance]
     runs-on: ubuntu-24.04
     timeout-minutes: 170
     steps:
@@ -114,6 +207,7 @@ jobs:
   build-pack:
     name: Build ${{ matrix.target }}
     if: github.event_name == 'push'
+    needs: [release-provenance]
     strategy:
       fail-fast: false
       matrix:
