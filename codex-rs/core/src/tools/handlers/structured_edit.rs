@@ -107,7 +107,7 @@ impl StructuredEditHandler {
             ));
         };
         let action = prepare_structured_edit_action(
-            &turn_environment,
+            turn_environment,
             &file_path,
             &old_string,
             &new_string,
