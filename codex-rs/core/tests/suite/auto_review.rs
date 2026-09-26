@@ -639,6 +639,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+        structured_edit_tool_type: None,
         web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,

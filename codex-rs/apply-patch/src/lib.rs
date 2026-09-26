@@ -4,6 +4,7 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod structured_edit;
 mod text_file;
 
 use std::collections::HashMap;
@@ -42,6 +43,9 @@ pub use invocation::maybe_parse_apply_patch_verified_with_mode;
 pub use invocation::verify_apply_patch_args;
 pub use invocation::verify_apply_patch_args_with_mode;
 pub use standalone_executable::main;
+pub use structured_edit::StructuredEditError;
+pub use structured_edit::apply_exact_replacement;
+pub use structured_edit::apply_verified_action;
 
 use crate::invocation::ExtractHeredocError;
 
@@ -240,6 +244,43 @@ impl ApplyPatchAction {
             patch,
         }
     }
+
+    /// Build an update from already-computed file bytes.
+    ///
+    /// The synthetic `patch` is for approval/UI summaries only. Callers that
+    /// must preserve exact bytes should write through `apply_verified_action`
+    /// instead of re-parsing this patch.
+    pub fn from_exact_update(
+        cwd: PathUri,
+        path: PathUri,
+        old_content: &str,
+        new_content: String,
+    ) -> Self {
+        let display_path = path
+            .basename()
+            .unwrap_or_else(|| path.inferred_native_path_string());
+        let unified_diff = similar::TextDiff::from_lines(old_content, &new_content)
+            .unified_diff()
+            .context_radius(3)
+            .to_string();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {display_path}\n{unified_diff}*** End Patch\n"
+        );
+        let changes = HashMap::from([(
+            path,
+            ApplyPatchFileChange::Update {
+                unified_diff,
+                move_path: None,
+                new_content,
+            },
+        )]);
+        Self {
+            changes,
+            update_file_mode: ApplyPatchFileUpdateMode::PreserveLineEndings,
+            cwd,
+            patch,
+        }
+    }
 }
 
 /// Textual file changes that were actually committed while applying a patch.
@@ -254,8 +295,16 @@ impl AppliedPatchDelta {
         Self { changes, exact }
     }
 
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self::new(Vec::new(), /*exact*/ true)
+    }
+
+    pub(crate) fn mark_inexact(&mut self) {
+        self.exact = false;
+    }
+
+    pub(crate) fn push(&mut self, change: AppliedPatchChange) {
+        self.changes.push(change);
     }
 
     pub fn changes(&self) -> &[AppliedPatchChange] {
@@ -318,11 +367,11 @@ pub struct ApplyPatchFailure {
 }
 
 impl ApplyPatchFailure {
-    fn new(error: ApplyPatchError, delta: AppliedPatchDelta) -> Self {
+    pub(crate) fn new(error: ApplyPatchError, delta: AppliedPatchDelta) -> Self {
         Self { error, delta }
     }
 
-    fn without_delta(error: ApplyPatchError) -> Self {
+    pub(crate) fn without_delta(error: ApplyPatchError) -> Self {
         Self::new(error, AppliedPatchDelta::empty())
     }
 

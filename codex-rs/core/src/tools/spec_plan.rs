@@ -26,6 +26,7 @@ use crate::tools::handlers::RequestUserInputAsyncHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::SendMessageToUserAsyncHandler;
 use crate::tools::handlers::SleepHandler;
+use crate::tools::handlers::StructuredEditHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
@@ -1212,6 +1213,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if environment_mode.has_environment() && context.model_info.apply_patch_tool_type.is_some() {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ApplyPatchHandler::new(include_environment_id));
+    }
+
+    if environment_mode.has_environment() && context.model_info.structured_edit_tool_type.is_some()
+    {
+        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+        registry.add(StructuredEditHandler::new(include_environment_id));
     }
 
     if context

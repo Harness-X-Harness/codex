@@ -17,6 +17,8 @@ use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchOptions;
+use codex_apply_patch::apply_patch_with_options;
+use codex_apply_patch::apply_verified_action;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -41,6 +43,16 @@ pub(crate) struct ApplyPatchApprovalKey {
     pub(crate) path: PathUri,
 }
 
+/// How a verified file mutation is written after approval and sandbox checks.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ApplyPatchWriteMode {
+    /// Re-parse `action.patch` and apply hunks. Stock `apply_patch` behavior.
+    #[default]
+    ReparsePatch,
+    /// Write the already-computed file bytes without re-parsing the patch.
+    VerifiedContents,
+}
+
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub turn_environment: TurnEnvironment,
@@ -50,6 +62,7 @@ pub struct ApplyPatchRequest {
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     pub permissions_preapproved: bool,
+    pub write_mode: ApplyPatchWriteMode,
 }
 
 #[derive(Default)]
@@ -176,26 +189,42 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let result = codex_apply_patch::apply_patch_with_options(
-            &req.action.patch,
-            ApplyPatchOptions {
-                update_file_mode: req.action.update_file_mode(),
-                // Only reject links when an otherwise-required sandbox was bypassed.
-                // Executor-managed sandboxes can have SandboxType::None.
-                follow_symlinks: attempt.sandbox_requested
-                    || !attempt.manager.should_sandbox(
-                        attempt.permissions,
-                        self.sandbox_preference(),
-                        attempt.enforce_managed_network,
-                    ),
-            },
-            &req.action.cwd,
-            &mut stdout,
-            &mut stderr,
-            fs.as_ref(),
-            sandbox.as_ref(),
-        )
-        .await;
+        let options = ApplyPatchOptions {
+            update_file_mode: req.action.update_file_mode(),
+            // Only reject links when an otherwise-required sandbox was bypassed.
+            // Executor-managed sandboxes can have SandboxType::None.
+            follow_symlinks: attempt.sandbox_requested
+                || !attempt.manager.should_sandbox(
+                    attempt.permissions,
+                    self.sandbox_preference(),
+                    attempt.enforce_managed_network,
+                ),
+        };
+        let result = match req.write_mode {
+            ApplyPatchWriteMode::ReparsePatch => {
+                apply_patch_with_options(
+                    &req.action.patch,
+                    options,
+                    &req.action.cwd,
+                    &mut stdout,
+                    &mut stderr,
+                    fs.as_ref(),
+                    sandbox.as_ref(),
+                )
+                .await
+            }
+            ApplyPatchWriteMode::VerifiedContents => {
+                apply_verified_action(
+                    &req.action,
+                    options,
+                    &mut stdout,
+                    &mut stderr,
+                    fs.as_ref(),
+                    sandbox.as_ref(),
+                )
+                .await
+            }
+        };
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr).into_owned();
         let failed = result.is_err();

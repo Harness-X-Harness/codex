@@ -323,6 +323,12 @@ pub enum ApplyPatchToolType {
     Freeform,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredEditToolType {
+    ExactMatch,
+}
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema, Default,
 )]
@@ -443,6 +449,8 @@ pub struct ModelInfo {
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_edit_tool_type: Option<StructuredEditToolType>,
     #[serde(default)]
     pub web_search_tool_type: WebSearchToolType,
     pub truncation_policy: TruncationPolicyConfig,
@@ -979,6 +987,7 @@ mod tests {
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
+            structured_edit_tool_type: None,
             web_search_tool_type: WebSearchToolType::Text,
             truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_image_detail_original: false,

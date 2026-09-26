@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::StructuredEditToolType;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -1349,6 +1350,50 @@ async fn environment_count_controls_environment_backed_tools() {
     ));
     assert!(has_parameter(
         multiple_environments.visible_spec("view_image"),
+        "environment_id"
+    ));
+}
+
+#[tokio::test]
+async fn structured_edit_registers_independently_of_apply_patch() {
+    let apply_patch_only = probe(|turn| {
+        update_turn_settings_for_test(turn, |settings| {
+            let model = Arc::make_mut(&mut settings.model_info);
+            model.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+            model.structured_edit_tool_type = None;
+        });
+    })
+    .await;
+    apply_patch_only.assert_visible_contains(&["apply_patch"]);
+    apply_patch_only.assert_visible_lacks(&["structured_edit"]);
+
+    let structured_edit_only = probe(|turn| {
+        update_turn_settings_for_test(turn, |settings| {
+            let model = Arc::make_mut(&mut settings.model_info);
+            model.apply_patch_tool_type = None;
+            model.structured_edit_tool_type = Some(StructuredEditToolType::ExactMatch);
+        });
+    })
+    .await;
+    structured_edit_only.assert_visible_contains(&["structured_edit"]);
+    structured_edit_only.assert_visible_lacks(&["apply_patch"]);
+    assert!(!has_parameter(
+        structured_edit_only.visible_spec("structured_edit"),
+        "environment_id"
+    ));
+
+    let multiple_environments = probe(|turn| {
+        duplicate_primary_environment(turn);
+        update_turn_settings_for_test(turn, |settings| {
+            let model = Arc::make_mut(&mut settings.model_info);
+            model.apply_patch_tool_type = None;
+            model.structured_edit_tool_type = Some(StructuredEditToolType::ExactMatch);
+        });
+    })
+    .await;
+    multiple_environments.assert_visible_contains(&["structured_edit"]);
+    assert!(has_parameter(
+        multiple_environments.visible_spec("structured_edit"),
         "environment_id"
     ));
 }
