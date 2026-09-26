@@ -85,9 +85,11 @@ even if it compiles or could pass Live, is not a successful release transition.
 1. PR review owns deterministic proof: formatting, lint, native regression
    tests, harness unit tests, and stock-owned generated/precomputed consistency
    tests for the surfaces this product changes.
-2. The Cargo job must include the App Server protocol schema/precomputed export
-   consistency suite so checked-in schemas cannot diverge from embedded
-   precomputed exports.
+2. When a PR changes App Server protocol, protocol source, schema, or generated
+   SDK surfaces, Cargo must run the App Server protocol schema/precomputed
+   export consistency suite so checked-in schemas cannot diverge from embedded
+   precomputed exports. Unrelated proof-infrastructure or documentation changes
+   do not retroactively reopen inherited generated surfaces.
 3. A version-line push must pass Release provenance before target builds start.
    The gate verifies that the pushed head is associated with a merged PR into
    the current version line and that the PR's grok workflow completed Cargo
@@ -115,14 +117,16 @@ The Cargo proof includes:
 - Rust formatting;
 - Clippy for the affected product owners and tests;
 - Provider/API contracts;
-- App Server protocol schema and precomputed export consistency;
+- App Server protocol schema and precomputed export consistency when the PR
+  touches that owner/source/generated closure;
 - Provider-bound App Server tests;
 - Grok Core and whole-number argument tests;
 - Guardian/memory/history/image-generation owner tests;
 - Go Live harness unit tests.
 
 Generated or precomputed outputs are not considered closed merely because their
-source fixtures changed. Their stock-owned consistency tests must pass.
+source fixtures changed. When a PR touches that closure, its stock-owned
+consistency tests must run and pass.
 
 ## Merge provenance
 
