@@ -155,7 +155,23 @@ jobs:
         run: cargo clippy -p codex-app-server --test all -- -D warnings
       - name: Provider contracts
         run: cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
+      - name: Detect App Server schema closure scope
+        id: app_server_schema
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          files="$(gh api --paginate             "/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100"             --jq '.[].filename')"
+          if grep -Eq '^(codex-rs/app-server-protocol/|codex-rs/protocol/src/|sdk/python/src/openai_codex/generated/)' <<<"${files}"; then
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "required=false" >> "${GITHUB_OUTPUT}"
+          fi
       - name: App Server schema and precomputed export closure
+        if: steps.app_server_schema.outputs.required == 'true'
         run: cargo test -p codex-app-server-protocol --lib
       - name: Stock App Server Provider projections
         run: cargo test -p codex-app-server --test all grok
