@@ -170,6 +170,10 @@ Responses backend does not consume the stock namespace-tool wire form. The
 reverse mapping restores a wire call to its canonical tool identity before
 dispatch.
 
+Shipped Grok model profiles advertise the structured exact-match editor
+(`structured_edit_tool_type = exact_match`) and do not advertise freeform
+`apply_patch`. Stock OpenAI/ChatGPT profiles keep `apply_patch`.
+
 ### History projection
 
 Before model input is sent, Grok may project canonical Codex response/history

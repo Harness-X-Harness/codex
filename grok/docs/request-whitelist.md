@@ -84,7 +84,7 @@ regresses.
 | `tool_search`, deferred tool loading | `ModelInfo.supports_search_tool` | `false` (`grok_catalog.rs`) | full tool list in the plan |
 | namespace tool wire form | `ProviderCapabilities.namespace_tools` + `projects_tools_as_flat_functions` | `true` + `true` | stock namespaces planned, flattened at egress, restored on the reverse map |
 | `local_shell` tool | `ModelInfo.shell_type` | `UnifiedExec` | `exec_command` functions |
-| OpenAI `apply_patch` function | `ModelInfo.apply_patch_tool_type` | `Freeform` | custom `apply_patch` |
+| OpenAI `apply_patch` function | `ModelInfo.apply_patch_tool_type` | `None` | structured `structured_edit` (`ExactMatch`) |
 | verbosity `text.verbosity` | `ModelInfo.support_verbosity` | `false` | — |
 | `reasoning.summary` parameter | `ModelInfo.supports_reasoning_summary_parameter` | `false` | reasoning summaries stay off |
 | Responses Lite, `reasoning.context`, `configuration_update` | `ModelInfo.use_responses_lite` + stock `is_openai` gate | `false` | request-level `reasoning.effort` each Turn |
@@ -274,7 +274,7 @@ request copy exactly as today:
 | `FunctionCall` | `function_call` | `call_id`, `name`, `arguments`, `id?` | grok-build; Live. `namespace` and `encrypted_function_args` are not constructed |
 | `FunctionCallOutput` | `function_call_output` | `call_id`, `output` (text or content items) | grok-build; Live |
 | `CustomToolCall` | `custom_tool_call` | `id`, `call_id`, `name`, `input`, `status?` | on a Grok Thread this is only a replayed backend-executed x_search call (client custom tools are flattened to `function_call`); grok-build replays it as-is. Live (`TestGrokHostedXSearch`). `id` is required on replay (`TestFactCustomToolCallReplayRequiresID`: `422 missing field id`); `status` is accepted (`TestFactInputStatusOnHostedItems`) |
-| `CustomToolCallOutput` | `custom_tool_call_output` | `call_id`, `output` | custom `apply_patch` Story |
+| `CustomToolCallOutput` | `custom_tool_call_output` | `call_id`, `output` | unused by the shipped editor; Grok file edits persist as `function_call_output` (`TestGrokStructuredEdit`) |
 | `WebSearchCall` | `web_search_call` | `id?`, `action` | Live (`TestGrokHostedWebSearch`): Turn 2 replays `id` + `action` and Grok accepts it. grok-build replays as-is with status; `status` is accepted (`TestFactInputStatusOnHostedItems`) but not constructed. `action` is required on replay (`TestFactWebSearchCallReplayRequiresAction`: `422 missing field action`) |
 | `ImageGenerationCall` | `image_generation_call` | `id?`, `status`, `revised_prompt?`, `result` | image-edit Story was GREEN with `status` at `c4c80eef`; `status` is accepted (`TestFactInputStatusOnHostedItems`) |
 | `CompactionTrigger` | dropped | — | stock request control; Grok `remote_compaction` `Unsupported` |
@@ -296,7 +296,7 @@ values, maps each by `type`, and constructs Grok tool types.
 | Codex tool JSON | Grok tool | Evidence / reason |
 |-----------------|-----------|-------------------|
 | `function { name, description, parameters, strict, defer_loading? }` | `function { name, description, parameters }` | omit `strict`: grok-build `strict: None`; `TestFactFunctionStrict` (`accepted`) is not consumed; this B1 probe. `defer_loading` is not constructed |
-| `custom { name, description, format }` | `custom` as-is | custom `apply_patch` Story |
+| `custom { name, description, format }` | `custom` as-is | no longer the shipped Grok editor; `structured_edit` is a normal `function` (`TestGrokStructuredEditWireContract`) |
 | `web_search { external_web_access, indexed_web_access, filters, user_location, search_context_size, search_content_types }` | `web_search { filters: { allowed_domains }? }` or `{ filters: { excluded_domains }? }` | grok-build `to_tool_entry`; emit `filters.allowed_domains` or `filters.excluded_domains` from stock when present (max 5); omit `filters` when missing or empty. Reject before transport when both lists are non-empty, a list exceeds 5, or a domain is not a string. Stock `WebSearchMode::{Cached,Indexed,Live}` share this one hosted Grok `web_search` shape; they are not distinct Grok wire modes. Live (`TestGrokHostedWebSearchAllowlist`). Live (`TestGrokHostedWebSearchExcludedDomains`) |
 | `x_search` | appended once when tools are non-empty; `from_date` / `to_date` copied from canonical tool JSON when present and valid `YYYY-MM-DD`, otherwise from the Grok Provider window when the tool key is absent | Grok capability rule, Live GREEN for bare `x_search`; Live (`TestGrokHostedXSearchDateWindow`) for Provider `from_date` / `to_date`. A present invalid date rejects before transport and does not widen the window. grok-build emits dates when the hosted tool is requested |
 | `namespace`, `tool_search` | reject | flat projection already flattens namespaces; reaching the whitelist is a flat-projection regression |
@@ -330,7 +330,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 | `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | Grok Provider `[model_providers.grok.x_search]` | copied onto the `x_search` tool when the tool key is valid or absent (Provider window fills an absent key); a present invalid date fails closed | — | Live (`TestGrokHostedXSearchDateWindow`): shipped profile plus `[model_providers.grok.x_search]` `from_date` / `to_date` advertises the window on an accepted `/responses` |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
 | image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
-| custom `apply_patch` | `custom` tool | `ModelInfo.apply_patch_tool_type = Freeform` | `custom` tool as-is | flat `function_call` reverse map | Live (`TestGrokCustomApplyPatch`) |
+| structured exact-match editor | `function` tool | `ModelInfo.structured_edit_tool_type = ExactMatch`; `apply_patch_tool_type` absent | flat `function` | flat `function_call` reverse map | Live (`TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`, `TestGrokStructuredEditApprovalDeclined`) |
 | maximum native reasoning effort | `reasoning.effort` | catalog reasoning projection (`Ultra` → `xhigh`) | `reasoning.effort` | — | Implemented |
 | prompt-cache routing | `prompt_cache_key` | stock | emitted | — | Live |
 | hosted `code_interpreter` | `code_interpreter_call` replay | none | — | none; Codex has no response item, so it would land in `Other` | Not surfaced; not advertised, so never emitted by Grok |
@@ -487,7 +487,9 @@ Rules for the module:
   `/responses`. `TestGrokPinnedPreviousModel` smokes `grok-4.6` with the
   requested model on `/responses`, a named tool round trip, encrypted
   reasoning, and a second Turn on that history. The
-  encrypted-reasoning continuation, image-edit, custom `apply_patch`,
+  encrypted-reasoning continuation, image-edit, structured `structured_edit`
+  (`TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`,
+  `TestGrokStructuredEditApprovalDeclined`),
   hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`
   allowlist (`TestGrokHostedWebSearchAllowlist`), hosted `web_search`
   blocklist (`TestGrokHostedWebSearchExcludedDomains`), hosted `x_search`

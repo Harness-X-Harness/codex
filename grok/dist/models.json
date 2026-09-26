@@ -41,7 +41,8 @@
       "default_reasoning_summary": "none",
       "support_verbosity": false,
       "default_verbosity": null,
-      "apply_patch_tool_type": "freeform",
+      "apply_patch_tool_type": null,
+      "structured_edit_tool_type": "exact_match",
       "web_search_tool_type": "text",
       "truncation_policy": {
         "mode": "bytes",
@@ -105,7 +106,8 @@
       "default_reasoning_summary": "none",
       "support_verbosity": false,
       "default_verbosity": null,
-      "apply_patch_tool_type": "freeform",
+      "apply_patch_tool_type": null,
+      "structured_edit_tool_type": "exact_match",
       "web_search_tool_type": "text",
       "truncation_policy": {
         "mode": "bytes",

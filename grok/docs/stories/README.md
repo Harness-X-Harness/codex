@@ -28,7 +28,7 @@ Triage by stage lives in [`../release.md`](../release.md) §Triage.
 | [Encrypted reasoning survives full-history continuation](./grok-encrypted-reasoning-history-continuation.md) | `TestGrokEncryptedReasoningContinuation` |
 | [Child agent inherits parent Provider authority](./grok-provider-binding-lifecycle.md) | `TestGrokCollaboration` |
 | [Image generation and same-Thread history edit](./grok-image-generation-history-edit.md) | `TestGrokImageGenerationEdit` |
-| [Custom `apply_patch` file edit](./grok-custom-apply-patch.md) | `TestGrokCustomApplyPatch` |
+| [Structured exact-match file edit](./grok-structured-edit.md) | `TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`, `TestGrokStructuredEditApprovalDeclined` |
 | [Hosted `web_search` Turn and replay](./grok-hosted-web-search-turn.md) | `TestGrokHostedWebSearch` |
 | [Hosted `web_search` domain allowlist](./grok-hosted-web-search-allowlist.md) | `TestGrokHostedWebSearchAllowlist` |
 | [Hosted `web_search` domain blocklist](./grok-hosted-web-search-excluded-domains.md) | `TestGrokHostedWebSearchExcludedDomains` |

@@ -109,6 +109,23 @@ async fn list_models_uses_shipped_catalog_json() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![("grok-4.7", "grok-4.7"), ("grok-4.6", "grok-4.6")]
     );
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| {
+                (
+                    model["apply_patch_tool_type"].clone(),
+                    model["structured_edit_tool_type"]
+                        .as_str()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (serde_json::Value::Null, "exact_match"),
+            (serde_json::Value::Null, "exact_match"),
+        ]
+    );
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())

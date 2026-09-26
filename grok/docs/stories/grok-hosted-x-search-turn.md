@@ -75,7 +75,7 @@ one follow-up Turn on the same Thread, **then**:
 
 This Story does not prove `x_search` `from_date` / `to_date` (B2), widening
 `is_provider_hosted_tool_call` to every completed `custom_tool_call` (B2),
-hosted `web_search`, custom `apply_patch`, Mini routing, every Grok model, or
+hosted `web_search`, structured `structured_edit`, Mini routing, every Grok model, or
 every x_search sub-tool Grok may add later.
 
 It does not fix the order in which the client sees the hosted call. Grok

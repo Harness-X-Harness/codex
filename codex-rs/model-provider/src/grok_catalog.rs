@@ -1,5 +1,4 @@
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -7,6 +6,7 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::StructuredEditToolType;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -56,8 +56,8 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
             default_reasoning_summary: ReasoningSummary::None,
             support_verbosity: false,
             default_verbosity: None,
-            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            structured_edit_tool_type: None,
+            apply_patch_tool_type: None,
+            structured_edit_tool_type: Some(StructuredEditToolType::ExactMatch),
             web_search_tool_type: WebSearchToolType::Text,
             truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_image_detail_original: false,
