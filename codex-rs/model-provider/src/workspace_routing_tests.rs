@@ -17,6 +17,9 @@ use codex_model_provider_info::ModelProviderInfo;
 use pretty_assertions::assert_eq;
 
 use crate::create_model_provider;
+use crate::workspace_routing::apply_workspace_routing;
+use codex_api::ApiDialect;
+use codex_model_provider_info::WireApi;
 
 struct Routing(WorkspaceRouting);
 
@@ -196,5 +199,33 @@ async fn missing_routing_owner_and_wrong_workspace_fail_closed() {
             .responses_api_provider(&routing_context)
             .await
             .is_err()
+    );
+}
+
+#[test]
+fn apply_workspace_routing_does_not_mutate_api_dialect() {
+    let info = ModelProviderInfo {
+        name: "xAI".into(),
+        base_url: Some("https://chatgpt.com/backend-api/codex".into()),
+        wire_api: WireApi::GrokResponses,
+        ..ModelProviderInfo::default()
+    };
+    let mut provider = info
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("GrokResponses should build API provider");
+    assert_eq!(provider.dialect, ApiDialect::Grok);
+    apply_workspace_routing(
+        &mut provider,
+        WorkspaceRouting {
+            chatgpt_account_id: "account_id".into(),
+            backend_origin: "https://gov.chatgpt.com".into(),
+            account_routing_override: "us_cr".into(),
+        },
+    )
+    .expect("routing should apply");
+    assert_eq!(provider.dialect, ApiDialect::Grok);
+    assert_eq!(
+        provider.base_url,
+        "https://gov.chatgpt.com/backend-api/codex"
     );
 }

@@ -2650,6 +2650,15 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "x_search": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/XSearchProviderConfig"
+            }
+          ],
+          "default": null,
+          "description": "Optional Grok hosted `x_search` date window (`from_date` / `to_date` as calendar `YYYY-MM-DD`). Other providers ignore this field."
         }
       },
       "type": "object"
@@ -6349,6 +6358,12 @@
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
         },
+        "excluded_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"
         }
@@ -6381,10 +6396,32 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "Serialized selector for the Grok Provider implementation.\n\nTransport remains the stock Responses HTTP/SSE path. This variant is the only serialized selector that maps to `ApiDialect::Grok`.",
+          "enum": [
+            "grok_responses"
+          ],
+          "type": "string"
         }
       ]
     },
     "WorkspaceRootsToml": {
+      "type": "object"
+    },
+    "XSearchProviderConfig": {
+      "additionalProperties": false,
+      "description": "Optional Grok hosted `x_search` date window.\n\nConfigured as `[model_providers.*.x_search]` with calendar `YYYY-MM-DD` `from_date` / `to_date`. Other dialects ignore this field.",
+      "properties": {
+        "from_date": {
+          "description": "Start of the Grok hosted `x_search` window (`YYYY-MM-DD`).",
+          "type": "string"
+        },
+        "to_date": {
+          "description": "End of the Grok hosted `x_search` window (`YYYY-MM-DD`).",
+          "type": "string"
+        }
+      },
       "type": "object"
     }
   },

@@ -258,6 +258,10 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    #[serde(
+        default,
+        deserialize_with = "crate::tools::handlers::json_whole_number::deserialize_optional_string_or_whole_count"
+    )]
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }
