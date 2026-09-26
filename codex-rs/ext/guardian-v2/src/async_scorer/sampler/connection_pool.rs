@@ -160,7 +160,7 @@ impl ConnectionPool {
                         pool.idle_connections
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .push(*connection);
+                            .push(connection);
                     }
                     Err(error) => {
                         if matches!(error, LunaSamplerError::ConnectionTimeout) {
@@ -508,7 +508,7 @@ impl ConnectionLease {
                 .idle_connections
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(connection);
+                .push(*connection);
         }
     }
 }
