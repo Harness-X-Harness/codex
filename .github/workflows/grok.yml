@@ -5,6 +5,7 @@ name: grok
 # GitHub Actions artifacts are the delivery output; there is no repository publisher.
 #
 # PR and push ignore documentation, editor configuration, and Grok Facts.
+# A push with no other file changes does not start this workflow.
 # Everything else uses the native GitHub Actions event/filter semantics.
 
 on:
