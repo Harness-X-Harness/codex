@@ -844,16 +844,28 @@ func (h *liveHarness) requireListedModel(ctx context.Context, id string) {
 }
 
 type startTurnOpts struct {
-	prompt          string
-	deadline        time.Duration
-	effort          string
-	model           string
-	probeTool       bool
-	approvalNever   bool
-	dangerFull      bool
-	disableShell    bool
-	allowFailedTurn bool
-	threadID        string
+	prompt            string
+	deadline          time.Duration
+	effort            string
+	model             string
+	probeTool         bool
+	approvalNever     bool
+	approvalUntrusted bool
+	dangerFull        bool
+	disableShell      bool
+	allowFailedTurn   bool
+	threadID          string
+}
+
+func threadApprovalPolicy(opts startTurnOpts) (protocolv2.AskForApproval, bool) {
+	switch {
+	case opts.approvalNever:
+		return protocolv2.NewAskForApprovalNever(), true
+	case opts.approvalUntrusted:
+		return protocolv2.NewAskForApprovalUntrusted(), true
+	default:
+		return protocolv2.AskForApproval{}, false
+	}
 }
 
 func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn {
@@ -884,8 +896,8 @@ func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn 
 			ModelProvider: protocolv2.Value(grokProvider),
 			Ephemeral:     protocolv2.Value(false),
 		}
-		if opts.approvalNever {
-			thread.ApprovalPolicy = protocolv2.Value(protocolv2.NewAskForApprovalNever())
+		if policy, ok := threadApprovalPolicy(opts); ok {
+			thread.ApprovalPolicy = protocolv2.Value(policy)
 		}
 		if opts.dangerFull {
 			thread.Sandbox = protocolv2.Value(protocolv2.SandboxModeDangerFullAccess)

@@ -112,5 +112,8 @@ ChatGPT live Turn.
 ## Executable contract
 
 `TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`, and
-`TestGrokStructuredEditApprovalDeclined` in `grok/live`. Scheduling is
+`TestGrokStructuredEditApprovalDeclined` in `grok/live`. The decline Story
+uses App Server `untrusted` approval (`UnlessTrusted`) so the Live harness
+receives a file-change approval request; default `on-request` plus
+`danger-full-access` auto-approves workspace writes. Scheduling is
 [`release.md`](../release.md).

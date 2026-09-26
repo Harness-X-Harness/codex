@@ -139,11 +139,12 @@ func TestGrokStructuredEditApprovalDeclined(t *testing.T) {
 	h.requireGrokCatalog(ctx)
 
 	run := h.runTurn(ctx, startTurnOpts{
-		prompt:          "Replace the exact text GROK_STRUCTURED_EDIT_SEED_v1 with GROK_STRUCTURED_EDIT_REPLACED_v1 in structured_edit_fixture.txt by calling structured_edit exactly once. Do not call apply_patch. Do not use a shell, exec_command, Python, or sed. If the edit is declined, stop without retrying.",
-		deadline:        3 * time.Minute,
-		dangerFull:      true,
-		disableShell:    true,
-		allowFailedTurn: true,
+		prompt:            "Replace the exact text GROK_STRUCTURED_EDIT_SEED_v1 with GROK_STRUCTURED_EDIT_REPLACED_v1 in structured_edit_fixture.txt by calling structured_edit exactly once. Do not call apply_patch. Do not use a shell, exec_command, Python, or sed. If the edit is declined, stop without retrying.",
+		deadline:          3 * time.Minute,
+		approvalUntrusted: true,
+		dangerFull:        true,
+		disableShell:      true,
+		allowFailedTurn:   true,
 	})
 	if run.Provider != grokProvider {
 		h.failStage("thread_bound_to_grok", "Thread is not bound to the Grok Provider")
@@ -413,6 +414,20 @@ func readFileSHA256(path string) ([]byte, string, error) {
 		return nil, "", err
 	}
 	return data, sha256Hex(data), nil
+}
+
+func TestThreadApprovalPolicyUsesUntrustedForDecline(t *testing.T) {
+	policy, ok := threadApprovalPolicy(startTurnOpts{approvalUntrusted: true})
+	if !ok || policy.Kind() != protocolv2.AskForApprovalKindUntrusted {
+		t.Fatalf("decline config policy = %s ok=%t, want untrusted", policy.Kind(), ok)
+	}
+	never, ok := threadApprovalPolicy(startTurnOpts{approvalNever: true})
+	if !ok || never.Kind() != protocolv2.AskForApprovalKindNever {
+		t.Fatalf("success config policy = %s ok=%t, want never", never.Kind(), ok)
+	}
+	if _, ok := threadApprovalPolicy(startTurnOpts{}); ok {
+		t.Fatal("default Live turn must not set an explicit approval policy")
+	}
 }
 
 func TestStructuredEditIdentityRejectsContainsMatches(t *testing.T) {
