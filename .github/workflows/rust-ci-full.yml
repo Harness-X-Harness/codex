@@ -8,6 +8,13 @@ on:
       - "**full-ci**"
   workflow_dispatch:
 
+# Direct *full-ci* branches are disposable pre-merge proof branches: a newer
+# push supersedes an older head. Reusable/postmerge calls and manual runs use a
+# unique run group so they retain exact-run evidence and never cancel each other.
+concurrency:
+  group: rust-ci-full-${{ github.event_name == 'push' && contains(github.ref_name, 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && contains(github.ref_name, 'full-ci') }}
+
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
@@ -481,6 +488,35 @@ jobs:
       remote_env: true
       use_sccache: true
     secrets: inherit
+
+  structured_edit_remote_proof:
+    name: Structured edit remote proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Run structured_edit remote proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          trap codex_remote_env_cleanup EXIT
+
+          cargo test -p codex-core --test all \
+            suite::structured_edit::structured_edit_stale_snapshot_on_remote_environment \
+            -- --exact --test-threads=1
+          cargo test -p codex-core --test all \
+            suite::structured_edit::structured_edit_remote_read_failure_does_not_commit \
+            -- --exact --test-threads=1
 
   tests_linux_arm64:
     name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
