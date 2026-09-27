@@ -50,9 +50,12 @@ const (
 	probeToolOutput = "GROK_LIVE_TOOL_OK"
 	probeToolDesc   = "Return the fixed live validation marker."
 
-	applyPatchFile     = "hello.txt"
-	applyPatchSeed     = "HELLO\n"
-	applyPatchExpected = "WORLD"
+	structuredEditFile           = "structured_edit_fixture.txt"
+	structuredEditSeed           = "GROK_STRUCTURED_EDIT_SEED_v1\n"
+	structuredEditExpected       = "GROK_STRUCTURED_EDIT_REPLACED_v1\n"
+	structuredEditRepeatFile     = "structured_edit_repeat_fixture.txt"
+	structuredEditRepeatSeed     = "GROK_STRUCTURED_EDIT_REPEAT_v1 alpha\nGROK_STRUCTURED_EDIT_REPEAT_v1 beta\n"
+	structuredEditRepeatExpected = "GROK_STRUCTURED_EDIT_REPEATED_v1 alpha\nGROK_STRUCTURED_EDIT_REPEATED_v1 beta\n"
 
 	notificationQueueCapacity = 1 << 16
 	rolloutSettle             = 15 * time.Second
@@ -377,8 +380,10 @@ type liveHarness struct {
 }
 
 type shippedCatalogModel struct {
-	Slug     string `json:"slug"`
-	Priority int    `json:"priority"`
+	Slug                   string  `json:"slug"`
+	Priority               int     `json:"priority"`
+	ApplyPatchToolType     *string `json:"apply_patch_tool_type"`
+	StructuredEditToolType *string `json:"structured_edit_tool_type"`
 }
 
 type xSearchDateWindow struct {
@@ -842,15 +847,28 @@ func (h *liveHarness) requireListedModel(ctx context.Context, id string) {
 }
 
 type startTurnOpts struct {
-	prompt        string
-	deadline      time.Duration
-	effort        string
-	model         string
-	probeTool     bool
-	approvalNever bool
-	dangerFull    bool
-	disableShell  bool
-	threadID      string
+	prompt            string
+	deadline          time.Duration
+	effort            string
+	model             string
+	probeTool         bool
+	approvalNever     bool
+	approvalUntrusted bool
+	dangerFull        bool
+	disableShell      bool
+	allowFailedTurn   bool
+	threadID          string
+}
+
+func threadApprovalPolicy(opts startTurnOpts) (protocolv2.AskForApproval, bool) {
+	switch {
+	case opts.approvalNever:
+		return protocolv2.NewAskForApprovalNever(), true
+	case opts.approvalUntrusted:
+		return protocolv2.NewAskForApprovalUntrusted(), true
+	default:
+		return protocolv2.AskForApproval{}, false
+	}
 }
 
 func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn {
@@ -881,8 +899,8 @@ func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn 
 			ModelProvider: protocolv2.Value(grokProvider),
 			Ephemeral:     protocolv2.Value(false),
 		}
-		if opts.approvalNever {
-			thread.ApprovalPolicy = protocolv2.Value(protocolv2.NewAskForApprovalNever())
+		if policy, ok := threadApprovalPolicy(opts); ok {
+			thread.ApprovalPolicy = protocolv2.Value(policy)
 		}
 		if opts.dangerFull {
 			thread.Sandbox = protocolv2.Value(protocolv2.SandboxModeDangerFullAccess)
@@ -931,7 +949,7 @@ func (h *liveHarness) runTurn(ctx context.Context, opts startTurnOpts) liveTurn 
 		defer interruptCancel()
 		_, _ = h.client.Turns().Interrupt(interruptCtx, protocolv2.TurnInterruptParams{ThreadID: threadID, TurnID: run.TurnID})
 	}
-	if waitErr != nil && !completedWithoutFinalAnswer(waitErr, run.Status) {
+	if waitErr != nil && !completedWithoutFinalAnswer(waitErr, run.Status) && !opts.allowFailedTurn {
 		h.failError("turn_wait", waitErr, result, threadID, provider, model)
 	}
 	if strings.TrimSpace(run.FinalResponse) == "" {

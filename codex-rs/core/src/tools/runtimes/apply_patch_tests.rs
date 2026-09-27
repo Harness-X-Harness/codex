@@ -1,3 +1,4 @@
+use super::ApplyPatchWriteMode;
 use super::*;
 use crate::config::PermissionProfileSnapshot;
 use crate::environment_selection::EnvironmentConfigOrigin;
@@ -89,6 +90,8 @@ async fn approval_action_preserves_patch_path_uris() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     let approval_action = ApplyPatchRuntime::build_approval_action(&request, "call-1");
@@ -103,6 +106,7 @@ async fn approval_action_preserves_patch_path_uris() {
             patch: expected_patch,
             changes: Arc::new(HashMap::new()),
             permissions_preapproved: false,
+            hook_identity: ApplyPatchHookIdentity::ApplyPatch,
         }
     );
 }
@@ -126,6 +130,8 @@ async fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     let payload =
@@ -140,6 +146,48 @@ async fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         payload.tool_input,
         serde_json::json!({ "command": expected_patch })
     );
+}
+
+#[tokio::test]
+async fn permission_request_payload_preserves_structured_edit_identity() {
+    let path = std::env::temp_dir()
+        .join("structured-edit-permission-request-payload.txt")
+        .abs();
+    let arguments = serde_json::json!({
+        "file_path": "nested/dir/target.txt",
+        "old_string": "old",
+        "new_string": "new",
+        "replace_all": false,
+    });
+    let action = ApplyPatchAction::from_exact_update(
+        PathUri::from_abs_path(&std::env::temp_dir().abs()),
+        PathUri::from_abs_path(&path),
+        "old\n",
+        "new\n".to_string(),
+    );
+    let req = ApplyPatchRequest {
+        turn_environment: test_turn_environment(codex_exec_server::LOCAL_ENVIRONMENT_ID),
+        action,
+        file_paths: vec![PathUri::from_abs_path(&path)],
+        changes: Arc::new(HashMap::new()),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::VerifiedContents,
+        hook_identity: ApplyPatchHookIdentity::StructuredEdit {
+            arguments: arguments.clone(),
+        },
+    };
+
+    let payload =
+        ApplyPatchRuntime::build_approval_action(&req, "call-1").permission_request_payload();
+
+    assert_eq!(payload.tool_name.name(), "structured_edit");
+    assert!(payload.tool_name.matcher_aliases().is_empty());
+    assert_eq!(payload.tool_input, arguments);
 }
 
 #[tokio::test]
@@ -160,6 +208,8 @@ async fn approval_keys_include_environment_id() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     let keys = runtime
@@ -198,6 +248,8 @@ async fn sandbox_cwd_uses_patch_action_cwd() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     assert_eq!(runtime.sandbox_cwd(&req), Some(&req.action.cwd));
@@ -229,6 +281,8 @@ async fn file_system_sandbox_context_preserves_executor_workspace_permissions() 
         },
         additional_permissions: Some(additional_permissions.clone()),
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
     let exec_server_permissions = PermissionProfile::workspace_write();
     let file_system_policy = exec_server_permissions.file_system_sandbox_policy();
@@ -300,6 +354,8 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();

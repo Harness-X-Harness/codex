@@ -112,6 +112,8 @@ A pull request to a grok/rust-v* line runs Cargo on GitHub's pull-request
 context. PR proof does not build distribution binaries or run real-provider
 Live.
 
+The public `Cargo` status is a stable aggregate gate: every PR proof-domain job it owns must succeed. Internal proof jobs may evolve without changing the required status name.
+
 The Cargo proof includes:
 
 - Rust formatting;
@@ -122,7 +124,9 @@ The Cargo proof includes:
 - Provider-bound App Server tests;
 - Grok Core and whole-number argument tests;
 - Guardian/memory/history/image-generation owner tests;
-- Go Live harness unit tests.
+- Go Live harness unit tests;
+- structured exact-match editing: engine semantics, runtime/lifecycle behavior, stale-snapshot rejection, VerifiedContents failure semantics, and approval-hook identity;
+- stock `apply_patch` compatibility, including nested Code Mode and Linux sandbox/link regressions.
 
 Generated or precomputed outputs are not considered closed merely because their
 source fixtures changed. When a PR touches that closure, its stock-owned
@@ -210,6 +214,9 @@ build-grok action
 
 go test -run '^TestGrok'
     -> Live on the Linux distribution artifact
+
+rust-ci-full / Structured edit remote proof
+    -> Docker-backed remote executor semantics for structured_edit; independent of the PR release gate
 
 GitHub Actions run
     -> proof orchestration and immutable run context

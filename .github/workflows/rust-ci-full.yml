@@ -482,6 +482,35 @@ jobs:
       use_sccache: true
     secrets: inherit
 
+  structured_edit_remote_proof:
+    name: Structured edit remote proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Run structured_edit remote proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          trap codex_remote_env_cleanup EXIT
+
+          cargo test -p codex-core --test all \
+            suite::structured_edit::structured_edit_stale_snapshot_on_remote_environment \
+            -- --exact --test-threads=1
+          cargo test -p codex-core --test all \
+            suite::structured_edit::structured_edit_remote_read_failure_does_not_commit \
+            -- --exact --test-threads=1
+
   tests_linux_arm64:
     name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml

@@ -12,6 +12,7 @@ use codex_models_manager::cache::ModelsCacheFuture;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::StructuredEditToolType;
 use pretty_assertions::assert_eq;
 
 use crate::RemoteCompactionSupport;
@@ -322,6 +323,21 @@ fn grok_internal_tasks_use_bundled_model_not_openai_ids() {
             openai.memory_extraction_preferred_model(),
             openai.memory_consolidation_preferred_model(),
         )
+    );
+}
+
+#[test]
+fn grok_fallback_catalog_advertises_structured_edit_not_apply_patch() {
+    let model = static_model_catalog()
+        .models
+        .into_iter()
+        .next()
+        .expect("bundled Grok catalog should contain a model");
+
+    assert_eq!(model.apply_patch_tool_type, None);
+    assert_eq!(
+        model.structured_edit_tool_type,
+        Some(StructuredEditToolType::ExactMatch)
     );
 }
 
