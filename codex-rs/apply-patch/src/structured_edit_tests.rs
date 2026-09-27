@@ -185,3 +185,95 @@ async fn structured_edit_verified_write_rejects_stale_snapshot() {
     assert!(error.delta().is_exact());
     assert_eq!(fs::read_to_string(&path).expect("read"), "version-c\n");
 }
+
+#[tokio::test]
+async fn structured_edit_verified_write_reports_read_failure_without_creating_file() {
+    use crate::ApplyPatchAction;
+    use crate::ApplyPatchOptions;
+    use crate::apply_verified_action;
+    use codex_exec_server::LOCAL_FS;
+    use codex_utils_path_uri::PathUri;
+    use std::fs;
+    use tempfile::tempdir;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("missing-after-plan.txt");
+    fs::write(&path, "before\n").expect("seed");
+    let path_uri = PathUri::from_host_native_path(&path).expect("path uri");
+    let cwd = PathUri::from_host_native_path(dir.path()).expect("cwd");
+    let action =
+        ApplyPatchAction::from_exact_update(cwd, path_uri, "before\n", "after\n".to_string());
+    fs::remove_file(&path).expect("delete after planning");
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let error = apply_verified_action(
+        &action,
+        ApplyPatchOptions {
+            follow_symlinks: true,
+            ..ApplyPatchOptions::default()
+        },
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        None,
+    )
+    .await
+    .expect_err("read failure must not succeed");
+
+    let stderr_text = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr_text.contains("Failed to read file"),
+        "stderr={stderr_text} error={error}"
+    );
+    assert!(error.delta().is_empty());
+    assert!(!error.delta().is_exact());
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn structured_edit_verified_write_reports_write_failure_without_commit() {
+    use crate::ApplyPatchAction;
+    use crate::ApplyPatchOptions;
+    use crate::apply_verified_action;
+    use codex_exec_server::LOCAL_FS;
+    use codex_utils_path_uri::PathUri;
+    use std::fs;
+    use tempfile::tempdir;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("readonly.txt");
+    fs::write(&path, "before\n").expect("seed");
+    let path_uri = PathUri::from_host_native_path(&path).expect("path uri");
+    let cwd = PathUri::from_host_native_path(dir.path()).expect("cwd");
+    let action =
+        ApplyPatchAction::from_exact_update(cwd, path_uri, "before\n", "after\n".to_string());
+    let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).expect("make read-only");
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let error = apply_verified_action(
+        &action,
+        ApplyPatchOptions {
+            follow_symlinks: true,
+            ..ApplyPatchOptions::default()
+        },
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        None,
+    )
+    .await
+    .expect_err("write failure must not succeed");
+
+    let stderr_text = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr_text.contains("Failed to write file"),
+        "stderr={stderr_text} error={error}"
+    );
+    assert!(error.delta().is_empty());
+    assert!(!error.delta().is_exact());
+    assert_eq!(fs::read_to_string(&path).expect("read"), "before\n");
+}
