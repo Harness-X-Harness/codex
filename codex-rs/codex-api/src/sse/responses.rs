@@ -1142,6 +1142,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stalled_stream_emits_idle_timeout_error() {
+        let stream = stream::pending::<Result<Bytes, TransportError>>();
+        let stream: ByteStream = Box::pin(stream);
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
+
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            Duration::from_millis(50),
+            /*telemetry*/ None,
+        ));
+
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("idle timeout should produce an event")
+            .expect("idle timeout should keep the channel alive long enough to emit");
+        assert_matches!(
+            event,
+            Err(ApiError::Stream(message)) if message == "idle timeout waiting for SSE"
+        );
+    }
+
+    #[tokio::test]
     async fn rate_limit_error_preserves_retry_delay() {
         let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_689bcf18d7f08194bf3440ba62fe05d803fee0cdac429894","object":"response","created_at":1755041560,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.1 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."}, "usage":null,"user":null,"metadata":{}}}"#;
 

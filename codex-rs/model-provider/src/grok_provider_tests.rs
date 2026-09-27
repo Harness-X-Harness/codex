@@ -14,11 +14,14 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::StructuredEditToolType;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 use crate::RemoteCompactionSupport;
 use crate::ToolWireFormat;
 use crate::create_model_provider;
 use crate::grok_catalog::static_model_catalog;
+use crate::grok_provider::GROK_STREAM_IDLE_TIMEOUT_MS;
+use crate::grok_provider::GROK_STREAM_MAX_RETRIES;
 use crate::grok_provider::is_grok_provider_info;
 use crate::image_generation_policy;
 
@@ -97,6 +100,55 @@ fn grok_provider_identity_matches_serialized_wire_selector() {
 }
 
 #[tokio::test]
+async fn grok_provider_owns_stream_recovery_defaults() {
+    let provider = create_model_provider(grok_info("Grok"), /*auth_manager*/ None);
+
+    assert_eq!(
+        provider.info().stream_idle_timeout_ms,
+        Some(GROK_STREAM_IDLE_TIMEOUT_MS)
+    );
+    assert_eq!(
+        provider.info().stream_max_retries,
+        Some(GROK_STREAM_MAX_RETRIES)
+    );
+    assert_eq!(
+        provider.info().stream_idle_timeout(),
+        Duration::from_millis(GROK_STREAM_IDLE_TIMEOUT_MS)
+    );
+    assert_eq!(
+        provider.info().stream_max_retries(),
+        GROK_STREAM_MAX_RETRIES
+    );
+
+    let runtime = provider
+        .api_provider()
+        .await
+        .expect("Grok provider should build API provider");
+    assert_eq!(
+        runtime.stream_idle_timeout,
+        Duration::from_millis(GROK_STREAM_IDLE_TIMEOUT_MS)
+    );
+}
+
+#[tokio::test]
+async fn grok_provider_preserves_explicit_stream_recovery_overrides() {
+    let mut info = grok_info("Grok");
+    info.stream_idle_timeout_ms = Some(90_000);
+    info.stream_max_retries = Some(3);
+    let provider = create_model_provider(info, /*auth_manager*/ None);
+
+    assert_eq!(provider.info().stream_idle_timeout_ms, Some(90_000));
+    assert_eq!(provider.info().stream_max_retries, Some(3));
+    assert_eq!(provider.info().stream_max_retries(), 3);
+
+    let runtime = provider
+        .api_provider()
+        .await
+        .expect("Grok provider should preserve explicit stream recovery overrides");
+    assert_eq!(runtime.stream_idle_timeout, Duration::from_secs(90));
+}
+
+#[tokio::test]
 async fn arbitrary_name_with_grok_responses_selects_grok_dialect() {
     let provider = create_model_provider(grok_info("any-proxy"), /*auth_manager*/ None);
     let api_provider = provider
@@ -116,6 +168,8 @@ async fn name_grok_with_responses_selects_openai_dialect() {
         .expect("Responses wire_api should construct an API provider");
     assert_eq!(api_provider.name, "Grok");
     assert_eq!(api_provider.dialect, ApiDialect::OpenAi);
+    assert_eq!(provider.info().stream_idle_timeout_ms, None);
+    assert_eq!(provider.info().stream_max_retries, None);
     assert!(!provider.projects_tools_as_flat_functions());
 }
 
