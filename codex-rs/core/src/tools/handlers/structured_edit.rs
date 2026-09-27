@@ -11,6 +11,7 @@ use crate::tools::handlers::structured_edit_spec::STRUCTURED_EDIT_TOOL_NAME;
 use crate::tools::handlers::structured_edit_spec::create_structured_edit_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::runtimes::apply_patch::ApplyPatchHookIdentity;
 use crate::tools::runtimes::apply_patch::ApplyPatchWriteMode;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
@@ -114,6 +115,15 @@ impl StructuredEditHandler {
             replace_all,
         )
         .await?;
+        let mut hook_arguments = serde_json::json!({
+            "file_path": file_path,
+            "old_string": old_string,
+            "new_string": new_string,
+            "replace_all": replace_all,
+        });
+        if let Some(environment_id) = &environment_id {
+            hook_arguments["environment_id"] = serde_json::Value::String(environment_id.clone());
+        }
         let tool_ctx = ToolCtx {
             session,
             step_context: Arc::clone(&step_context),
@@ -127,6 +137,9 @@ impl StructuredEditHandler {
             Some(&tracker),
             tool_ctx,
             ApplyPatchWriteMode::VerifiedContents,
+            ApplyPatchHookIdentity::StructuredEdit {
+                arguments: hook_arguments,
+            },
         )
         .await?;
         Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))

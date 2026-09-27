@@ -34,6 +34,7 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::runtimes::apply_patch::ApplyPatchHookIdentity;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::runtimes::apply_patch::ApplyPatchWriteMode;
@@ -425,6 +426,7 @@ impl ApplyPatchHandler {
                     Some(&tracker),
                     tool_ctx,
                     ApplyPatchWriteMode::ReparsePatch,
+                    ApplyPatchHookIdentity::ApplyPatch,
                 )
                 .await?;
                 Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
@@ -536,6 +538,7 @@ pub(crate) async fn intercept_apply_patch(
                 tracker,
                 tool_ctx,
                 ApplyPatchWriteMode::ReparsePatch,
+                ApplyPatchHookIdentity::ApplyPatch,
             )
             .await?;
             Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
@@ -559,6 +562,7 @@ pub(crate) async fn execute_verified_patch(
     tracker: Option<&SharedTurnDiffTracker>,
     tool_ctx: ToolCtx,
     write_mode: ApplyPatchWriteMode,
+    hook_identity: ApplyPatchHookIdentity,
 ) -> Result<String, FunctionCallError> {
     let cwd = action.cwd.clone();
     let sandbox_context = turn_environment.sandbox_context(/*additional_permissions*/ None);
@@ -612,6 +616,7 @@ pub(crate) async fn execute_verified_patch(
         additional_permissions: effective_additional_permissions.additional_permissions,
         permissions_preapproved: effective_additional_permissions.permissions_preapproved,
         write_mode,
+        hook_identity,
     };
     let mut orchestrator = ToolOrchestrator::new();
     let mut runtime = ApplyPatchRuntime::new();
