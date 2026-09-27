@@ -30,6 +30,9 @@ use crate::provider::RemoteCompactionSupport;
 use crate::provider::SharedModelProvider;
 use crate::provider::ToolWireFormat;
 
+pub(crate) const GROK_STREAM_IDLE_TIMEOUT_MS: u64 = 60_000;
+pub(crate) const GROK_STREAM_MAX_RETRIES: u64 = 1;
+
 /// Grok runtime identity is selected only by the serialized wire selector.
 pub(crate) fn is_grok_provider_info(provider_info: &ModelProviderInfo) -> bool {
     provider_info.wire_api == WireApi::GrokResponses
@@ -48,9 +51,15 @@ pub(crate) struct GrokModelProvider {
 
 impl GrokModelProvider {
     pub(crate) fn new(
-        provider_info: ModelProviderInfo,
+        mut provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
+        provider_info
+            .stream_idle_timeout_ms
+            .get_or_insert(GROK_STREAM_IDLE_TIMEOUT_MS);
+        provider_info
+            .stream_max_retries
+            .get_or_insert(GROK_STREAM_MAX_RETRIES);
         Self {
             inner: crate::provider::create_model_provider(provider_info, auth_manager),
         }
