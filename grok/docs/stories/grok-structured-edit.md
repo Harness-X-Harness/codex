@@ -73,10 +73,11 @@ same Thread, **then**:
 ## What this does not prove
 
 This Story does not prove Mini dialect rewriting, Local Adapter projection,
-Gateway function-calling capability, resume, fork, compaction, child
-inheritance of `structured_edit`, `replace_all` matching rules, or every
-Grok model. Cardinality and matching rules belong to the Rust
-`structured_edit` tests.
+Gateway function-calling capability, resume, fork, compaction, or child
+inheritance of `structured_edit`. Normative `replace_all` cardinality and
+matching rules belong to the Rust `structured_edit` tests. Additional Live
+confidence for the previous shipped model and one `replace_all=true` call
+is named below.
 
 ## Proof plan
 
@@ -115,5 +116,22 @@ ChatGPT live Turn.
 `TestGrokStructuredEditApprovalDeclined` in `grok/live`. The decline Story
 uses App Server `untrusted` approval (`UnlessTrusted`) so the Live harness
 receives a file-change approval request; default `on-request` plus
-`danger-full-access` auto-approves workspace writes. Scheduling is
-[`release.md`](../release.md).
+`danger-full-access` auto-approves workspace writes.
+
+Additional Live confidence, selected by the same `^TestGrok` job:
+
+- `TestGrokStructuredEditPinnedPreviousModel` pins `grok-4.6`, requires that
+  slug on `/responses`, and completes one structured edit with shell disabled.
+  Stages: `shipped_default_model`, `catalog_lists_model`,
+  `thread_bound_to_grok`, `thread_model_matches_pin`, `turn_completed`,
+  `pinned_model_on_responses`, `structured_edit_exactly_once`,
+  `apply_patch_absent`, `command_execution_absent`, `file_change_completed`,
+  `workspace_file_verified`.
+- `TestGrokStructuredEditReplaceAll` seeds repeated exact text and requires a
+  durable `structured_edit` argument object with `replace_all=true`. It is
+  not the normative matching proof. Stages: `thread_bound_to_grok`,
+  `turn_completed`, `structured_edit_attempted`, `replace_all_requested`,
+  `apply_patch_absent`, `command_execution_absent`, `file_change_completed`,
+  `workspace_file_verified`.
+
+Scheduling is [`release.md`](../release.md).

@@ -50,9 +50,12 @@ const (
 	probeToolOutput = "GROK_LIVE_TOOL_OK"
 	probeToolDesc   = "Return the fixed live validation marker."
 
-	structuredEditFile     = "structured_edit_fixture.txt"
-	structuredEditSeed     = "GROK_STRUCTURED_EDIT_SEED_v1\n"
-	structuredEditExpected = "GROK_STRUCTURED_EDIT_REPLACED_v1\n"
+	structuredEditFile           = "structured_edit_fixture.txt"
+	structuredEditSeed           = "GROK_STRUCTURED_EDIT_SEED_v1\n"
+	structuredEditExpected       = "GROK_STRUCTURED_EDIT_REPLACED_v1\n"
+	structuredEditRepeatFile     = "structured_edit_repeat_fixture.txt"
+	structuredEditRepeatSeed     = "GROK_STRUCTURED_EDIT_REPEAT_v1 alpha\nGROK_STRUCTURED_EDIT_REPEAT_v1 beta\n"
+	structuredEditRepeatExpected = "GROK_STRUCTURED_EDIT_REPEATED_v1 alpha\nGROK_STRUCTURED_EDIT_REPEATED_v1 beta\n"
 
 	notificationQueueCapacity = 1 << 16
 	rolloutSettle             = 15 * time.Second

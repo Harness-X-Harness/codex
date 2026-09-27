@@ -330,7 +330,7 @@ current status. `Implemented` means code and native Cargo tests exist;
 | `x_search` date window | `from_date` / `to_date` (`YYYY-MM-DD`) | Grok Provider `[model_providers.grok.x_search]` | copied onto the `x_search` tool when the tool key is valid or absent (Provider window fills an absent key); a present invalid date fails closed | — | Live (`TestGrokHostedXSearchDateWindow`): shipped profile plus `[model_providers.grok.x_search]` `from_date` / `to_date` advertises the window on an accepted `/responses` |
 | encrypted reasoning continuation | reasoning sibling with `encrypted_content` | stock `include` | `reasoning` row | stock `reasoning` item | Live (`TestGrokEncryptedReasoningContinuation`) |
 | image generation and history edit | — (Codex-specific hosted item) | provider policy (`ProviderCapabilities.image_generation`) | `image_generation_call` replay | stock | Live (`TestGrokImageGenerationEdit`) |
-| structured exact-match editor | `function` tool | `ModelInfo.structured_edit_tool_type = ExactMatch`; `apply_patch_tool_type` absent | flat `function` | flat `function_call` reverse map | Live (`TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`, `TestGrokStructuredEditApprovalDeclined`) |
+| structured exact-match editor | `function` tool | `ModelInfo.structured_edit_tool_type = ExactMatch`; `apply_patch_tool_type` absent | flat `function` | flat `function_call` reverse map | Live (`TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`, `TestGrokStructuredEditApprovalDeclined`); optional `TestGrokStructuredEditPinnedPreviousModel`, `TestGrokStructuredEditReplaceAll` |
 | maximum native reasoning effort | `reasoning.effort` | catalog reasoning projection (`Ultra` → `xhigh`) | `reasoning.effort` | — | Implemented |
 | prompt-cache routing | `prompt_cache_key` | stock | emitted | — | Live |
 | hosted `code_interpreter` | `code_interpreter_call` replay | none | — | none; Codex has no response item, so it would land in `Other` | Not surfaced; not advertised, so never emitted by Grok |
@@ -489,7 +489,9 @@ Rules for the module:
   reasoning, and a second Turn on that history. The
   encrypted-reasoning continuation, image-edit, structured `structured_edit`
   (`TestGrokStructuredEditWireContract`, `TestGrokStructuredEdit`,
-  `TestGrokStructuredEditApprovalDeclined`),
+  `TestGrokStructuredEditApprovalDeclined`, plus optional
+  `TestGrokStructuredEditPinnedPreviousModel` and
+  `TestGrokStructuredEditReplaceAll`),
   hosted `web_search` (`TestGrokHostedWebSearch`), hosted `web_search`
   allowlist (`TestGrokHostedWebSearchAllowlist`), hosted `web_search`
   blocklist (`TestGrokHostedWebSearchExcludedDomains`), hosted `x_search`
