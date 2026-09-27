@@ -134,3 +134,54 @@ async fn structured_edit_verified_write_preserves_crlf_bytes() {
 
     assert_eq!(fs::read(&path).expect("read"), b"hi\r\nworld");
 }
+
+#[tokio::test]
+async fn structured_edit_verified_write_rejects_stale_snapshot() {
+    use crate::ApplyPatchAction;
+    use crate::ApplyPatchOptions;
+    use crate::STALE_STRUCTURED_EDIT_MESSAGE;
+    use crate::apply_verified_action;
+    use codex_exec_server::LOCAL_FS;
+    use codex_utils_path_uri::PathUri;
+    use std::fs;
+    use tempfile::tempdir;
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("stale.txt");
+    fs::write(&path, "version-a\n").expect("seed");
+    let path_uri = PathUri::from_host_native_path(&path).expect("path uri");
+    let cwd = PathUri::from_host_native_path(dir.path()).expect("cwd");
+    let new_content = apply_exact_replacement(
+        "version-a\n",
+        "version-a",
+        "version-b",
+        /*replace_all*/ false,
+    )
+    .expect("match");
+    let action = ApplyPatchAction::from_exact_update(cwd, path_uri, "version-a\n", new_content);
+    fs::write(&path, "version-c\n").expect("concurrent overwrite");
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let error = apply_verified_action(
+        &action,
+        ApplyPatchOptions {
+            follow_symlinks: true,
+            ..ApplyPatchOptions::default()
+        },
+        &mut stdout,
+        &mut stderr,
+        LOCAL_FS.as_ref(),
+        None,
+    )
+    .await
+    .expect_err("stale snapshot must fail closed");
+
+    assert!(
+        error.to_string().contains(STALE_STRUCTURED_EDIT_MESSAGE),
+        "{error}"
+    );
+    assert_eq!(error.delta().changes(), []);
+    assert!(error.delta().is_exact());
+    assert_eq!(fs::read_to_string(&path).expect("read"), "version-c\n");
+}

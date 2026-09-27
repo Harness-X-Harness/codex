@@ -37,6 +37,10 @@ pub enum StructuredEditError {
     MultipleMatches { count: usize },
 }
 
+/// Model-visible error when the target file changed after the replacement was planned.
+pub const STALE_STRUCTURED_EDIT_MESSAGE: &str =
+    "file changed after the edit was planned; re-read the file and submit a new structured_edit";
+
 /// Apply an exact UTF-8 replacement according to the structured-edit cardinality rules.
 pub fn apply_exact_replacement(
     content: &str,
@@ -111,7 +115,12 @@ async fn apply_verified_updates(
 
     let mut modified = Vec::new();
     for (path, change) in action.changes() {
-        let ApplyPatchFileChange::Update { new_content, .. } = change else {
+        let ApplyPatchFileChange::Update {
+            new_content,
+            expected_content,
+            ..
+        } = change
+        else {
             anyhow::bail!("verified write supports existing-file updates only");
         };
         let original_contents = match fs
@@ -132,6 +141,11 @@ async fn apply_verified_updates(
                 });
             }
         };
+        if let Some(expected_content) = expected_content
+            && original_contents != *expected_content
+        {
+            anyhow::bail!("{STALE_STRUCTURED_EDIT_MESSAGE}");
+        }
         if let Err(error) = fs
             .write_file(
                 path,
