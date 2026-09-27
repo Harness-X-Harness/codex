@@ -109,6 +109,20 @@ func TestShippedGrokProfilePathIsReadable(t *testing.T) {
 	}
 }
 
+
+func TestShippedGrokProfileOwnsStreamingRecoveryPolicy(t *testing.T) {
+	data, err := os.ReadFile(shippedGrokProfilePath())
+	if err != nil {
+		t.Fatalf("read shipped Grok profile: %v", err)
+	}
+	if got := tableString(data, "model_providers.grok", "stream_idle_timeout_ms"); got != "60000" {
+		t.Fatalf("stream_idle_timeout_ms = %q, want 60000", got)
+	}
+	if got := tableString(data, "model_providers.grok", "stream_max_retries"); got != "1" {
+		t.Fatalf("stream_max_retries = %q, want 1", got)
+	}
+}
+
 func TestEnsureShellToolDisabledIsIdempotent(t *testing.T) {
 	first := ensureShellToolDisabled([]byte("model = \"grok-4.6\"\n"))
 	second := ensureShellToolDisabled(first)
