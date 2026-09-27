@@ -1,6 +1,6 @@
 name: grok
 
-# PR: Cargo. Push: complete linux x64 musl + mac arm64 distributions and Linux Live.
+# PR: proof-domain jobs aggregated by Cargo. Push: complete linux x64 musl + mac arm64 distributions and Linux Live.
 # workflow_dispatch: Live only, using an existing Linux distribution artifact.
 # GitHub Actions artifacts are the delivery output; there is no repository publisher.
 #
@@ -44,16 +44,11 @@ permissions:
   actions: read
 
 jobs:
-  cargo:
-    name: Cargo
+  live-harness:
+    name: Live harness
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 140
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      RUST_MIN_STACK: "16777216"
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -67,13 +62,25 @@ jobs:
         env:
           GOWORK: "off"
         run: go vet ./... && go test ./... -count=1
+
+  rust-lint:
+    name: Rust lint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-ci
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: rustfmt, clippy
-      - uses: ./.github/actions/setup-rusty-v8
-        with:
-          target: x86_64-unknown-linux-gnu
       - run: cargo fmt -- --config imports_granularity=Item --check
       - name: Lint affected libraries
         run: cargo clippy -p codex-api -p codex-config -p codex-guardian-v2 -p codex-image-generation-extension -p codex-memories-write -p codex-model-provider -p codex-model-provider-info -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
@@ -81,42 +88,147 @@ jobs:
         run: cargo clippy -p codex-core --test all -- -D warnings
       - name: Lint App Server tests
         run: cargo clippy -p codex-app-server --test all -- -D warnings
+
+  provider-contracts:
+    name: Provider contracts
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
       - name: Provider contracts
         run: cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
       - name: Stock App Server Provider projections
         run: cargo test -p codex-app-server --test all grok
+
+  core-grok:
+    name: Core Grok
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
       - name: Core Grok lib
         run: cargo test -p codex-core --lib grok
       - name: Core Grok suite
         run: cargo test -p codex-core --test all grok
-      - name: Structured edit
-        run: cargo test -p codex-apply-patch --lib structured_edit && cargo test -p codex-core --lib structured_edit && cargo test -p codex-core --test all structured_edit
-      # Stock apply_patch proof owners in this Grok Cargo job:
-      # - "Stock apply_patch regressions": crate unit tests plus the apply_patch
-      #   suite, including code_mode_can_apply_patch_via_nested_tool after
-      #   setup-rusty-v8 and the code-mode host binary are available
-      # - "Stock apply_patch sandbox intercepts": the four sandbox/link intercept
-      #   tests, serialized because the parallel GHA Cargo suite dropped
-      #   tool-output capture on the same SHA
+
+  structured-edit:
+    name: Structured edit
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Engine semantics and VerifiedContents failures
+        run: cargo test -p codex-apply-patch --lib structured_edit
+      - name: Core runtime semantics
+        run: cargo test -p codex-core --lib structured_edit
+      - name: Lifecycle, stale-snapshot, and integration proof
+        run: cargo test -p codex-core --test all structured_edit
+      - name: Approval-hook identity
+        run: cargo test -p codex-core --test all structured_edit_hooks
+
+  stock-apply-patch:
+    name: Stock apply_patch
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
       - name: Stock apply_patch regressions
         run: |
           set -euo pipefail
-          cargo build -p codex-code-mode-host --bin codex-code-mode-host
           cargo test -p codex-apply-patch --lib
           cargo test -p codex-core --lib apply_patch
           cargo test -p codex-core --test all apply_patch -- \
+            --skip code_mode_can_apply_patch_via_nested_tool \
             --skip apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace \
             --skip apply_patch_cli_preserves_existing_hard_link_outside_workspace \
             --skip intercepted_apply_patch_verification_uses_local_sandbox \
             --skip intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_removed
-      - name: Stock apply_patch sandbox intercepts
-        run: |
-          cargo test -p codex-core --test all \
-            apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace \
-            apply_patch_cli_preserves_existing_hard_link_outside_workspace \
-            intercepted_apply_patch_verification_uses_local_sandbox \
-            intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_removed \
-            -- --test-threads=1
+      - name: Build code-mode apply_patch host
+        run: cargo build -p codex-code-mode-host --bin codex-code-mode-host
+      - name: Code mode can apply_patch via nested tool
+        run: cargo test -p codex-core --test all suite::code_mode::code_mode_can_apply_patch_via_nested_tool -- --exact --test-threads=1
+
+  stock-apply-patch-sandbox:
+    name: Stock apply_patch sandbox
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Reject symlink escape outside workspace
+        run: cargo test -p codex-core --test all suite::apply_patch_cli::apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace -- --exact --test-threads=1
+      - name: Preserve hard link outside workspace
+        if: ${{ !cancelled() }}
+        run: cargo test -p codex-core --test all suite::apply_patch_cli::apply_patch_cli_preserves_existing_hard_link_outside_workspace -- --exact --test-threads=1
+      - name: Use local sandbox for intercepted verification
+        if: ${{ !cancelled() }}
+        run: cargo test -p codex-core --test all suite::apply_patch_cli::intercepted_apply_patch_verification_uses_local_sandbox -- --exact --test-threads=1
+      - name: Update absolute target after turn cwd removal
+        if: ${{ !cancelled() }}
+        run: cargo test -p codex-core --test all suite::apply_patch_cli::intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_removed -- --exact --test-threads=1
+
+  regression-pack:
+    name: Regression pack
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
       - name: Core whole-number lib
         run: cargo test -p codex-core --lib json_whole_number
       - name: Guardian and memories
@@ -127,6 +239,39 @@ jobs:
         run: cargo test -p codex-history --lib
       - name: Image generation
         run: cargo test -p codex-image-generation-extension --lib
+
+  cargo:
+    name: Cargo
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs:
+      - live-harness
+      - rust-lint
+      - provider-contracts
+      - core-grok
+      - structured-edit
+      - stock-apply-patch
+      - stock-apply-patch-sandbox
+      - regression-pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every proof domain
+        env:
+          LIVE_HARNESS: ${{ needs.live-harness.result }}
+          RUST_LINT: ${{ needs.rust-lint.result }}
+          PROVIDER_CONTRACTS: ${{ needs.provider-contracts.result }}
+          CORE_GROK: ${{ needs.core-grok.result }}
+          STRUCTURED_EDIT: ${{ needs.structured-edit.result }}
+          STOCK_APPLY_PATCH: ${{ needs.stock-apply-patch.result }}
+          STOCK_APPLY_PATCH_SANDBOX: ${{ needs.stock-apply-patch-sandbox.result }}
+          REGRESSION_PACK: ${{ needs.regression-pack.result }}
+        run: |
+          set -euo pipefail
+          for result in "$LIVE_HARNESS" "$RUST_LINT" "$PROVIDER_CONTRACTS" "$CORE_GROK" \
+            "$STRUCTURED_EDIT" "$STOCK_APPLY_PATCH" "$STOCK_APPLY_PATCH_SANDBOX" \
+            "$REGRESSION_PACK"; do
+            test "$result" = success
+          done
 
   build-linux-x64-musl:
     name: Build x86_64-unknown-linux-musl
