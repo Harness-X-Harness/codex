@@ -5,9 +5,11 @@
 //! sandboxing enforced by the explicit filesystem sandbox context.
 use crate::exec::is_likely_sandbox_denied;
 use crate::session::turn_context::TurnEnvironment;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
@@ -43,6 +45,38 @@ pub(crate) struct ApplyPatchApprovalKey {
     pub(crate) path: PathUri,
 }
 
+/// Hook/policy identity for file-change approvals that reuse ApplyPatchRuntime.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ApplyPatchHookIdentity {
+    /// Stock `apply_patch` hook contract: name `apply_patch`, input `{ command }`.
+    #[default]
+    ApplyPatch,
+    /// Canonical structured-edit arguments without a synthetic patch command.
+    StructuredEdit { arguments: serde_json::Value },
+}
+
+impl ApplyPatchHookIdentity {
+    pub(crate) fn permission_request_payload(&self, patch: &str) -> PermissionRequestPayload {
+        match self {
+            Self::ApplyPatch => PermissionRequestPayload {
+                tool_name: HookToolName::apply_patch(),
+                tool_input: serde_json::json!({ "command": patch }),
+            },
+            Self::StructuredEdit { arguments } => PermissionRequestPayload {
+                tool_name: HookToolName::new("structured_edit"),
+                tool_input: arguments.clone(),
+            },
+        }
+    }
+
+    pub(crate) fn telemetry_tool_name(&self) -> &'static str {
+        match self {
+            Self::ApplyPatch => "apply_patch",
+            Self::StructuredEdit { .. } => "structured_edit",
+        }
+    }
+}
+
 /// How a verified file mutation is written after approval and sandbox checks.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ApplyPatchWriteMode {
@@ -63,6 +97,7 @@ pub struct ApplyPatchRequest {
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     pub permissions_preapproved: bool,
     pub write_mode: ApplyPatchWriteMode,
+    pub hook_identity: ApplyPatchHookIdentity,
 }
 
 #[derive(Default)]
@@ -94,6 +129,7 @@ impl ApplyPatchRuntime {
             patch: req.action.patch.clone(),
             changes: Arc::clone(&req.changes),
             permissions_preapproved: req.permissions_preapproved,
+            hook_identity: req.hook_identity.clone(),
         }
     }
 
