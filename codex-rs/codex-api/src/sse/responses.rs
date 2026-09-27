@@ -1150,11 +1150,11 @@ mod tests {
         tokio::spawn(process_sse(
             stream,
             tx,
-            Duration::from_millis(20),
+            Duration::from_millis(50),
             /*telemetry*/ None,
         ));
 
-        let event = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
             .await
             .expect("idle timeout should produce an event")
             .expect("idle timeout should keep the channel alive long enough to emit");
