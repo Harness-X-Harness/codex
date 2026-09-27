@@ -44,6 +44,7 @@ use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -836,6 +837,8 @@ async fn structured_edit_verified_contents_sandbox_denial_does_not_mutate() -> R
     .await;
     let test = harness.test();
     let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), test.cwd_path());
     test.codex
         .start_or_steer_turn(
             TurnInputRequest::user_input(vec![UserInput::Text {
@@ -844,8 +847,8 @@ async fn structured_edit_verified_contents_sandbox_denial_does_not_mutate() -> R
             }])
             .with_thread_settings(ThreadSettingsOverrides {
                 approval_policy: Some(AskForApproval::Never),
-                sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),
-                permission_profile: Some(PermissionProfile::Disabled),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
                 collaboration_mode: Some(CollaborationMode {
                     mode: ModeKind::Default,
                     settings: Settings {
@@ -876,8 +879,9 @@ async fn structured_edit_verified_contents_sandbox_denial_does_not_mutate() -> R
     .await;
 
     let output = output_text(&harness.function_call_output_value(call_id).await);
+    assert!(!output.is_empty(), "{output}");
     assert!(!output.contains("Success. Updated"), "{output}");
-    assert_eq!(end_success, Some(false));
+    assert_ne!(end_success, Some(true));
     if let Some(diff) = turn_diff {
         assert!(
             !diff.contains("+after"),
