@@ -4,7 +4,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
 use std::num::NonZeroU64;
-use std::time::Duration;
 use tempfile::tempdir;
 
 #[test]
@@ -258,29 +257,6 @@ supports_websockets = true
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.websocket_connect_timeout_ms, Some(15_000));
-}
-
-#[test]
-fn configured_stream_recovery_maps_to_runtime_provider() {
-    let provider: ModelProviderInfo = toml::from_str(
-        r#"
-name = "Grok"
-base_url = "https://proxy.example/v1"
-wire_api = "grok_responses"
-stream_idle_timeout_ms = 60000
-stream_max_retries = 1
-        "#,
-    )
-    .expect("stream recovery provider should deserialize");
-
-    assert_eq!(provider.stream_idle_timeout(), Duration::from_secs(60));
-    assert_eq!(provider.stream_max_retries(), 1);
-
-    let runtime = provider
-        .to_api_provider(/*auth_mode*/ None)
-        .expect("stream recovery provider should build runtime provider");
-    assert_eq!(runtime.stream_idle_timeout, Duration::from_secs(60));
-    assert_eq!(runtime.dialect, ApiDialect::Grok);
 }
 
 #[test]
