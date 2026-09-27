@@ -175,6 +175,116 @@ func TestGrokStructuredEditApprovalDeclined(t *testing.T) {
 	}
 }
 
+func TestGrokStructuredEditPinnedPreviousModel(t *testing.T) {
+	h := startGrokLive(t, liveOptions{disableShell: true})
+	if h.model != shippedDefaultModel {
+		h.failStage("shipped_default_model", fmt.Sprintf("Live profile model is %q, want %q", h.model, shippedDefaultModel))
+	}
+	pinned := shippedPreviousModel
+	path := filepath.Join(h.workspace, structuredEditFile)
+	if err := os.WriteFile(path, []byte(structuredEditSeed), 0o644); err != nil {
+		t.Fatalf("seed structured_edit fixture: %v", err)
+	}
+	wantHash := sha256Hex([]byte(structuredEditExpected))
+	ctx := context.Background()
+	h.requireListedModel(ctx, pinned)
+
+	run := h.runTurn(ctx, startTurnOpts{
+		prompt:        "Replace the exact text GROK_STRUCTURED_EDIT_SEED_v1 with GROK_STRUCTURED_EDIT_REPLACED_v1 in structured_edit_fixture.txt by calling structured_edit exactly once. Do not call apply_patch. Do not use a shell, exec_command, Python, sed, or any other tool. After the file contains GROK_STRUCTURED_EDIT_REPLACED_v1, stop without editing again.",
+		model:         pinned,
+		deadline:      3 * time.Minute,
+		approvalNever: true,
+		dangerFull:    true,
+		disableShell:  true,
+	})
+	if run.Provider != grokProvider {
+		h.failStage("thread_bound_to_grok", "Thread is not bound to the Grok Provider")
+	}
+	if run.Model != pinned {
+		h.failStage("thread_model_matches_pin", fmt.Sprintf("Thread model is %q, pinned catalog model is %q", run.Model, pinned))
+	}
+	if !run.completed() {
+		h.failStage("turn_completed", "pinned structured_edit Turn did not complete")
+	}
+	requireResponsesModel(h, "pinned_model_on_responses", pinned)
+
+	var ev structuredEditEvidence
+	if !waitDurable(rolloutSettle, func() bool {
+		ev = collectStructuredEditEvidence(run.Items, h.home)
+		return ev.StructuredEditCalls == 1 && ev.FileChangeCompleted == 1
+	}) {
+		ev = collectStructuredEditEvidence(run.Items, h.home)
+	}
+	if ev.StructuredEditCalls != 1 {
+		h.failStage("structured_edit_exactly_once", fmt.Sprintf("structured_edit identities=%d file_change_completed=%d, expected exactly one structured_edit invocation", ev.StructuredEditCalls, ev.FileChangeCompleted))
+	}
+	if ev.ApplyPatchCalls != 0 {
+		h.failStage("apply_patch_absent", fmt.Sprintf("apply_patch identities=%d, expected zero", ev.ApplyPatchCalls))
+	}
+	if ev.CommandCalls != 0 || hasCommandExecution(run.Items) {
+		h.failStage("command_execution_absent", fmt.Sprintf("command identities=%d command_execution=%t, expected zero", ev.CommandCalls, hasCommandExecution(run.Items)))
+	}
+	if ev.FileChangeCompleted != 1 || ev.FileChangeDeclined != 0 {
+		h.failStage("file_change_completed", fmt.Sprintf("file_change completed=%d declined=%d failed=%d, expected one completed FileChange", ev.FileChangeCompleted, ev.FileChangeDeclined, ev.FileChangeFailed))
+	}
+	got, gotHash, err := readFileSHA256(path)
+	if err != nil || !bytesEqual(got, []byte(structuredEditExpected)) || gotHash != wantHash {
+		h.failStage("workspace_file_verified", fmt.Sprintf("fixture hash=%s want=%s readable=%t, expected exact structured_edit bytes", gotHash, wantHash, err == nil))
+	}
+}
+
+func TestGrokStructuredEditReplaceAll(t *testing.T) {
+	h := startGrokLive(t, liveOptions{disableShell: true})
+	path := filepath.Join(h.workspace, structuredEditRepeatFile)
+	if err := os.WriteFile(path, []byte(structuredEditRepeatSeed), 0o644); err != nil {
+		t.Fatalf("seed structured_edit replace_all fixture: %v", err)
+	}
+	wantHash := sha256Hex([]byte(structuredEditRepeatExpected))
+	ctx := context.Background()
+	h.requireGrokCatalog(ctx)
+
+	run := h.runTurn(ctx, startTurnOpts{
+		prompt:        "Call structured_edit exactly once with replace_all=true to replace every exact occurrence of GROK_STRUCTURED_EDIT_REPEAT_v1 with GROK_STRUCTURED_EDIT_REPEATED_v1 in structured_edit_repeat_fixture.txt. Do not call apply_patch. Do not use a shell, exec_command, Python, or sed. After both lines contain GROK_STRUCTURED_EDIT_REPEATED_v1, stop.",
+		deadline:      3 * time.Minute,
+		approvalNever: true,
+		dangerFull:    true,
+		disableShell:  true,
+	})
+	if run.Provider != grokProvider {
+		h.failStage("thread_bound_to_grok", "Thread is not bound to the Grok Provider")
+	}
+	if !run.completed() {
+		h.failStage("turn_completed", "replace_all structured_edit Turn did not complete")
+	}
+
+	var ev structuredEditEvidence
+	if !waitDurable(rolloutSettle, func() bool {
+		ev = collectStructuredEditEvidence(run.Items, h.home)
+		return ev.StructuredEditCalls >= 1 && ev.FileChangeCompleted == 1 && structuredEditReplaceAllRequested(h.home)
+	}) {
+		ev = collectStructuredEditEvidence(run.Items, h.home)
+	}
+	if ev.StructuredEditCalls < 1 {
+		h.failStage("structured_edit_attempted", fmt.Sprintf("structured_edit identities=%d, expected at least one structured_edit invocation", ev.StructuredEditCalls))
+	}
+	if !structuredEditReplaceAllRequested(h.home) {
+		h.failStage("replace_all_requested", "durable structured_edit arguments do not include replace_all=true")
+	}
+	if ev.ApplyPatchCalls != 0 {
+		h.failStage("apply_patch_absent", fmt.Sprintf("apply_patch identities=%d, expected zero", ev.ApplyPatchCalls))
+	}
+	if ev.CommandCalls != 0 || hasCommandExecution(run.Items) {
+		h.failStage("command_execution_absent", fmt.Sprintf("command identities=%d command_execution=%t, expected zero", ev.CommandCalls, hasCommandExecution(run.Items)))
+	}
+	if ev.FileChangeCompleted < 1 || ev.FileChangeDeclined != 0 {
+		h.failStage("file_change_completed", fmt.Sprintf("file_change completed=%d declined=%d failed=%d, expected a completed FileChange", ev.FileChangeCompleted, ev.FileChangeDeclined, ev.FileChangeFailed))
+	}
+	got, gotHash, err := readFileSHA256(path)
+	if err != nil || !bytesEqual(got, []byte(structuredEditRepeatExpected)) || gotHash != wantHash {
+		h.failStage("workspace_file_verified", fmt.Sprintf("fixture hash=%s want=%s readable=%t, expected every repeated token to be replaced", gotHash, wantHash, err == nil))
+	}
+}
+
 type grokAdvertisedTool struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name"`
@@ -337,6 +447,28 @@ func collectStructuredEditEvidence(items []protocolv2.ThreadItem, home string) s
 	return ev
 }
 
+func structuredEditReplaceAllRequested(home string) bool {
+	for _, item := range scanDurableResponseItems(home) {
+		if item.Type != "function_call" && item.Type != "custom_tool_call" {
+			continue
+		}
+		if !isStructuredEditIdentity(item.Name) {
+			continue
+		}
+		if functionArgsReplaceAll(item.Arguments) {
+			return true
+		}
+	}
+	return false
+}
+
+func functionArgsReplaceAll(raw string) bool {
+	var args struct {
+		ReplaceAll bool `json:"replace_all"`
+	}
+	return json.Unmarshal([]byte(raw), &args) == nil && args.ReplaceAll
+}
+
 func countToolIdentity(ev *structuredEditEvidence, name string) {
 	switch {
 	case isStructuredEditIdentity(name):
@@ -480,6 +612,48 @@ func TestStructuredEditHistoryReplayRequiresPairedOutput(t *testing.T) {
 	}
 	if structuredEditHistoryReplayed([]byte(`{"input":[{"type":"custom_tool_call","name":"apply_patch","call_id":"c1"},{"type":"custom_tool_call_output","call_id":"c1"}]}`)) {
 		t.Fatal("apply_patch custom history must not count as structured_edit replay")
+	}
+}
+
+func TestFunctionArgsReplaceAllRequiresJSONTrue(t *testing.T) {
+	if !functionArgsReplaceAll(`{"file_path":"f.txt","old_string":"a","new_string":"b","replace_all":true}`) {
+		t.Fatal("replace_all true must count")
+	}
+	if functionArgsReplaceAll(`{"file_path":"f.txt","old_string":"a","new_string":"b","replace_all":false}`) {
+		t.Fatal("replace_all false must not count")
+	}
+	if functionArgsReplaceAll(`{"file_path":"f.txt","old_string":"a","new_string":"b"}`) {
+		t.Fatal("omitted replace_all must not count")
+	}
+	if functionArgsReplaceAll(`not-json`) {
+		t.Fatal("invalid arguments must not count")
+	}
+}
+
+func TestStructuredEditReplaceAllRequestedUsesExactIdentity(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"response_item","payload":{"type":"function_call","name":"structured_edit","arguments":"{\"replace_all\":true}"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "rollout.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !structuredEditReplaceAllRequested(home) {
+		t.Fatal("canonical structured_edit with replace_all true should count")
+	}
+	other := t.TempDir()
+	otherDir := filepath.Join(other, "sessions")
+	if err := os.MkdirAll(otherDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nearMiss := `{"type":"response_item","payload":{"type":"function_call","name":"not_structured_edit","arguments":"{\"replace_all\":true}"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(otherDir, "rollout.jsonl"), []byte(nearMiss), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if structuredEditReplaceAllRequested(other) {
+		t.Fatal("non-structured_edit identities must not count as replace_all")
 	}
 }
 

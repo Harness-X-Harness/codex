@@ -72,8 +72,9 @@ func TestGrokHostedWebSearch(t *testing.T) {
 }
 
 type durableResponseItem struct {
-	Type string
-	Name string
+	Type      string
+	Name      string
+	Arguments string
 }
 
 func scanDurableResponseItems(home string) []durableResponseItem {
@@ -105,6 +106,7 @@ func scanDurableResponseItems(home string) []durableResponseItem {
 			var item durableResponseItem
 			_ = json.Unmarshal(obj["type"], &item.Type)
 			_ = json.Unmarshal(obj["name"], &item.Name)
+			_ = json.Unmarshal(obj["arguments"], &item.Arguments)
 			if item.Type == "" {
 				continue
 			}
