@@ -146,6 +146,21 @@ stays in the dialect Rust.
 A new or changed remote model becomes selectable only after a release verifies
 it and adds that request slug to `models.json`.
 
+### Streaming recovery
+
+The shipped Grok provider profile owns a 60 second streaming idle timeout and
+one stream retry. Grok can accept a Responses request with HTTP 200 and then
+stop producing SSE frames, including after a completed tool call. The stock
+Codex SSE reader converts an idle stream into a stream error, and the stock
+sampling retry loop rebuilds the request from durable turn history. Grok uses
+that generic recovery path; it does not add a provider-private retry loop.
+
+The global stock idle timeout is five minutes. That is too long for the Grok
+interactive and release-proof contract because a stalled stream can outlive the
+turn before stock recovery starts. One retry bounds recovery without replaying
+indefinitely. Live deadlines are evidence limits, not the recovery mechanism,
+so they must not be extended to hide a stalled provider stream.
+
 ### Where a product change goes
 
 ```text
