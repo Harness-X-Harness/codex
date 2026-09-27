@@ -202,17 +202,19 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+      - name: Build Linux sandbox helper
+        run: cargo build -p codex-linux-sandbox --bin codex-linux-sandbox
       - name: Reject symlink escape outside workspace
-        run: cargo test -p codex-core --test all suite::apply_patch_cli::apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace -- --exact --test-threads=1
+        run: CARGO_BIN_EXE_codex_linux_sandbox="$CARGO_TARGET_DIR/debug/codex-linux-sandbox" cargo test -p codex-core --test all suite::apply_patch_cli::apply_patch_cli_does_not_write_through_symlink_escape_outside_workspace -- --exact --test-threads=1
       - name: Preserve hard link outside workspace
         if: ${{ !cancelled() }}
-        run: cargo test -p codex-core --test all suite::apply_patch_cli::apply_patch_cli_preserves_existing_hard_link_outside_workspace -- --exact --test-threads=1
+        run: CARGO_BIN_EXE_codex_linux_sandbox="$CARGO_TARGET_DIR/debug/codex-linux-sandbox" cargo test -p codex-core --test all suite::apply_patch_cli::apply_patch_cli_preserves_existing_hard_link_outside_workspace -- --exact --test-threads=1
       - name: Use local sandbox for intercepted verification
         if: ${{ !cancelled() }}
-        run: cargo test -p codex-core --test all suite::apply_patch_cli::intercepted_apply_patch_verification_uses_local_sandbox -- --exact --test-threads=1
+        run: CARGO_BIN_EXE_codex_linux_sandbox="$CARGO_TARGET_DIR/debug/codex-linux-sandbox" cargo test -p codex-core --test all suite::apply_patch_cli::intercepted_apply_patch_verification_uses_local_sandbox -- --exact --test-threads=1
       - name: Update absolute target after turn cwd removal
         if: ${{ !cancelled() }}
-        run: cargo test -p codex-core --test all suite::apply_patch_cli::intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_removed -- --exact --test-threads=1
+        run: CARGO_BIN_EXE_codex_linux_sandbox="$CARGO_TARGET_DIR/debug/codex-linux-sandbox" cargo test -p codex-core --test all suite::apply_patch_cli::intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_removed -- --exact --test-threads=1
 
   regression-pack:
     name: Regression pack
