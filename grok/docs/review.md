@@ -15,108 +15,96 @@ Use these methods directly; do not restate or fork them here:
 - prune-legacy:
   https://github.com/ronhuafeng/skills-release/tree/main/catalog/engineering/prune-legacy
 
-Use prune-legacy only for review/identification unless an explicit apply or
+Use `prune-legacy` only for review/identification unless an explicit apply or
 prune request authorizes mutation.
 
 ## Authorities
 
 Current release-evolution policy:
 
-- grok/main:grok/docs/carry-forward.md
+- `grok/main:grok/docs/carry-forward.md`
 
 Current product baseline:
 
-- the latest grok/rust-v* that reached SUCCESSFUL under its branch-local
-  grok/docs/release.md contract.
+- the latest `grok/rust-v*` that reached `SUCCESSFUL` under its branch-local
+  `grok/docs/release.md` contract.
 
-A newer grok/rust-v* whose proof is incomplete is a candidate only. It does not
-replace the latest successful release authority.
+A newer release candidate does not replace that authority until it is
+`SUCCESSFUL`.
 
-Release-specific product and proof truth stays on that release line, including
-runtime, tests, architecture, release.md, workflows, Stories, Facts, Live
-evidence, catalog, configuration, and request-projection evidence.
-
-For forward-looking grok/main work, current stock authority is openai/codex
-main. For a release candidate, stock authority is that candidate's exact target
-tag/SHA.
+Release-specific product and proof truth stays on that release line. For
+forward-looking `grok/main` work, current stock authority is
+`openai/codex main`. For a release candidate, stock authority is its exact
+target tag/SHA.
 
 ## Review scope
 
 Review incrementally.
 
-Start with Grok-related code, docs, workflows, PRs/issues, proof state, and
-process changes since the previous review. Expand only to current authorities,
-runtime seams, generators, tests, Facts, or Live evidence directly needed to
-understand those changes.
+Start with Grok-related code, docs, workflows, PRs/issues, and proof state that
+changed since the previous review. Expand only to the current authorities,
+runtime owners, generators, tests, Facts, or Live evidence directly needed to
+resolve those changes.
 
-Do not read older releases or Git history for completeness. Enter older history
-only when current evidence cannot resolve a concrete question.
+Do not enter older release history for completeness. Use it only when current
+evidence cannot resolve a concrete semantic question.
 
 ## Review lenses
 
-### Context / legacy
+### Context / legacy / mechanism size
 
-Apply the referenced context-reduce and prune-legacy methods.
+Apply the referenced `context-reduce` and `prune-legacy` methods.
 
-Look for evidence-backed duplicate authorities, stale historical process in
-current paths, dead compatibility or fallback paths, legacy schemas/APIs/tests/
-docs without a current consumer, and unnecessary scripts, ledgers, parsers,
-publishers, validators, or synchronization layers.
+Look for duplicate authorities, stale process snapshots, dead compatibility
+paths, and unnecessary scripts, ledgers, parsers, publishers, validators, or
+synchronization layers.
 
-Also review grok/main as a rebased workspace:
+For release infrastructure, specifically ask:
 
-- is its stock base reasonably current relative to openai/codex main?
-- when no experiment is active, is the downstream overlay still one current
-  process commit where practical?
-- are extra commits intentional active experiments?
-- can a finished experiment be pruned while preserving carry-forward.md,
-  review.md, the thin evolution skill, and README index?
-- if main was hard-reset to stock during maintenance, was the process overlay
-  rebuilt before treating the branch as complete?
+- does this mechanism protect an independent invariant?
+- is native owner testing or GitHub state already the authority?
+- does a helper have stable semantics or reuse beyond one workflow?
+- can a script or state layer be deleted without weakening proof?
 
-Finding prefix: CR- or PL-.
+Flag custom workflow-state models or decision frameworks that merely mirror a
+small number of GitHub API predicates.
+
+Also review `grok/main` as a cheap rebased workspace: keep its process overlay
+small, preserve it during pruning, and do not accumulate finished experiments.
+
+Finding prefix: `CR-` or `PL-`.
 
 ### Stock ownership
 
 For a release candidate, compare affected downstream responsibilities with the
-candidate's exact target stock tag.
+exact target stock tag. For `grok/main`, compare with current
+`openai/codex main`.
 
-For forward-looking grok/main experiments, compare with current openai/codex
-main.
+Report a downstream mechanism when stock now owns the responsibility and Grok
+can delete or reduce it without changing the product contract.
 
-Report a downstream mechanism when stock now owns the responsibility and the
-Grok layer can be removed or reduced without changing the product contract.
-
-Finding prefix: SO-.
+Finding prefix: `SO-`.
 
 ### Carry closure
 
-For every retained or intentionally changed semantic, verify the closure from
-carry-forward.md:
+For every retained or intentionally changed semantic, verify:
 
-~~~text
-owner
-invariant
-source seam
-derived representations
-owning proof
-~~~
+```text
+changed owner
+-> source-of-truth seam
+-> that owner's derived outputs
+-> that owner's native proof
+```
 
-Inspect current stock build rules, generators, embedded/precomputed exports,
-schemas, SDK generation, and consistency tests at the touched seam. Do not
-assume a checked-in generated file is fresh merely because a nearby source file
-changed too.
+Do not require a global generated-file sweep. Follow only the owners changed by
+the candidate.
 
-Report any semantic that could be marked RECONSTRUCTED while a derived
-representation is stale or an owner-level consistency test is absent from the
-deterministic proof.
+Report a candidate as incomplete when an owned derived representation is stale
+or a necessary owner-level consistency proof is missing.
 
-Finding prefix: CC-.
+Finding prefix: `CC-`.
 
 ### Semantic contract / proof
-
-Check that tests, Stories, Facts, Live, and workflow results prove what current
-product documentation claims.
 
 Keep proof classes distinct:
 
@@ -128,62 +116,62 @@ Keep proof classes distinct:
 Do not expand backend acceptance, HTTP success, a green PR, or a workflow state
 into a product claim it does not prove.
 
-Prefer user-visible semantic invariants over accidental implementation details.
+Prefer user-visible semantic invariants over implementation details.
 
-Finding prefix: CP-.
+Finding prefix: `CP-`.
 
-### Release state and provenance
+### Release authority
 
-Review the candidate against the lifecycle in carry-forward.md and the target
-line's branch-local release.md.
+Use the simplified product states:
+
+```text
+RECONSTRUCTED
+PR_PROVEN
+SUCCESSFUL
+```
 
 Verify:
 
-- RECONSTRUCTED includes derived-artifact closure;
-- RELEASE_HANDOFF actually read the target release.md;
-- DETERMINISTICALLY_PROVEN comes from the required PR proof;
-- MERGED is associated with that proven PR rather than an unproven direct push;
-- ARTIFACT_PROVEN uses the exact version-line head and exact artifact;
-- SUCCESSFUL is not claimed while any release.md-required transition is
-  missing, failed, cancelled, or skipped.
+- `RECONSTRUCTED` includes the changed owners' derived-output closure;
+- after reconstruction, the candidate actually hands off to branch-local
+  `release.md`;
+- `PR_PROVEN` comes from the proof required by that `release.md`;
+- only the exact version-line head that completes the release contract becomes
+  `SUCCESSFUL`.
 
-If release.md or the workflow allows a direct unproven push to produce a green
-release proof, report the mechanism itself.
+Merge and provenance are release transitions owned by `release.md`, not
+separate product states.
 
-Finding prefix: RP-.
+If a direct or otherwise unproven push can become `SUCCESSFUL`, report the
+release mechanism.
+
+Finding prefix: `RP-`.
 
 ### Release delta
 
-When a new stable target or candidate release exists, review only:
+When a new stable target exists, review only:
 
-~~~text
+```text
 latest successful Grok release
-+ explicit product changes
-+ current process/proof changes
++ explicit product decisions
 + relevant validated grok/main experiments
 + exact target stock tag
-~~~
+```
 
 Classify affected semantics as stock-owned, retain downstream, intentional
 product change, obsolete, or unclear/history needed. Only the last class
 justifies deeper historical diagnosis.
 
-Finding prefix: RD-.
+Finding prefix: `RD-`.
 
 ## Output
 
-Report only findings backed by direct evidence. For each finding include:
+Report only findings backed by direct evidence. For each finding include the
+owner, invariant, evidence, smallest correction, correctness boundary, and
+risk.
 
-- current owner;
-- invariant it should protect;
-- evidence of the problem;
-- extra context or legacy burden imposed;
-- smallest delete / merge / rewrite action;
-- correctness boundary that must remain;
-- risk.
-
-For carry/release review, also report the exact lifecycle state reached and the
-first unsatisfied transition. If there is no meaningful finding, report none.
+For carry/release review, report the current product state and the first
+unsatisfied transition. If there is no meaningful finding, report `none`.
 
 Do not manufacture work to make the review non-empty.
 
