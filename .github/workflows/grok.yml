@@ -202,6 +202,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+      - name: Install Linux sandbox dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcap-dev bubblewrap
       - name: Build Linux sandbox helper
         run: cargo build -p codex-linux-sandbox --bin codex-linux-sandbox
       - name: Reject symlink escape outside workspace
