@@ -30,9 +30,11 @@ on:
         required: true
         type: string
 
+# PR proof is supersedable by a newer head of the same PR. Push and manual
+# release proofs are exact-head evidence and must never cancel one another.
 concurrency:
-  group: grok-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  group: grok-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

@@ -8,6 +8,13 @@ on:
       - "**full-ci**"
   workflow_dispatch:
 
+# Direct *full-ci* branches are disposable pre-merge proof branches: a newer
+# push supersedes an older head. Reusable/postmerge calls and manual runs use a
+# unique run group so they retain exact-run evidence and never cancel each other.
+concurrency:
+  group: rust-ci-full-${{ github.event_name == 'push' && contains(github.ref_name, 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && contains(github.ref_name, 'full-ci') }}
+
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
