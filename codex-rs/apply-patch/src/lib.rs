@@ -43,6 +43,7 @@ pub use invocation::maybe_parse_apply_patch_verified_with_mode;
 pub use invocation::verify_apply_patch_args;
 pub use invocation::verify_apply_patch_args_with_mode;
 pub use standalone_executable::main;
+pub use structured_edit::STALE_STRUCTURED_EDIT_MESSAGE;
 pub use structured_edit::StructuredEditError;
 pub use structured_edit::apply_exact_replacement;
 pub use structured_edit::apply_verified_action;
@@ -173,6 +174,9 @@ pub enum ApplyPatchFileChange {
         move_path: Option<PathUri>,
         /// new_content that will result after the unified_diff is applied.
         new_content: String,
+        /// Contents the VerifiedContents writer must still observe immediately
+        /// before replacing the file. `None` for stock `apply_patch` updates.
+        expected_content: Option<String>,
     },
 }
 
@@ -272,6 +276,7 @@ impl ApplyPatchAction {
                 unified_diff,
                 move_path: None,
                 new_content,
+                expected_content: Some(old_content.to_string()),
             },
         )]);
         Self {

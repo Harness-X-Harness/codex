@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_apply_patch::STALE_STRUCTURED_EDIT_MESSAGE;
 use codex_core::TurnInputRequest;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -102,6 +104,72 @@ fn output_text(value: &serde_json::Value) -> String {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string()
+}
+
+async fn start_structured_edit_unless_trusted(
+    harness: &TestCodexHarness,
+    prompt: &str,
+) -> Result<()> {
+    let test = harness.test();
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: prompt.into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::UnlessTrusted),
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: Some(PermissionProfile::Disabled),
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn wait_for_structured_edit_approval(harness: &TestCodexHarness, call_id: &str) -> String {
+    let event = wait_for_event(&harness.test().codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = event else {
+        panic!("expected structured_edit approval before completion");
+    };
+    assert_eq!(approval.call_id, call_id);
+    approval.call_id
+}
+
+async fn decide_structured_edit_approval(
+    harness: &TestCodexHarness,
+    call_id: String,
+    decision: ReviewDecision,
+) -> Result<()> {
+    harness
+        .test()
+        .codex
+        .submit(Op::PatchApproval {
+            id: call_id,
+            decision,
+        })
+        .await?;
+    wait_for_event(&harness.test().codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -367,6 +435,95 @@ async fn structured_edit_approval_denied_does_not_mutate() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_edit_stale_snapshot_after_approval_does_not_mutate() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let harness = structured_edit_harness().await?;
+    harness.write_file("stale.txt", "version-a\n").await?;
+    let call_id = "structured-edit-stale";
+    mount_structured_edit(
+        &harness,
+        call_id,
+        &structured_edit_args(
+            "stale.txt",
+            "version-a",
+            "version-b",
+            /*replace_all*/ false,
+        ),
+    )
+    .await;
+    start_structured_edit_unless_trusted(&harness, "edit stale.txt").await?;
+    let approval_id = wait_for_structured_edit_approval(&harness, call_id).await;
+    harness.write_file("stale.txt", "version-c\n").await?;
+    harness
+        .test()
+        .codex
+        .submit(Op::PatchApproval {
+            id: approval_id,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    let mut end_success = None;
+    let mut turn_diff = None;
+    wait_for_event(&harness.test().codex, |event| match event {
+        EventMsg::PatchApplyEnd(end) => {
+            end_success = Some(end.success);
+            false
+        }
+        EventMsg::TurnDiff(ev) => {
+            turn_diff = Some(ev.unified_diff.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    let output = output_text(&harness.function_call_output_value(call_id).await);
+    assert!(output.contains(STALE_STRUCTURED_EDIT_MESSAGE), "{output}");
+    assert!(!output.contains("Success. Updated"), "{output}");
+    assert_eq!(end_success, Some(false));
+    if let Some(diff) = turn_diff {
+        assert!(
+            !diff.contains("version-b"),
+            "stale edit must not publish the planned TurnDiff: {diff}"
+        );
+    }
+    assert_eq!(harness.read_file_text("stale.txt").await?, "version-c\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_edit_unchanged_snapshot_after_approval_succeeds() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let harness = structured_edit_harness().await?;
+    harness.write_file("fresh.txt", "version-a\n").await?;
+    let call_id = "structured-edit-fresh";
+    mount_structured_edit(
+        &harness,
+        call_id,
+        &structured_edit_args(
+            "fresh.txt",
+            "version-a",
+            "version-b",
+            /*replace_all*/ false,
+        ),
+    )
+    .await;
+    start_structured_edit_unless_trusted(&harness, "edit fresh.txt").await?;
+    let approval_id = wait_for_structured_edit_approval(&harness, call_id).await;
+    decide_structured_edit_approval(&harness, approval_id, ReviewDecision::Approved).await?;
+
+    let output = output_text(&harness.function_call_output_value(call_id).await);
+    assert!(
+        output.contains("Success. Updated the following files:"),
+        "{output}"
+    );
+    assert_eq!(harness.read_file_text("fresh.txt").await?, "version-b\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn structured_edit_does_not_change_stock_apply_patch() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let harness = structured_edit_harness().await?;
@@ -486,6 +643,163 @@ async fn structured_edit_routes_to_selected_remote_environment() -> Result<()> {
         !local_cwd.path().join(file_name).exists(),
         "structured_edit should not write the remote file into the local environment"
     );
+
+    test.fs()
+        .remove(
+            &remote_cwd_uri,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_edit_stale_snapshot_on_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_target_windows!(Ok(()), "requires the Docker-backed POSIX executor");
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.structured_edit_tool_type = Some(StructuredEditToolType::ExactMatch);
+        })
+        .build_with_remote_and_local_env(&server)
+        .await?;
+    let local_cwd = TempDir::new()?;
+    let file_name = "structured_edit_remote_stale.txt";
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-structured-edit-stale-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let remote_cwd_uri = PathUri::from_host_native_path(&remote_cwd)?;
+    test.fs()
+        .create_directory(
+            &remote_cwd_uri,
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    let remote_file = PathUri::from_host_native_path(remote_cwd.join(file_name))?;
+    test.fs()
+        .write_file(
+            &remote_file,
+            b"version-a\n".to_vec(),
+            WriteFileOptions {
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let call_id = "structured-edit-remote-stale";
+    let arguments = json!({
+        "file_path": file_name,
+        "old_string": "version-a",
+        "new_string": "version-b",
+        "replace_all": false,
+        "environment_id": REMOTE_ENVIRONMENT_ID,
+    })
+    .to_string();
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(call_id, "structured_edit", &arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "edit the remote file".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![
+                        local(local_cwd.path().abs()),
+                        TurnEnvironmentSelection {
+                            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                            cwd: PathUri::from_abs_path(&remote_cwd),
+                            workspace_roots: vec![PathUri::from_abs_path(&remote_cwd)],
+                            config: EnvironmentConfigState::FromThread,
+                        },
+                    ],
+                )),
+                approval_policy: Some(AskForApproval::UnlessTrusted),
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: Some(PermissionProfile::Disabled),
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = event else {
+        panic!("expected remote structured_edit approval before completion");
+    };
+    assert_eq!(approval.call_id, call_id);
+    test.fs()
+        .write_file(
+            &remote_file,
+            b"version-c\n".to_vec(),
+            WriteFileOptions {
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.codex
+        .submit(Op::PatchApproval {
+            id: approval.call_id,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let remote_contents = test
+        .fs()
+        .read_file_text(&remote_file, Default::default(), /*sandbox*/ None)
+        .await?;
+    assert_eq!(remote_contents, "version-c\n");
 
     test.fs()
         .remove(
