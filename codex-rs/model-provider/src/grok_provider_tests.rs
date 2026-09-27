@@ -168,6 +168,8 @@ async fn name_grok_with_responses_selects_openai_dialect() {
         .expect("Responses wire_api should construct an API provider");
     assert_eq!(api_provider.name, "Grok");
     assert_eq!(api_provider.dialect, ApiDialect::OpenAi);
+    assert_eq!(provider.info().stream_idle_timeout_ms, None);
+    assert_eq!(provider.info().stream_max_retries, None);
     assert!(!provider.projects_tools_as_flat_functions());
 }
 
