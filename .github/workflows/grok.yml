@@ -71,6 +71,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: rustfmt, clippy
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
       - run: cargo fmt -- --config imports_granularity=Item --check
       - name: Lint affected libraries
         run: cargo clippy -p codex-api -p codex-config -p codex-guardian-v2 -p codex-image-generation-extension -p codex-memories-write -p codex-model-provider -p codex-model-provider-info -p codex-tools -p codex-history -p codex-core --lib -- -D warnings
@@ -88,9 +91,10 @@ jobs:
         run: cargo test -p codex-core --test all grok
       - name: Structured edit
         run: cargo test -p codex-apply-patch --lib structured_edit && cargo test -p codex-core --lib structured_edit && cargo test -p codex-core --test all structured_edit
-      # Stock apply_patch proof owners:
-      # - this step: crate unit tests plus the apply_patch suite, including
-      #   code_mode_can_apply_patch_via_nested_tool after the host binary is built
+      # Stock apply_patch proof owners in this Grok Cargo job:
+      # - "Stock apply_patch regressions": crate unit tests plus the apply_patch
+      #   suite, including code_mode_can_apply_patch_via_nested_tool after
+      #   setup-rusty-v8 and the code-mode host binary are available
       # - "Stock apply_patch sandbox intercepts": the four sandbox/link intercept
       #   tests, serialized because the parallel GHA Cargo suite dropped
       #   tool-output capture on the same SHA
