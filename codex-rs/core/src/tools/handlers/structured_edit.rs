@@ -87,6 +87,7 @@ impl StructuredEditHandler {
                 "structured_edit handler received unsupported payload".to_string(),
             ));
         };
+        let hook_arguments: serde_json::Value = parse_arguments(&arguments)?;
         let StructuredEditArgs {
             file_path,
             old_string,
@@ -115,15 +116,6 @@ impl StructuredEditHandler {
             replace_all,
         )
         .await?;
-        let mut hook_arguments = serde_json::json!({
-            "file_path": file_path,
-            "old_string": old_string,
-            "new_string": new_string,
-            "replace_all": replace_all,
-        });
-        if let Some(environment_id) = &environment_id {
-            hook_arguments["environment_id"] = serde_json::Value::String(environment_id.clone());
-        }
         let tool_ctx = ToolCtx {
             session,
             step_context: Arc::clone(&step_context),

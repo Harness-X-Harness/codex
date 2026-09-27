@@ -127,12 +127,11 @@ fn read_hook_log(home: &Path, name: &str) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn structured_edit_args() -> String {
+fn structured_edit_args_without_replace_all() -> String {
     json!({
         "file_path": "nested/dir/hook.txt",
         "old_string": "old",
         "new_string": "new",
-        "replace_all": false,
     })
     .to_string()
 }
@@ -143,7 +142,7 @@ async fn structured_edit_hooks_keep_identity_across_pre_permission_post() -> Res
 
     let server = start_mock_server().await;
     let call_id = "structured-edit-hooks";
-    let arguments = structured_edit_args();
+    let arguments = structured_edit_args_without_replace_all();
     mount_sse_sequence(
         &server,
         vec![
@@ -209,7 +208,7 @@ async fn structured_edit_permission_request_does_not_match_apply_patch_only_hook
 
     let server = start_mock_server().await;
     let call_id = "structured-edit-apply-patch-hook";
-    let arguments = structured_edit_args();
+    let arguments = structured_edit_args_without_replace_all();
     mount_sse_sequence(
         &server,
         vec![
