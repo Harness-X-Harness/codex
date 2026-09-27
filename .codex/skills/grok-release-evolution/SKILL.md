@@ -11,68 +11,69 @@ authority.
 ## Bootstrap
 
 1. Always read the current doctrine from
-   grok/main:grok/docs/carry-forward.md before release-evolution work.
+   `grok/main:grok/docs/carry-forward.md` before release-evolution work.
 2. Do not use the carry worktree as the bootstrap source. A carry branch starts
    from exact stock and may intentionally lack the current process overlay.
-3. Resolve the lifecycle state defined by the doctrine before changing code.
-4. Resolve the latest SUCCESSFUL grok/rust-v* checkpoint and the exact target
+3. Resolve the latest `SUCCESSFUL grok/rust-v*` checkpoint and the exact target
    stock tag/SHA. Do not use an unproven candidate as the baseline.
-5. Treat current process/proof decisions on grok/main as mandatory inputs even
-   when they postdate the latest stable release.
+4. Treat the current doctrine itself as process authority. Do not invent a
+   separate list of process/proof changes to carry as product state.
 
-A release-local copy of this skill or carry-forward.md is historical process
+A release-local copy of this skill or `carry-forward.md` is historical process
 evidence only.
 
-## Reconstruction phase
+## Reconstruction
 
 For carry-forward work:
 
-1. Read the latest successful release's branch-local product authorities needed
-   to understand the carried semantics.
+1. Read only the latest successful release authorities needed to understand the
+   selected semantics.
 2. Read the exact target stock seams and their native tests/generators.
-3. Classify candidate semantics according to carry-forward.md.
-4. Reconstruct the smallest current semantic at the target seam.
-5. For every changed semantic, enumerate owner, invariant, source seam, derived
-   representations, and owning proof.
-6. Run stock-owned generators and consistency tests before calling the
-   candidate RECONSTRUCTED.
+3. Classify candidate semantics according to `carry-forward.md`.
+4. Reconstruct the smallest current semantic at the target owner.
+5. For each changed owner, close its source, owned derived outputs, and native
+   consistency/regression proof.
 
 Do not mechanically replay old commits, reconstruct historical implementation
-shapes, or treat a clean patch application as semantic proof.
+shapes, or treat clean patch application as semantic proof.
+
+Call the candidate `RECONSTRUCTED` only when those owner closures are complete.
 
 ## Release handoff
 
-RELEASE_HANDOFF is mandatory for a complete release operation.
+For a complete release operation, hand off immediately after
+`RECONSTRUCTED`:
 
-At handoff:
+1. Read the target version line's branch-local `grok/docs/release.md`.
+2. If that release contract is insufficient, repair it before proof.
+3. From then on, follow `release.md` as the sole authority for PR proof,
+   merge/provenance, builds, artifacts, Live, `PR_PROVEN`, and `SUCCESSFUL`.
 
-1. Read the target version line's branch-local grok/docs/release.md.
-2. Verify that the branch-local proof mechanism satisfies the current doctrine.
-3. Carry any required proof-mechanism update before starting release proof.
-4. From that point, release.md owns PR checks, merge provenance, build targets,
-   artifact identity, Live proof, and SUCCESSFUL.
+Do not restate or infer release mechanics from memory or from
+`carry-forward.md`.
 
-Do not restate release.md rules from memory.
-
-A direct version-line push, a local test run, or a green artifact/Live run does
-not substitute for a missing deterministic PR transition.
-
-If the user requested carry, merge, or release end-to-end, continue to the
-requested lifecycle state. Do not stop after reconstruction merely because the
-code appears ready. Stop only on failed proof, missing authorization, or an
-unavailable external capability, and report the exact state reached.
+If the user requested carry-and-release end to end, continue until
+`SUCCESSFUL` unless required proof fails, authorization is missing, or an
+external capability is unavailable.
 
 ## grok/main work
 
-For process maintenance or experiments on grok/main, follow the main
-rebase/prune/rebuild rules in carry-forward.md. Keep the process overlay small
-and current. Do not make grok/main a required product-promotion intermediate.
+For process maintenance or experiments on `grok/main`, follow the
+rebase/prune/rebuild rules in `carry-forward.md`. Keep the process overlay
+small and current. Do not make `grok/main` a product-promotion intermediate.
 
 ## Historical diagnosis
 
-Read older release lines or Git history only when current doctrine, the latest
+Read older release lines or Git history only when the current doctrine, latest
 successful release, target stock, and directly relevant evidence cannot resolve
 a concrete semantic question. Stop once the transition is understood.
+
+## Mechanism discipline
+
+Prefer native owner tests, the branch-local release workflow, and minimal
+native GitHub protection. Do not create custom ledgers, workflow-state models,
+or helper frameworks whose only purpose is to mirror GitHub state for one
+workflow.
 
 ## Authorization
 
@@ -80,6 +81,6 @@ Review findings are not write authorization. Do not merge, publish, prune,
 rebase, force-reset, or mutate another authoritative branch unless the user or
 invoking task authorized that action.
 
-After mutation, verify the authoritative ref and workflow result required for
-the requested lifecycle transition. Do not invent ledgers or parsers to replace
+After mutation, verify the authoritative ref or workflow result required for
+the requested state transition. Do not invent compatibility state to prove
 GitHub's own state.
