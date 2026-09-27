@@ -12,6 +12,11 @@ env_key = "GROK_API_KEY"
 wire_api = "grok_responses"
 requires_openai_auth = false
 supports_websockets = false
+# Grok can accept a streaming request (HTTP 200) and then stop producing SSE
+# frames. Detect that before an interactive turn is effectively hung, then let
+# stock Codex replay durable turn history once through its sampling retry path.
+stream_idle_timeout_ms = 60000
+stream_max_retries = 1
 
 [memories]
 extract_model = "grok-4.7"
