@@ -5,9 +5,8 @@ name: grok
 # GitHub Actions artifacts are the delivery output; there is no repository publisher.
 #
 # Every PR to a Grok version line runs Cargo so the check can be required by
-# native branch protection. Pushes still ignore documentation, editor
-# configuration, and Grok Facts; a push with no other file changes does not
-# start this workflow.
+# native branch protection. Every push to a Grok version line starts release
+# proof for that exact authoritative head; there are no path-based exemptions.
 # Everything else uses the native GitHub Actions event/filter semantics.
 
 on:
@@ -15,14 +14,6 @@ on:
     branches: ['grok/rust-v*']
   push:
     branches: ['grok/rust-v*']
-    paths-ignore:
-      - 'docs/**'
-      - 'grok/docs/**'
-      - 'grok/facts/**'
-      - '*.md'
-      - '.codex/**'
-      - '.devcontainer/**'
-      - '.vscode/**'
   workflow_dispatch:
     inputs:
       binary_run_id:
