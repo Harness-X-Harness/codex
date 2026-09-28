@@ -40,6 +40,8 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_target_windows;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::local;
@@ -53,6 +55,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 
 async fn structured_edit_harness() -> Result<TestCodexHarness> {
     structured_edit_harness_with(|builder| builder).await
@@ -177,6 +180,142 @@ async fn decide_structured_edit_approval(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_edit_recovers_stalled_stream_from_durable_tool_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let call_id = "structured-edit-stalled-retry";
+    let arguments = structured_edit_args("retry.txt", "a", "aa", /*replace_all*/ false);
+    let (stall_tx, stall_rx) = oneshot::channel();
+    let first_response = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("resp-stalled"),
+                ev_function_call(call_id, "structured_edit", &arguments),
+            ]),
+        },
+        StreamingSseChunk {
+            gate: Some(stall_rx),
+            body: sse(vec![ev_completed("resp-stalled")]),
+        },
+    ];
+    let second_response = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-retry"),
+            ev_assistant_message("msg-retry", "done"),
+            ev_completed("resp-retry"),
+        ]),
+    }];
+    let (streaming_server, _completions) =
+        start_streaming_sse_server(vec![first_response, second_response]).await;
+
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.structured_edit_tool_type = Some(StructuredEditToolType::ExactMatch);
+        })
+        .with_config(|config| {
+            config.model_provider.stream_max_retries = Some(1);
+            config.model_provider.stream_idle_timeout_ms = Some(100);
+        });
+    let test = builder
+        .build_with_streaming_server(&streaming_server)
+        .await?;
+    let file = test.workspace_path_uri("retry.txt")?;
+    test.fs()
+        .write_file(
+            &file,
+            b"a\n".to_vec(),
+            WriteFileOptions {
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "edit retry.txt".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: Some(PermissionProfile::Disabled),
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+
+    let EventMsg::TurnComplete(completed) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("predicate guarantees TurnComplete");
+    };
+    assert!(
+        completed.error.is_none(),
+        "retry should complete the original turn normally: {:?}",
+        completed.error
+    );
+
+    let requests = streaming_server.requests().await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "one stalled stream with stream_max_retries=1 must produce exactly one retry"
+    );
+    let bodies = requests
+        .iter()
+        .map(|body| serde_json::from_slice::<serde_json::Value>(body).expect("request JSON"))
+        .collect::<Vec<_>>();
+    let count_call_items = |body: &serde_json::Value, item_type: &str| {
+        body.get("input")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|item| {
+                item.get("type").and_then(serde_json::Value::as_str) == Some(item_type)
+                    && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+            })
+            .count()
+    };
+    assert_eq!(count_call_items(&bodies[0], "function_call_output"), 0);
+    assert_eq!(
+        count_call_items(&bodies[1], "function_call"),
+        1,
+        "retry history must retain the original tool call exactly once"
+    );
+    assert_eq!(
+        count_call_items(&bodies[1], "function_call_output"),
+        1,
+        "retry history must retain the completed tool output exactly once"
+    );
+    assert_eq!(
+        test.fs()
+            .read_file_text(&file, Default::default(), /*sandbox*/ None)
+            .await?,
+        "aa\n",
+        "structured_edit side effect must not be applied twice"
+    );
+
+    let _ = stall_tx.send(());
+    streaming_server.shutdown().await;
     Ok(())
 }
 

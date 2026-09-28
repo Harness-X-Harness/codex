@@ -76,6 +76,13 @@ impl Default for WriteFileOptions {
     }
 }
 
+/// Result of an executor-owned conditional file write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConditionalWriteResult {
+    Written,
+    Conflict,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GetMetadataOptions {
     pub follow_symlinks: bool,
@@ -666,6 +673,28 @@ pub trait ExecutorFileSystem: Send + Sync {
         options: WriteFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()>;
+
+    /// Writes `contents` only when the current bytes still equal `expected_contents`.
+    ///
+    /// Implementations must make the compare and write one executor-owned mutation critical
+    /// section shared with ordinary mutations of the same path. This owner-level guarantee does
+    /// not provide a kernel CAS against unrelated processes that bypass the executor filesystem.
+    fn write_file_if_unchanged<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ConditionalWriteResult> {
+        Box::pin(async move {
+            let _ = (path, expected_contents, contents, options, sandbox);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "conditional writes are not supported by this executor filesystem",
+            ))
+        })
+    }
 
     fn create_directory<'a>(
         &'a self,

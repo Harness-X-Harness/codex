@@ -6,6 +6,7 @@ use codex_exec_server_protocol::JSONRPCErrorError;
 
 use crate::CapabilityRootsDiscoverParams;
 use crate::CapabilityRootsDiscoverResponse;
+use crate::ConditionalWriteResult;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
@@ -17,6 +18,7 @@ use crate::WriteFileOptions;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -41,6 +43,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
+use crate::protocol::FsWriteFileIfUnchangedParams;
+use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
@@ -201,6 +205,40 @@ impl FileSystemHandler {
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
+    }
+
+    pub(crate) async fn write_file_if_unchanged(
+        &self,
+        params: FsWriteFileIfUnchangedParams,
+    ) -> Result<FsWriteFileIfUnchangedResponse, JSONRPCErrorError> {
+        let expected_bytes = STANDARD
+            .decode(params.expected_data_base64)
+            .map_err(|err| {
+                invalid_request(format!(
+                    "{FS_WRITE_FILE_IF_UNCHANGED_METHOD} requires valid base64 expectedDataBase64: {err}"
+                ))
+            })?;
+        let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
+            invalid_request(format!(
+                "{FS_WRITE_FILE_IF_UNCHANGED_METHOD} requires valid base64 dataBase64: {err}"
+            ))
+        })?;
+        let result = self
+            .file_system
+            .write_file_if_unchanged(
+                &params.path,
+                expected_bytes,
+                bytes,
+                WriteFileOptions {
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
+                params.sandbox.as_ref(),
+            )
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsWriteFileIfUnchangedResponse {
+            written: result == ConditionalWriteResult::Written,
+        })
     }
 
     pub(crate) async fn create_directory(
@@ -364,7 +402,68 @@ mod tests {
     use super::*;
     use crate::FileSystemSandboxContext;
     use crate::protocol::FsReadFileParams;
+    use crate::protocol::FsWriteFileIfUnchangedParams;
     use crate::protocol::FsWriteFileParams;
+
+    #[tokio::test]
+    async fn conditional_write_reports_written_then_conflict() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let runtime_paths = ExecServerRuntimePaths::new(
+            std::env::current_exe().expect("current exe"),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let handler = FileSystemHandler::new(runtime_paths);
+        let path =
+            PathUri::from_host_native_path(temp_dir.path().join("conditional.txt")).expect("path");
+
+        handler
+            .write_file(FsWriteFileParams {
+                path: path.clone(),
+                data_base64: STANDARD.encode("version-a\n"),
+                follow_symlinks: None,
+                sandbox: None,
+            })
+            .await
+            .expect("seed file");
+
+        let written = handler
+            .write_file_if_unchanged(FsWriteFileIfUnchangedParams {
+                path: path.clone(),
+                expected_data_base64: STANDARD.encode("version-a\n"),
+                data_base64: STANDARD.encode("version-b\n"),
+                follow_symlinks: None,
+                sandbox: None,
+            })
+            .await
+            .expect("matching conditional write");
+        assert!(written.written);
+
+        let conflict = handler
+            .write_file_if_unchanged(FsWriteFileIfUnchangedParams {
+                path: path.clone(),
+                expected_data_base64: STANDARD.encode("version-a\n"),
+                data_base64: STANDARD.encode("version-c\n"),
+                follow_symlinks: None,
+                sandbox: None,
+            })
+            .await
+            .expect("stale conditional write");
+        assert!(!conflict.written);
+
+        let contents = handler
+            .read_file(FsReadFileParams {
+                path,
+                follow_symlinks: None,
+                sandbox: None,
+            })
+            .await
+            .expect("read committed file");
+        assert_eq!(
+            STANDARD.decode(contents.data_base64).expect("base64"),
+            b"version-b\n"
+        );
+    }
 
     #[tokio::test]
     async fn no_platform_sandbox_policies_do_not_require_configured_sandbox_helper() {
