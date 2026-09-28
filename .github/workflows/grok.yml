@@ -1,12 +1,13 @@
 name: grok
 
-# PR: proof-domain jobs aggregated by Cargo. Push: merged-PR provenance, complete linux x64 musl + mac arm64 distributions, and Linux Live.
+# PR: proof-domain jobs aggregated by Cargo. Push: complete linux x64 musl +
+# mac arm64 distributions, and Linux Live on the same-run Linux artifact.
 # workflow_dispatch: Live only, using an existing Linux distribution artifact.
 # GitHub Actions artifacts are the delivery output; there is no repository publisher.
 #
-# Every PR to a Grok version line runs Cargo so the check can be required by
-# native branch protection. Every push to a Grok version line starts release
-# proof for that exact authoritative head; there are no path-based exemptions.
+# The active GitHub Ruleset owns version-line branch admission. Every PR to a
+# Grok version line runs Cargo as the required admission proof, and every push
+# to a Grok version line starts release composition for that admitted head.
 # Everything else uses the native GitHub Actions event/filter semantics.
 
 on:
@@ -33,79 +34,6 @@ permissions:
   pull-requests: read
 
 jobs:
-  release-provenance:
-    name: Release provenance
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Require merged PR with green Cargo proof
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-
-          prs="$(gh api             -H 'Accept: application/vnd.github+json'             "/repos/${REPO}/commits/${SHA}/pulls")"
-
-          pr_number="$(jq -r --arg branch "${BRANCH}" '
-            [.[] | select(.base.ref == $branch and .merged_at != null)]
-            | sort_by(.merged_at)
-            | last
-            | .number // empty
-          ' <<<"${prs}")"
-
-          if [[ -z "${pr_number}" ]]; then
-            echo "::error::Release head ${SHA} is not associated with a merged PR into ${BRANCH}."
-            exit 1
-          fi
-
-          pr="$(gh api "/repos/${REPO}/pulls/${pr_number}")"
-          head_sha="$(jq -r '.head.sha' <<<"${pr}")"
-          head_ref="$(jq -r '.head.ref' <<<"${pr}")"
-
-          runs="$(gh api             "/repos/${REPO}/actions/workflows/grok.yml/runs?event=pull_request&head_sha=${head_sha}&per_page=100")"
-
-          run_id="$(jq -r --arg head_ref "${head_ref}" '
-            [.workflow_runs[]
-              | select(
-                  .head_branch == $head_ref
-                  and .status == "completed"
-                  and .conclusion == "success"
-                )
-            ]
-            | sort_by(.created_at)
-            | last
-            | .id // empty
-          ' <<<"${runs}")"
-
-          if [[ -z "${run_id}" ]]; then
-            echo "::error::PR #${pr_number} has no successful grok pull_request workflow for head ${head_sha}."
-            exit 1
-          fi
-
-          jobs="$(gh api "/repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100")"
-          cargo_ok="$(jq -r '
-            [.jobs[]
-              | select(
-                  .name == "Cargo"
-                  and .status == "completed"
-                  and .conclusion == "success"
-                )
-            ]
-            | length
-          ' <<<"${jobs}")"
-
-          if [[ "${cargo_ok}" != "1" ]]; then
-            echo "::error::PR #${pr_number} workflow run ${run_id} did not complete Cargo successfully."
-            exit 1
-          fi
-
-          echo "Release provenance OK: PR #${pr_number}, Cargo run ${run_id}."
-
   live-harness:
     name: Live harness
     if: github.event_name == 'pull_request'
@@ -362,7 +290,6 @@ jobs:
   build-linux-x64-musl:
     name: Build x86_64-unknown-linux-musl
     if: github.event_name == 'push'
-    needs: [release-provenance]
     runs-on: ubuntu-24.04
     timeout-minutes: 170
     steps:
@@ -376,7 +303,6 @@ jobs:
   build-pack:
     name: Build ${{ matrix.target }}
     if: github.event_name == 'push'
-    needs: [release-provenance]
     strategy:
       fail-fast: false
       matrix:

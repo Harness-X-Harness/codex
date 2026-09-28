@@ -15,9 +15,9 @@ PR to grok/rust-v*
     = deterministic Cargo proof, including generated/precomputed closure
 
 push grok/rust-v*
-    = merged-PR provenance gate
+    = GitHub-admitted version-line head
     -> complete target distributions
-    -> Linux Live on the exact Linux artifact
+    -> Linux Live on the same-run Linux artifact
 
 workflow_dispatch
     = diagnostic Live only from an existing Linux distribution artifact
@@ -86,8 +86,9 @@ head must then complete the push release contract for that exact SHA.
 SUCCESSFUL requires that exact version-line head to complete the release
 workflow successfully, including all required shipped target artifacts and
 Grok Live consuming the exact Linux artifact required by this contract.
-Release provenance, target builds, and Live are proof conditions within this
-transition; they are not additional product states.
+Native branch admission is the merge transition. Target builds and Live are
+proof conditions within the push release transition; they are not additional
+product states.
 
 A direct or otherwise unproven push cannot become SUCCESSFUL. Every new
 authoritative `grok/rust-v*` head requires a new release proof for that exact
@@ -104,18 +105,22 @@ changes only documentation or other non-runtime files.
    export consistency suite so checked-in schemas cannot diverge from embedded
    precomputed exports. Unrelated proof-infrastructure or documentation changes
    do not retroactively reopen inherited generated surfaces.
-3. A version-line push must pass Release provenance before target builds start.
-   The gate verifies that the pushed head is associated with a merged PR into
-   the current version line and that the PR's grok workflow completed Cargo
-   successfully.
-4. A direct or otherwise unproven push must fail Release provenance. Build and
-   Live success cannot retroactively replace missing PR proof.
-5. After provenance passes, each shipped target builds exactly once for that
-   SHA.
-6. Linux Live consumes the Linux distribution artifact from the same push run.
-7. A failed, cancelled, or skipped required transition is failed proof.
-8. The commit SHA and GitHub Actions run are source and proof identities.
-9. The artifact from that run is the delivery output.
+3. The active GitHub Ruleset owns admission to `grok/rust-v*`: changes enter
+   through a PR, the GitHub Actions `Cargo` check is required and strict, and
+   deletion, force-push, and bypass are blocked.
+4. After GitHub admits a new version-line head, the push workflow trusts that
+   platform transition and proves release composition for the admitted state.
+   It does not reconstruct branch admission by searching historical PR runs or
+   comparing PR head refs/SHAs.
+5. Each shipped target builds exactly once for the push run.
+6. Linux Live depends on the Linux build and consumes the Linux distribution
+   artifact from that same workflow run.
+7. A failed, cancelled, or skipped required build or Live transition is failed
+   proof; the head is not SUCCESSFUL.
+8. The commit SHA is source/artifact identity, not a reconstructed admission
+   predicate.
+9. The GitHub Actions run is the release proof unit and its artifacts are the
+   delivery outputs.
 10. Facts remain independent backend evidence unless a concrete product change
     explicitly makes one part of release acceptance.
 11. Installation is document-driven through INSTALL.md.
@@ -149,28 +154,36 @@ Generated or precomputed outputs are not considered closed merely because their
 source fixtures changed. When a PR touches that closure, its stock-owned
 consistency tests must run and pass.
 
-## Merge provenance
+## Branch admission and release composition
 
-On a push to grok/rust-v*, the Release provenance job runs before target
-builds.
+The required pull-request Grok workflow is the authority for PR_PROVEN. The
+active `Grok version lines` GitHub Ruleset is the authority for whether that
+PR_PROVEN change may enter `grok/rust-v*`.
 
-It uses GitHub's own repository state to verify:
+The Ruleset requires PR-based changes and the GitHub Actions `Cargo` context
+with strict/up-to-date enforcement. It blocks deletion and non-fast-forward
+updates and has no bypass. The release workflow trusts those native GitHub
+control-plane decisions instead of querying historical PR workflow runs after
+merge.
 
-1. the pushed SHA is associated with a merged PR;
-2. that PR targets the current version line;
-3. the PR head has a successful pull_request run of .github/workflows/grok.yml;
-4. that run contains a completed successful Cargo job.
+Every admitted version-line head starts a push workflow. That run owns release
+composition:
 
-The Linux and macOS build jobs depend on this gate. Do not replace this with a
-manual proof ledger, commit-message convention, or custom stored state.
+~~~text
+push event
+    -> Linux distribution build
+       -> Linux artifact
+       -> Grok Live consumes that artifact in the same run
+    -> macOS distribution build
+~~~
 
-Repository branch protection or rulesets may provide an additional preventive
-control when available. They are not the proof authority: this workflow must
-still reject an unproven push.
+The workflow DAG and current-run artifact namespace bind these operations.
+Commit SHA remains useful for artifact names and observability, but PR head
+SHA/ref equality is not a release-authorization predicate.
 
 ## Artifact and Live proof
 
-After Release provenance succeeds, a push runs:
+For every admitted version-line push, the release workflow runs:
 
 ~~~text
 x86_64-unknown-linux-musl
@@ -190,7 +203,8 @@ Other targets stay out until they have users.
 
 workflow_dispatch can run Live against an existing Linux distribution artifact
 selected by binary_run_id. It is diagnostic proof only; it does not create a
-new delivery artifact or supply missing PR/merge provenance.
+new delivery artifact or substitute for PR_PROVEN, branch admission, or the
+required push release workflow.
 
 Live runs go test -v directly. The Go harness owns failure diagnostics such as
 NOT_PROVEN, stage names, and redacted wire evidence; the workflow does not
@@ -201,13 +215,13 @@ parse or reinterpret test results.
 | RED where | Read | Owner | Next |
 |---|---|---|---|
 | PR Cargo | failing step and native/consistency test | owning seam | fix the seam, derived artifacts, and owning proof |
-| Release provenance | associated PR, PR head workflow, Cargo job | release transition | use a proven PR path; do not retry builds to bypass it |
+| branch admission | GitHub Ruleset / required Cargo context | native GitHub policy | repair the PR proof or ruleset; do not add workflow-side provenance reconstruction |
 | target build | compiler/staging output | source or build-grok action | fix and prove on a new PR/push |
 | Grok Live | NOT_PROVEN stage and redacted wire evidence | capability, egress, ingress, or harness | fix the actual owner; do not add a blind retry |
 | TestFact* | recorded vs observed class | corresponding whitelist row | update evidence and product behavior only when user-visible |
 
-A green target build with red provenance or red Live is not completed Grok
-proof.
+A green target build with red Live, a failed sibling target build, or missing
+native branch admission is not completed Grok proof.
 
 ## Delivery
 
@@ -218,19 +232,25 @@ The artifact already contains the complete distribution.
 
 ~~~text
 cargo fmt/clippy/test
-    -> deterministic PR gate
+    -> deterministic PR proof
 
 codex-app-server-protocol consistency tests
     -> generated/precomputed closure
 
-Release provenance
-    -> proven PR-to-version-line transition
+required pull_request Grok workflow / Cargo
+    -> PR_PROVEN
+
+Grok version lines GitHub Ruleset
+    -> version-line branch admission
+
+push Grok workflow DAG
+    -> exact-head release composition
 
 build-grok action
     -> complete per-target distribution artifact
 
 go test -run '^TestGrok'
-    -> Live on the Linux distribution artifact
+    -> Live on the same-run Linux distribution artifact
 
 rust-ci-full / Structured edit remote proof
     -> Docker-backed remote executor semantics for structured_edit; independent of the PR release gate
