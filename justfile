@@ -54,6 +54,11 @@ fmt:
 fmt-check:
     @{{ python }} ../scripts/format.py --check
 
+# Construct canonical Rust source before Grok behavior commits.
+# This mutates only Rust formatting; lint checks remain independent verifiers.
+grok-rust-chore:
+    cargo fmt -- --config imports_granularity=Item
+
 fix *args:
     cargo clippy --fix --tests --allow-dirty {args}
 
