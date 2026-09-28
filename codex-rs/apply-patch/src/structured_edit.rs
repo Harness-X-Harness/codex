@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use codex_exec_server::ConditionalWriteResult;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::ReadFileOptions;
@@ -146,9 +147,10 @@ async fn apply_verified_updates(
         {
             anyhow::bail!("{STALE_STRUCTURED_EDIT_MESSAGE}");
         }
-        if let Err(error) = fs
-            .write_file(
+        match fs
+            .write_file_if_unchanged(
                 path,
+                original_contents.clone().into_bytes(),
                 new_content.clone().into_bytes(),
                 WriteFileOptions {
                     follow_symlinks: options.follow_symlinks,
@@ -157,13 +159,19 @@ async fn apply_verified_updates(
             )
             .await
         {
-            delta.mark_inexact();
-            return Err(error).with_context(|| {
-                format!(
-                    "Failed to write file {}",
-                    path.inferred_native_path_string()
-                )
-            });
+            Ok(ConditionalWriteResult::Written) => {}
+            Ok(ConditionalWriteResult::Conflict) => {
+                anyhow::bail!("{STALE_STRUCTURED_EDIT_MESSAGE}");
+            }
+            Err(error) => {
+                delta.mark_inexact();
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to write file {}",
+                        path.inferred_native_path_string()
+                    )
+                });
+            }
         }
         delta.push(AppliedPatchChange {
             path: path.clone(),

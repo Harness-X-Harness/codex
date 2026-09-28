@@ -34,16 +34,82 @@ use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
 use crate::protocol::FsReadFileParams;
 use crate::protocol::FsReadFileResponse;
+use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeResponse;
 use crate::protocol::WireFsGetMetadataParams;
 use crate::protocol::WireFsReadFileParams;
+use crate::protocol::WireFsWriteFileIfUnchangedParams;
+
+#[tokio::test]
+async fn remote_conditional_write_preserves_conflict_result() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let websocket_url = format!("ws://{}", listener.local_addr().expect("listener address"));
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("listener should accept");
+        let mut websocket = accept_async(stream)
+            .await
+            .expect("websocket handshake should succeed");
+        complete_websocket_initialize(&mut websocket).await;
+
+        let JSONRPCMessage::Request(request) = read_jsonrpc_websocket(&mut websocket).await else {
+            panic!("expected conditional write request");
+        };
+        assert_eq!(request.method, FS_WRITE_FILE_IF_UNCHANGED_METHOD);
+        let params = serde_json::from_value::<WireFsWriteFileIfUnchangedParams>(
+            request.params.expect("conditional write params"),
+        )
+        .expect("conditional write wire params")
+        .try_into_request(|_| unreachable!("test request has no sandbox"))
+        .expect("conditional write params should convert");
+        assert_eq!(
+            params.path,
+            PathUri::parse("file:///workspace/conflict.txt").expect("path")
+        );
+        assert_eq!(params.expected_data_base64, STANDARD.encode(b"version-a\n"));
+        assert_eq!(params.data_base64, STANDARD.encode(b"version-b\n"));
+
+        write_jsonrpc_websocket(
+            &mut websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::to_value(FsWriteFileIfUnchangedResponse { written: false })
+                    .expect("conditional write response"),
+            }),
+        )
+        .await;
+    });
+
+    let file_system = RemoteFileSystem::new(LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::websocket_url(
+            websocket_url,
+            DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        ),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    ));
+    let path = PathUri::parse("file:///workspace/conflict.txt").expect("path");
+    let result = file_system
+        .write_file_if_unchanged(
+            &path,
+            b"version-a\n".to_vec(),
+            b"version-b\n".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
+        .await
+        .expect("conditional write RPC");
+    assert_eq!(result, ConditionalWriteResult::Conflict);
+    server.await.expect("recording server should succeed");
+}
 
 /// Absolute policies preserve foreign selection paths without adding legacy policy directories.
 #[tokio::test]
