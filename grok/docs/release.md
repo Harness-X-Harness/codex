@@ -80,6 +80,11 @@ push run.
 SUCCESSFUL requires every transition above to be satisfied. A direct push,
 even if it compiles or could pass Live, is not a successful release transition.
 
+Every new authoritative `grok/rust-v*` head requires a new push release proof
+for that exact SHA before it can be SUCCESSFUL. Proof from an earlier head is
+never inherited, including when the new head changes only documentation or
+other non-runtime files.
+
 ## Rules
 
 1. PR review owns deterministic proof: formatting, lint, native regression
