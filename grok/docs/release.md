@@ -3,8 +3,10 @@
 This document owns the branch-local Grok proof and delivery contract. Product
 semantics live in architecture.md.
 
-Once carry-forward reaches RELEASE_HANDOFF, this document is the sole authority
-for the remaining proof and delivery transitions on this version line.
+Once carry-forward reaches RECONSTRUCTED and hands the candidate to this
+version line, this document is the sole authority for the remaining proof and
+delivery transitions. The handoff is an authority transition, not a product
+state.
 
 ## Northstar
 
@@ -56,34 +58,41 @@ product CODEX_HOME and does not reuse the normal ~/.codex or ~/.grok Home.
 
 ## Release states
 
-This document proves these transitions after carry-forward handoff:
+The branch-local durable product states are exactly:
 
 ~~~text
-RELEASE_HANDOFF
-    -> DETERMINISTICALLY_PROVEN
-    -> MERGED
-    -> ARTIFACT_PROVEN
-    -> SUCCESSFUL
+RECONSTRUCTED
+    -> required PR proof
+PR_PROVEN
+    -> merge to the version line
+    -> exact-head release proof
+SUCCESSFUL
 ~~~
 
-DETERMINISTICALLY_PROVEN requires a green pull_request grok workflow with its
-Cargo job successful. Local tests do not substitute for this transition.
+RECONSTRUCTED is established by carry-forward after candidate semantics and
+owned derived outputs are closed on the target stock. Handoff from that state
+makes this branch-local document authoritative; handoff itself is not another
+state.
 
-MERGED requires the version-line head to be associated with a merged PR whose
-base is this exact grok/rust-v* line and whose candidate received the green
-Cargo proof.
+PR_PROVEN requires the required `pull_request` Grok workflow to complete
+successfully for the candidate in the target `grok/rust-v*` PR context. The
+public `Cargo` aggregate must be successful. Local tests do not substitute for
+this state.
 
-ARTIFACT_PROVEN requires every shipped target to build for the exact merged
-head and Grok Live to consume the Linux distribution artifact from that same
-push run.
+Merge is a transition, not a durable state. A PR_PROVEN candidate may enter the
+version line only through the permitted merge path. The resulting authoritative
+head must then complete the push release contract for that exact SHA.
 
-SUCCESSFUL requires every transition above to be satisfied. A direct push,
-even if it compiles or could pass Live, is not a successful release transition.
+SUCCESSFUL requires that exact version-line head to complete the release
+workflow successfully, including all required shipped target artifacts and
+Grok Live consuming the exact Linux artifact required by this contract.
+Release provenance, target builds, and Live are proof conditions within this
+transition; they are not additional product states.
 
-Every new authoritative `grok/rust-v*` head requires a new push release proof
-for that exact SHA before it can be SUCCESSFUL. Proof from an earlier head is
-never inherited, including when the new head changes only documentation or
-other non-runtime files.
+A direct or otherwise unproven push cannot become SUCCESSFUL. Every new
+authoritative `grok/rust-v*` head requires a new release proof for that exact
+SHA. Proof from an earlier head is never inherited, including when the new head
+changes only documentation or other non-runtime files.
 
 ## Rules
 
@@ -111,13 +120,16 @@ other non-runtime files.
     explicitly makes one part of release acceptance.
 11. Installation is document-driven through INSTALL.md.
 
-## Deterministic PR proof
+## PR_PROVEN proof
 
 A pull request to a grok/rust-v* line runs Cargo on GitHub's pull-request
-context. PR proof does not build distribution binaries or run real-provider
-Live.
+context. When the required Grok pull-request workflow completes successfully
+with its public `Cargo` aggregate successful, the candidate is PR_PROVEN.
+This proof does not build distribution binaries or run real-provider Live.
 
-The public `Cargo` status is a stable aggregate gate: every PR proof-domain job it owns must succeed. Internal proof jobs may evolve without changing the required status name.
+The public `Cargo` status is a stable aggregate gate: every PR proof-domain job
+it owns must succeed. Internal proof jobs may evolve without changing the
+required status name.
 
 The Cargo proof includes:
 
