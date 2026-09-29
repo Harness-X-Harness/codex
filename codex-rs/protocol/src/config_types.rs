@@ -440,6 +440,7 @@ impl WebSearchLocation {
 pub struct WebSearchToolConfig {
     pub context_size: Option<WebSearchContextSize>,
     pub allowed_domains: Option<Vec<String>>,
+    pub excluded_domains: Option<Vec<String>>,
     pub location: Option<WebSearchLocation>,
 }
 
@@ -451,6 +452,10 @@ impl WebSearchToolConfig {
                 .allowed_domains
                 .clone()
                 .or_else(|| self.allowed_domains.clone()),
+            excluded_domains: other
+                .excluded_domains
+                .clone()
+                .or_else(|| self.excluded_domains.clone()),
             location: match (&self.location, &other.location) {
                 (Some(location), Some(other_location)) => Some(location.merge(other_location)),
                 (Some(location), None) => Some(location.clone()),
@@ -465,6 +470,7 @@ impl WebSearchToolConfig {
 #[schemars(deny_unknown_fields)]
 pub struct WebSearchFilters {
     pub allowed_domains: Option<Vec<String>>,
+    pub excluded_domains: Option<Vec<String>>,
 }
 
 #[derive(
@@ -510,12 +516,15 @@ impl From<WebSearchLocation> for WebSearchUserLocation {
 
 impl From<WebSearchToolConfig> for WebSearchConfig {
     fn from(config: WebSearchToolConfig) -> Self {
+        let filters = match (config.allowed_domains, config.excluded_domains) {
+            (None, None) => None,
+            (allowed_domains, excluded_domains) => Some(WebSearchFilters {
+                allowed_domains,
+                excluded_domains,
+            }),
+        };
         Self {
-            filters: config
-                .allowed_domains
-                .map(|allowed_domains| WebSearchFilters {
-                    allowed_domains: Some(allowed_domains),
-                }),
+            filters,
             user_location: config.location.map(Into::into),
             search_context_size: config.context_size,
         }
@@ -946,6 +955,7 @@ mod tests {
         let base = WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::Low),
             allowed_domains: Some(vec!["openai.com".to_string()]),
+            excluded_domains: Some(vec!["blocked.test".to_string()]),
             location: Some(WebSearchLocation {
                 country: Some("US".to_string()),
                 region: Some("CA".to_string()),
@@ -956,6 +966,7 @@ mod tests {
         let overlay = WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: None,
+            excluded_domains: None,
             location: Some(WebSearchLocation {
                 country: None,
                 region: Some("WA".to_string()),
@@ -967,6 +978,7 @@ mod tests {
         let expected = WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: Some(vec!["openai.com".to_string()]),
+            excluded_domains: Some(vec!["blocked.test".to_string()]),
             location: Some(WebSearchLocation {
                 country: Some("US".to_string()),
                 region: Some("WA".to_string()),
@@ -976,5 +988,41 @@ mod tests {
         };
 
         assert_eq!(expected, base.merge(&overlay));
+    }
+
+    #[test]
+    fn web_search_tool_config_maps_domain_lists_into_filters() {
+        assert_eq!(
+            WebSearchConfig::from(WebSearchToolConfig {
+                context_size: None,
+                allowed_domains: Some(vec!["openai.com".to_string()]),
+                excluded_domains: None,
+                location: None,
+            }),
+            WebSearchConfig {
+                filters: Some(WebSearchFilters {
+                    allowed_domains: Some(vec!["openai.com".to_string()]),
+                    excluded_domains: None,
+                }),
+                user_location: None,
+                search_context_size: None,
+            }
+        );
+        assert_eq!(
+            WebSearchConfig::from(WebSearchToolConfig {
+                context_size: None,
+                allowed_domains: None,
+                excluded_domains: Some(vec!["example.com".to_string()]),
+                location: None,
+            }),
+            WebSearchConfig {
+                filters: Some(WebSearchFilters {
+                    allowed_domains: None,
+                    excluded_domains: Some(vec!["example.com".to_string()]),
+                }),
+                user_location: None,
+                search_context_size: None,
+            }
+        );
     }
 }
