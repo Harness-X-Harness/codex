@@ -148,10 +148,10 @@ delivery process used at that time. Those files are historical branch-local
 operation evidence. They do not override this current distribution doctrine or
 the current product-evolution policy on `grok/main`.
 
-Where a current version-line workflow still uses older names such as
-`release`, `SUCCESSFUL`, or `release proof`, interpret those names as legacy
-workflow vocabulary until the implementation is simplified. They must not be
-used to infer semantic authority.
+Where a current version-line workflow still uses older release-state or
+release-proof vocabulary, interpret those names as legacy workflow terminology
+until the implementation is simplified. They must not be used to infer semantic
+authority.
 
 ## Human installation
 
