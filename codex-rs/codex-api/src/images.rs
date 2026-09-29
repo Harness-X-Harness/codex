@@ -1,6 +1,12 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Verified Grok image-edit cardinality.
+///
+/// Provider policy and the Images dialect projection share this limit so the
+/// tool schema, executor, and wire rewrite cannot drift.
+pub const GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 3;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
     pub prompt: String,

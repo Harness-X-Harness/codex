@@ -8,6 +8,7 @@ pub struct MockResponsesConfig {
     provider_id: String,
     provider_name: String,
     provider_base_url: String,
+    wire_api: String,
     model: String,
     approval_policy: String,
     sandbox_mode: String,
@@ -23,6 +24,7 @@ impl MockResponsesConfig {
             provider_id: "mock_provider".to_string(),
             provider_name: "Mock provider for test".to_string(),
             provider_base_url: format!("{server_uri}/v1"),
+            wire_api: "responses".to_string(),
             model: "mock-model".to_string(),
             approval_policy: "never".to_string(),
             sandbox_mode: "read-only".to_string(),
@@ -45,6 +47,11 @@ impl MockResponsesConfig {
 
     pub fn with_provider_base_url(mut self, provider_base_url: &str) -> Self {
         self.provider_base_url = provider_base_url.to_string();
+        self
+    }
+
+    pub fn with_wire_api(mut self, wire_api: &str) -> Self {
+        self.wire_api = wire_api.to_string();
         self
     }
 
@@ -102,6 +109,7 @@ impl MockResponsesConfig {
             provider_id,
             provider_name,
             provider_base_url,
+            wire_api,
             model,
             approval_policy,
             sandbox_mode,
@@ -144,7 +152,7 @@ model_provider = "{provider_id}"
 {feature_config}[model_providers.{provider_id}]
 name = "{provider_name}"
 base_url = "{provider_base_url}"
-wire_api = "responses"
+wire_api = "{wire_api}"
 request_max_retries = 0
 stream_max_retries = 0
 {provider_config}

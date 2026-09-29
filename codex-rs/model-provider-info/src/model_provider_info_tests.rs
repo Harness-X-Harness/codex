@@ -1,4 +1,5 @@
 use super::*;
+use codex_api::ApiDialect;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
@@ -80,6 +81,7 @@ base_url = "http://localhost:11434/v1"
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -117,6 +119,7 @@ query_params = { api-version = "2025-04-01-preview" }
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -158,6 +161,7 @@ supports_standalone_web_search = true
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: true,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -175,6 +179,71 @@ wire_api = "chat"
 
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
     assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+}
+
+fn dialect_from_info(info: ModelProviderInfo) -> ApiDialect {
+    info.to_api_provider(/*auth_mode*/ None)
+        .expect("provider should build API provider")
+        .dialect
+}
+
+#[test]
+fn to_api_provider_maps_wire_api_to_dialect_once() {
+    let mut grok = ModelProviderInfo {
+        name: "any-name".into(),
+        base_url: Some("https://proxy.example/v1".into()),
+        wire_api: WireApi::GrokResponses,
+        ..ModelProviderInfo::default()
+    };
+    assert_eq!(dialect_from_info(grok.clone()), ApiDialect::Grok);
+
+    grok.name = "Grok".into();
+    grok.wire_api = WireApi::Responses;
+    grok.base_url = Some("https://api.x.ai/v1".into());
+    assert_eq!(dialect_from_info(grok.clone()), ApiDialect::OpenAi);
+
+    grok.name = "custom".into();
+    grok.wire_api = WireApi::Responses;
+    grok.base_url = Some("https://api.x.ai/v1".into());
+    assert_eq!(dialect_from_info(grok.clone()), ApiDialect::OpenAi);
+
+    grok.wire_api = WireApi::GrokResponses;
+    grok.base_url = Some("https://corp-proxy.internal/v1".into());
+    let api = grok
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("GrokResponses should build API provider");
+    assert_eq!(api.dialect, ApiDialect::Grok);
+    assert_eq!(api.base_url, "https://corp-proxy.internal/v1");
+}
+
+#[test]
+fn to_api_provider_keeps_dialect_when_base_url_changes() {
+    let info = ModelProviderInfo {
+        name: "xAI".into(),
+        base_url: Some("https://proxy.example/v1".into()),
+        wire_api: WireApi::GrokResponses,
+        ..ModelProviderInfo::default()
+    };
+    let mut api = info
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("GrokResponses should build API provider");
+    assert_eq!(api.dialect, ApiDialect::Grok);
+    api.base_url = "https://routed.example/backend-api/codex".into();
+    assert_eq!(api.dialect, ApiDialect::Grok);
+}
+
+#[test]
+fn deserializes_grok_responses_wire_api() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "xAI"
+base_url = "https://proxy.example/v1"
+wire_api = "grok_responses"
+        "#,
+    )
+    .unwrap();
+    assert_eq!(provider.wire_api, WireApi::GrokResponses);
+    assert_eq!(dialect_from_info(provider), ApiDialect::Grok);
 }
 
 #[test]
@@ -346,6 +415,7 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            x_search: None,
         }
     );
 }

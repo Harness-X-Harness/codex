@@ -1,12 +1,92 @@
+use chrono::NaiveDate;
 use codex_client::Request;
 use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use http::Method;
 use http::header::HeaderMap;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
+
+/// Explicit Responses/Images wire dialect.
+///
+/// Mapped exactly once from `WireApi` in `ModelProviderInfo::to_api_provider()`.
+/// Runtime request/stream/image projection must consume this value instead of
+/// inferring dialect from provider display name or hostname.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ApiDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
+/// Optional Grok hosted `x_search` date window.
+///
+/// Configured as `[model_providers.*.x_search]` with calendar `YYYY-MM-DD`
+/// `from_date` / `to_date`. Other dialects ignore this field.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct XSearchProviderConfig {
+    /// Start of the Grok hosted `x_search` window (`YYYY-MM-DD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_date: Option<String>,
+    /// End of the Grok hosted `x_search` window (`YYYY-MM-DD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_date: Option<String>,
+}
+
+impl XSearchProviderConfig {
+    /// Parse a real calendar day in exactly `YYYY-MM-DD` form.
+    pub fn parse_ymd(value: &str) -> Option<String> {
+        let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+        (parsed.format("%Y-%m-%d").to_string() == value).then(|| value.to_string())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (field, value) in [("from_date", &self.from_date), ("to_date", &self.to_date)] {
+            if let Some(value) = value
+                && Self::parse_ymd(value).is_none()
+            {
+                return Err(format!(
+                    "x_search.{field} `{value}` must be a calendar YYYY-MM-DD"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.from_date.is_none() && self.to_date.is_none()
+    }
+}
+
+impl<'de> Deserialize<'de> for XSearchProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawXSearchProviderConfig {
+            #[serde(default)]
+            from_date: Option<String>,
+            #[serde(default)]
+            to_date: Option<String>,
+        }
+
+        let raw = RawXSearchProviderConfig::deserialize(deserializer)?;
+        let config = Self {
+            from_date: raw.from_date,
+            to_date: raw.to_date,
+        };
+        config.validate().map_err(serde::de::Error::custom)?;
+        Ok(config)
+    }
+}
 
 /// High-level retry configuration for a provider.
 ///
@@ -47,6 +127,11 @@ pub struct Provider {
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
+    /// Wire dialect mapped from `WireApi`. Routing must not mutate this field.
+    pub dialect: ApiDialect,
+    /// Grok hosted `x_search` window copied from provider config. Ignored by
+    /// other dialects.
+    pub x_search: Option<XSearchProviderConfig>,
 }
 
 impl Provider {
@@ -162,5 +247,29 @@ mod tests {
                 "expected {base_url} not to be detected as Azure"
             );
         }
+    }
+
+    #[test]
+    fn api_dialect_is_stored_explicitly_and_not_inferred_from_name_or_host() {
+        let provider = Provider {
+            name: "Grok".to_string(),
+            base_url: "https://api.x.ai/v1".to_string(),
+            query_params: None,
+            headers: HeaderMap::new(),
+            retry: RetryConfig {
+                max_attempts: 1,
+                base_delay: Duration::from_millis(1),
+                retry_429: false,
+                retry_5xx: false,
+                retry_transport: true,
+            },
+            stream_idle_timeout: Duration::from_secs(1),
+            dialect: ApiDialect::OpenAi,
+            x_search: None,
+        };
+
+        assert_eq!(provider.dialect, ApiDialect::OpenAi);
+        assert_eq!(provider.name, "Grok");
+        assert_eq!(provider.base_url, "https://api.x.ai/v1");
     }
 }

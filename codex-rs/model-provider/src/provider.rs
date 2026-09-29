@@ -21,6 +21,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::ResolvedResponsesProvider;
@@ -33,6 +34,18 @@ use crate::auth::resolve_provider_auth_for_scope;
 use crate::combined_auth::compose_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::workspace_routing::WorkspaceRoutingContext;
+
+/// How a provider serializes planned tools on the Responses wire.
+///
+/// `ToolPolicy` controls exposure and restriction. This enum only names the
+/// provider-owned wire projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolWireFormat {
+    /// Stock OpenAI Responses tool specs.
+    Canonical,
+    /// Collision-safe flat `function` tools used by the Grok dialect.
+    FlatFunctions,
+}
 
 /// Remote context-compaction protocols supported by a model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +179,28 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Providers that require backend-specific model IDs should override this.
     fn memory_consolidation_preferred_model(&self) -> &'static str {
         DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL
+    }
+
+    /// Returns the provider-owned tool wire format.
+    ///
+    /// Stock providers emit canonical Responses tool specs. Grok projects those
+    /// specs as collision-safe flat functions at the API boundary.
+    fn tool_wire_format(&self) -> ToolWireFormat {
+        ToolWireFormat::Canonical
+    }
+
+    /// Returns whether this provider projects tools as flat functions.
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        matches!(self.tool_wire_format(), ToolWireFormat::FlatFunctions)
+    }
+
+    /// Returns whether a history item is a provider-hosted tool call.
+    ///
+    /// Hosted calls must not receive synthetic client outputs during history
+    /// normalization. The default is that no items are provider-hosted.
+    fn is_provider_hosted_tool_call(&self, item: &ResponseItem) -> bool {
+        let _ = item;
+        false
     }
 
     /// Returns whether requests made through this provider should include attestation.
@@ -697,6 +732,7 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            x_search: None,
         }
     }
 

@@ -56,6 +56,8 @@ mod fs;
 #[path = "gateway_oauth_tests.rs"]
 mod gateway_oauth;
 mod git_attribution;
+mod grok_model_list;
+mod grok_provider_binding;
 mod guardian_v2;
 mod history_notes_extension;
 mod hooks_list;

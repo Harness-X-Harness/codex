@@ -130,6 +130,8 @@ async fn check_connection(address: String) {
                 retry_transport: false,
             },
             stream_idle_timeout: Duration::from_secs(/*secs*/ 5),
+            dialect: codex_api::ApiDialect::OpenAi,
+            x_search: None,
         },
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     );
