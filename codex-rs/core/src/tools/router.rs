@@ -237,9 +237,9 @@ impl ToolRouter {
         let name = name.clone().with_default_namespace();
         if self.flat_tool_routes.contains_canonical(&name)
             || self
-            .code_mode_tool_names
-            .values()
-            .any(|nested| nested.clone().with_default_namespace() == name)
+                .code_mode_tool_names
+                .values()
+                .any(|nested| nested.clone().with_default_namespace() == name)
             || self.model_visible_specs.iter().any(|spec| match spec {
                 ToolSpec::Function(_) | ToolSpec::Freeform(_) => {
                     name.is_default_namespace() && spec.name() == name.name
@@ -274,35 +274,64 @@ impl ToolRouter {
         let mut projected_custom_call_ids = BTreeSet::new();
         for item in &mut input {
             match item {
-                ResponseItem::FunctionCall { name, namespace, encrypted_function_args, .. } => {
+                ResponseItem::FunctionCall {
+                    name,
+                    namespace,
+                    encrypted_function_args,
+                    ..
+                } => {
                     let tool_name = ToolName::new(namespace.take(), name.clone());
                     *name = flat_wire_name("function", &tool_name);
                     *encrypted_function_args = None;
                 }
-                ResponseItem::FunctionCallOutput { call_id: None, name: Some(name), namespace, .. } => {
+                ResponseItem::FunctionCallOutput {
+                    call_id: None,
+                    name: Some(name),
+                    namespace,
+                    ..
+                } => {
                     let tool_name = ToolName::new(namespace.take(), name.clone());
                     *name = flat_wire_name("function", &tool_name);
                 }
-                ResponseItem::CustomToolCall { id, status, call_id, name, namespace, input: custom_input, internal_chat_message_metadata_passthrough, .. }
-                    if status.is_none() =>
-                {
+                ResponseItem::CustomToolCall {
+                    id,
+                    status,
+                    call_id,
+                    name,
+                    namespace,
+                    input: custom_input,
+                    internal_chat_message_metadata_passthrough,
+                    ..
+                } if status.is_none() => {
                     let tool_name = ToolName::new(namespace.clone(), name.clone());
                     projected_custom_call_ids.insert(call_id.clone());
                     *item = ResponseItem::FunctionCall {
                         id: id.clone(),
                         name: flat_wire_name("custom", &tool_name),
                         namespace: None,
-                        arguments: serde_json::json!({ (custom_input_key(&tool_name.name)): custom_input }).to_string(),
+                        arguments:
+                            serde_json::json!({ (custom_input_key(&tool_name.name)): custom_input })
+                                .to_string(),
                         encrypted_function_args: None,
                         call_id: call_id.clone(),
-                        internal_chat_message_metadata_passthrough: internal_chat_message_metadata_passthrough.clone(),
+                        internal_chat_message_metadata_passthrough:
+                            internal_chat_message_metadata_passthrough.clone(),
                     };
                 }
                 _ => {}
             }
         }
         for item in &mut input {
-            let ResponseItem::CustomToolCallOutput { id, call_id, output, internal_chat_message_metadata_passthrough, .. } = item else { continue; };
+            let ResponseItem::CustomToolCallOutput {
+                id,
+                call_id,
+                output,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } = item
+            else {
+                continue;
+            };
             if projected_custom_call_ids.contains(call_id) {
                 *item = ResponseItem::FunctionCallOutput {
                     id: id.clone(),
@@ -310,7 +339,8 @@ impl ToolRouter {
                     name: None,
                     namespace: None,
                     output: output.clone(),
-                    internal_chat_message_metadata_passthrough: internal_chat_message_metadata_passthrough.clone(),
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
                 };
             }
         }
@@ -414,8 +444,21 @@ impl ToolRouter {
         self.flat_tool_routes.resolve(name)
     }
 
-    pub(crate) fn restore_tool_call(&self, item: &mut ResponseItem) -> Result<(), FunctionCallError> {
-        let ResponseItem::FunctionCall { id, name, namespace, arguments, encrypted_function_args, call_id, internal_chat_message_metadata_passthrough, .. } = item else {
+    pub(crate) fn restore_tool_call(
+        &self,
+        item: &mut ResponseItem,
+    ) -> Result<(), FunctionCallError> {
+        let ResponseItem::FunctionCall {
+            id,
+            name,
+            namespace,
+            arguments,
+            encrypted_function_args,
+            call_id,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = item
+        else {
             return Ok(());
         };
         let Some(route) = self.resolve_wire_route(name) else {
@@ -429,13 +472,17 @@ impl ToolRouter {
                     *encrypted_function_args = Some(Vec::new());
                 }
             }
-            WireToolRoute::Custom { tool_name, input_key } => {
+            WireToolRoute::Custom {
+                tool_name,
+                input_key,
+            } => {
                 let custom_input = decode_custom_input(name, arguments, input_key)?;
-                let custom_input = if tool_name.is_default_namespace() && tool_name.name == "apply_patch" {
-                    flat_apply_patch::validate_projected_apply_patch(&custom_input)?
-                } else {
-                    custom_input
-                };
+                let custom_input =
+                    if tool_name.is_default_namespace() && tool_name.name == "apply_patch" {
+                        flat_apply_patch::validate_projected_apply_patch(&custom_input)?
+                    } else {
+                        custom_input
+                    };
                 *item = ResponseItem::CustomToolCall {
                     id: id.clone(),
                     status: None,
@@ -443,7 +490,8 @@ impl ToolRouter {
                     name: tool_name.name.clone(),
                     namespace: tool_name.namespace.clone(),
                     input: custom_input,
-                    internal_chat_message_metadata_passthrough: internal_chat_message_metadata_passthrough.clone(),
+                    internal_chat_message_metadata_passthrough:
+                        internal_chat_message_metadata_passthrough.clone(),
                 };
             }
         }

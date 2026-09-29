@@ -239,9 +239,9 @@ mod windows_sandbox;
 mod workspace_roots;
 mod worktree_trust;
 
-#[path = "guardian_sender_messages_tests.rs"]
-mod guardian_sender_messages;
 mod grok_hosted_stream;
 mod grok_hosted_x_search;
 mod grok_reasoning_replay;
 mod grok_web_search;
+#[path = "guardian_sender_messages_tests.rs"]
+mod guardian_sender_messages;

@@ -533,7 +533,9 @@ fn project_function_call_output<'a>(
     Err(GrokProjectionError::FunctionCallOutputMissingCallId { index })
 }
 
-fn project_tools(tools: Option<&ResponsesApiTools>) -> Result<Option<Vec<GrokTool>>, GrokProjectionError> {
+fn project_tools(
+    tools: Option<&ResponsesApiTools>,
+) -> Result<Option<Vec<GrokTool>>, GrokProjectionError> {
     let Some(tools) = tools else {
         return Ok(None);
     };
@@ -667,13 +669,11 @@ fn x_search_ymd(tool: &Value, key: &str) -> Result<Option<String>, GrokProjectio
             "x_search.{key} must be a calendar YYYY-MM-DD"
         )));
     };
-    parse_ymd(text)
-        .map(Some)
-        .ok_or_else(|| {
-            GrokProjectionError::UnsupportedSearchRestriction(format!(
-                "x_search.{key} `{text}` must be a calendar YYYY-MM-DD"
-            ))
-        })
+    parse_ymd(text).map(Some).ok_or_else(|| {
+        GrokProjectionError::UnsupportedSearchRestriction(format!(
+            "x_search.{key} `{text}` must be a calendar YYYY-MM-DD"
+        ))
+    })
 }
 
 fn parse_ymd(value: &str) -> Option<String> {
