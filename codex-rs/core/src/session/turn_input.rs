@@ -697,12 +697,17 @@ impl Session {
             input => pending_turn_input(self, input.clone(), active_turn_id).await,
         };
         pending_input.push(input);
-        self.input_queue
+        if self
+            .input_queue
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),
                 pending_input,
             )
-            .await;
+            .await
+            .is_err()
+        {
+            return Err(NotSubmittedReason::NoActiveTurn);
+        }
         Ok(active_turn_id.clone())
     }
 }

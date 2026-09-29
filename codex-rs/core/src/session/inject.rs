@@ -19,22 +19,27 @@ impl Session {
         input: Vec<T>,
     ) -> Result<(), Vec<T>> {
         let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(active_turn) => {
-                self.input_queue
-                    .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                        active_turn.turn_state.as_ref(),
-                        input
-                            .into_iter()
-                            .map(Into::into)
-                            .map(PendingTurnInput::ResponseItem)
-                            .collect(),
-                    )
-                    .await;
-                Ok(())
-            }
-            None => Err(input),
+        let Some(active_turn) = active.as_mut() else {
+            return Err(input);
+        };
+        let mut turn_state = active_turn.turn_state.lock().await;
+        // The slot can still be occupied after the turn snapshots its input.
+        // Appending there would acknowledge items that completion will not read.
+        if turn_state.pending_input.is_closed() {
+            return Err(input);
         }
+        let queued = input
+            .into_iter()
+            .map(Into::into)
+            .map(PendingTurnInput::ResponseItem)
+            .collect();
+        assert!(
+            super::input_queue::push_turn_input_if_open(&mut turn_state, queued).is_ok(),
+            "turn input closed while its lock was held"
+        );
+        drop(turn_state);
+        self.input_queue.signal_steer();
+        Ok(())
     }
 
     /// Injects hook context into the running turn atomically.
@@ -53,16 +58,21 @@ impl Session {
         if active_turn.task.is_none() {
             return Err(input);
         }
-        self.input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                input
-                    .into_iter()
-                    .map(ResponseItemEnvelope::new)
-                    .map(PendingTurnInput::ResponseItem)
-                    .collect(),
-            )
-            .await;
+        let mut turn_state = active_turn.turn_state.lock().await;
+        if turn_state.pending_input.is_closed() {
+            return Err(input);
+        }
+        let queued = input
+            .into_iter()
+            .map(ResponseItemEnvelope::new)
+            .map(PendingTurnInput::ResponseItem)
+            .collect();
+        assert!(
+            super::input_queue::push_turn_input_if_open(&mut turn_state, queued).is_ok(),
+            "turn input closed while its lock was held"
+        );
+        drop(turn_state);
+        self.input_queue.signal_steer();
         Ok(())
     }
 
@@ -81,19 +91,31 @@ impl Session {
             .map(|item| self.annotate_client_response_item(item))
             .collect::<Vec<_>>();
         let mut active = self.active_turn.lock().await;
-        if let Some(active_turn) = active.as_mut() {
-            self.input_queue
-                .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                    active_turn.turn_state.as_ref(),
-                    items
-                        .into_iter()
-                        .map(PendingTurnInput::ResponseItem)
-                        .collect(),
-                )
-                .await;
+        let queued_into_open_turn = if let Some(active_turn) = active.as_mut() {
+            let mut turn_state = active_turn.turn_state.lock().await;
+            if turn_state.pending_input.is_closed() {
+                false
+            } else {
+                let queued = items
+                    .iter()
+                    .cloned()
+                    .map(PendingTurnInput::ResponseItem)
+                    .collect();
+                assert!(
+                    super::input_queue::push_turn_input_if_open(&mut turn_state, queued).is_ok(),
+                    "turn input closed while its lock was held"
+                );
+                drop(turn_state);
+                self.input_queue.signal_steer();
+                true
+            }
+        } else {
+            false
+        };
+        drop(active);
+        if queued_into_open_turn {
             return;
         }
-        drop(active);
         self.record_annotated_conversation_items(turn_context, turn_context.model_info(), items)
             .await;
     }
