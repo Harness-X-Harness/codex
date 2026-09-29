@@ -202,7 +202,7 @@ fn model_provider_from_proto(
 fn model_provider_to_proto(
     id: impl Into<String>,
     provider: ModelProviderInfo,
-) -> proto::ModelProvider {
+) -> Result<proto::ModelProvider, ThreadConfigLoadError> {
     let ModelProviderInfo {
         name,
         base_url,
@@ -226,7 +226,7 @@ fn model_provider_to_proto(
         supports_standalone_web_search,
     } = provider;
 
-    proto::ModelProvider {
+    Ok(proto::ModelProvider {
         id: id.into(),
         name,
         base_url,
@@ -235,7 +235,7 @@ fn model_provider_to_proto(
         env_key_instructions,
         experimental_bearer_token: experimental_bearer_token.map(RedactedString::into_inner),
         auth: auth.map(model_provider_auth_to_proto),
-        wire_api: proto_wire_api(wire_api).into(),
+        wire_api: proto_wire_api(wire_api)?.into(),
         query_params: query_params.map(proto_string_map),
         http_headers: http_headers.map(proto_string_map),
         env_http_headers: env_http_headers.map(|values| proto::StringMap { values }),
@@ -246,7 +246,7 @@ fn model_provider_to_proto(
         requires_openai_auth,
         supports_websockets,
         supports_standalone_web_search,
-    }
+    })
 }
 
 fn model_provider_auth_from_proto(
@@ -307,9 +307,12 @@ fn proto_string_map(values: HashMap<String, RedactedString>) -> proto::StringMap
 }
 
 #[cfg(test)]
-fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
+fn proto_wire_api(wire_api: WireApi) -> Result<proto::WireApi, ThreadConfigLoadError> {
     match wire_api {
-        WireApi::Responses => proto::WireApi::Responses,
+        WireApi::Responses => Ok(proto::WireApi::Responses),
+        WireApi::GrokResponses => Err(parse_error(
+            "remote thread config does not support wire_api = \"grok_responses\"; GrokResponses cannot be converted to Responses",
+        )),
     }
 }
 
@@ -443,7 +446,8 @@ mod tests {
         let mut expected = expected_provider();
         expected.auth = None;
         expected.experimental_bearer_token = Some("synthetic-provider-token".into());
-        let proto = model_provider_to_proto("local", expected.clone());
+        let proto = model_provider_to_proto("local", expected.clone())
+            .expect("Responses provider should serialize");
         assert!(proto.supports_standalone_web_search);
         let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
 
@@ -452,12 +456,22 @@ mod tests {
     }
 
     #[test]
+    fn remote_thread_config_rejects_grok_responses_without_lossy_conversion() {
+        let mut provider = expected_provider();
+        provider.wire_api = WireApi::GrokResponses;
+        let err = model_provider_to_proto("grok", provider)
+            .expect_err("GrokResponses must not serialize as Responses");
+        assert!(err.to_string().contains("grok_responses"), "{err}");
+    }
+
+    #[test]
     fn model_provider_proto_defaults_standalone_web_search_to_false() {
         let expected = ModelProviderInfo {
             supports_standalone_web_search: false,
             ..expected_provider()
         };
-        let proto = model_provider_to_proto("local", expected.clone());
+        let proto = model_provider_to_proto("local", expected.clone())
+            .expect("Responses provider should serialize");
         assert!(!proto.supports_standalone_web_search);
         let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
 

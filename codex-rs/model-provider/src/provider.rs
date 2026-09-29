@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
@@ -15,6 +16,7 @@ use codex_login::GatewayAuthManager;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -133,6 +135,9 @@ pub const DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL: &str = "gpt-5.6-luna";
 /// a backend-specific model ID.
 pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 
+const GROK_STREAM_IDLE_TIMEOUT_MS: u64 = 60_000;
+const GROK_STREAM_MAX_RETRIES: u64 = 1;
+
 /// Runtime provider abstraction used by model execution.
 ///
 /// Implementations own provider-specific behavior for a model backend. The
@@ -141,6 +146,17 @@ pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
+
+    /// Returns the Responses-family API dialect.
+    ///
+    /// This is the single runtime mapping from serialized WireApi to API-layer
+    /// request/stream semantics. Routing may change destination but not dialect.
+    fn api_dialect(&self) -> ApiDialect {
+        match self.info().wire_api {
+            WireApi::Responses => ApiDialect::OpenAi,
+            WireApi::GrokResponses => ApiDialect::Grok,
+        }
+    }
 
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
@@ -356,9 +372,17 @@ fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
 
 /// Creates the default runtime model provider for configured provider metadata.
 pub fn create_model_provider(
-    provider_info: ModelProviderInfo,
+    mut provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
+    if provider_info.wire_api == WireApi::GrokResponses {
+        provider_info
+            .stream_idle_timeout_ms
+            .get_or_insert(GROK_STREAM_IDLE_TIMEOUT_MS);
+        provider_info
+            .stream_max_retries
+            .get_or_insert(GROK_STREAM_MAX_RETRIES);
+    }
     if provider_info.is_amazon_bedrock() {
         return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
     }
@@ -653,6 +677,27 @@ mod tests {
     use super::*;
     use crate::auth::AgentIdentitySessionFallback;
     use crate::shared_state::process_shared_state;
+
+    #[test]
+    fn grok_dialect_and_stream_defaults_are_provider_owned() {
+        let info = ModelProviderInfo {
+            wire_api: WireApi::GrokResponses,
+            stream_idle_timeout_ms: None,
+            stream_max_retries: None,
+            ..ModelProviderInfo::default()
+        };
+        let provider = create_model_provider(info, /*auth_manager*/ None);
+
+        assert_eq!(provider.api_dialect(), ApiDialect::Grok);
+        assert_eq!(
+            provider.info().stream_idle_timeout_ms,
+            Some(GROK_STREAM_IDLE_TIMEOUT_MS)
+        );
+        assert_eq!(
+            provider.info().stream_max_retries,
+            Some(GROK_STREAM_MAX_RETRIES)
+        );
+    }
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
         ModelProviderInfo {

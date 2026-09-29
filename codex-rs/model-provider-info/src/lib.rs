@@ -104,12 +104,23 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// The Grok Responses dialect over the stock Responses HTTP/SSE transport.
+    #[serde(rename = "grok_responses")]
+    GrokResponses,
+}
+
+impl WireApi {
+    /// Whether this provider uses the Responses-family transport.
+    pub fn uses_responses_transport(self) -> bool {
+        matches!(self, Self::Responses | Self::GrokResponses)
+    }
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::GrokResponses => "grok_responses",
         };
         f.write_str(value)
     }
@@ -123,8 +134,12 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
+            "grok_responses" => Ok(Self::GrokResponses),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["responses", "grok_responses"],
+            )),
         }
     }
 }

@@ -1,6 +1,18 @@
 pub use codex_client::Provider;
 pub use codex_client::RetryConfig;
 
+/// Responses-family wire dialect consumed at the API boundary.
+///
+/// The stock HTTP Provider remains owned by codex-client. Dialect is carried
+/// separately by endpoint clients and must never be inferred from display name
+/// or destination URL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ApiDialect {
+    #[default]
+    OpenAi,
+    Grok,
+}
+
 pub fn is_azure_responses_provider(name: &str, base_url: Option<&str>) -> bool {
     if name.eq_ignore_ascii_case("azure") {
         true

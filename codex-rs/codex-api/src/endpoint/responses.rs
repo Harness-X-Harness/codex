@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::provider::ApiDialect;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
@@ -26,6 +27,7 @@ use tracing::instrument;
 pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
+    dialect: ApiDialect,
 }
 
 #[derive(Default)]
@@ -43,7 +45,13 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Self {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,
+            dialect: ApiDialect::OpenAi,
         }
+    }
+
+    pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     pub fn with_telemetry(
@@ -54,6 +62,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Self {
             session: self.session.with_request_telemetry(request),
             sse_telemetry: sse,
+            dialect: self.dialect,
         }
     }
 
@@ -80,8 +89,18 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = EncodedJsonBody::encode(&request)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let body = match self.dialect {
+            ApiDialect::OpenAi => EncodedJsonBody::encode(&request).map_err(|error| {
+                ApiError::Stream(format!("failed to encode responses request: {error}"))
+            })?,
+            ApiDialect::Grok => {
+                let projected = crate::grok_request::build(&request)
+                    .map_err(|error| ApiError::Stream(error.to_string()))?;
+                EncodedJsonBody::encode(&projected).map_err(|error| {
+                    ApiError::Stream(format!("failed to encode responses request: {error}"))
+                })?
+            }
+        };
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
@@ -154,6 +173,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            self.dialect,
         ))
     }
 }
