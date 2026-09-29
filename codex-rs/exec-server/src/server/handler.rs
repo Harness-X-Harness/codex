@@ -54,6 +54,7 @@ use crate::protocol::FsWriteFileIfUnchangedParams;
 use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HTTP_REQUEST_METHOD;
 use crate::protocol::HttpRequestParams;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
@@ -294,6 +295,15 @@ impl ExecServerHandler {
             }
             return Err(error);
         }
+        // This response bypasses the dispatcher; record it before body-stream setup.
+        tracing::event!(
+            name: "codex.exec_server.response_enqueued",
+            target: "codex_otel.trace_safe",
+            tracing::Level::INFO,
+            event.name = "codex.exec_server.response_enqueued",
+            rpc.method = HTTP_REQUEST_METHOD,
+            outcome = "success",
+        );
         if let Some(pending_stream) = pending_stream {
             self.start_http_body_stream(pending_stream).await;
         }
