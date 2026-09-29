@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_model_provider_info::WireApi;
+use codex_model_provider_info::XSearchProviderConfig;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchFilters;
 use codex_protocol::config_types::WebSearchMode;
@@ -131,6 +132,61 @@ async fn grok_emits_web_search_excluded_domains_from_stock_config() {
         &json!({
             "type": "web_search",
             "filters": {"excluded_domains": ["en.wikipedia.org"]}
+        })
+    );
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_emits_provider_configured_x_search_window() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.model_provider.name = "xAI".to_string();
+        config.model_provider.wire_api = WireApi::GrokResponses;
+        config.model_provider.requires_openai_auth = false;
+        config.model_provider.x_search = Some(XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        });
+        config
+            .web_search_mode
+            .set(WebSearchMode::Live)
+            .expect("test web_search_mode should satisfy constraints");
+    });
+    let test = builder
+        .build_with_auto_env(&server)
+        .await
+        .expect("create Grok Codex conversation");
+
+    test.submit_turn_with_permission_profile(
+        "hello grok x search window",
+        PermissionProfile::read_only(),
+    )
+    .await
+    .expect("submit turn");
+
+    let body = resp_mock.single_request().body_json();
+    let x_search = body["tools"]
+        .as_array()
+        .expect("Grok request should include tools")
+        .iter()
+        .find(|tool| tool.get("type").and_then(Value::as_str) == Some("x_search"))
+        .expect("Grok should advertise hosted x_search");
+
+    assert_eq!(
+        x_search,
+        &json!({
+            "type": "x_search",
+            "from_date": "2026-01-01",
+            "to_date": "2026-01-31"
         })
     );
 }

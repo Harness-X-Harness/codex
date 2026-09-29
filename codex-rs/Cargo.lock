@@ -4019,6 +4019,7 @@ dependencies = [
 name = "codex-model-provider-info"
 version = "0.0.0"
 dependencies = [
+ "codex-api",
  "codex-client",
  "codex-protocol",
  "codex-utils-absolute-path",

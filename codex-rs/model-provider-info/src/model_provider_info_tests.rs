@@ -80,6 +80,7 @@ base_url = "http://localhost:11434/v1"
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -117,6 +118,7 @@ query_params = { api-version = "2025-04-01-preview" }
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -158,6 +160,7 @@ supports_standalone_web_search = true
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: true,
+        x_search: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -346,6 +349,7 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+        x_search: None,
         }
     );
 }
@@ -879,4 +883,54 @@ requires_openai_auth = false
             .expect("provider should serialize")
             .contains("grok_responses")
     );
+}
+
+
+#[test]
+fn grok_x_search_window_deserializes_and_empty_window_is_absent() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Grok"
+wire_api = "grok_responses"
+
+[x_search]
+from_date = "2026-01-01"
+to_date = "2026-01-31"
+"#,
+    )
+    .expect("valid Grok x_search config");
+
+    assert_eq!(
+        provider.x_search,
+        Some(XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        })
+    );
+
+    let empty: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Grok"
+wire_api = "grok_responses"
+
+[x_search]
+"#,
+    )
+    .expect("empty x_search table should deserialize");
+    assert_eq!(empty.x_search, None);
+}
+
+#[test]
+fn grok_x_search_window_rejects_non_calendar_dates() {
+    let err = toml::from_str::<ModelProviderInfo>(
+        r#"
+name = "Grok"
+wire_api = "grok_responses"
+
+[x_search]
+from_date = "2026-02-30"
+"#,
+    )
+    .expect_err("invalid calendar date should fail");
+    assert!(err.to_string().contains("must be a calendar YYYY-MM-DD"));
 }

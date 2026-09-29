@@ -19,11 +19,16 @@ pub enum ApiDialect {
 }
 
 /// Optional Grok hosted `x_search` date window.
+///
+/// Configured as `[model_providers.*.x_search]` with calendar `YYYY-MM-DD`
+/// `from_date` / `to_date`. Other dialects ignore this field.
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct XSearchProviderConfig {
+    /// Start of the Grok hosted `x_search` window (`YYYY-MM-DD`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_date: Option<String>,
+    /// End of the Grok hosted `x_search` window (`YYYY-MM-DD`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_date: Option<String>,
 }

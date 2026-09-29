@@ -10,6 +10,7 @@
 
 use codex_client::Provider as ApiProvider;
 use codex_client::RetryConfig as ApiRetryConfig;
+pub use codex_api::XSearchProviderConfig;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
@@ -207,6 +208,10 @@ pub struct ModelProviderInfo {
     /// Whether this provider supports the standalone web-search endpoint.
     #[serde(default)]
     pub supports_standalone_web_search: bool,
+    /// Optional Grok hosted `x_search` date window (`from_date` / `to_date` as
+    /// calendar `YYYY-MM-DD`). Other providers ignore this field.
+    #[serde(default, deserialize_with = "deserialize_x_search_window")]
+    pub x_search: Option<XSearchProviderConfig>,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -275,6 +280,16 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
         Some(timeout_ms) => timeout_ms,
         None => panic!("AWS auth refresh timeout must be non-zero"),
     }
+}
+
+fn deserialize_x_search_window<'de, D>(
+    deserializer: D,
+) -> Result<Option<XSearchProviderConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let window = Option::<XSearchProviderConfig>::deserialize(deserializer)?;
+    Ok(window.filter(|window| !window.is_empty()))
 }
 
 impl ModelProviderInfo {
@@ -562,6 +577,7 @@ other non-default provider fields are not supported"
             requires_openai_auth: true,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            x_search: None,
         }
     }
 
@@ -600,6 +616,7 @@ other non-default provider fields are not supported"
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            x_search: None,
         }
     }
 
@@ -772,6 +789,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+            x_search: None,
     }
 }
 
