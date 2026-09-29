@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
@@ -141,6 +142,14 @@ pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
+
+    /// Returns the runtime API dialect independently of HTTP routing.
+    fn api_dialect(&self) -> ApiDialect {
+        match self.info().wire_api {
+            WireApi::Responses => ApiDialect::OpenAi,
+            WireApi::GrokResponses => ApiDialect::Grok,
+        }
+    }
 
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
@@ -356,9 +365,13 @@ fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
 
 /// Creates the default runtime model provider for configured provider metadata.
 pub fn create_model_provider(
-    provider_info: ModelProviderInfo,
+    mut provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
+    if matches!(provider_info.wire_api, WireApi::GrokResponses) {
+        provider_info.stream_idle_timeout_ms.get_or_insert(60_000);
+        provider_info.stream_max_retries.get_or_insert(1);
+    }
     if provider_info.is_amazon_bedrock() {
         return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
     }
@@ -1436,4 +1449,39 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             }
         }
     }
+    #[test]
+    fn grok_wire_api_maps_to_grok_dialect_and_stream_defaults() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Grok".to_string(),
+                wire_api: WireApi::GrokResponses,
+                stream_idle_timeout_ms: None,
+                stream_max_retries: None,
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(provider.api_dialect(), ApiDialect::Grok);
+        assert_eq!(provider.info().stream_idle_timeout_ms, Some(60_000));
+        assert_eq!(provider.info().stream_max_retries, Some(1));
+    }
+
+    #[test]
+    fn grok_stream_defaults_preserve_explicit_overrides() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Grok".to_string(),
+                wire_api: WireApi::GrokResponses,
+                stream_idle_timeout_ms: Some(12_345),
+                stream_max_retries: Some(3),
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(provider.info().stream_idle_timeout_ms, Some(12_345));
+        assert_eq!(provider.info().stream_max_retries, Some(3));
+    }
+
 }

@@ -6515,6 +6515,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "Serialized selector for the Grok Provider implementation.\n\nTransport remains the stock Responses HTTP/SSE path.",
+          "enum": [
+            "grok_responses"
+          ],
+          "type": "string"
         }
       ]
     },

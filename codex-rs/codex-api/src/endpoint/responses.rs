@@ -3,12 +3,13 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::provider::ApiDialect;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use crate::sse::spawn_response_stream;
+use crate::sse::spawn_response_stream_with_dialect;
 use crate::telemetry::SseTelemetry;
 use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
@@ -25,6 +26,7 @@ use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
+    dialect: ApiDialect,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
 }
 
@@ -40,8 +42,18 @@ pub struct ResponsesOptions {
 
 impl<T: HttpTransport> ResponsesClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
+        Self::new_with_dialect(transport, provider, auth, ApiDialect::OpenAi)
+    }
+
+    pub fn new_with_dialect(
+        transport: T,
+        provider: Provider,
+        auth: SharedAuthProvider,
+        dialect: ApiDialect,
+    ) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
+            dialect,
             sse_telemetry: None,
         }
     }
@@ -53,6 +65,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ) -> Self {
         Self {
             session: self.session.with_request_telemetry(request),
+            dialect: self.dialect,
             sse_telemetry: sse,
         }
     }
@@ -80,8 +93,17 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = EncodedJsonBody::encode(&request)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let body = match self.dialect {
+            ApiDialect::OpenAi => EncodedJsonBody::encode(&request)
+                .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?,
+            ApiDialect::Grok => {
+                let projected = crate::grok_request::build(&request, /*x_search*/ None)
+                    .map_err(|e| ApiError::Stream(e.to_string()))?;
+                EncodedJsonBody::encode(&projected).map_err(|e| {
+                    ApiError::Stream(format!("failed to encode Grok responses request: {e}"))
+                })?
+            }
+        };
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
@@ -149,11 +171,12 @@ impl<T: HttpTransport> ResponsesClient<T> {
             )
             .await?;
 
-        Ok(spawn_response_stream(
+        Ok(spawn_response_stream_with_dialect(
             stream_response,
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            self.dialect,
         ))
     }
 }

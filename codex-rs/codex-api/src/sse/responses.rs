@@ -4,6 +4,8 @@ use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::error::parse_flex_unavailable;
+use crate::grok_stream::GrokOutputSequencer;
+use crate::provider::ApiDialect;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
@@ -40,6 +42,22 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+) -> ResponseStream {
+    spawn_response_stream_with_dialect(
+        stream_response,
+        idle_timeout,
+        telemetry,
+        turn_state,
+        ApiDialect::OpenAi,
+    )
+}
+
+pub(crate) fn spawn_response_stream_with_dialect(
+    stream_response: StreamResponse,
+    idle_timeout: Duration,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
+    dialect: ApiDialect,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -93,6 +111,7 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             safety_buffering_treatment,
+            dialect,
         )
         .await;
     });
@@ -182,6 +201,8 @@ pub struct ResponsesStreamEvent {
     text: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    #[serde(default)]
+    pub(crate) output_index: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_present_value")]
     safety_buffering: Option<Value>,
 }
@@ -586,20 +607,26 @@ pub async fn process_sse(
         idle_timeout,
         telemetry,
         SafetyBufferingTreatment::default(),
+        ApiDialect::OpenAi,
     )
     .await;
 }
 
-async fn process_sse_with_treatment(
+pub(crate) async fn process_sse_with_treatment(
     stream: ByteStream,
     tx_event: mpsc::Sender<Result<ResponseEvent, ApiError>>,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    dialect: ApiDialect,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut sequencer = match dialect {
+        ApiDialect::Grok => Some(GrokOutputSequencer::default()),
+        ApiDialect::OpenAi => None,
+    };
 
     loop {
         let start = Instant::now();
@@ -654,67 +681,82 @@ async fn process_sse_with_treatment(
                 continue;
             }
         };
-        let model_verifications = event.model_verifications();
-        let turn_moderation_metadata = event.turn_moderation_metadata();
-        let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
-
-        if let Some(model) = event.response_model()
-            && last_server_model.as_deref() != Some(model.as_str())
-        {
-            if tx_event
-                .send(Ok(ResponseEvent::ServerModel(model.clone())))
-                .await
-                .is_err()
+        let ready = match sequencer.as_mut() {
+            Some(sequencer) => match sequencer.push(event) {
+                Ok(ready) => ready,
+                Err(error) => {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream(error.to_string())))
+                        .await;
+                    return;
+                }
+            },
+            None => vec![event],
+        };
+        for event in ready {
+            let model_verifications = event.model_verifications();
+            let turn_moderation_metadata = event.turn_moderation_metadata();
+            let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
+    
+            if let Some(model) = event.response_model()
+                && last_server_model.as_deref() != Some(model.as_str())
+            {
+                if tx_event
+                    .send(Ok(ResponseEvent::ServerModel(model.clone())))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                last_server_model = Some(model);
+            }
+            if let Some(verifications) = model_verifications
+                && tx_event
+                    .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+                    .await
+                    .is_err()
             {
                 return;
             }
-            last_server_model = Some(model);
-        }
-        if let Some(verifications) = model_verifications
-            && tx_event
-                .send(Ok(ResponseEvent::ModelVerifications(verifications)))
-                .await
-                .is_err()
-        {
-            return;
-        }
-        if let Some(metadata) = turn_moderation_metadata
-            && tx_event
-                .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
-                .await
-                .is_err()
-        {
-            return;
-        }
-        if let Some(buffering) = safety_buffering
-            && tx_event
-                .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
-                .await
-                .is_err()
-        {
-            return;
-        }
-
-        match process_responses_event(event) {
-            Ok(Some(event)) => {
-                let is_completed = matches!(event, ResponseEvent::Completed { .. });
-                if tx_event.send(Ok(event)).await.is_err() {
-                    return;
-                }
-                if is_completed {
-                    return;
-                }
+            if let Some(metadata) = turn_moderation_metadata
+                && tx_event
+                    .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
+                    .await
+                    .is_err()
+            {
+                return;
             }
-            Ok(None) => {}
-            Err(error) => {
-                let error = error.into_api_error();
-                if matches!(error, ApiError::FlexUnavailable) {
-                    let _ = tx_event.send(Err(error)).await;
-                    return;
-                }
-                response_error = Some(error);
+            if let Some(buffering) = safety_buffering
+                && tx_event
+                    .send(Ok(ResponseEvent::SafetyBuffering(buffering)))
+                    .await
+                    .is_err()
+            {
+                return;
             }
-        };
+    
+            match process_responses_event(event) {
+                Ok(Some(event)) => {
+                    let is_completed = matches!(event, ResponseEvent::Completed { .. });
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                    if is_completed {
+                        return;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let error = error.into_api_error();
+                    if matches!(error, ApiError::FlexUnavailable) {
+                        let _ = tx_event.send(Err(error)).await;
+                        return;
+                    }
+                    response_error = Some(error);
+                }
+            };
+    
+        }
     }
 }
 
@@ -2151,3 +2193,8 @@ mod tests {
 
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
 }
+
+
+#[cfg(test)]
+#[path = "grok_dialect_tests.rs"]
+mod grok_dialect_tests;

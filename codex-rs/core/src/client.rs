@@ -39,6 +39,7 @@ use crate::CodexResponsesHeaders;
 use crate::tools::ExecutedToolCalls;
 use async_channel::Sender;
 use codex_api::AgentIdentityTelemetry;
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::Compression;
@@ -234,6 +235,7 @@ struct CurrentClientSetup {
     auth_owner_generation: Option<u64>,
     auth_revision: Option<u64>,
     api_provider: ApiProvider,
+    api_dialect: ApiDialect,
     redirect_policy: ClientRedirectPolicy,
     api_auth: SharedAuthProvider,
     agent_identity_telemetry: Option<AgentIdentityTelemetry>,
@@ -1102,6 +1104,7 @@ impl ModelClient {
                 auth_owner_generation,
                 auth_revision: revision,
                 api_provider,
+                api_dialect: self.state.provider.api_dialect(),
                 redirect_policy,
                 api_auth: resolved_auth.auth,
                 agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
@@ -1761,10 +1764,11 @@ impl ModelClientSession {
                 request.input = input;
             }
             inference_trace_attempt.record_started(&request);
-            let client = ApiResponsesClient::new(
+            let client = ApiResponsesClient::new_with_dialect(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
+                client_setup.api_dialect,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
@@ -2225,8 +2229,10 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
-            WireApi::Responses => {
-                if self.client.responses_websocket_enabled() {
+            WireApi::Responses | WireApi::GrokResponses => {
+                if matches!(wire_api, WireApi::Responses)
+                    && self.client.responses_websocket_enabled()
+                {
                     let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(
