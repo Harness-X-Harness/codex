@@ -1,7 +1,7 @@
 # Grok product review
 
-This document is the canonical current authority for reviewing the Grok
-downstream product and its release evolution.
+This document is the canonical current authority for reviewing Grok downstream
+product evolution and its supporting distribution machinery.
 
 The scheduled task uses this document as review policy. Automation-specific
 mutation permission belongs to the task, not to this document.
@@ -20,34 +20,42 @@ prune request authorizes mutation.
 
 ## Authorities
 
-Current release-evolution policy:
+Current product-evolution policy:
 
 - `grok/main:grok/docs/carry-forward.md`
 
-Current product baseline:
+Current binary-distribution policy:
 
-- the latest `grok/rust-v*` that reached `SUCCESSFUL` under its branch-local
-  `grok/docs/release.md` contract.
+- `grok/main:grok/docs/distribution.md`
 
-A newer release candidate does not replace that authority until it is
-`SUCCESSFUL`.
+Current accepted product state:
 
-Release-specific product and proof truth stays on that release line. For
-forward-looking `grok/main` work, current stock authority is
-`openai/codex main`. For a release candidate, stock authority is its exact
-target tag/SHA.
+- the newest accepted `grok/rust-v*` source state for its stock generation.
+
+Current continuation baseline:
+
+- that accepted source directly; or
+- a verified semantics-preserving baseline rewrite derived from it.
+
+A build, artifact, release page, workflow run, or download channel does not
+make source canonical and does not gate continuation to the next stock version.
+
+Release-specific architecture, product docs, Facts, Stories, and implementation
+truth stay on the corresponding version line. For forward-looking `grok/main`
+work, current stock authority is `openai/codex main`. For a carry candidate,
+stock authority is its exact target tag/SHA.
 
 ## Review scope
 
 Review incrementally.
 
-Start with Grok-related code, docs, workflows, PRs/issues, and proof state that
-changed since the previous review. Expand only to the current authorities,
-runtime owners, generators, tests, Facts, or Live evidence directly needed to
-resolve those changes.
+Start with Grok-related code, docs, workflows, PRs/issues, accepted baseline
+state, and distribution surfaces that changed since the previous review. Expand
+only to the current authorities, runtime owners, generators, tests, Facts, or
+Live evidence directly needed to resolve those changes.
 
-Do not enter older release history for completeness. Use it only when current
-evidence cannot resolve a concrete semantic question.
+Do not enter older version-line history for completeness. Use it only when
+current evidence cannot resolve a concrete semantic question.
 
 ## Review lenses
 
@@ -59,15 +67,16 @@ Look for duplicate authorities, stale process snapshots, dead compatibility
 paths, and unnecessary scripts, ledgers, parsers, publishers, validators, or
 synchronization layers.
 
-For release infrastructure, specifically ask:
+For process infrastructure, specifically ask:
 
 - does this mechanism protect an independent invariant?
-- is native owner testing or GitHub state already the authority?
+- is native owner testing or repository state already the authority?
 - does a helper have stable semantics or reuse beyond one workflow?
-- can a script or state layer be deleted without weakening proof?
+- can a script or state layer be deleted without weakening semantic validation
+  or distribution usability?
 
-Flag custom workflow-state models or decision frameworks that merely mirror a
-small number of GitHub API predicates.
+Flag workflow-state models or decision frameworks that merely mirror a small
+number of GitHub API predicates.
 
 Also review `grok/main` as a cheap rebased workspace: keep its process overlay
 small, preserve it during pruning, and do not accumulate finished experiments.
@@ -76,7 +85,7 @@ Finding prefix: `CR-` or `PL-`.
 
 ### Stock ownership
 
-For a release candidate, compare affected downstream responsibilities with the
+For a carry candidate, compare affected downstream responsibilities with the
 exact target stock tag. For `grok/main`, compare with current
 `openai/codex main`.
 
@@ -85,16 +94,44 @@ can delete or reduce it without changing the product contract.
 
 Finding prefix: `SO-`.
 
+### Baseline resolution
+
+Verify that continuation begins from the newest accepted product semantics, not
+from whichever SHA most recently produced an artifact.
+
+If a semantics-preserving baseline rewrite is used, verify:
+
+~~~text
+accepted source SHA
+-> complete diff classification
+-> preserved product semantics
+-> changed-owner closure where needed
+-> explicit separation from intentional product changes
+~~~
+
+A rewrite may improve history or remove representation noise without being
+distributed. That is not a defect.
+
+Report a baseline problem when:
+
+- the rewrite cannot be traced to an accepted source;
+- a difference is unexplained;
+- behavior changed under the label of cleanup;
+- owner-derived outputs became stale;
+- a distribution result is being used as semantic authority.
+
+Finding prefix: `BR-`.
+
 ### Carry closure
 
 For every retained or intentionally changed semantic, verify:
 
-```text
+~~~text
 changed owner
 -> source-of-truth seam
 -> that owner's derived outputs
 -> that owner's native proof
-```
+~~~
 
 Do not require a global generated-file sweep. Follow only the owners changed by
 the candidate.
@@ -104,65 +141,73 @@ or a necessary owner-level consistency proof is missing.
 
 Finding prefix: `CC-`.
 
-### Semantic contract / proof
+### Semantic contract / validation
 
-Keep proof classes distinct:
+Keep evidence classes distinct:
 
 - deterministic implementation proof;
 - backend observation;
-- exact-artifact Live composition;
+- semantic Live evidence;
+- distribution smoke evidence;
 - workflow orchestration.
 
-Do not expand backend acceptance, HTTP success, a green PR, or a workflow state
-into a product claim it does not prove.
+Do not expand backend acceptance, HTTP success, a green artifact build, or a
+workflow state into a product claim it does not prove.
 
 Prefer user-visible semantic invariants over implementation details.
 
+`RECONSTRUCTED` means candidate semantics and changed-owner closure are complete
+on target stock. It does not mean binaries have been produced.
+
+Version-line admission should follow the repository's required semantic checks,
+review, and branch protections. Once accepted, the source may seed future carry
+regardless of artifact availability.
+
 Finding prefix: `CP-`.
 
-### Release authority
+### Distribution independence
 
-Use the simplified product states:
+Distribution exists only to make binaries convenient for humans to obtain.
 
-```text
-RECONSTRUCTED
-PR_PROVEN
-SUCCESSFUL
-```
+Review distribution separately from semantic authority.
 
 Verify:
 
-- `RECONSTRUCTED` includes the changed owners' derived-output closure;
-- after reconstruction, the candidate actually hands off to branch-local
-  `release.md`;
-- `PR_PROVEN` comes from the proof required by that `release.md`;
-- only the exact version-line head that completes the release contract becomes
-  `SUCCESSFUL`.
+- each artifact identifies the source SHA it was built from;
+- the intended binaries and bundled assets are present;
+- optional artifact-level smoke tests actually consume the packaged artifact;
+- a failed build is reported as artifact unavailability, not product invalidity;
+- artifact success is not used to promote or select a semantic baseline;
+- semantic Live checks are not accidentally reclassified as distribution proof,
+  or vice versa.
 
-Merge and provenance are release transitions owned by `release.md`, not
-separate product states.
+Do not require every accepted source to have downloadable artifacts unless
+there is an actual human distribution requirement.
 
-If a direct or otherwise unproven push can become `SUCCESSFUL`, report the
-release mechanism.
+Finding prefix: `DI-`.
 
-Finding prefix: `RP-`.
+### Evolution delta
 
-### Release delta
+When a new stable stock target exists, review only:
 
-When a new stable target exists, review only:
-
-```text
-latest successful Grok release
+~~~text
+resolved semantic baseline
 + explicit product decisions
 + relevant validated grok/main experiments
 + exact target stock tag
-```
+~~~
 
-Classify affected semantics as stock-owned, retain downstream, intentional
-product change, obsolete, or unclear/history needed. Only the last class
-justifies deeper historical diagnosis.
+Classify affected semantics as:
 
-Finding prefix: `RD-`.
+- stock-owned;
+- retain downstream;
+- intentional product change;
+- obsolete;
+- unclear/history needed.
+
+Only the last class justifies deeper historical diagnosis.
+
+Finding prefix: `ED-`.
 
 ## Output
 
@@ -170,8 +215,18 @@ Report only findings backed by direct evidence. For each finding include the
 owner, invariant, evidence, smallest correction, correctness boundary, and
 risk.
 
-For carry/release review, report the current product state and the first
-unsatisfied transition. If there is no meaningful finding, report `none`.
+For carry review, report:
+
+- resolved semantic baseline;
+- target stock authority;
+- whether owner closure is complete;
+- whether the candidate is `RECONSTRUCTED`;
+- the first unsatisfied semantic validation or admission requirement, if any.
+
+For distribution review, report artifact availability and integrity separately.
+Do not translate distribution status into product authority.
+
+If there is no meaningful finding, report `none`.
 
 Do not manufacture work to make the review non-empty.
 
@@ -179,6 +234,6 @@ Do not manufacture work to make the review non-empty.
 
 Review is read-only by default.
 
-Do not modify code, docs, PRs, Issues, workflows, tags, releases, or branches
-without explicit authorization from the invoking task or user. Findings are not
-write authorization.
+Do not modify code, docs, PRs, Issues, workflows, tags, artifacts, releases, or
+branches without explicit authorization from the invoking task or user.
+Findings are not write authorization.
