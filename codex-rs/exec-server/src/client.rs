@@ -45,7 +45,6 @@ use crate::environment::EnvironmentConnectionState;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
 use crate::process::ExecProcessEventReceiver;
-use crate::process_telemetry::trace_process_id;
 use crate::protocol::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use crate::protocol::CapabilityRootsDiscoverParams;
 use crate::protocol::CapabilityRootsDiscoverResponse;
@@ -80,6 +79,7 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WALK_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -103,6 +103,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
+use crate::protocol::FsWriteFileIfUnchangedParams;
+use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
@@ -130,6 +132,7 @@ use crate::protocol::WireFsReadDirectoryParams;
 use crate::protocol::WireFsReadFileParams;
 use crate::protocol::WireFsRemoveParams;
 use crate::protocol::WireFsWalkParams;
+use crate::protocol::WireFsWriteFileIfUnchangedParams;
 use crate::protocol::WireFsWriteFileParams;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
@@ -965,6 +968,17 @@ impl ExecServerClient {
             .await
     }
 
+    pub async fn fs_write_file_if_unchanged(
+        &self,
+        params: FsWriteFileIfUnchangedParams,
+    ) -> Result<FsWriteFileIfUnchangedResponse, ExecServerError> {
+        self.call(
+            FS_WRITE_FILE_IF_UNCHANGED_METHOD,
+            &WireFsWriteFileIfUnchangedParams::from(params),
+        )
+        .await
+    }
+
     pub async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
@@ -1027,11 +1041,6 @@ impl ExecServerClient {
             .await
     }
 
-    #[tracing::instrument(
-        name = "codex.exec_server.process_start",
-        skip_all,
-        fields(process.id = trace_process_id(params.process_id.as_str())),
-    )]
     pub(crate) async fn start_process(
         &self,
         params: ExecParams,

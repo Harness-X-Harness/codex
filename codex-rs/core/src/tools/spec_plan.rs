@@ -26,6 +26,7 @@ use crate::tools::handlers::RequestUserInputAsyncHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::SendMessageToUserAsyncHandler;
 use crate::tools::handlers::SleepHandler;
+use crate::tools::handlers::StructuredEditHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
@@ -80,7 +81,6 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_tools::IndirectNamespacePrefixes;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolCall as ExtensionToolCall;
@@ -404,14 +404,8 @@ pub(crate) fn finalize_tool_router(
         append_tool_search_executor(turn_context, &mut registry, tool_search_handler_cache);
     }
 
-    let model_messages = ResolvedModelMessages::from_model(model_info);
-    let indirect_prefixes = IndirectNamespacePrefixes::new(
-        model_messages.indirect_description_prefixes(),
-        registry.mcp_namespaces(),
-    )
-    .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
     let code_mode_tool_names =
-        register_code_mode_executors(turn_context, model_info, &mut registry, &indirect_prefixes);
+        register_code_mode_executors(turn_context, model_info, &mut registry);
     let include_tool_namespaces_info = turn_context
         .config
         .tool_registry
@@ -488,33 +482,14 @@ pub(crate) fn finalize_tool_router(
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    let router = ToolRouter::from_parts(
+    Ok(ToolRouter::from_parts(
         registry,
         model_visible_specs,
         tool_mode,
         code_mode_tool_names,
         tool_namespaces_info,
         &child_management_tools,
-    );
-    // Internal workers can inherit MAv2 configuration without using the board.
-    if multi_agent_v2_enabled(turn_context)
-        && collab_tools_enabled(turn_context, model_info)
-        && turn_context.config.multi_agent_v2.disable_direct_message
-        && !turn_context.session_source.is_internal()
-    {
-        let post_tool = ToolName::new(
-            turn_context.config.multi_agent_v2.tool_namespace.clone(),
-            "post",
-        );
-        if !router.exposes_tool(&post_tool) {
-            return Err(CodexErrorDetails::InvalidRequest(
-                "disable_direct_message requires an available agent message board in this session"
-                    .to_owned(),
-            )
-            .into());
-        }
-    }
-    Ok(router)
+    ))
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -609,10 +584,7 @@ fn spec_for_model_request(
             ))
             .is_some_and(|winner| winner == tool_name)
     {
-        codex_tools::augment_tool_spec_for_code_mode(
-            spec,
-            turn_context.config.code_mode.tool_input_schema_max_bytes,
-        )
+        codex_tools::augment_tool_spec_for_code_mode(spec)
     } else {
         spec
     }
@@ -701,16 +673,12 @@ fn required_child_management_tool_names(
             namespace_tools_enabled(turn_context)
                 .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
                 .flatten(),
-            if turn_context.config.multi_agent_v2.disable_direct_message {
-                &["interrupt_agent", "list_agents"]
-            } else {
-                &[
-                    "send_message",
-                    "followup_task",
-                    "interrupt_agent",
-                    "list_agents",
-                ]
-            },
+            &[
+                "send_message",
+                "followup_task",
+                "interrupt_agent",
+                "list_agents",
+            ],
         ),
     };
     let mut tools = names
@@ -820,7 +788,6 @@ fn register_code_mode_executors(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
-    indirect_prefixes: &IndirectNamespacePrefixes<'_>,
 ) -> BTreeMap<String, ToolName> {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
@@ -895,23 +862,15 @@ fn register_code_mode_executors(
         code_mode_nested_tool_specs.push((spec, cached_runtime));
     }
 
-    let mut namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
-    let code_mode_input_schema_max_bytes =
-        turn_context.config.code_mode.tool_input_schema_max_bytes;
-    let mut enabled_tools = collect_code_mode_exec_prompt_tool_definitions(
-        exec_prompt_tool_specs.iter(),
-        code_mode_input_schema_max_bytes,
-    );
+    let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
+    let mut enabled_tools =
+        collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());
     let deferred_tools = collect_code_mode_exec_prompt_tool_definitions(
         deferred_exec_prompt_tool_specs.iter().map(Arc::as_ref),
-        code_mode_input_schema_max_bytes,
     );
-    let model_messages = ResolvedModelMessages::from_model(model_info);
-    if tool_mode == ToolMode::CodeModeOnly {
-        indirect_prefixes.apply_exec_prompt(&mut enabled_tools, &mut namespace_descriptions);
-    }
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
+    let model_messages = ResolvedModelMessages::from_model(model_info);
     let execute_handler = CodeModeExecuteHandler::new(
         create_code_mode_tool(
             &enabled_tools,
@@ -1131,16 +1090,9 @@ fn unified_exec_should_include_shell_parameter(
 #[instrument(level = "trace", skip_all)]
 fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistry) {
     if context.mcp.has_servers() {
-        let messages = ResolvedModelMessages::from_model(context.model_info).mcp_resources();
-        registry.add(ListMcpResourcesHandler::new(
-            messages.and_then(|messages| messages.list_mcp_resources.as_ref()),
-        ));
-        registry.add(ListMcpResourceTemplatesHandler::new(
-            messages.and_then(|messages| messages.list_mcp_resource_templates.as_ref()),
-        ));
-        registry.add(ReadMcpResourceHandler::new(
-            messages.and_then(|messages| messages.read_mcp_resource.as_ref()),
-        ));
+        registry.add(ListMcpResourcesHandler);
+        registry.add(ListMcpResourceTemplatesHandler);
+        registry.add(ReadMcpResourceHandler);
     }
 }
 
@@ -1188,15 +1140,11 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
                 )
             })
     {
-        let model_messages = ResolvedModelMessages::from_model(context.model_info);
         registry.add_with_exposure(
             RequestUserInputAsyncHandler {
-                description: model_messages
+                description: ResolvedModelMessages::from_model(context.model_info)
                     .request_user_input_async_description()
                     .to_string(),
-                parameters: model_messages
-                    .request_user_input_async_parameters_override()
-                    .map(str::to_owned),
             },
             ToolExposure::DirectModelOnly,
         );
@@ -1269,6 +1217,12 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     if environment_mode.has_environment() && context.model_info.apply_patch_tool_type.is_some() {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         registry.add(ApplyPatchHandler::new(include_environment_id));
+    }
+
+    if environment_mode.has_environment() && context.model_info.structured_edit_tool_type.is_some()
+    {
+        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+        registry.add(StructuredEditHandler::new(include_environment_id));
     }
 
     if context
@@ -1344,26 +1298,24 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 ),
                 exposure,
             );
-            if !turn_context.config.multi_agent_v2.disable_direct_message {
-                registry.register_trusted_with_exposure(
-                    multi_agent_v2_handler(
-                        SendMessageHandlerV2,
-                        tool_namespace,
-                        model_messages.multi_agent_tool_description_override("send_message"),
-                        model_messages.multi_agent_tool_parameters_override("send_message"),
-                    ),
-                    exposure,
-                );
-                registry.register_trusted_with_exposure(
-                    multi_agent_v2_handler(
-                        FollowupTaskHandlerV2,
-                        tool_namespace,
-                        model_messages.multi_agent_tool_description_override("followup_task"),
-                        model_messages.multi_agent_tool_parameters_override("followup_task"),
-                    ),
-                    exposure,
-                );
-            }
+            registry.register_trusted_with_exposure(
+                multi_agent_v2_handler(
+                    SendMessageHandlerV2,
+                    tool_namespace,
+                    model_messages.multi_agent_tool_description_override("send_message"),
+                    model_messages.multi_agent_tool_parameters_override("send_message"),
+                ),
+                exposure,
+            );
+            registry.register_trusted_with_exposure(
+                multi_agent_v2_handler(
+                    FollowupTaskHandlerV2,
+                    tool_namespace,
+                    model_messages.multi_agent_tool_description_override("followup_task"),
+                    model_messages.multi_agent_tool_parameters_override("followup_task"),
+                ),
+                exposure,
+            );
             if turn_context.config.multi_agent_v2.wait_agent_enabled {
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(

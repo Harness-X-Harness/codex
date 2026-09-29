@@ -15,9 +15,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
 use tokio::io::AsyncReadExt;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::ConditionalWriteResult;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
@@ -53,6 +56,17 @@ fn file_too_large_error() -> io::Error {
 
 pub static LOCAL_FS: LazyLock<Arc<dyn ExecutorFileSystem>> =
     LazyLock::new(|| -> Arc<dyn ExecutorFileSystem> { Arc::new(LocalFileSystem::unsandboxed()) });
+
+static FILE_MUTATION_SEMAPHORE: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(1)));
+
+async fn acquire_file_mutation_permit() -> io::Result<OwnedSemaphorePermit> {
+    FILE_MUTATION_SEMAPHORE
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| io::Error::other("file mutation semaphore unexpectedly closed"))
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct DirectFileSystem;
@@ -184,10 +198,40 @@ impl LocalFileSystem {
         options: WriteFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let _mutation_permit = acquire_file_mutation_permit().await?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system
             .write_file(path, contents, options, sandbox)
             .await
+    }
+
+    async fn write_file_if_unchanged(
+        &self,
+        path: &PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<ConditionalWriteResult> {
+        let _mutation_permit = acquire_file_mutation_permit().await?;
+        let (read_file_system, read_sandbox) = self.file_system_for_reads(sandbox)?;
+        let current_contents = read_file_system
+            .read_file(
+                path,
+                ReadFileOptions {
+                    follow_symlinks: options.follow_symlinks,
+                },
+                read_sandbox,
+            )
+            .await?;
+        if current_contents != expected_contents {
+            return Ok(ConditionalWriteResult::Conflict);
+        }
+        let (write_file_system, write_sandbox) = self.file_system_for_writes(sandbox)?;
+        write_file_system
+            .write_file(path, contents, options, write_sandbox)
+            .await?;
+        Ok(ConditionalWriteResult::Written)
     }
 
     async fn create_directory(
@@ -240,6 +284,7 @@ impl LocalFileSystem {
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let _mutation_permit = acquire_file_mutation_permit().await?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system.remove(path, options, sandbox).await
     }
@@ -251,6 +296,7 @@ impl LocalFileSystem {
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
+        let _mutation_permit = acquire_file_mutation_permit().await?;
         let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system
             .copy(source_path, destination_path, options, sandbox)
@@ -293,6 +339,24 @@ impl ExecutorFileSystem for LocalFileSystem {
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::write_file(
             self, path, contents, options, sandbox,
+        ))
+    }
+
+    fn write_file_if_unchanged<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ConditionalWriteResult> {
+        Box::pin(LocalFileSystem::write_file_if_unchanged(
+            self,
+            path,
+            expected_contents,
+            contents,
+            options,
+            sandbox,
         ))
     }
 

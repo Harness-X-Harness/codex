@@ -36,6 +36,7 @@ pub const FS_OPEN_METHOD: &str = "fs/open";
 pub const FS_READ_BLOCK_METHOD: &str = "fs/readBlock";
 pub const FS_CLOSE_METHOD: &str = "fs/close";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
+pub const FS_WRITE_FILE_IF_UNCHANGED_METHOD: &str = "fs/writeFileIfUnchanged";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
 pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
@@ -142,9 +143,6 @@ pub struct EnvironmentCapabilities {
     /// Whether capability discovery applies the filesystem sandbox sent with each root.
     #[serde(default)]
     pub capability_discovery_sandbox: bool,
-    /// Whether this executor supports V2 capability discovery.
-    #[serde(default)]
-    pub capability_discovery_v2: bool,
     /// Whether this executor supports the `environmentConfig/read` request.
     #[serde(default)]
     pub environment_config_read: bool,
@@ -251,7 +249,6 @@ impl EnvironmentInfo {
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
-                capability_discovery_v2: true,
                 environment_config_read: true,
                 http_header_env_vars: true,
                 sandboxed_file_streaming: true,
@@ -622,6 +619,35 @@ pub struct FsWriteFileResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsWriteFileIfUnchangedParams {
+    pub path: PathUri,
+    pub expected_data_base64: String,
+    pub data_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_symlinks: Option<bool>,
+    pub sandbox: Option<FileSystemSandboxContext>,
+}
+
+/// Filesystem RPC wire request with legacy optional sandbox policy cwd.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireFsWriteFileIfUnchangedParams {
+    path: PathUri,
+    expected_data_base64: String,
+    data_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    follow_symlinks: Option<bool>,
+    sandbox: Option<WireFileSystemSandboxContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteFileIfUnchangedResponse {
+    pub written: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FsCreateDirectoryParams {
     pub path: PathUri,
     pub recursive: Option<bool>,
@@ -857,6 +883,9 @@ impl_wire_filesystem_request! {
     WireFsReadFileParams => FsReadFileParams { path, follow_symlinks },
     WireFsOpenParams => FsOpenParams { handle_id, path },
     WireFsWriteFileParams => FsWriteFileParams { path, data_base64, follow_symlinks },
+    WireFsWriteFileIfUnchangedParams => FsWriteFileIfUnchangedParams {
+        path, expected_data_base64, data_base64, follow_symlinks
+    },
     WireFsCreateDirectoryParams => FsCreateDirectoryParams { path, recursive, follow_symlinks },
     WireFsGetMetadataParams => FsGetMetadataParams { path, follow_symlinks },
     WireFsCanonicalizeParams => FsCanonicalizeParams { path },
@@ -1162,20 +1191,6 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::CapabilityRootDiscoverRequest;
-    #[test]
-    fn discovery_v2_support_defaults_off_for_older_executors() -> serde_json::Result<()> {
-        let legacy: super::EnvironmentCapabilities = serde_json::from_value(serde_json::json!({}))?;
-        assert!(!legacy.capability_discovery_v2);
-        let capabilities = super::EnvironmentInfo::local().capabilities;
-        assert_eq!(
-            serde_json::from_value::<super::EnvironmentCapabilities>(serde_json::to_value(
-                &capabilities
-            )?)?,
-            capabilities
-        );
-        Ok(())
-    }
-
     use super::EnvironmentCapabilities;
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
@@ -1384,7 +1399,6 @@ mod tests {
             EnvironmentCapabilities {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
-                capability_discovery_v2: false,
                 environment_config_read: false,
                 http_header_env_vars: false,
                 sandboxed_file_streaming: false,
@@ -1407,7 +1421,6 @@ mod tests {
             "capabilities": {
                 "networkProxyLaunch": false,
                 "capabilityDiscoverySandbox": false,
-                "capabilityDiscoveryV2": false,
                 "environmentConfigRead": false,
                 "httpHeaderEnvVars": false,
                 "sandboxedFileStreaming": false,

@@ -26,6 +26,7 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WALK_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCloseParams;
 use crate::protocol::FsReadBlockParams;
@@ -49,6 +50,7 @@ use crate::protocol::WireFsReadDirectoryParams;
 use crate::protocol::WireFsReadFileParams;
 use crate::protocol::WireFsRemoveParams;
 use crate::protocol::WireFsWalkParams;
+use crate::protocol::WireFsWriteFileIfUnchangedParams;
 use crate::protocol::WireFsWriteFileParams;
 use crate::protocol::WriteParams;
 use crate::rpc::RpcRouter;
@@ -162,6 +164,13 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         |handler: Arc<ExecServerHandler>, params: WireFsWriteFileParams| async move {
             let params = params.try_into_request(resolve_filesystem_sandbox)?;
             handler.fs_write_file(params).await
+        },
+    );
+    router.request(
+        FS_WRITE_FILE_IF_UNCHANGED_METHOD,
+        |handler: Arc<ExecServerHandler>, params: WireFsWriteFileIfUnchangedParams| async move {
+            let params = params.try_into_request(resolve_filesystem_sandbox)?;
+            handler.fs_write_file_if_unchanged(params).await
         },
     );
     router.request(
