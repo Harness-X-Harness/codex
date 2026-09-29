@@ -50,6 +50,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
+use crate::protocol::FsWriteFileIfUnchangedParams;
+use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HttpRequestParams;
@@ -344,6 +346,14 @@ impl ExecServerHandler {
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.write_file(params).await
+    }
+
+    pub(crate) async fn fs_write_file_if_unchanged(
+        &self,
+        params: FsWriteFileIfUnchangedParams,
+    ) -> Result<FsWriteFileIfUnchangedResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file_if_unchanged(params).await
     }
 
     pub(crate) async fn fs_create_directory(
