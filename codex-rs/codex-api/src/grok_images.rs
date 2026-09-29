@@ -51,11 +51,11 @@ pub(crate) fn edit_body(request: &ImageEditRequest) -> Result<Value, ApiError> {
         Value::Array(images)
     };
     let mut body = serde_json::Map::new();
-    body.insert("model".to_string(), Value::String(GROK_IMAGE_MODEL.to_string()));
     body.insert(
-        "prompt".to_string(),
-        Value::String(request.prompt.clone()),
+        "model".to_string(),
+        Value::String(GROK_IMAGE_MODEL.to_string()),
     );
+    body.insert("prompt".to_string(), Value::String(request.prompt.clone()));
     body.insert(
         "response_format".to_string(),
         Value::String("b64_json".to_string()),
