@@ -83,8 +83,13 @@ impl<T: HttpTransport> ImagesClient<T> {
             }),
             ApiDialect::Grok => Ok(grok_images::generation_body(request)),
         }?;
-        self.post_image_request("images/generations", body, extra_headers, "image generation")
-            .await
+        self.post_image_request(
+            "images/generations",
+            body,
+            extra_headers,
+            "image generation",
+        )
+        .await
     }
 
     pub async fn edit(
@@ -482,5 +487,4 @@ mod tests {
             }))
         );
     }
-
 }

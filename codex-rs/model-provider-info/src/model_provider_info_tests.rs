@@ -857,6 +857,8 @@ model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
             .base_url,
         "https://gateway.example/v1"
     );
+}
+
 #[test]
 fn grok_responses_wire_api_round_trips() {
     let provider: ModelProviderInfo = toml::from_str(
@@ -872,9 +874,9 @@ requires_openai_auth = false
     assert_eq!(provider.wire_api, WireApi::GrokResponses);
     assert!(provider.wire_api.uses_responses_transport());
     assert_eq!(provider.wire_api.to_string(), "grok_responses");
-    assert!(toml::to_string(&provider)
-        .expect("provider should serialize")
-        .contains("grok_responses"));
-}
-
+    assert!(
+        toml::to_string(&provider)
+            .expect("provider should serialize")
+            .contains("grok_responses")
+    );
 }

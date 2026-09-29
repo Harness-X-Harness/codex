@@ -67,7 +67,8 @@ async fn omitted_references_generate_with_fixed_defaults() {
                 num_last_images_to_include: None,
             },
             &[],
-            &[], MAX_EDIT_IMAGES
+            &[],
+            MAX_EDIT_IMAGES
         )
         .await
         .expect("generation request should build"),
@@ -157,7 +158,8 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
                 num_last_images_to_include: Some(5),
             },
             &history,
-            &[], MAX_EDIT_IMAGES
+            &[],
+            MAX_EDIT_IMAGES
         )
         .await
         .expect("history-backed edit request should build"),
@@ -192,7 +194,8 @@ async fn recent_image_fallback_passes_file_backed_image_to_edit_request() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }],
-        &[], MAX_EDIT_IMAGES
+        &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect("a selected file-backed image should be passed through");
@@ -247,7 +250,8 @@ async fn recent_image_fallback_passes_file_backed_tool_output_to_edit_request() 
                 internal_chat_message_metadata_passthrough: None,
             },
         ],
-        &[], MAX_EDIT_IMAGES
+        &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect("a selected file-backed tool output should be passed through");
@@ -282,7 +286,8 @@ async fn conflicting_image_selectors_return_tool_error() {
             num_last_images_to_include: Some(1),
         },
         &[],
-        &[], MAX_EDIT_IMAGES
+        &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -311,7 +316,8 @@ async fn too_many_referenced_image_paths_return_tool_error() {
             num_last_images_to_include: None,
         },
         &[],
-        &[], MAX_EDIT_IMAGES
+        &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -368,7 +374,8 @@ async fn recent_image_fallback_requires_requested_count() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }],
-        &[], MAX_EDIT_IMAGES
+        &[],
+        MAX_EDIT_IMAGES,
     )
     .await
     .expect_err("history-backed edit should require the requested image count");

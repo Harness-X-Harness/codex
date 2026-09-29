@@ -88,7 +88,10 @@ fn edit_rejects_new_file_backed_reference_until_backend_support_is_verified() {
         size: None,
     };
     let error = edit_body(&request).expect_err("file-backed Grok edit must fail closed");
-    assert!(error.to_string().contains("file-backed image reference"), "{error}");
+    assert!(
+        error.to_string().contains("file-backed image reference"),
+        "{error}"
+    );
 }
 
 #[test]

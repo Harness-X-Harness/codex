@@ -38,7 +38,9 @@ pub(crate) enum GrokProjectionError {
 }
 
 pub(crate) fn build(request: &ResponsesApiRequest) -> Result<Value, GrokProjectionError> {
-    Ok(serde_json::to_value(&GrokResponsesRequest::try_from_request(request)?)?)
+    Ok(serde_json::to_value(
+        &GrokResponsesRequest::try_from_request(request)?,
+    )?)
 }
 
 #[derive(Serialize)]
