@@ -349,7 +349,7 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
-        x_search: None,
+            x_search: None,
         }
     );
 }
@@ -884,7 +884,6 @@ requires_openai_auth = false
             .contains("grok_responses")
     );
 }
-
 
 #[test]
 fn grok_x_search_window_deserializes_and_empty_window_is_absent() {

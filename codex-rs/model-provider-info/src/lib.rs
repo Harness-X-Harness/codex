@@ -8,9 +8,9 @@
 //! API provider construction applies the process-wide managed residency policy also
 //! used by default HTTP headers.
 
+pub use codex_api::XSearchProviderConfig;
 use codex_client::Provider as ApiProvider;
 use codex_client::RetryConfig as ApiRetryConfig;
-pub use codex_api::XSearchProviderConfig;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
@@ -789,7 +789,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
-            x_search: None,
+        x_search: None,
     }
 }
 

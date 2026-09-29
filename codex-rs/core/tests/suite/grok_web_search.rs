@@ -136,7 +136,6 @@ async fn grok_emits_web_search_excluded_domains_from_stock_config() {
     );
 }
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grok_emits_provider_configured_x_search_window() {
     skip_if_no_network!();
