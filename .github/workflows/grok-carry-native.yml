@@ -1,8 +1,14 @@
 name: grok-carry-native
 
-# Temporary reconstruction proof for carry/grok-rust-v* workspaces.
-# This validates changed semantic owners with native Cargo tests only.
-# It does not establish release authority, run Grok Live, or build artifacts.
+# Native validation for temporary carry/grok-rust-v* reconstruction workspaces.
+#
+# A carry branch is intentionally incomplete while semantic owners are being
+# reconstructed. Detect owners from source-of-truth markers and validate only
+# owners that already exist at the current HEAD. Downstream owners must not
+# appear before their semantic dependency.
+#
+# This workflow is deterministic implementation proof only. It does not run
+# Grok Live, build distribution artifacts, or define product/release state.
 on:
   pull_request:
     branches: ['carry/grok-rust-v*']
@@ -18,8 +24,78 @@ permissions:
   contents: read
 
 jobs:
+  detect:
+    name: Detect reconstructed owners
+    runs-on: ubuntu-24.04
+    outputs:
+      provider: ${{ steps.owners.outputs.provider }}
+      structured_edit: ${{ steps.owners.outputs.structured_edit }}
+      whole_number: ${{ steps.owners.outputs.whole_number }}
+      input_queue: ${{ steps.owners.outputs.input_queue }}
+      tools: ${{ steps.owners.outputs.tools }}
+      app_server: ${{ steps.owners.outputs.app_server }}
+      images: ${{ steps.owners.outputs.images }}
+      all_owners: ${{ steps.owners.outputs.all_owners }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Detect semantic owners from source markers
+        id: owners
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          provider=false
+          structured_edit=false
+          whole_number=false
+          input_queue=false
+          tools=false
+          app_server=false
+          images=false
+
+          [[ -f codex-rs/codex-api/src/grok_request.rs ]] && provider=true
+          [[ -f codex-rs/apply-patch/src/structured_edit.rs ]] && structured_edit=true
+          [[ -f codex-rs/core/src/tools/handlers/json_whole_number.rs ]] && whole_number=true
+          grep -q 'close_and_take' codex-rs/core/src/session/input_queue.rs && input_queue=true
+          [[ -f codex-rs/tools/src/flat_projection.rs ]] && tools=true
+          [[ -f codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs && -f grok/dist/models.json ]] && app_server=true
+          [[ -f codex-rs/codex-api/src/grok_images.rs ]] && images=true
+
+          for owner in provider structured_edit whole_number input_queue tools app_server images; do
+            echo "${owner}=${!owner}" >> "$GITHUB_OUTPUT"
+          done
+
+          all_owners=false
+          if [[ "$provider" == true &&
+                "$structured_edit" == true &&
+                "$whole_number" == true &&
+                "$input_queue" == true &&
+                "$tools" == true &&
+                "$app_server" == true &&
+                "$images" == true ]]; then
+            all_owners=true
+          fi
+          echo "all_owners=$all_owners" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce semantic dependency order
+        shell: bash
+        env:
+          PROVIDER: ${{ steps.owners.outputs.provider }}
+          TOOLS: ${{ steps.owners.outputs.tools }}
+          APP_SERVER: ${{ steps.owners.outputs.app_server }}
+          IMAGES: ${{ steps.owners.outputs.images }}
+        run: |
+          set -euo pipefail
+          if [[ "$PROVIDER" != true ]]; then
+            [[ "$TOOLS" != true ]] || { echo '#322 tool projection requires #320 Provider/Responses'; exit 1; }
+            [[ "$APP_SERVER" != true ]] || { echo '#329 App Server binding requires #320 Provider identity'; exit 1; }
+            [[ "$IMAGES" != true ]] || { echo '#328 image dialect requires #320 Provider/API dialect'; exit 1; }
+          fi
+
   rust-lint:
-    name: Rust lint
+    name: Stock compile and Rust lint
+    needs: detect
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -37,7 +113,7 @@ jobs:
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt -- --config imports_granularity=Item --check
-      - name: Lint carried libraries
+      - name: Lint carry-sensitive libraries
         run: >-
           cargo clippy
           -p codex-api
@@ -49,13 +125,11 @@ jobs:
           -p codex-model-provider
           -p codex-model-provider-info
           --lib -- -D warnings
-      - name: Lint core integration tests
-        run: cargo clippy -p codex-core --test all -- -D warnings
-      - name: Lint App Server integration tests
-        run: cargo clippy -p codex-app-server --test all -- -D warnings
 
-  provider-contracts:
-    name: Provider and image contracts
+  provider:
+    name: "#320 Provider / Responses"
+    needs: detect
+    if: needs.detect.outputs.provider == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -68,38 +142,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
-      - name: Provider identity, dialect, request, stream, and image projection
+      - name: Provider identity, dialect, request, stream, and config closure
         run: cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
-      - name: Stock image-extension regressions
-        run: cargo test -p codex-image-generation-extension --lib
-
-  core-correctness:
-    name: Core correctness
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      RUST_MIN_STACK: "16777216"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-ci
-      - name: Whole-number JSON semantics
-        run: cargo test -p codex-core --lib json_whole_number
-      - name: Input-queue close/snapshot invariant
-        run: cargo test -p codex-core --lib closed_turn_input_returns_snapshot_and_rejects_later_appends
-      - name: Post-close injection durability
-        run: cargo test -p codex-core --lib client_inject_records_history_after_turn_input_is_closed
-      - name: Grok core semantics
-        run: |
-          cargo test -p codex-core --lib grok
-          cargo test -p codex-core --test all grok
 
   structured-edit:
-    name: Structured edit
+    name: "#321 Structured edit"
+    needs: detect
+    if: needs.detect.outputs.structured_edit == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     defaults:
@@ -127,8 +176,73 @@ jobs:
           cargo test -p codex-apply-patch --lib
           cargo test -p codex-core --lib apply_patch
 
+  whole-number:
+    name: "#327 Whole-number JSON"
+    needs: detect
+    if: needs.detect.outputs.whole_number == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Exact lexical and range semantics
+        run: cargo test -p codex-core --lib json_whole_number
+
+  input-queue:
+    name: "#323 Input queue"
+    needs: detect
+    if: needs.detect.outputs.input_queue == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Close/snapshot invariant
+        run: cargo test -p codex-core --lib closed_turn_input_returns_snapshot_and_rejects_later_appends
+      - name: Post-close injection durability
+        run: cargo test -p codex-core --lib client_inject_records_history_after_turn_input_is_closed
+
+  tools:
+    name: "#322 Tool projection / hosted calls"
+    needs: detect
+    if: needs.detect.outputs.tools == 'true' && needs.detect.outputs.provider == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Flat projection
+        run: |
+          cargo test -p codex-tools --lib flat_projection
+          cargo test -p codex-core --lib flat_projection
+      - name: Hosted Grok calls and search
+        run: cargo test -p codex-core --test all grok
+
   app-server:
-    name: App Server Grok binding
+    name: "#329 Product profile / App Server"
+    needs: detect
+    if: needs.detect.outputs.app_server == 'true' && needs.detect.outputs.provider == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -144,27 +258,138 @@ jobs:
       - name: Grok catalog and Provider lifecycle
         run: cargo test -p codex-app-server --test all grok
 
+  images:
+    name: "#328 Images"
+    needs: detect
+    if: needs.detect.outputs.images == 'true' && needs.detect.outputs.provider == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Grok image projection and normalization
+        run: cargo test -p codex-api grok_images
+      - name: Stock transparent-background and file-backed edit regressions
+        run: cargo test -p codex-image-generation-extension --lib
+
+  all-owner-native:
+    name: All-owner native composition
+    needs:
+      - detect
+      - provider
+      - structured-edit
+      - whole-number
+      - input-queue
+      - tools
+      - app-server
+      - images
+    if: always() && needs.detect.outputs.all_owners == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - name: Require every owner proof before composition
+        env:
+          PROVIDER: ${{ needs.provider.result }}
+          STRUCTURED_EDIT: ${{ needs.structured-edit.result }}
+          WHOLE_NUMBER: ${{ needs.whole-number.result }}
+          INPUT_QUEUE: ${{ needs.input-queue.result }}
+          TOOLS: ${{ needs.tools.result }}
+          APP_SERVER: ${{ needs.app-server.result }}
+          IMAGES: ${{ needs.images.result }}
+        run: |
+          set -euo pipefail
+          for result in "$PROVIDER" "$STRUCTURED_EDIT" "$WHOLE_NUMBER" "$INPUT_QUEUE" "$TOOLS" "$APP_SERVER" "$IMAGES"; do
+            test "$result" = success
+          done
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Compile combined Grok-facing native targets
+        run: >-
+          cargo test --no-run
+          -p codex-api
+          -p codex-app-server
+          -p codex-core
+          -p codex-image-generation-extension
+          -p codex-model-provider
+          -p codex-model-provider-info
+          -p codex-tools
+
   native-required:
     name: Native carry required
     if: always()
     needs:
+      - detect
       - rust-lint
-      - provider-contracts
-      - core-correctness
+      - provider
       - structured-edit
+      - whole-number
+      - input-queue
+      - tools
       - app-server
+      - images
+      - all-owner-native
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every deterministic proof domain
+      - name: Require baseline and every owner present at this HEAD
+        shell: bash
         env:
+          DETECT: ${{ needs.detect.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
-          PROVIDER_CONTRACTS: ${{ needs.provider-contracts.result }}
-          CORE_CORRECTNESS: ${{ needs.core-correctness.result }}
-          STRUCTURED_EDIT: ${{ needs.structured-edit.result }}
-          APP_SERVER: ${{ needs.app-server.result }}
+          PROVIDER_PRESENT: ${{ needs.detect.outputs.provider }}
+          PROVIDER_RESULT: ${{ needs.provider.result }}
+          STRUCTURED_EDIT_PRESENT: ${{ needs.detect.outputs.structured_edit }}
+          STRUCTURED_EDIT_RESULT: ${{ needs.structured-edit.result }}
+          WHOLE_NUMBER_PRESENT: ${{ needs.detect.outputs.whole_number }}
+          WHOLE_NUMBER_RESULT: ${{ needs.whole-number.result }}
+          INPUT_QUEUE_PRESENT: ${{ needs.detect.outputs.input_queue }}
+          INPUT_QUEUE_RESULT: ${{ needs.input-queue.result }}
+          TOOLS_PRESENT: ${{ needs.detect.outputs.tools }}
+          TOOLS_RESULT: ${{ needs.tools.result }}
+          APP_SERVER_PRESENT: ${{ needs.detect.outputs.app_server }}
+          APP_SERVER_RESULT: ${{ needs.app-server.result }}
+          IMAGES_PRESENT: ${{ needs.detect.outputs.images }}
+          IMAGES_RESULT: ${{ needs.images.result }}
+          ALL_OWNERS: ${{ needs.detect.outputs.all_owners }}
+          ALL_OWNER_RESULT: ${{ needs.all-owner-native.result }}
         run: |
           set -euo pipefail
-          for result in "$RUST_LINT" "$PROVIDER_CONTRACTS" "$CORE_CORRECTNESS" "$STRUCTURED_EDIT" "$APP_SERVER"; do
-            test "$result" = success
-          done
+
+          test "$DETECT" = success
+          test "$RUST_LINT" = success
+
+          require_present_owner() {
+            local present="$1"
+            local result="$2"
+            local owner="$3"
+            if [[ "$present" == true && "$result" != success ]]; then
+              echo "$owner is present at this HEAD but its native proof is $result"
+              exit 1
+            fi
+          }
+
+          require_present_owner "$PROVIDER_PRESENT" "$PROVIDER_RESULT" "#320"
+          require_present_owner "$STRUCTURED_EDIT_PRESENT" "$STRUCTURED_EDIT_RESULT" "#321"
+          require_present_owner "$WHOLE_NUMBER_PRESENT" "$WHOLE_NUMBER_RESULT" "#327"
+          require_present_owner "$INPUT_QUEUE_PRESENT" "$INPUT_QUEUE_RESULT" "#323"
+          require_present_owner "$TOOLS_PRESENT" "$TOOLS_RESULT" "#322"
+          require_present_owner "$APP_SERVER_PRESENT" "$APP_SERVER_RESULT" "#329"
+          require_present_owner "$IMAGES_PRESENT" "$IMAGES_RESULT" "#328"
+
+          if [[ "$ALL_OWNERS" == true ]]; then
+            test "$ALL_OWNER_RESULT" = success
+          fi
