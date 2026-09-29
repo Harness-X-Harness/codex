@@ -1,0 +1,6 @@
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/google/jsonschema-go v0.4.3 h1:/DBOLZTfDow7pe2GmaJNhltueGTtDKICi8V8p+DQPd0=
+github.com/google/jsonschema-go v0.4.3/go.mod h1:r5quNTdLOYEz95Ru18zA0ydNbBuYoo9tgaYcxEYhJVE=
+github.com/ronhuafeng/llm-go/codexsdk v0.8.1-0.20260910083314-76eb91fc8c07 h1:bm4rY9SMwtY6u7AFAlUElmSk7tnK97nc7yeGOlnHg18=
+github.com/ronhuafeng/llm-go/codexsdk v0.8.1-0.20260910083314-76eb91fc8c07/go.mod h1:nEUkMR3zmP6lqOf6el0qvH1q8M1X4HPhguadeTFceuI=
