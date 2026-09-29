@@ -93,7 +93,7 @@ impl CodexImagesBackend {
         )
         .await
         .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        Ok(ImagesClient::new(transport, provider, auth))
+        Ok(ImagesClient::new(transport, provider, auth).with_dialect(self.provider.api_dialect()))
     }
 
     /// Sends a standalone image generation request through the configured Images client.

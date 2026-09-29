@@ -362,6 +362,32 @@ pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
 
+const DEFAULT_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 5;
+
+/// Provider-owned image policy consumed by the stock image extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageGenerationPolicy {
+    pub max_edit_images: usize,
+}
+
+pub fn image_generation_policy(provider: &SharedModelProvider) -> Option<ImageGenerationPolicy> {
+    let info = provider.info();
+    let stock_available =
+        info.is_openai() || info.requires_openai_auth || info.uses_openai_actor_authorization();
+    let is_grok = provider.api_dialect() == ApiDialect::Grok;
+    if !provider.capabilities().image_generation || (!stock_available && !is_grok) {
+        return None;
+    }
+
+    Some(ImageGenerationPolicy {
+        max_edit_images: if is_grok {
+            codex_api::GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES
+        } else {
+            DEFAULT_IMAGE_GENERATION_MAX_EDIT_IMAGES
+        },
+    })
+}
+
 fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
     provider.requires_openai_auth
         && provider.env_key.is_none()
@@ -696,6 +722,22 @@ mod tests {
         assert_eq!(
             provider.info().stream_max_retries,
             Some(GROK_STREAM_MAX_RETRIES)
+        );
+        assert_eq!(
+            image_generation_policy(&provider),
+            Some(ImageGenerationPolicy { max_edit_images: 3 })
+        );
+    }
+
+    #[test]
+    fn stock_image_policy_keeps_five_edit_images() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+        assert_eq!(
+            image_generation_policy(&provider),
+            Some(ImageGenerationPolicy { max_edit_images: 5 })
         );
     }
 

@@ -2,6 +2,9 @@ use codex_protocol::models::ImageReference;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Verified Grok image-edit cardinality.
+pub const GROK_IMAGE_GENERATION_MAX_EDIT_IMAGES: usize = 3;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
     pub prompt: String,

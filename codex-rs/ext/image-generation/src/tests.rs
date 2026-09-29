@@ -28,6 +28,7 @@ use crate::IMAGEGEN_TOOL_NAME;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 
+const MAX_EDIT_IMAGES: usize = 5;
 const RESULT: &str = "cG5n";
 
 #[test]
@@ -45,7 +46,7 @@ fn artifact_path_sanitizes_session_and_call_ids() {
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
-    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+    let ToolSpec::Namespace(spec) = imagegen_tool_spec(MAX_EDIT_IMAGES) else {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
@@ -66,7 +67,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
                 num_last_images_to_include: None,
             },
             &[],
-            &[],
+            &[], MAX_EDIT_IMAGES
         )
         .await
         .expect("generation request should build"),
@@ -156,7 +157,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
                 num_last_images_to_include: Some(5),
             },
             &history,
-            &[],
+            &[], MAX_EDIT_IMAGES
         )
         .await
         .expect("history-backed edit request should build"),
@@ -191,7 +192,7 @@ async fn recent_image_fallback_passes_file_backed_image_to_edit_request() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }],
-        &[],
+        &[], MAX_EDIT_IMAGES
     )
     .await
     .expect("a selected file-backed image should be passed through");
@@ -246,7 +247,7 @@ async fn recent_image_fallback_passes_file_backed_tool_output_to_edit_request() 
                 internal_chat_message_metadata_passthrough: None,
             },
         ],
-        &[],
+        &[], MAX_EDIT_IMAGES
     )
     .await
     .expect("a selected file-backed tool output should be passed through");
@@ -281,7 +282,7 @@ async fn conflicting_image_selectors_return_tool_error() {
             num_last_images_to_include: Some(1),
         },
         &[],
-        &[],
+        &[], MAX_EDIT_IMAGES
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -310,7 +311,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
             num_last_images_to_include: None,
         },
         &[],
-        &[],
+        &[], MAX_EDIT_IMAGES
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -318,6 +319,36 @@ async fn too_many_referenced_image_paths_return_tool_error() {
     assert_eq!(
         error.to_string(),
         "`referenced_image_paths` must contain at most 5 paths"
+    );
+}
+
+#[tokio::test]
+async fn provider_edit_limit_rejects_before_reading_files() {
+    let error = request_for_call_args(
+        &ImagegenArgs {
+            prompt: "change the lighting".to_string(),
+            transparent_background: false,
+            referenced_image_paths: Some(
+                (0..4)
+                    .map(|index| {
+                        format!("/tmp/image-{index}.png")
+                            .try_into()
+                            .expect("test path should be absolute")
+                    })
+                    .collect(),
+            ),
+            num_last_images_to_include: None,
+        },
+        &[],
+        &[],
+        3,
+    )
+    .await
+    .expect_err("Grok edit limit should fail before reading files");
+
+    assert_eq!(
+        error.to_string(),
+        "`referenced_image_paths` must contain at most 3 paths"
     );
 }
 
@@ -337,7 +368,7 @@ async fn recent_image_fallback_requires_requested_count() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }],
-        &[],
+        &[], MAX_EDIT_IMAGES
     )
     .await
     .expect_err("history-backed edit should require the requested image count");
