@@ -499,7 +499,7 @@ pub(crate) fn finalize_tool_router(
         &child_management_tools,
         turn_context.provider.projects_tools_as_flat_functions(),
     )
-    .map_err(|wire_name| CodexErrorDetails::ToolCollision(wire_name))?;
+    .map_err(CodexErrorDetails::ToolCollision)?;
     // Internal workers can inherit MAv2 configuration without using the board.
     if multi_agent_v2_enabled(turn_context)
         && collab_tools_enabled(turn_context, model_info)

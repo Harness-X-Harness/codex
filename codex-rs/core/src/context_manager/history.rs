@@ -525,6 +525,7 @@ impl ContextManager {
     /// Returns the history prepared for sending to the model. This applies a proper
     /// normalization and drops un-suited items. Unsupported image and audio content
     /// is stripped from messages and tool outputs according to `input_modalities`.
+    #[cfg(test)]
     pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.for_prompt_with_hosted_calls(input_modalities, |_| false)
     }
@@ -891,6 +892,7 @@ impl ContextManager {
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
+    #[cfg(test)]
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
         self.normalize_history_with_hosted_calls(input_modalities, |_| false);
     }

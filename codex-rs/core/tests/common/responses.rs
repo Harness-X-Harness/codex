@@ -1619,6 +1619,15 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
     let function_calls = gather_ids(items, "function_call");
     let tool_search_calls = gather_ids(items, "tool_search_call");
     let custom_tool_calls = gather_ids(items, "custom_tool_call");
+    let custom_tool_calls_requiring_outputs = items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && item.get("status").and_then(Value::as_str) != Some("completed")
+        })
+        .filter_map(get_call_id)
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
     let local_shell_calls = gather_ids(items, "local_shell_call");
     let function_call_outputs = gather_output_ids(
         items,
@@ -1657,7 +1666,7 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             "Function call output is missing for call id: {cid}",
         );
     }
-    for cid in &custom_tool_calls {
+    for cid in &custom_tool_calls_requiring_outputs {
         assert!(
             custom_tool_call_outputs.contains(cid),
             "Custom tool call output is missing for call id: {cid}",
