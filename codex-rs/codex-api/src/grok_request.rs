@@ -6,7 +6,6 @@
 
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
-use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use crate::common::TextFormat;
 use codex_protocol::ResponseItemId;

@@ -45,22 +45,23 @@ pub(crate) fn edit_body(request: &ImageEditRequest) -> Result<Value, ApiError> {
     }
 
     let image_field = if images.len() == 1 { "image" } else { "images" };
-    let mut body = serde_json::json!({
-        "model": GROK_IMAGE_MODEL,
-        "prompt": request.prompt.as_str(),
-        "response_format": "b64_json",
-    });
-    body.as_object_mut()
-        .expect("Grok image body must be an object")
-        .insert(
-            image_field.to_string(),
-            if images.len() == 1 {
-                images[0].clone()
-            } else {
-                Value::Array(images)
-            },
-        );
-    Ok(body)
+    let image_value = if images.len() == 1 {
+        images[0].clone()
+    } else {
+        Value::Array(images)
+    };
+    let mut body = serde_json::Map::new();
+    body.insert("model".to_string(), Value::String(GROK_IMAGE_MODEL.to_string()));
+    body.insert(
+        "prompt".to_string(),
+        Value::String(request.prompt.clone()),
+    );
+    body.insert(
+        "response_format".to_string(),
+        Value::String("b64_json".to_string()),
+    );
+    body.insert(image_field.to_string(), image_value);
+    Ok(Value::Object(body))
 }
 
 /// Decodes a Grok image response, normalizing the backend's optional timestamp.
