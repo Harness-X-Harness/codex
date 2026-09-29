@@ -9,7 +9,7 @@ use crate::common::ResponsesApiRequest;
 use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use crate::common::TextFormat;
-use chrono::NaiveDate;
+use crate::provider::XSearchProviderConfig;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
@@ -45,9 +45,12 @@ pub(crate) enum GrokProjectionError {
     Serialize(#[from] serde_json::Error),
 }
 
-pub(crate) fn build(request: &ResponsesApiRequest) -> Result<Value, GrokProjectionError> {
+pub(crate) fn build(
+    request: &ResponsesApiRequest,
+    x_search: Option<&XSearchProviderConfig>,
+) -> Result<Value, GrokProjectionError> {
     Ok(serde_json::to_value(
-        &GrokResponsesRequest::try_from_request(request)?,
+        &GrokResponsesRequest::try_from_request(request, x_search)?,
     )?)
 }
 
@@ -209,7 +212,10 @@ struct GrokWebSearchFilters {
 }
 
 impl<'a> GrokResponsesRequest<'a> {
-    fn try_from_request(request: &'a ResponsesApiRequest) -> Result<Self, GrokProjectionError> {
+    fn try_from_request(
+        request: &'a ResponsesApiRequest,
+        x_search: Option<&XSearchProviderConfig>,
+    ) -> Result<Self, GrokProjectionError> {
         let ResponsesApiRequest {
             model,
             instructions,
@@ -228,7 +234,7 @@ impl<'a> GrokResponsesRequest<'a> {
             client_metadata: _,
             access_programs: _,
         } = request;
-        let tools = project_tools(tools.as_ref())?;
+        let tools = project_tools(tools.as_ref(), x_search)?;
         let tool_choice = tools.is_some().then_some(tool_choice.as_str());
         Ok(Self {
             model,
@@ -535,6 +541,7 @@ fn project_function_call_output<'a>(
 
 fn project_tools(
     tools: Option<&ResponsesApiTools>,
+    x_search: Option<&XSearchProviderConfig>,
 ) -> Result<Option<Vec<GrokTool>>, GrokProjectionError> {
     let Some(tools) = tools else {
         return Ok(None);
@@ -565,8 +572,10 @@ fn project_tools(
             "x_search" => {
                 has_x_search = true;
                 projected.push(GrokTool::XSearch {
-                    from_date: x_search_ymd(tool, "from_date")?,
-                    to_date: x_search_ymd(tool, "to_date")?,
+                    from_date: x_search_ymd(tool, "from_date")?
+                        .or_else(|| x_search.and_then(|window| window.from_date.clone())),
+                    to_date: x_search_ymd(tool, "to_date")?
+                        .or_else(|| x_search.and_then(|window| window.to_date.clone())),
                 });
             }
             other => {
@@ -579,8 +588,8 @@ fn project_tools(
     }
     if !has_x_search {
         projected.push(GrokTool::XSearch {
-            from_date: None,
-            to_date: None,
+            from_date: x_search.and_then(|window| window.from_date.clone()),
+            to_date: x_search.and_then(|window| window.to_date.clone()),
         });
     }
     Ok(Some(projected))
@@ -669,16 +678,13 @@ fn x_search_ymd(tool: &Value, key: &str) -> Result<Option<String>, GrokProjectio
             "x_search.{key} must be a calendar YYYY-MM-DD"
         )));
     };
-    parse_ymd(text).map(Some).ok_or_else(|| {
-        GrokProjectionError::UnsupportedSearchRestriction(format!(
-            "x_search.{key} `{text}` must be a calendar YYYY-MM-DD"
-        ))
-    })
-}
-
-fn parse_ymd(value: &str) -> Option<String> {
-    let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
-    (parsed.format("%Y-%m-%d").to_string() == value).then(|| value.to_string())
+    XSearchProviderConfig::parse_ymd(text)
+        .map(Some)
+        .ok_or_else(|| {
+            GrokProjectionError::UnsupportedSearchRestriction(format!(
+                "x_search.{key} `{text}` must be a calendar YYYY-MM-DD"
+            ))
+        })
 }
 
 fn json_string(value: &Value, key: &str) -> Option<String> {

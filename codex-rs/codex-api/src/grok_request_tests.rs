@@ -1,7 +1,11 @@
 use super::build;
 use crate::common::ResponsesApiRequest;
+use crate::common::ResponsesApiTools;
+use crate::provider::XSearchProviderConfig;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serde_json::value::RawValue;
+use std::sync::Arc;
 
 fn request() -> ResponsesApiRequest {
     ResponsesApiRequest {
@@ -29,7 +33,7 @@ fn request() -> ResponsesApiRequest {
 
 #[test]
 fn basic_projection_is_whitelist_based() {
-    let body = build(&request()).expect("Grok request should project");
+    let body = build(&request(), None).expect("Grok request should project");
 
     assert_eq!(body["model"], json!("grok-test"));
     assert_eq!(body["instructions"], json!("system"));
@@ -50,6 +54,48 @@ fn basic_projection_is_whitelist_based() {
 fn empty_instructions_are_omitted() {
     let mut request = request();
     request.instructions.clear();
-    let body = build(&request).expect("Grok request should project");
+    let body = build(&request, None).expect("Grok request should project");
     assert!(body.get("instructions").is_none());
+}
+
+
+fn raw_tools(value: serde_json::Value) -> ResponsesApiTools {
+    let raw = RawValue::from_string(value.to_string()).expect("valid raw tool JSON");
+    ResponsesApiTools::from(Arc::<RawValue>::from(raw))
+}
+
+#[test]
+fn provider_x_search_window_applies_to_appended_tool() {
+    let mut request = request();
+    request.tools = Some(raw_tools(json!([{"type": "web_search"}])));
+    let window = XSearchProviderConfig {
+        from_date: Some("2026-01-01".to_string()),
+        to_date: Some("2026-01-31".to_string()),
+    };
+    let body = build(&request, Some(&window)).expect("Grok request should project");
+    let x_search = body["tools"].as_array().unwrap().iter()
+        .find(|tool| tool["type"] == "x_search").unwrap();
+    assert_eq!(x_search, &json!({
+        "type": "x_search",
+        "from_date": "2026-01-01",
+        "to_date": "2026-01-31"
+    }));
+}
+
+#[test]
+fn explicit_x_search_dates_override_provider_defaults_individually() {
+    let mut request = request();
+    request.tools = Some(raw_tools(json!([
+        {"type": "x_search", "from_date": "2026-02-01"}
+    ])));
+    let window = XSearchProviderConfig {
+        from_date: Some("2026-01-01".to_string()),
+        to_date: Some("2026-02-28".to_string()),
+    };
+    let body = build(&request, Some(&window)).expect("Grok request should project");
+    assert_eq!(body["tools"][0], json!({
+        "type": "x_search",
+        "from_date": "2026-02-01",
+        "to_date": "2026-02-28"
+    }));
 }

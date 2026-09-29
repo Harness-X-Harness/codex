@@ -5,6 +5,7 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::ApiDialect;
 use crate::provider::Provider;
+use crate::provider::XSearchProviderConfig;
 use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
@@ -28,6 +29,7 @@ pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
     dialect: ApiDialect,
+    x_search: Option<XSearchProviderConfig>,
 }
 
 #[derive(Default)]
@@ -46,11 +48,17 @@ impl<T: HttpTransport> ResponsesClient<T> {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,
             dialect: ApiDialect::OpenAi,
+            x_search: None,
         }
     }
 
     pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
         self.dialect = dialect;
+        self
+    }
+
+    pub fn with_x_search_config(mut self, x_search: Option<XSearchProviderConfig>) -> Self {
+        self.x_search = x_search;
         self
     }
 
@@ -63,6 +71,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             session: self.session.with_request_telemetry(request),
             sse_telemetry: sse,
             dialect: self.dialect,
+            x_search: self.x_search,
         }
     }
 
@@ -94,7 +103,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
                 ApiError::Stream(format!("failed to encode responses request: {error}"))
             })?,
             ApiDialect::Grok => {
-                let projected = crate::grok_request::build(&request)
+                let projected = crate::grok_request::build(&request, self.x_search.as_ref())
                     .map_err(|error| ApiError::Stream(error.to_string()))?;
                 EncodedJsonBody::encode(&projected).map_err(|error| {
                     ApiError::Stream(format!("failed to encode responses request: {error}"))

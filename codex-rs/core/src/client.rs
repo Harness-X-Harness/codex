@@ -1767,6 +1767,7 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_dialect(self.client.state.provider.api_dialect())
+            .with_x_search_config(self.client.state.provider.info().x_search.clone())
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 
