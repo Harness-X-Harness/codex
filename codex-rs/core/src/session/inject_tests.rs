@@ -64,6 +64,7 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
     assert_eq!(reconstructed.history, recorded);
 }
 
+
 #[tokio::test]
 async fn client_inject_records_history_after_turn_input_is_closed() {
     let (session, turn_context, _rx_event) = make_session_and_context_with_rx().await;
