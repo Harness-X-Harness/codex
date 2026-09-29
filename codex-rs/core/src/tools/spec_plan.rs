@@ -490,14 +490,16 @@ pub(crate) fn finalize_tool_router(
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    let router = ToolRouter::from_parts(
+    let router = ToolRouter::from_parts_with_projection(
         registry,
         model_visible_specs,
         tool_mode,
         code_mode_tool_names,
         tool_namespaces_info,
         &child_management_tools,
-    );
+        turn_context.provider.projects_tools_as_flat_functions(),
+    )
+    .map_err(|wire_name| CodexErrorDetails::ToolCollision(wire_name))?;
     // Internal workers can inherit MAv2 configuration without using the board.
     if multi_agent_v2_enabled(turn_context)
         && collab_tools_enabled(turn_context, model_info)

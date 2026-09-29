@@ -6,8 +6,10 @@
 
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
+use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use crate::common::TextFormat;
+use chrono::NaiveDate;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
@@ -23,15 +25,22 @@ use codex_protocol::openai_models::ReasoningEffort;
 use serde::Serialize;
 use serde_json::Value;
 
+/// Verified Grok hosted `web_search` domain-list limit.
+const GROK_WEB_SEARCH_DOMAIN_LIMIT: usize = 5;
+
 /// Why a Grok Responses request cannot be constructed from the canonical input.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GrokProjectionError {
     #[error("Grok cannot replay {variant} at input[{index}]")]
     RejectedItem { index: usize, variant: &'static str },
+    #[error("Grok cannot replay tool type {tool_type} at tools[{index}]")]
+    RejectedTool { index: usize, tool_type: String },
     #[error("Grok cannot replay unsupported encrypted collaboration history at input[{index}]")]
     EncryptedCollaborationHistory { index: usize },
     #[error("Grok cannot replay function_call_output history without call_id at input[{index}]")]
     FunctionCallOutputMissingCallId { index: usize },
+    #[error("Grok cannot apply unsupported search restriction: {0}")]
+    UnsupportedSearchRestriction(String),
     #[error("{0}")]
     Serialize(#[from] serde_json::Error),
 }
@@ -49,7 +58,7 @@ struct GrokResponsesRequest<'a> {
     instructions: Option<&'a str>,
     input: Vec<GrokInputItem<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Value>,
+    tools: Option<Vec<GrokTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
     reasoning: Option<GrokReasoning<'a>>,
@@ -162,6 +171,43 @@ struct GrokFunctionCallOutput<'a> {
     output: &'a FunctionCallOutputPayload,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum GrokTool {
+    Function {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parameters: Option<Value>,
+    },
+    Custom {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<Value>,
+    },
+    WebSearch {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filters: Option<GrokWebSearchFilters>,
+    },
+    XSearch {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from_date: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to_date: Option<String>,
+    },
+}
+
+#[derive(Serialize)]
+struct GrokWebSearchFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allowed_domains: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    excluded_domains: Option<Vec<String>>,
+}
+
 impl<'a> GrokResponsesRequest<'a> {
     fn try_from_request(request: &'a ResponsesApiRequest) -> Result<Self, GrokProjectionError> {
         let ResponsesApiRequest {
@@ -182,10 +228,7 @@ impl<'a> GrokResponsesRequest<'a> {
             client_metadata: _,
             access_programs: _,
         } = request;
-        let tools = tools
-            .as_ref()
-            .map(|tools| serde_json::from_str(tools.as_raw_value().get()))
-            .transpose()?;
+        let tools = project_tools(tools.as_ref())?;
         let tool_choice = tools.is_some().then_some(tool_choice.as_str());
         Ok(Self {
             model,
@@ -488,6 +531,162 @@ fn project_function_call_output<'a>(
     }
 
     Err(GrokProjectionError::FunctionCallOutputMissingCallId { index })
+}
+
+fn project_tools(tools: Option<&ResponsesApiTools>) -> Result<Option<Vec<GrokTool>>, GrokProjectionError> {
+    let Some(tools) = tools else {
+        return Ok(None);
+    };
+    let parsed: Value = serde_json::from_str(tools.as_raw_value().get())?;
+    let Value::Array(array) = parsed else {
+        return Err(GrokProjectionError::RejectedTool {
+            index: 0,
+            tool_type: "unknown".to_string(),
+        });
+    };
+    if array.is_empty() {
+        return Ok(None);
+    }
+
+    let mut projected = Vec::with_capacity(array.len() + 1);
+    let mut has_x_search = false;
+    for (index, tool) in array.iter().enumerate() {
+        let tool_type = tool
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|tool_type| !tool_type.is_empty())
+            .unwrap_or("unknown");
+        match tool_type {
+            "function" => projected.push(project_function_tool(tool)),
+            "custom" => projected.push(project_custom_tool(tool)),
+            "web_search" => projected.push(project_web_search_tool(tool)?),
+            "x_search" => {
+                has_x_search = true;
+                projected.push(GrokTool::XSearch {
+                    from_date: x_search_ymd(tool, "from_date")?,
+                    to_date: x_search_ymd(tool, "to_date")?,
+                });
+            }
+            other => {
+                return Err(GrokProjectionError::RejectedTool {
+                    index,
+                    tool_type: other.to_string(),
+                });
+            }
+        }
+    }
+    if !has_x_search {
+        projected.push(GrokTool::XSearch {
+            from_date: None,
+            to_date: None,
+        });
+    }
+    Ok(Some(projected))
+}
+
+fn project_web_search_tool(tool: &Value) -> Result<GrokTool, GrokProjectionError> {
+    let allowed_domains = project_web_search_domains(tool, "allowed_domains")?;
+    let excluded_domains = project_web_search_domains(tool, "excluded_domains")?;
+    let filters = match (allowed_domains, excluded_domains) {
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            return Err(GrokProjectionError::UnsupportedSearchRestriction(
+                "web_search filters cannot include both allowed_domains and excluded_domains"
+                    .to_string(),
+            ));
+        }
+        (Some(allowed_domains), None) => Some(GrokWebSearchFilters {
+            allowed_domains: Some(allowed_domains),
+            excluded_domains: None,
+        }),
+        (None, Some(excluded_domains)) => Some(GrokWebSearchFilters {
+            allowed_domains: None,
+            excluded_domains: Some(excluded_domains),
+        }),
+    };
+    Ok(GrokTool::WebSearch { filters })
+}
+
+fn project_web_search_domains(
+    tool: &Value,
+    key: &str,
+) -> Result<Option<Vec<String>>, GrokProjectionError> {
+    let Some(domains) = tool.get("filters").and_then(|filters| filters.get(key)) else {
+        return Ok(None);
+    };
+    let Some(array) = domains.as_array() else {
+        return Err(GrokProjectionError::UnsupportedSearchRestriction(format!(
+            "web_search filters.{key} must be an array of strings"
+        )));
+    };
+    if array.is_empty() {
+        return Ok(None);
+    }
+    if array.len() > GROK_WEB_SEARCH_DOMAIN_LIMIT {
+        return Err(GrokProjectionError::UnsupportedSearchRestriction(format!(
+            "web_search filters.{key} cannot list more than {GROK_WEB_SEARCH_DOMAIN_LIMIT} domains"
+        )));
+    }
+    let mut projected = Vec::with_capacity(array.len());
+    for domain in array {
+        let Some(domain) = domain.as_str() else {
+            return Err(GrokProjectionError::UnsupportedSearchRestriction(format!(
+                "web_search filters.{key} must contain only strings"
+            )));
+        };
+        projected.push(domain.to_string());
+    }
+    Ok(Some(projected))
+}
+
+fn project_function_tool(tool: &Value) -> GrokTool {
+    GrokTool::Function {
+        name: json_string(tool, "name").unwrap_or_default(),
+        description: json_string(tool, "description"),
+        parameters: json_value(tool, "parameters"),
+    }
+}
+
+fn project_custom_tool(tool: &Value) -> GrokTool {
+    GrokTool::Custom {
+        name: json_string(tool, "name").unwrap_or_default(),
+        description: json_string(tool, "description"),
+        format: json_value(tool, "format"),
+    }
+}
+
+fn x_search_ymd(tool: &Value, key: &str) -> Result<Option<String>, GrokProjectionError> {
+    let Some(value) = tool.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(text) = value.as_str() else {
+        return Err(GrokProjectionError::UnsupportedSearchRestriction(format!(
+            "x_search.{key} must be a calendar YYYY-MM-DD"
+        )));
+    };
+    parse_ymd(text)
+        .map(Some)
+        .ok_or_else(|| {
+            GrokProjectionError::UnsupportedSearchRestriction(format!(
+                "x_search.{key} `{text}` must be a calendar YYYY-MM-DD"
+            ))
+        })
+}
+
+fn parse_ymd(value: &str) -> Option<String> {
+    let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    (parsed.format("%Y-%m-%d").to_string() == value).then(|| value.to_string())
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn json_value(value: &Value, key: &str) -> Option<Value> {
+    value.get(key).cloned().filter(|value| !value.is_null())
 }
 
 #[cfg(test)]

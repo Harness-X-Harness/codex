@@ -37,6 +37,7 @@ pub use provider::ProviderCapabilities;
 pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::RemoteCompactionSupport;
 pub use provider::SharedModelProvider;
+pub use provider::ToolWireFormat;
 pub use provider::create_model_provider;
 pub use provider::image_generation_policy;
 

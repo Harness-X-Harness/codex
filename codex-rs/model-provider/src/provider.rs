@@ -23,6 +23,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 
 use crate::ResolvedResponsesProvider;
@@ -35,6 +36,13 @@ use crate::auth::resolve_provider_auth_for_scope;
 use crate::combined_auth::compose_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::workspace_routing::WorkspaceRoutingContext;
+
+/// Provider-owned model-visible tool wire representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolWireFormat {
+    Canonical,
+    FlatFunctions,
+}
 
 /// Remote context-compaction protocols supported by a model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +169,19 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    fn tool_wire_format(&self) -> ToolWireFormat {
+        ToolWireFormat::Canonical
+    }
+
+    fn projects_tools_as_flat_functions(&self) -> bool {
+        matches!(self.tool_wire_format(), ToolWireFormat::FlatFunctions)
+    }
+
+    fn is_provider_hosted_tool_call(&self, item: &ResponseItem) -> bool {
+        let _ = item;
+        false
     }
 
     /// Returns the preferred model used for automatic approval review.
@@ -455,6 +476,25 @@ impl ConfiguredModelProvider {
 impl ModelProvider for ConfiguredModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         &self.info
+    }
+
+    fn tool_wire_format(&self) -> ToolWireFormat {
+        if self.api_dialect() == ApiDialect::Grok {
+            ToolWireFormat::FlatFunctions
+        } else {
+            ToolWireFormat::Canonical
+        }
+    }
+
+    fn is_provider_hosted_tool_call(&self, item: &ResponseItem) -> bool {
+        self.api_dialect() == ApiDialect::Grok
+            && matches!(
+                item,
+                ResponseItem::CustomToolCall {
+                    status: Some(status),
+                    ..
+                } if status == "completed"
+            )
     }
 
     fn capabilities(&self) -> ProviderCapabilities {

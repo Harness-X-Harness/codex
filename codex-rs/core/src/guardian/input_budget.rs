@@ -53,7 +53,10 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
         &session
             .clone_history()
             .await
-            .for_prompt_annotated(&turn.model_info().input_modalities),
+            .for_prompt_annotated_with_hosted_calls(
+                &turn.model_info().input_modalities,
+                |item| turn.provider.is_provider_hosted_tool_call(item),
+            ),
     );
     if context.estimated_tokens().saturating_add(minimum_prefix) > maximum {
         context
@@ -98,7 +101,10 @@ pub(crate) async fn finalize(
     let model = &step.settings.model_info;
     let history = session.clone_history().await;
     let history_version = history.history_version();
-    let history = history.for_prompt_annotated(&model.input_modalities);
+    let history = history.for_prompt_annotated_with_hosted_calls(
+        &model.input_modalities,
+        |item| step.turn.provider.is_provider_hosted_tool_call(item),
+    );
     // Use the history that will actually reach the model. Recompute after every
     // compaction retry; evidence removed by compaction must be delivered again.
     context.retain_new_instructions(&history);
