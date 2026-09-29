@@ -1,0 +1,170 @@
+name: grok-carry-native
+
+# Temporary reconstruction proof for carry/grok-rust-v* workspaces.
+# This validates changed semantic owners with native Cargo tests only.
+# It does not establish release authority, run Grok Live, or build artifacts.
+on:
+  pull_request:
+    branches: ['carry/grok-rust-v*']
+  push:
+    branches: ['carry/grok-rust-v*']
+  workflow_dispatch: {}
+
+concurrency:
+  group: grok-carry-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust-lint:
+    name: Rust lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Lint carried libraries
+        run: >-
+          cargo clippy
+          -p codex-api
+          -p codex-app-server
+          -p codex-apply-patch
+          -p codex-core
+          -p codex-exec-server
+          -p codex-image-generation-extension
+          -p codex-model-provider
+          -p codex-model-provider-info
+          --lib -- -D warnings
+      - name: Lint core integration tests
+        run: cargo clippy -p codex-core --test all -- -D warnings
+      - name: Lint App Server integration tests
+        run: cargo clippy -p codex-app-server --test all -- -D warnings
+
+  provider-contracts:
+    name: Provider and image contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Provider identity, dialect, request, stream, and image projection
+        run: cargo test -p codex-model-provider -p codex-model-provider-info -p codex-api
+      - name: Stock image-extension regressions
+        run: cargo test -p codex-image-generation-extension --lib
+
+  core-correctness:
+    name: Core correctness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Whole-number JSON semantics
+        run: cargo test -p codex-core --lib json_whole_number
+      - name: Input-queue close/snapshot invariant
+        run: cargo test -p codex-core --lib closed_turn_input_returns_snapshot_and_rejects_later_appends
+      - name: Post-close injection durability
+        run: cargo test -p codex-core --lib client_inject_records_history_after_turn_input_is_closed
+      - name: Grok core semantics
+        run: |
+          cargo test -p codex-core --lib grok
+          cargo test -p codex-core --test all grok
+
+  structured-edit:
+    name: Structured edit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Engine semantics and VerifiedContents failures
+        run: cargo test -p codex-apply-patch --lib structured_edit
+      - name: Core runtime semantics
+        run: cargo test -p codex-core --lib structured_edit
+      - name: Lifecycle and stale-snapshot integration
+        run: cargo test -p codex-core --test all structured_edit
+      - name: Approval-hook identity
+        run: cargo test -p codex-core --test all structured_edit_hooks
+      - name: Local and remote conditional-write paths
+        run: cargo test -p codex-exec-server --lib
+      - name: Stock apply_patch regressions
+        run: |
+          cargo test -p codex-apply-patch --lib
+          cargo test -p codex-core --lib apply_patch
+
+  app-server:
+    name: App Server Grok binding
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "16777216"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Grok catalog and Provider lifecycle
+        run: cargo test -p codex-app-server --test all grok
+
+  native-required:
+    name: Native carry required
+    if: always()
+    needs:
+      - rust-lint
+      - provider-contracts
+      - core-correctness
+      - structured-edit
+      - app-server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every deterministic proof domain
+        env:
+          RUST_LINT: ${{ needs.rust-lint.result }}
+          PROVIDER_CONTRACTS: ${{ needs.provider-contracts.result }}
+          CORE_CORRECTNESS: ${{ needs.core-correctness.result }}
+          STRUCTURED_EDIT: ${{ needs.structured-edit.result }}
+          APP_SERVER: ${{ needs.app-server.result }}
+        run: |
+          set -euo pipefail
+          for result in "$RUST_LINT" "$PROVIDER_CONTRACTS" "$CORE_CORRECTNESS" "$STRUCTURED_EDIT" "$APP_SERVER"; do
+            test "$result" = success
+          done
