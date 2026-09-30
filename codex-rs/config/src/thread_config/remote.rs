@@ -194,6 +194,7 @@ fn model_provider_from_proto(
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
         supports_standalone_web_search: provider.supports_standalone_web_search,
+        x_search: None,
     };
     Ok((id, info))
 }
@@ -224,7 +225,14 @@ fn model_provider_to_proto(
         requires_openai_auth,
         supports_websockets,
         supports_standalone_web_search,
+        x_search,
     } = provider;
+
+    if x_search.is_some() {
+        return Err(parse_error(
+            "remote thread config does not support model provider x_search; configured x_search cannot be converted without loss",
+        ));
+    }
 
     Ok(proto::ModelProvider {
         id: id.into(),
@@ -332,6 +340,7 @@ mod tests {
 
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
+    use codex_model_provider_info::XSearchProviderConfig;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -465,6 +474,19 @@ mod tests {
     }
 
     #[test]
+    fn remote_thread_config_rejects_x_search_without_lossy_conversion() {
+        let mut provider = expected_provider();
+        provider.x_search = Some(XSearchProviderConfig {
+            from_date: Some("2026-01-01".to_string()),
+            to_date: Some("2026-01-31".to_string()),
+        });
+        let err = model_provider_to_proto("grok-window", provider)
+            .expect_err("x_search must not be silently dropped");
+        assert!(err.to_string().contains("x_search"), "{err}");
+        assert!(err.to_string().contains("without loss"), "{err}");
+    }
+
+    #[test]
     fn model_provider_proto_defaults_standalone_web_search_to_false() {
         let expected = ModelProviderInfo {
             supports_standalone_web_search: false,
@@ -591,6 +613,7 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            x_search: None,
             gateway_oauth: None,
             aws: None,
         }
