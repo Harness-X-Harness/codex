@@ -1,0 +1,12 @@
+{
+  "model": "grok-4.7",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_fact",
+      "name": "fact_echo",
+      "arguments": "{\"text\":\"ok\"}",
+      "call_id": "call_fact"
+    }
+  ]
+}
