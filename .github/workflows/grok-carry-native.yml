@@ -300,6 +300,7 @@ jobs:
       RUST_MIN_STACK: "16777216"
     steps:
       - name: Require every owner proof before composition
+        working-directory: ${{ github.workspace }}
         env:
           PROVIDER: ${{ needs.provider.result }}
           STRUCTURED_EDIT: ${{ needs.structured-edit.result }}
