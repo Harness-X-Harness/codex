@@ -1,174 +1,205 @@
-# Grok binary distribution
+# Grok distribution
 
 This document is the canonical current policy for Grok binary distribution.
 
-Distribution has one purpose: make binaries convenient for humans to download
-and use.
+Distribution is part of the **software-development capability** that may need to
+survive carry-forward, but actual artifact production remains optional.
 
-It does not establish product semantics, source authority, semantic acceptance,
-or eligibility for the next carry-forward.
+That distinction is fundamental:
 
-Product evolution policy lives in [carry-forward.md](./carry-forward.md).
+~~~text
+carry the ability to distribute when it is an accepted development capability
+!=
+require every accepted source to be distributed
+~~~
+
+Product-development evolution is governed by
+[carry-forward.md](./carry-forward.md).
 
 ## Authority direction
 
-The authority direction is strictly one-way:
+Source authority flows one way:
 
 ~~~text
 accepted source SHA
         v
-build and package
+optional build/package
         v
-downloadable artifact
+artifact
         v
 human use
 ~~~
 
-Never infer the reverse.
+Never infer authority in reverse.
 
-- A successful artifact does not make source canonical.
-- A failed or missing artifact does not make accepted source non-canonical.
-- Distribution does not gate the next carry-forward.
-- Rebuilding the same semantics under a different history representation is not
-  required merely because the original representation produced an artifact.
+- artifact success does not make source canonical;
+- artifact failure does not revoke accepted source;
+- missing artifacts do not block future carry-forward;
+- Live or smoke success on an artifact does not replace source admission.
+
+## Distribution capability in carry-forward
+
+When the previous accepted development line can produce supported human-use
+packages, PRE-CARRY must classify that capability as `KEEP`, `UPDATE`, or
+`DROP`.
+
+The carry may therefore need to reconstruct:
+
+- target build action(s);
+- package staging rules;
+- launch/install assets;
+- artifact naming;
+- artifact-level smoke;
+- artifact-backed Live wiring where it serves runtime/release evidence.
+
+This is process continuity.
+
+It does not require running those builds before `RECONSTRUCTED` unless they are
+the only available deterministic proof for a product owner, which should be
+avoided where practical.
 
 ## Inputs
 
-A distribution job starts from an explicitly selected source SHA.
+A distribution operation starts from an explicitly selected exact source SHA.
 
-That SHA should normally be an accepted version-line source. A diagnostic or
-temporary build may use another SHA when the purpose is clear, but the artifact
-must identify exactly what source it came from.
+For normal human delivery, that SHA should be an accepted version-line head.
 
-Distribution policy does not decide which source is semantically accepted.
-That decision belongs to product evolution, review, and version-line admission.
+Diagnostic packaging of another SHA is allowed when the purpose is explicit,
+but the artifact must clearly identify its source.
+
+Distribution never decides which source is accepted.
 
 ## Outputs
 
-A complete distribution artifact should contain the binaries and product assets
-needed by the intended human user.
+An artifact should contain exactly what a human needs for the supported target.
 
-The concrete target set and package contents may evolve with actual users.
-Do not expand target coverage merely to create symmetry.
+Target/platform coverage follows actual users, not symmetry.
 
-Each artifact should be traceable to:
+Every artifact should be traceable to:
 
 - repository;
 - exact source SHA;
 - target platform;
-- workflow/run identity when useful for retrieval.
+- run identity when useful.
 
-Checksums and metadata are useful when they help humans verify or identify what
-they downloaded. Do not turn them into a parallel semantic authority.
+Package metadata and checksums are identification/integrity aids, not semantic
+authority.
 
-## Build failures
+## Build and staging design
 
-A build failure means:
-
-~~~text
-artifact unavailable for that source/target
-~~~
-
-It does not mean:
+Prefer a small, explicit flow:
 
 ~~~text
-source semantics rejected
-product state revoked
-next carry blocked
+selected source SHA
+    -> build requested target once
+    -> stage complete human-use package
+    -> optional package smoke
+    -> upload/publish
 ~~~
 
-Fix a distribution failure when humans need that artifact. Do not force product
-evolution to wait on an unrelated packaging problem.
+Avoid duplicated builds of the same target merely to satisfy different workflow
+phases.
 
-## Live checks
+When runtime Live must prove the packaged binary, prefer same-run artifact flow:
 
-Live checks must declare which role they serve.
+~~~text
+Linux build
+    -> Linux package artifact
+    -> Live consumes that exact artifact
+~~~
 
-### Semantic Live evidence
+The workflow DAG and run-local artifact namespace are sufficient binding when
+GitHub Actions is the trusted execution environment. Do not rebuild historical
+provenance with custom ledgers or PR/run selectors.
 
-A Live check is semantic evidence when it verifies a product behavior against
-the real backend, such as Provider binding, hosted search, reasoning/history,
-images, or another user-visible contract.
+## Live roles
 
-That evidence belongs to product validation. It should be associated with the
-semantic owner and may run before or independently of binary distribution.
+A Live check must declare its role.
 
-### Distribution smoke evidence
+### Product/runtime Live evidence
 
-A Live or smoke check is distribution evidence when it verifies the packaged
-artifact itself:
+Verifies a user-visible product contract against the real backend.
 
-- the expected executable is present;
-- the launcher works;
-- required bundled assets are found;
-- the packaged binary can start and perform the intended smoke scenario.
+Examples include provider routing, hosted search, reasoning continuation, image
+behavior, or another runtime semantic.
 
-It is often efficient to run this against the same-run artifact. That is an
-implementation convenience, not a product-authority boundary.
+Its harness capability may be carried with the owning semantic increment.
+Execution may happen later because it depends on backend availability/secrets.
 
-Do not use artifact-level smoke success to select the next semantic baseline.
+### Artifact/release Live evidence
+
+Consumes the packaged artifact and proves that the delivered composition works.
+
+This may be the same scenario code as product Live, but its evidence role is
+different because the subject under test is the package produced by the release
+path.
+
+Neither role creates source authority.
 
 ## Facts
 
-Facts are backend observations.
+Facts are real-backend observations independent of package availability.
 
-They may inform product decisions and semantic validation. They are not
-distribution state and do not become more authoritative because an artifact was
-built or downloaded.
+They may inform product decisions and evidence classification. They are not
+distribution state.
 
-## Workflow design
+A Facts workflow can be a carried development capability without being part of
+artifact production.
 
-Keep distribution workflows small.
+## Failures
 
-Prefer:
+Classify failures by owner.
 
-1. build the requested target exactly once;
-2. stage the complete artifact;
-3. run only the artifact-level checks that protect download usability;
-4. upload or publish the artifact where humans can retrieve it.
+~~~text
+source/native test failure
+    -> product/development proof failure
 
-Do not add:
+build/staging failure
+    -> distribution capability or artifact failure
 
-- release-proof state machines;
-- proof ledgers;
-- provenance reconstruction whose only purpose is to promote source authority;
-- historical PR/run selectors used to decide whether source is semantically
-  valid;
-- custom workflow-state models that duplicate GitHub state.
+artifact smoke failure
+    -> package usability failure
 
-Repository review and semantic tests may run in the same workflow for
-convenience, but their authority remains separate from distribution.
+real-provider Live failure
+    -> runtime/backend evidence failure
+~~~
 
-## Version lines and historical release documents
-
-`grok/rust-vX.Y.Z` is a source version line, not a distribution state.
-
-Historical version lines may contain `grok/docs/release.md` describing the
-delivery process used at that time. Those files are historical branch-local
-operation evidence. They do not override this current distribution doctrine or
-the current product-evolution policy on `grok/main`.
-
-Where a current version-line workflow still uses older release-state or
-release-proof vocabulary, interpret those names as legacy workflow terminology
-until the implementation is simplified. They must not be used to infer semantic
-authority.
+Do not translate a packaging failure into semantic rejection without direct
+evidence of a product defect.
 
 ## Human installation
 
-Installation documentation should answer the practical questions a human needs:
+Human-use packages should document:
 
-- which artifact to download;
-- how to make launchers executable when archive transport drops mode bits;
-- which product Home/config/catalog files to use;
-- how to start the binary.
+- which artifact/target to download;
+- how to restore executable bits when archive transport drops them;
+- expected launcher/binary layout;
+- required config/catalog/profile assets;
+- product Home requirements;
+- how to start the product.
 
-Installation must not silently migrate or overwrite existing user state unless
-that is an explicit product requirement.
+Installation must not silently migrate or overwrite unrelated user state unless
+that is an explicit product decision.
 
-## Retention and cleanup
+## Retention
 
-Distribution artifacts and temporary distribution branches may be cleaned
-according to practical retention needs.
+Artifacts are derivatives and may be cleaned according to practical retention
+needs.
 
-Deleting an artifact does not delete or invalidate the accepted source state
-from which it was built.
+Deleting an artifact does not delete or invalidate the accepted source from
+which it was built.
+
+## Mechanism discipline
+
+Do not create a second release-control plane.
+
+Avoid:
+
+- release-proof ledgers;
+- publisher state machines;
+- custom source-promotion logic based on artifact status;
+- historical PR/run reconstruction used as source admission;
+- workflow-state models duplicating GitHub's native state.
+
+Prefer native branch admission, shared deterministic proof, a simple build DAG,
+and explicit artifact identity.
