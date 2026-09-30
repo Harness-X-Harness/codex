@@ -1,239 +1,382 @@
-# Grok product review
+# Grok development-line review
 
-This document is the canonical current authority for reviewing Grok downstream
-product evolution and its supporting distribution machinery.
+This document is the canonical current review policy for Grok evolution.
 
-The scheduled task uses this document as review policy. Automation-specific
-mutation permission belongs to the task, not to this document.
+Review the health of the **development line**, not only its final source diff.
 
-## Methods
+The current evolution doctrine is
+[grok/docs/carry-forward.md](./carry-forward.md). Distribution policy is
+[grok/docs/distribution.md](./distribution.md).
 
-Use these methods directly; do not restate or fork them here:
+## Review objective
 
-- context-reduce:
-  https://github.com/ronhuafeng/skills-release/tree/main/catalog/engineering/context-reduce
-- prune-legacy:
-  https://github.com/ronhuafeng/skills-release/tree/main/catalog/engineering/prune-legacy
+A successful carry must leave a line that can continue normal software
+development on the new stock generation.
 
-Use `prune-legacy` only for review/identification unless an explicit apply or
-prune request authorizes mutation.
+Review therefore asks two independent questions:
+
+~~~text
+Is the product behavior reconstructed correctly?
+
+Can the reconstructed line still develop, prove, admit, validate, and
+optionally distribute that product normally?
+~~~
+
+A green final snapshot is insufficient if intermediate development increments
+were broken, proof disappeared during the stack, admission uses a different
+proof model, or accepted validation capability vanished accidentally.
 
 ## Authorities
 
-Current product-evolution policy:
+Use:
 
-- `grok/main:grok/docs/carry-forward.md`
+- current `grok/main` doctrine for process;
+- newest accepted `grok/rust-v*` source for accepted product state;
+- that accepted line's tests/workflows/harness/contracts as evidence of the
+  development process to classify;
+- exact target stock tag/SHA for target architecture and native behavior;
+- explicit product decisions for intentional change.
 
-Current binary-distribution policy:
+Do not infer source authority from artifacts, release pages, workflow runs,
+Facts, or Live.
 
-- `grok/main:grok/docs/distribution.md`
+## Review order
 
-Current accepted product state:
+Review in this order:
 
-- the newest accepted `grok/rust-v*` source state for its stock generation.
+1. PRE-CARRY contract and baseline selection;
+2. carry bootstrap;
+3. each published development increment;
+4. proof accumulation and dependency order;
+5. final composition;
+6. final carry/version-line proof equivalence;
+7. capability continuity;
+8. first-head/version-line admission;
+9. parallel Facts/Live evidence;
+10. optional distribution.
 
-Current continuation baseline:
+Stop at the first correctness boundary that makes later conclusions invalid.
+Do not manufacture findings for already-closed surfaces.
 
-- that accepted source directly; or
-- a verified semantics-preserving baseline rewrite derived from it.
+## PRE-CARRY review
 
-A build, artifact, release page, workflow run, or download channel does not
-make source canonical and does not gate continuation to the next stock version.
+Verify that PRE-CARRY identified:
 
-Release-specific architecture, product docs, Facts, Stories, and implementation
-truth stay on the corresponding version line. For forward-looking `grok/main`
-work, current stock authority is `openai/codex main`. For a carry candidate,
-stock authority is its exact target tag/SHA.
+- accepted source baseline;
+- exact target stock;
+- selected product decisions;
+- relevant semantic owners and dependencies;
+- existing deterministic characterization/proof;
+- inherited development-process capabilities;
+- `KEEP`, `UPDATE`, or `DROP` classification with rationale.
 
-## Review scope
+Check that exact stock passes its required native baseline before Grok
+reconstruction begins.
 
-Review incrementally.
+Report a PRE-CARRY defect when the work starts from an artifact-producing SHA
+instead of accepted source, silently assumes old implementation shape, lacks a
+meaningful contract for retained behavior, or ignores stock ownership.
 
-Start with Grok-related code, docs, workflows, PRs/issues, accepted baseline
-state, and distribution surfaces that changed since the previous review. Expand
-only to the current authorities, runtime owners, generators, tests, Facts, or
-Live evidence directly needed to resolve those changes.
+Finding prefix: `PC-`.
 
-Do not enter older version-line history for completeness. Use it only when
-current evidence cannot resolve a concrete semantic question.
+## Green Prefix review
 
-## Review lenses
+Every published prefix of the canonical semantic stack must pass the
+deterministic proof applicable to that prefix.
 
-### Context / legacy / mechanism size
+Look for:
 
-Apply the referenced `context-reduce` and `prune-legacy` methods.
+- commits that intentionally leave compile/test failures for later repair;
+- generated outputs fixed only by a later unrelated commit;
+- owner tests introduced long after the behavior they prove;
+- proof temporarily disabled to permit an intermediate state;
+- dependency owners appearing in reverse order.
 
-Look for duplicate authorities, stale process snapshots, dead compatibility
-paths, and unnecessary scripts, ledgers, parsers, publishers, validators, or
-synchronization layers.
+A local TDD RED step is not a defect if it was folded before publication into a
+closed green development increment.
 
-For process infrastructure, specifically ask:
+Finding prefix: `GP-`.
 
-- does this mechanism protect an independent invariant?
-- is native owner testing or repository state already the authority?
-- does a helper have stable semantics or reuse beyond one workflow?
-- can a script or state layer be deleted without weakening semantic validation
-  or distribution usability?
+## Closed Development Increment review
 
-Flag workflow-state models or decision frameworks that merely mirror a small
-number of GitHub API predicates.
+For every semantic commit, verify that it is a meaningful vertical development
+increment.
 
-Also review `grok/main` as a cheap rebased workspace: keep its process overlay
-small, preserve it during pruning, and do not accumulate finished experiments.
-
-Finding prefix: `CR-` or `PL-`.
-
-### Stock ownership
-
-For a carry candidate, compare affected downstream responsibilities with the
-exact target stock tag. For `grok/main`, compare with current
-`openai/codex main`.
-
-Report a downstream mechanism when stock now owns the responsibility and Grok
-can delete or reduce it without changing the product contract.
-
-Finding prefix: `SO-`.
-
-### Baseline resolution
-
-Verify that continuation begins from the newest accepted product semantics, not
-from whichever SHA most recently produced an artifact.
-
-If a semantics-preserving baseline rewrite is used, verify:
+Expected closure:
 
 ~~~text
-accepted source SHA
--> complete diff classification
--> preserved product semantics
--> changed-owner closure where needed
--> explicit separation from intentional product changes
+intent
+-> current stock seam
+-> implementation
+-> owned derived outputs
+-> native proof
+-> deterministic harness/proof activation
 ~~~
 
-A rewrite may improve history or remove representation noise without being
-distributed. That is not a defect.
+Historical patch decomposition is not a valid reason to split one semantic
+behavior into multiple broken commits.
 
-Report a baseline problem when:
-
-- the rewrite cannot be traced to an accepted source;
-- a difference is unexplained;
-- behavior changed under the label of cleanup;
-- owner-derived outputs became stale;
-- a distribution result is being used as semantic authority.
-
-Finding prefix: `BR-`.
-
-### Carry closure
-
-For every retained or intentionally changed semantic, verify:
-
-~~~text
-changed owner
--> source-of-truth seam
--> that owner's derived outputs
--> that owner's native proof
-~~~
-
-Do not require a global generated-file sweep. Follow only the owners changed by
-the candidate.
-
-Report a candidate as incomplete when an owned derived representation is stale
-or a necessary owner-level consistency proof is missing.
-
-Finding prefix: `CC-`.
-
-### Semantic contract / validation
-
-Keep evidence classes distinct:
-
-- deterministic implementation proof;
-- backend observation;
-- semantic Live evidence;
-- distribution smoke evidence;
-- workflow orchestration.
-
-Do not expand backend acceptance, HTTP success, a green artifact build, or a
-workflow state into a product claim it does not prove.
-
-Prefer user-visible semantic invariants over implementation details.
-
-`RECONSTRUCTED` means candidate semantics and changed-owner closure are complete
-on target stock. It does not mean binaries have been produced.
-
-Version-line admission should follow the repository's required semantic checks,
-review, and branch protections. Once accepted, the source may seed future carry
-regardless of artifact availability.
-
-Finding prefix: `CP-`.
-
-### Distribution independence
-
-Distribution exists only to make binaries convenient for humans to obtain.
-
-Review distribution separately from semantic authority.
-
-Verify:
-
-- each artifact identifies the source SHA it was built from;
-- the intended binaries and bundled assets are present;
-- optional artifact-level smoke tests actually consume the packaged artifact;
-- a failed build is reported as artifact unavailability, not product invalidity;
-- artifact success is not used to promote or select a semantic baseline;
-- semantic Live checks are not accidentally reclassified as distribution proof,
-  or vice versa.
-
-Do not require every accepted source to have downloadable artifacts unless
-there is an actual human distribution requirement.
+Conversely, do not require one giant commit when a large owner has independently
+meaningful, independently green sub-increments.
 
 Finding prefix: `DI-`.
 
-### Evolution delta
+## Proof Monotonicity review
 
-When a new stable stock target exists, review only:
+Proof established by an earlier prefix must remain active as later increments
+are added.
+
+Review the accumulated proof surface, not only the newest job.
+
+Report when:
+
+- an earlier owner proof becomes skipped or unreachable;
+- later CI narrows coverage without explicit rationale;
+- one owner can shadow or replace another owner's required proof;
+- the composition job can succeed without all applicable owner proofs.
+
+Finding prefix: `PM-`.
+
+## Owner and derived-output closure
+
+For each changed owner verify:
 
 ~~~text
-resolved semantic baseline
-+ explicit product decisions
-+ relevant validated grok/main experiments
-+ exact target stock tag
+changed behavior
+-> source-of-truth seam
+-> owned checked-in/runtime outputs
+-> stock generator where applicable
+-> native consistency/regression proof
 ~~~
 
-Classify affected semantics as:
+Do not require a repository-wide generated-file audit. Follow changed ownership.
 
-- stock-owned;
-- retain downstream;
-- intentional product change;
-- obsolete;
-- unclear/history needed.
+Report stale generated/precomputed/runtime representations or a missing
+owner-level proof.
 
-Only the last class justifies deeper historical diagnosis.
+Finding prefix: `OC-`.
 
-Finding prefix: `ED-`.
+## Dependency and composition review
 
-## Output
+Verify that semantic dependency order reflects current architecture rather than
+historical commit order.
 
-Report only findings backed by direct evidence. For each finding include the
-owner, invariant, evidence, smallest correction, correctness boundary, and
-risk.
+A dependent owner must not become active before its prerequisite.
 
-For carry review, report:
+At final carry, require:
 
-- resolved semantic baseline;
-- target stock authority;
-- whether owner closure is complete;
-- whether the candidate is `RECONSTRUCTED`;
-- the first unsatisfied semantic validation or admission requirement, if any.
+- every planned retained/updated owner proof;
+- cross-owner compile/composition proof;
+- no hidden reliance on a later release workflow to discover deterministic
+  integration failures.
 
-For distribution review, report artifact availability and integrity separately.
-Do not translate distribution status into product authority.
+Finding prefix: `CO-`.
+
+## Final Proof Equivalence review
+
+This is a primary carry invariant.
+
+Verify:
+
+~~~text
+CarryFinalProof(candidate)
+    == VersionLinePRProof(candidate)
+~~~
+
+The wrappers may differ, but the deterministic proof domains must be equivalent.
+
+Report when version-line PR admission introduces deterministic tests,
+consistency checks, harness unit tests, lint, or composition proof that final
+carry never ran.
+
+Also report duplicated carry/version-line command lists that have already
+drifted or can trivially drift.
+
+Prefer shared proof implementation with thin wrappers.
+
+Finding prefix: `FE-`.
+
+## Capability Continuity review
+
+Treat this as an anti-omission guardrail after progressive reconstruction.
+
+Compare the latest accepted line with the candidate for development-process
+capabilities, not file identity.
+
+At minimum classify:
+
+- required PR proof / public aggregate checks;
+- branch/ruleset admission;
+- Facts/backend-observation capability;
+- Live/runtime harness and invocation;
+- manual diagnostic entrypoints;
+- artifact-to-Live relationships;
+- release/distribution capability;
+- external prerequisites required to make those capabilities usable.
+
+Each item must be `KEEP`, `UPDATE`, or `DROP` with rationale.
+
+Classify its role:
+
+- admission-required;
+- parallel evidence;
+- distribution-only.
+
+A missing capability is a defect when it disappeared implicitly.
+
+Finding prefix: `CC-`.
+
+## RECONSTRUCTED review
+
+`RECONSTRUCTED` requires both:
+
+### Product closure
+
+- selected semantics classified;
+- retained/updated owners closed;
+- owned derived outputs current;
+- native proofs green;
+- composition green.
+
+### Development-process closure
+
+- progressive deterministic proof complete;
+- final version-line deterministic proof available and equivalent;
+- inherited validation/admission/evidence/release capabilities preserved,
+  reconstructed, or explicitly dropped;
+- the line can continue normal development after admission.
+
+Real-provider Live and actual distribution need not have run.
+
+Finding prefix: `RC-`.
+
+## First-head and version-line admission review
+
+Creating a `grok/rust-vX.Y.Z` ref is not admission proof.
+
+Verify that the first authoritative head has an explicit relationship to the
+required version-line PR proof and enters through the native protected-branch
+path.
+
+If a target ref had to be created first for platform mechanics, treat it as
+provisional until a non-empty PR-proven transition is admitted.
+
+Report direct branch creation, build success, Live success, or artifact
+availability being used as a substitute for required PR admission.
+
+Finding prefix: `VA-`.
+
+## Evidence-class review
+
+Keep these classes distinct.
+
+### Deterministic implementation proof
+
+Native tests, lint, generated consistency, deterministic harness unit tests, and
+composition.
+
+This composes progressively and participates in final proof equivalence.
+
+### Facts
+
+Backend observations. Useful for product decisions and evidence classification,
+not source authority.
+
+### Real-provider Live
+
+Runtime/backend evidence. Its capability may need to carry; its execution is not
+required for every semantic prefix.
+
+### Distribution smoke
+
+Evidence that a packaged artifact is usable. It is derivative of selected
+source.
+
+Report any workflow or document that blurs these authority boundaries.
+
+Finding prefix: `EC-`.
+
+## Distribution review
+
+Review distribution separately under
+[grok/docs/distribution.md](./distribution.md).
+
+Check:
+
+- exact source SHA identity;
+- requested target set;
+- package completeness;
+- artifact-level smoke actually consuming the package;
+- human installation usability.
+
+A failed or absent artifact is artifact unavailability, not semantic rejection.
+
+Finding prefix: `DR-`.
+
+## Mechanism review
+
+Prefer the smallest mechanism that protects an independent invariant.
+
+Good default order:
+
+1. native owner tests;
+2. shared deterministic proof commands;
+3. thin carry/version-line wrappers;
+4. native GitHub review/rulesets;
+5. separate environment-dependent Facts/Live;
+6. simple distribution.
+
+Flag:
+
+- proof ledgers;
+- custom workflow-state machines;
+- historical PR/run provenance reconstruction;
+- duplicate authorities;
+- helpers that merely mirror GitHub state;
+- multiple CI implementations for the same deterministic proof.
+
+Finding prefix: `MS-`.
+
+## Historical diagnosis
+
+Use older version lines only when current doctrine, latest accepted line, target
+stock, and direct evidence cannot resolve a concrete question.
+
+Historical commit order is evidence, not a reconstruction plan.
+
+Stop once ownership, behavior, or capability intent is understood.
+
+## Review output
+
+For every finding report:
+
+- finding ID;
+- owner/invariant;
+- direct evidence;
+- smallest correction;
+- correctness boundary;
+- risk if left unresolved.
+
+For a carry candidate also report:
+
+- accepted baseline;
+- exact target stock;
+- current published-prefix health;
+- first red prefix, if any;
+- product closure;
+- development-process closure;
+- final proof equivalence;
+- capability continuity;
+- whether `RECONSTRUCTED` is justified;
+- first unsatisfied admission requirement.
+
+Report Facts/Live/distribution status separately.
 
 If there is no meaningful finding, report `none`.
-
-Do not manufacture work to make the review non-empty.
 
 ## Mutation boundary
 
 Review is read-only by default.
 
-Do not modify code, docs, PRs, Issues, workflows, tags, artifacts, releases, or
-branches without explicit authorization from the invoking task or user.
-Findings are not write authorization.
+Do not mutate code, docs, issues, PRs, workflows, branches, artifacts, or
+releases without explicit authorization from the user or invoking task.
