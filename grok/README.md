@@ -1,17 +1,17 @@
 # Grok development
 
-Current authorities:
+Start with [Version-line-first development](./docs/carry-forward.md).
 
-- [Product evolution](./docs/carry-forward.md)
-- [Binary distribution](./docs/distribution.md)
-- [Product review](./docs/review.md)
+- [Review](./docs/review.md) — what makes an increment ready to merge and continue.
+- [Distribution](./docs/distribution.md) — runtime evidence and optional delivery.
+- [Agent entrypoint](../.codex/skills/grok-release-evolution/SKILL.md) — routing, not another policy.
 
-Agent entrypoint:
+`grok/main` owns current process documentation, not the product baseline.
+A new `grok/rust-vX.Y.Z` starts at exact stock and grows through ordinary PRs.
+It owns canonical development history from bootstrap; it becomes an accepted
+product baseline only after the planned product and process are complete and
+reviewed. A newer branch name or a downloadable artifact does not imply that
+acceptance.
 
-- [`$grok-release-evolution`](../.codex/skills/grok-release-evolution/SKILL.md)
-
-This README is an index only.
-
-Product semantics and accepted source state live on the corresponding
-`grok/rust-v*` line. Distribution artifacts are optional derivatives for human
-download and do not establish semantic authority.
+Version-specific plans belong on that version line and its GitHub roadmap.
+This README is an index, not a duplicate specification.
