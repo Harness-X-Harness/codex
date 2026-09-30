@@ -1,129 +1,260 @@
 ---
 name: grok-release-evolution
-description: Bootstrap and route Grok stable-tag carry-forward, semantic baseline resolution, optional binary distribution, historical diagnosis, and grok/main experiments through the canonical evolution doctrine. Do not use for ordinary stock Codex work.
+description: Bootstrap and route Grok development-line carry-forward, PRE-CARRY contract extraction, progressive green reconstruction, version-line admission, runtime evidence, and optional distribution through the canonical grok/main doctrine. Do not use for ordinary stock Codex work.
 ---
 
-# Grok Release Evolution
+# Grok Development-Line Evolution
 
-This skill is the bootstrap and routing entrypoint. It is not a second process
-authority.
+This skill is only the bootstrap/routing entrypoint.
+
+The canonical process authority is:
+
+- `grok/main:grok/docs/carry-forward.md`
+
+Read distribution policy only when packaging or human-use artifacts are relevant:
+
+- `grok/main:grok/docs/distribution.md`
+
+Read review policy when auditing a carry or accepted line:
+
+- `grok/main:grok/docs/review.md`
+
+Do not fork those rules into this skill.
+
+## North Star
+
+Carry-forward moves a **living software-development line** onto new stock.
+
+Do not treat the task as:
+
+- replaying old commits;
+- applying a patch series;
+- copying only product semantics;
+- producing one final green snapshot.
+
+The result must be able to continue normal development, proof, admission,
+runtime validation, and optional distribution on the new stock generation.
 
 ## Bootstrap
 
-1. Always read the current doctrine from
-   `grok/main:grok/docs/carry-forward.md` before product-evolution work.
-2. Read `grok/main:grok/docs/distribution.md` only when downloadable artifacts
-   are relevant to the request.
-3. Do not use the carry worktree as the bootstrap source. A carry branch starts
-   from exact stock and may intentionally lack the current process overlay.
-4. Resolve the newest accepted `grok/rust-v*` source state and the exact target
-   stock tag/SHA.
-5. If a verified semantics-preserving baseline rewrite exists, evaluate it under
-   the baseline-resolution rules in `carry-forward.md` and use it when it is the
-   cleaner continuation representation.
-6. Treat current doctrine as process authority. Do not infer semantic authority
-   from workflow runs, artifacts, release pages, or download channels.
+Before product reconstruction:
 
-A release-local copy of this skill or `carry-forward.md` is historical process
-evidence only.
+1. Read the current canonical doctrine from `grok/main`.
+2. Resolve the newest accepted `grok/rust-v*` source SHA.
+3. Resolve the exact target stock tag/SHA.
+4. Resolve any verified semantics-preserving continuation rewrite.
+5. Enter PRE-CARRY before editing product semantics.
+6. Do not bootstrap from a carry branch's local process files; carry workspaces
+   intentionally start from exact stock.
 
-## Baseline resolution
+Workflow runs, artifacts, releases, Facts, and Live do not create source
+authority.
 
-Before reconstruction:
+## PRE-CARRY
 
-1. Name the accepted source SHA.
-2. Decide whether to use it directly or use a verified semantics-preserving
-   rewrite derived from it.
-3. For a rewrite, classify every diff and verify that product behavior is
-   unchanged.
-4. Treat intentional behavior changes as explicit product decisions, not
-   cleanup.
-5. Do not require distribution of the rewrite.
+Extract a development contract from the accepted line and target stock.
 
-A baseline rewrite is disposable continuation history, not another product
-trunk.
+For each relevant item record:
 
-## Reconstruction
+- semantic behavior or development capability;
+- owner;
+- dependencies;
+- deterministic proof;
+- Facts/Live evidence when relevant;
+- admission/release role;
+- `KEEP`, `UPDATE`, or `DROP` decision.
 
-For carry-forward work:
+Run/verify:
 
-1. Read only the accepted baseline authorities needed to understand the selected
-   semantics.
-2. Read the exact target stock seams and their native tests/generators.
-3. Classify candidate semantics according to `carry-forward.md`.
-4. Reconstruct the smallest current semantic at the target owner.
-5. For each changed owner, close its source, owned derived outputs, and native
-   consistency/regression proof.
+- previous accepted behavior characterization where needed;
+- exact target-stock native baseline.
 
-Do not mechanically replay old commits, reconstruct historical implementation
-shapes, or treat clean patch application as semantic proof.
+Check whether target stock now owns each behavior before reconstructing
+downstream mechanisms.
 
-Call the candidate `RECONSTRUCTED` only when those owner closures are complete.
+Plan the new stack by current semantic dependency, not historical commit order.
 
-## Semantic validation and version-line admission
+## TDD
 
-After `RECONSTRUCTED`:
+Use TDD freely while developing:
 
-1. Run the required semantic checks for the changed owners.
-2. Use the repository's normal review and branch-admission controls.
-3. Admit the accepted source to `grok/rust-vX.Y.Z`.
-4. Treat that accepted source, or a later verified semantics-preserving baseline
-   rewrite derived from it, as eligible input to future carry-forward.
+~~~text
+test/characterization -> RED
+implementation -> GREEN
+refactor -> GREEN
+~~~
 
-Do not wait for binary distribution before continuing product evolution.
+Do not publish canonical carry commits that intentionally leave the branch
+broken.
 
-Do not invent product states that merely mirror PR or workflow phases.
+Fold temporary RED development steps into the closed green semantic increment
+they establish.
 
-## Binary distribution
+## Carry bootstrap
 
-Binary distribution is optional and has one purpose: make binaries convenient
-for humans to download.
+Start `carry/grok-rust-vX.Y.Z` from exact target stock.
 
-When the user asks for downloadable artifacts:
+Establish the minimum progressive deterministic proof machinery while pure
+target stock is still green.
 
-1. Read `grok/main:grok/docs/distribution.md`.
-2. Select the exact source SHA to build.
-3. Build and package the requested supported targets.
-4. Run artifact-level smoke checks only where they protect download usability.
-5. Upload or publish the artifacts and report their source SHA.
+Prefer one shared proof implementation used by:
 
-A failed distribution means the artifact is unavailable. It does not revoke
-source acceptance or block the next carry.
+- progressive carry validation;
+- final carry validation;
+- version-line PR admission.
 
-Semantic Live evidence and distribution smoke evidence are different roles.
-Classify each check explicitly.
+Do not maintain separate command lists that can drift.
 
-If the user requested carry-and-distribute end to end, complete semantic
-acceptance first, then perform distribution as a separate derivative operation.
+## Progressive development
 
-## grok/main work
+Treat every semantic commit as a closed vertical development increment.
 
-For process maintenance or experiments on `grok/main`, follow the
-rebase/prune/rebuild rules in `carry-forward.md`. Keep the process overlay
-small and current. Do not make `grok/main` a product-promotion intermediate.
+It should carry, as applicable:
+
+- intent;
+- source implementation;
+- owned derived outputs;
+- native tests;
+- deterministic harness pieces;
+- proof activation.
+
+After every published increment, run the accumulated deterministic proof for
+that prefix.
+
+Previously active proof must remain active.
+
+Never advance the canonical stack while its current prefix is red.
+
+Respect semantic dependencies between owners.
+
+## RECONSTRUCTED
+
+Call the candidate `RECONSTRUCTED` only when both are closed:
+
+### Product closure
+
+- selected semantics classified;
+- retained/updated owners implemented;
+- owned outputs current;
+- native proof green;
+- cross-owner composition green.
+
+### Development-process closure
+
+- progressive proof complete;
+- final carry proof equivalent to version-line PR deterministic proof;
+- inherited admission/Facts/Live/release capabilities preserved, reconstructed,
+  or explicitly dropped;
+- the new line can continue normal development after admission.
+
+Real-provider Live and actual artifact distribution need not have run.
+
+## Final admission checks
+
+Before version-line PR:
+
+1. Verify final deterministic proof equivalence:
+   `CarryFinalProof == VersionLinePRProof`.
+2. Perform the short capability-continuity guardrail.
+3. Classify inherited capabilities as `KEEP`, `UPDATE`, or `DROP`.
+4. Separate admission-required, parallel-evidence, and distribution-only roles.
+
+If the version-line PR exposes new deterministic proof that final carry did not
+run, fix the proof architecture rather than accepting divergent CI authorities.
+
+## Version-line bootstrap and admission
+
+A version-line branch name is not source authority.
+
+The first authoritative `grok/rust-vX.Y.Z` head must have an explicit
+relationship to required version-line PR proof and enter through the native
+protected-branch path.
+
+If GitHub mechanics require a target ref to exist first, treat that ref as
+provisional until a non-empty PR-proven transition is admitted.
+
+After native PR proof and protected-branch admission, the resulting head is
+accepted source.
+
+Do not substitute branch creation, build success, Live, or artifact availability
+for admission.
+
+## Facts and Live
+
+Keep environment-dependent evidence separate from deterministic proof.
+
+Facts:
+
+- backend observations;
+- may inform product decisions;
+- never source authority.
+
+Live:
+
+- runtime/backend evidence;
+- carry its harness capability when part of the accepted development process;
+- do not require real-provider execution for every semantic prefix.
+
+When Live consumes a packaged artifact, classify whether it is product/runtime
+evidence, artifact/release evidence, or both.
+
+## Distribution
+
+Actual distribution is optional.
+
+When users need downloadable artifacts:
+
+1. read `grok/main:grok/docs/distribution.md`;
+2. start from an explicitly selected exact source SHA;
+3. normally use an accepted version-line head;
+4. build each requested target once;
+5. stage the complete package;
+6. run package-level smoke only where useful;
+7. preserve exact source identity in artifact metadata.
+
+A failed artifact build is artifact unavailability unless direct evidence shows
+a product defect.
+
+## grok/main maintenance
+
+`grok/main` carries current process doctrine plus optional active experiments.
+
+Keep the process overlay small, current, and easy to rebase.
+
+Prune finished experiments. Prefer preserving reusable development invariants
+over historical implementation patches.
+
+A process lesson discovered during carry should be expressed as a current
+invariant when it will prevent future classes of failure.
 
 ## Historical diagnosis
 
-Read older version lines or Git history only when the current doctrine, accepted
-baseline, target stock, and directly relevant evidence cannot resolve a concrete
-semantic question. Stop once the transition is understood.
+Use older version lines only when current doctrine, latest accepted state,
+target stock, and direct evidence cannot answer a concrete question.
 
-Historical `release.md` files describe branch-local distribution processes used
-at the time. They are not current semantic authority.
+Stop once intent/ownership is understood.
+
+Historical implementation order is evidence, not the plan for the next carry.
 
 ## Mechanism discipline
 
-Prefer native owner tests, native repository admission, minimal branch
-protection, and simple distribution jobs. Do not create custom ledgers,
-workflow-state models, or helper frameworks whose only purpose is to mirror
-GitHub state for one workflow.
+Prefer:
+
+1. native owner tests;
+2. shared deterministic proof commands;
+3. thin carry/version-line wrappers;
+4. native GitHub review/rulesets;
+5. separate Facts/Live;
+6. simple optional distribution.
+
+Avoid custom proof ledgers, workflow-state machines, post-hoc provenance
+reconstruction, and duplicate CI authorities.
 
 ## Authorization
 
-Review findings are not write authorization. Do not merge, publish artifacts,
-prune, rebase, force-reset, or mutate another authoritative branch unless the
-user or invoking task authorized that action.
+Review findings are not write authorization.
 
-After mutation, verify the exact source ref or external artifact effect that the
-requested operation actually owns. Do not use distribution state as semantic
-proof.
+Do not mutate authoritative branches, merge PRs, publish artifacts, or rewrite
+history unless the user or invoking task authorized the action.
+
+After a mutation, verify the exact ref or artifact effect owned by that action.
