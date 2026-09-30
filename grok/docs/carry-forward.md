@@ -106,6 +106,8 @@ RECONSTRUCTED
         v
 required semantic validation and review
         v
+version-line capability parity review
+        v
 admission to grok/rust-vX.Y.Z
         v
 accepted version-line source
@@ -199,7 +201,55 @@ schema refreshes, generated cleanup, and commit surgery when they now describe
 one settled behavior. Provider-neutral fixes remain provider-neutral.
 
 Before version-line admission, verify each changed owner is closed and call the
-candidate `RECONSTRUCTED`.
+candidate `RECONSTRUCTED`. Then complete the version-line capability-parity
+review so validation/release capabilities inherited from the previous accepted
+line are either preserved or intentionally reclassified.
+
+## Version-line capability parity
+
+Before admitting a reconstructed candidate to `grok/rust-vX.Y.Z`, compare the
+candidate with the latest accepted Grok version line for **validation and release
+capabilities**, not implementation shape.
+
+Classify each relevant version-line capability as `KEEP`, `UPDATE`, or
+`DROP`, with a short rationale. At minimum review:
+
+- required PR checks and their proof domains;
+- branch protections or rulesets that define admission;
+- manual `workflow_dispatch` entrypoints;
+- Facts/backend-observation workflows;
+- Live/runtime-validation workflows;
+- artifact-to-Live validation paths;
+- release/distribution workflow ownership;
+- secrets, artifact dependencies, and other external prerequisites that make
+  those workflows usable.
+
+This is a capability-parity gate, not a requirement to replay old workflow
+files verbatim. Reconstruct the capability at the current repository seam when
+stock or workflow architecture changed.
+
+The gate must distinguish three roles:
+
+~~~text
+admission-required capability
+    = must exist and be usable before version-line admission
+
+parallel evidence capability
+    = should remain available, but its execution does not define source authority
+
+distribution-only capability
+    = belongs to optional artifact/release work and does not block semantic continuity
+~~~
+
+Live and distribution remain separate from source authority. A Live run does
+not need to succeed before `RECONSTRUCTED`, and a distribution artifact does
+not make a source SHA canonical. However, silently dropping an accepted
+version-line validation capability is not allowed. A missing prior capability
+must have an explicit `UPDATE` or `DROP` decision before admission.
+
+Creating a branch named `grok/rust-vX.Y.Z` does not itself complete admission.
+Admission is complete only after semantic review, owner closure, required native
+checks, and this version-line capability-parity review are all satisfied.
 
 ## Semantic validation and version-line admission
 
