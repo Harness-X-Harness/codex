@@ -1,0 +1,90 @@
+name: grok-proof
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Stock formatting and CI scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: rustfmt
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.3"
+      - name: Repository formatting
+        run: just fmt-check
+      - name: Stock CI script tests
+        run: just test-github-scripts
+      - name: Check for a clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+
+  rust:
+    name: Stock Rust workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install Linux build and sandbox dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential pkg-config libcap-dev libasound2-dev bubblewrap
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - name: Workspace Clippy
+        run: just clippy --workspace --locked --profile ci-test -- -D warnings
+      - name: Build native runtime test helpers
+        run: cargo build --locked --profile ci-test -p codex-linux-sandbox --bin codex-linux-sandbox -p codex-code-mode-host --bin codex-code-mode-host
+      - name: Workspace tests
+        env:
+          CARGO_BIN_EXE_codex-linux-sandbox: ${{ env.CARGO_TARGET_DIR }}/ci-test/codex-linux-sandbox
+          CARGO_BIN_EXE_codex_linux_sandbox: ${{ env.CARGO_TARGET_DIR }}/ci-test/codex-linux-sandbox
+        run: just test --workspace --locked --cargo-profile ci-test --no-tests=fail
+      - name: Check for a clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+
+  complete:
+    name: Native proof result
+    needs: [format, rust]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every native job
+        env:
+          FORMAT_RESULT: ${{ needs.format.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+        run: |
+          for result in "$FORMAT_RESULT" "$RUST_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required native job did not succeed: $result" >&2
+              exit 1
+            fi
+          done
