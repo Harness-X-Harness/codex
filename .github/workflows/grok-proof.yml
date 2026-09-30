@@ -15,7 +15,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-ci
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: rustfmt
@@ -26,6 +28,8 @@ jobs:
         run: just fmt-check
       - name: Stock CI script tests
         run: just test-github-scripts
+      - name: Cargo-owned Bazel lock consistency
+        run: just bazel-lock-check
       - name: Check for a clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
@@ -53,8 +57,7 @@ jobs:
           components: clippy
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
-          tool: nextest
-          version: 0.9.103
+          tool: nextest@0.9.103
       - uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu

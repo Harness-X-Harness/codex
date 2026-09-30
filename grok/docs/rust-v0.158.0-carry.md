@@ -46,7 +46,7 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 
 | Position / issue | Complete outcome | Real prerequisites | Minimum native proof |
 | --- | --- | --- | --- |
-| C0 / #337 | This plan and one shared native PR/push baseline. | #319 readiness. | Repository formatting, stock CI-script tests, Linux Rust workspace Clippy and all workspace tests; first required PR `Cargo` and actual squash push proof. |
+| C0 / #337 | This plan and one shared native PR/push baseline. | #319 readiness. | Repository formatting, stock CI-script tests, Cargo/Bazel lock consistency, Linux Rust workspace Clippy and all workspace tests; first required PR `Cargo` and actual squash push proof. |
 | C1 / #320 | Provider/Responses, owned representations, and first used Facts/Live support. | C0. | Identity/dialect, request/history policy, interleaved SSE, recovery/remote boundaries, stock regressions, and meaningful deterministic Go harness tests. |
 | C2 / #323 | Atomic close/snapshot and durable post-close input disposition. | C0. | Queue close/snapshot and post-close injection/history integration, plus stock session/turn regressions. |
 | C3 / #327 | Exact whole-number parsing and current tool call-site wiring. | C0. | Signed/unsigned bounds, integral decimal/exponent forms, fractions, values above 2^53, and exec/stdin/multi-agent argument integration. |
@@ -71,13 +71,19 @@ whole reusable proof; its inner aggregate requires every declared native job to
 succeed, including after a failure or cancellation. Missing/skipped results fail.
 PR runs may be superseded by a newer head; each canonical push retains its run.
 
-C0's required baseline runs on Linux using stock `setup-ci`, pinned Rust/nextest,
+C0's required baseline runs on Linux using stock CI/Bazel setup, pinned Rust/nextest,
 the stock V8 artifact verifier, Linux sandbox dependencies, and built sandbox and
 Code Mode helpers. Commands remain directly visible: `just fmt-check`,
-`just test-github-scripts`, workspace `just clippy`, helper `cargo build`, and
+`just test-github-scripts`, `just bazel-lock-check`, workspace `just clippy`, helper `cargo build`, and
 workspace `just test` with the stock `ci-test` build profile and explicit failure
 on an empty test selection. The inherited stock platform workflows remain
 stock-owned; C0 does not claim a completed macOS/Windows test run.
+
+Stock stamps `workspace.package.version` as `0.158.0` while its checked-in lock
+still records the workspace packages as `0.0.0`. C0 normalizes those lock entries
+through native Cargo resolution so the locked baseline can execute. External
+dependency versions, sources, checksums, and edges are preserved. The required
+native Bazel lock refresh/check closes this baseline-owned representation.
 
 Each later owner keeps this baseline and adds its applicable native/harness proof
 to the same workflow and required dependency set. Real-backend opt-ins remain
