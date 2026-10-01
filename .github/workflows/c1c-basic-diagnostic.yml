@@ -1,0 +1,65 @@
+name: C1c Basic diagnostic
+
+on:
+  push:
+    branches: ["codex/grok-0.158-c1-basic-live"]
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GROK_FACTS: "0"
+      GROK_LIVE: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Identify the diagnostic subject
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf '%s\n' "subject=$GITHUB_SHA" "workflow=$GITHUB_WORKFLOW_SHA"
+      - name: Test the public stdio boundary without backend calls
+        working-directory: grok
+        run: go test -race -count=1 -timeout=3m -v ./live
+
+  native:
+    needs: live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+      GROK_FACTS: "0"
+      GROK_LIVE: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install native Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Build the exact CLI for the controlled native fixture
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
+      - name: Test the real App Server and controlled HTTP boundary
+        working-directory: grok
+        run: |
+          export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
+          test -x "$GROK_LIVE_NATIVE_BIN"
+          go test -race -count=1 -timeout=5m -v ./live

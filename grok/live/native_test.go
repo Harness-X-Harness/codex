@@ -57,7 +57,7 @@ func TestNativeBasicFixture(t *testing.T) {
 			defer cancel()
 			got, err := live.Basic(ctx, live.Options{Subject: subject, Model: model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
 			if err != nil {
-				t.Fatalf("native fixture: %+v; %v", got, err)
+				t.Fatalf("native fixture: %+v; %v; requests=%d invalid=%t", got, err, requests.Load(), invalid.Load())
 			}
 			got.ObservedAt = ""
 			want := live.Evidence{SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA, Target: subject.Target, Environment: subject.Environment, Model: model, Stage: "final_reply", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 12, Bound: true, Completed: true}

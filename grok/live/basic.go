@@ -110,7 +110,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			Provider string `json:"modelProvider"`
 		} `json:"thread"`
 	}
-	if err := server.call("thread/start", map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}, &thread); err != nil {
+	if err := server.call("thread/start", map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd, "environments": []any{}}, &thread); err != nil {
 		return evidence, err
 	}
 	if thread.Thread.ID == "" || thread.Model != options.Model || thread.Provider != "grok" || thread.Thread.Provider != "grok" {
@@ -156,8 +156,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			return evidence, err
 		}
 		if len(message.ID) != 0 {
-			_ = server.send(frame{ID: message.ID, Error: json.RawMessage(`{"code":-32601,"message":"Unsupported Live request"}`)})
-			return evidence, errors.New("live: unsupported server request")
+			return evidence, server.refuse(message.ID)
 		}
 		if message.Method != "turn/completed" && message.Method != "item/completed" {
 			continue

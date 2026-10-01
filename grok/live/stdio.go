@@ -87,6 +87,11 @@ func (server *appServer) send(message frame) error {
 	return nil
 }
 
+func (server *appServer) refuse(id json.RawMessage) error {
+	_ = server.send(frame{ID: id, Error: json.RawMessage(`{"code":-32601,"message":"Unsupported Live request"}`)})
+	return errors.New("live: unsupported server request")
+}
+
 func (server *appServer) read() (frame, error) {
 	var message frame
 	if !server.output.Scan() {
@@ -133,8 +138,7 @@ func (server *appServer) call(method string, params any, result any) error {
 		}
 		if message.Method != "" {
 			if len(message.ID) != 0 {
-				_ = server.send(frame{ID: message.ID, Error: json.RawMessage(`{"code":-32601,"message":"Unsupported Live request"}`)})
-				return errors.New("live: unsupported server request")
+				return server.refuse(message.ID)
 			}
 			pendingBytes += message.size
 			if len(server.pending) == 128 || pendingBytes > 8<<20 {
