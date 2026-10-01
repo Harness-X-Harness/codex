@@ -174,9 +174,35 @@ jobs:
             ${{ runner.temp }}/provider-native.diff
           if-no-files-found: error
 
+  go:
+    name: Deterministic Facts proof
+    needs: subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GROK_FACTS: "0"
+      GROK_LIVE: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Test the Facts HTTP boundary without backend calls
+        working-directory: grok
+        run: go test -race -count=1 -v ./facts
+      - name: Vet the consumed Go foundation
+        working-directory: grok
+        run: go vet ./...
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+
   complete:
     name: Native proof result
-    needs: [subject, locks, runtime]
+    needs: [subject, locks, runtime, go]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -185,8 +211,9 @@ jobs:
           SUBJECT_RESULT: ${{ needs.subject.result }}
           LOCKS_RESULT: ${{ needs.locks.result }}
           RUNTIME_RESULT: ${{ needs.runtime.result }}
+          GO_RESULT: ${{ needs.go.result }}
         run: |
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT"; do
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT" "$GO_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1
