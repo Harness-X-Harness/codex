@@ -109,7 +109,13 @@ func fakeAppServer() {
 		if request.Method == "turn/start" && (script.Mode == "inline_request" || script.Mode == "await_request") {
 			_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{"tool": "PRIVATE_CANARY"}})
 			if script.Mode == "await_request" {
-				if !input.Scan() || string(input.Bytes()) != `{"id":99,"error":{"code":-32601,"message":"Unsupported Live request"}}` {
+				var rejection struct {
+					ID    int
+					Error struct{ Code int }
+				}
+				want := rejection
+				want.ID, want.Error.Code = 99, -32601
+				if !input.Scan() || json.Unmarshal(input.Bytes(), &rejection) != nil || rejection != want {
 					return
 				}
 				_, _ = io.WriteString(trace, "unsupported_rejected\n")
