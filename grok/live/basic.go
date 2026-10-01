@@ -127,6 +127,14 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 		return evidence, errors.New("live: turn identity unavailable")
 	}
 	evidence.Stage = "turn_submitted"
+	observeReply := func(item item) {
+		if item.Type == "agentMessage" && (item.Phase == "" || item.Phase == "final_answer") && strings.TrimSpace(item.Text) != "" {
+			evidence.ReplyBytes = len(item.Text)
+			if !evidence.Completed {
+				evidence.Stage = "reply_observed"
+			}
+		}
+	}
 	for {
 		message, err := server.next()
 		if err != nil {
@@ -136,33 +144,42 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			_ = server.send(frame{ID: message.ID, Error: json.RawMessage(`{"code":-32601,"message":"Unsupported Live request"}`)})
 			return evidence, errors.New("live: unsupported server request")
 		}
-		if message.Method != "turn/completed" {
+		if message.Method != "turn/completed" && message.Method != "item/completed" {
 			continue
 		}
 		var completed struct {
 			ThreadID string `json:"threadId"`
+			TurnID   string `json:"turnId"`
 			Turn     turn   `json:"turn"`
+			Item     item   `json:"item"`
 		}
 		if json.Unmarshal(message.Params, &completed) != nil {
 			return evidence, errors.New("live: invalid completion evidence")
 		}
-		if completed.ThreadID != thread.Thread.ID || completed.Turn.ID != started.Turn.ID {
+		if completed.ThreadID != thread.Thread.ID {
 			continue
 		}
-		if completed.Turn.Status != "completed" || len(completed.Turn.Error) != 0 && string(completed.Turn.Error) != "null" {
-			return evidence, errors.New("live: turn did not complete successfully")
-		}
-		evidence.Completed, evidence.Stage = true, "turn_completed"
-		for _, item := range completed.Turn.Items {
-			if item.Type == "agentMessage" && (item.Phase == "" || item.Phase == "final_answer") && strings.TrimSpace(item.Text) != "" {
-				evidence.ReplyBytes = len(item.Text)
+		if message.Method == "item/completed" {
+			if completed.TurnID != started.Turn.ID {
+				continue
+			}
+			observeReply(completed.Item)
+		} else {
+			if completed.Turn.ID != started.Turn.ID {
+				continue
+			}
+			if completed.Turn.Status != "completed" || len(completed.Turn.Error) != 0 && string(completed.Turn.Error) != "null" {
+				return evidence, errors.New("live: turn did not complete successfully")
+			}
+			evidence.Completed, evidence.Stage = true, "turn_completed"
+			for _, item := range completed.Turn.Items {
+				observeReply(item)
 			}
 		}
-		if evidence.ReplyBytes == 0 {
-			return evidence, errors.New("live: final assistant reply unavailable")
+		if evidence.Completed && evidence.ReplyBytes > 0 {
+			evidence.Stage = "final_reply"
+			return evidence, nil
 		}
-		evidence.Stage = "final_reply"
-		return evidence, nil
 	}
 }
 
