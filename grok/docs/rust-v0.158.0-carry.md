@@ -64,8 +64,11 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | C8 / #339 | Complete package-to-Live invocation and branch-local operations contract. | C0/C1 and relevant #321/#328/#329/#322 assets/scenarios. | New staging/orchestration tests, complete same-run package inputs, explicit artifact subject validation, and actual entrypoint verification at the claimed level. |
 
 #320/#333 detail serial C1a (typed Basic/reasoning HTTP + bounded SSE), C1b
-(runtime/config closure), and C1c (used Facts/Live) increments. #320 stays open
-until all close with independent canonical proof. Harness fixtures are independent
+(runtime/config closure), and C1c (used Facts/Live) increments. C1c first lands
+C1c1 (Basic/pinned/reasoning Facts and deterministic HTTP proof), then C1c2
+(consumed Live runner and scenarios with deterministic App Server proof).
+Each uses its own PR/squash/canonical proof. #320 stays open until all close.
+Harness fixtures are independent
 of #329; #322/#328 retain Tools/Images ownership; no obligation is retired.
 
 An owner may split only at independently complete green boundaries, updating this
@@ -88,7 +91,8 @@ against the event SHA, PR merge parents or canonical push ref, and the caller's
 workflow revision. Logs identify PR HEAD/base, checkout SHA and workflow context;
 the PR test-merge SHA remains distinct from the eventual squash SHA.
 
-The inner `complete` job explicitly needs `subject` and native `locks`;
+The inner `complete` job explicitly needs `subject`, native `locks` and `runtime`,
+and the consumed deterministic Go proof as it enters with C1c;
 outer `Cargo` needs the reusable `proof`. Both aggregates run with `always()`
 and accept only `success`. The lock job requires successful subject verification
 and uses native Cargo/Bazel entrypoints plus the existing Provider metadata suite.
