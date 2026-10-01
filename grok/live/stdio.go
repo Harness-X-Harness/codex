@@ -90,6 +90,9 @@ func (server *appServer) send(message frame) error {
 func (server *appServer) read() (frame, error) {
 	var message frame
 	if !server.output.Scan() {
+		if errors.Is(server.output.Err(), bufio.ErrTooLong) {
+			return message, errors.New("live: protocol frame budget exceeded")
+		}
 		return message, errors.New("live: protocol ended before proof completion")
 	}
 	if json.Unmarshal(server.output.Bytes(), &message) != nil {

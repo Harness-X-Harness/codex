@@ -135,7 +135,22 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			}
 		}
 	}
-	for {
+	observeTurn := func(turn turn) error {
+		if turn.Status != "completed" || len(turn.Error) != 0 && string(turn.Error) != "null" {
+			return errors.New("live: turn did not complete successfully")
+		}
+		evidence.Completed, evidence.Stage = true, "turn_completed"
+		for _, item := range turn.Items {
+			observeReply(item)
+		}
+		return nil
+	}
+	if started.Turn.Status != "inProgress" {
+		if err := observeTurn(started.Turn); err != nil {
+			return evidence, err
+		}
+	}
+	for !evidence.Completed || evidence.ReplyBytes == 0 {
 		message, err := server.next()
 		if err != nil {
 			return evidence, err
@@ -168,19 +183,13 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			if completed.Turn.ID != started.Turn.ID {
 				continue
 			}
-			if completed.Turn.Status != "completed" || len(completed.Turn.Error) != 0 && string(completed.Turn.Error) != "null" {
-				return evidence, errors.New("live: turn did not complete successfully")
+			if err := observeTurn(completed.Turn); err != nil {
+				return evidence, err
 			}
-			evidence.Completed, evidence.Stage = true, "turn_completed"
-			for _, item := range completed.Turn.Items {
-				observeReply(item)
-			}
-		}
-		if evidence.Completed && evidence.ReplyBytes > 0 {
-			evidence.Stage = "final_reply"
-			return evidence, nil
 		}
 	}
+	evidence.Stage = "final_reply"
+	return evidence, nil
 }
 
 var (
