@@ -110,11 +110,14 @@ func (p *Probe) post(ctx context.Context, model, stage string, input []any, incl
 		return observation, "", errors.New("response unreadable or oversized")
 	}
 	var result struct {
-		Status string `json:"status"`
-		Model  string `json:"model"`
-		Output []struct {
+		Status            string          `json:"status"`
+		Model             string          `json:"model"`
+		Error             json.RawMessage `json:"error"`
+		IncompleteDetails json.RawMessage `json:"incomplete_details"`
+		Output            []struct {
 			Type             string `json:"type"`
 			Role             string `json:"role"`
+			Status           string `json:"status"`
 			EncryptedContent string `json:"encrypted_content"`
 			Content          []struct {
 				Type string `json:"type"`
@@ -122,8 +125,21 @@ func (p *Probe) post(ctx context.Context, model, stage string, input []any, incl
 			} `json:"content"`
 		} `json:"output"`
 	}
-	if json.Unmarshal(raw, &result) != nil || result.Status != "completed" {
+	if json.Unmarshal(raw, &result) != nil || (result.Status != "" && result.Status != "completed") {
 		return observation, "", errors.New("complete response absent")
+	}
+	for _, field := range []json.RawMessage{result.Error, result.IncompleteDetails} {
+		if len(field) != 0 && string(bytes.TrimSpace(field)) != "null" {
+			return observation, "", errors.New("response reports failure or incompletion")
+		}
+	}
+	// A completed envelope permits omitted message status. Without it, every
+	// assistant message must establish its own completion before text can count.
+	for _, item := range result.Output {
+		if (item.Status != "" && item.Status != "completed") ||
+			(item.Type == "message" && item.Role == "assistant" && result.Status == "" && item.Status != "completed") {
+			return observation, "", errors.New("complete output absent")
+		}
 	}
 	var opaque string
 	for _, item := range result.Output {
