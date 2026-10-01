@@ -100,8 +100,7 @@ Any stock failure is reported with its tested subject instead of being skipped.
 Required PR proof, review, squash admission, and the actual canonical push result
 are verified separately in GitHub. Progress waits for the exact-head result;
 failures are retained and repaired/reverted through an ordinary PR. At a required
-CI wait the coordinator identifies one repository/run/attempt/subject and next
-action, then pauses for Grok Bot as required by the current policy.
+CI wait, the exact tested subject and authoritative result source remain explicit.
 
 ## Evidence and delivery roles
 
