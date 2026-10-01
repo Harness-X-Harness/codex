@@ -27,9 +27,10 @@ from a scheduler's serial order. Publish or update issues only when authorized.
 Old implementation and test results can inform reconstruction; they do not prove
 a new increment. Keep checked, historical, not-run, and unknown evidence distinct.
 
-When a required CI run is pending, hand off its exact repository, run/attempt,
-HEAD or PR context, authority, completion condition, and next action; pause.
-Grok Bot handles monitoring. Do not poll or create ChatGPT CI watchers.
+When a required CI run is pending, record its exact repository, run/attempt,
+HEAD or PR context, authoritative status source, and completion condition.
+Do not infer completion; resume decisions only from the settled result for that
+same subject.
 
 Read/review authority is not mutation authority. Verify authorization and tool
 permissions before changing branches, rulesets, code, releases, or history.
