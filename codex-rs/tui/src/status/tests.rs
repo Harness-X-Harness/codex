@@ -319,7 +319,9 @@ async fn status_snapshot_responses_dialects_show_configured_reasoning() {
             .trim()
             .trim_end_matches('│')
             .trim();
-        assert_snapshot!(model, @"fixture-model (reasoning high, summaries detailed)");
+        insta::allow_duplicates! {
+            assert_snapshot!(model, @"fixture-model (reasoning high, summaries detailed)");
+        }
     }
 }
 

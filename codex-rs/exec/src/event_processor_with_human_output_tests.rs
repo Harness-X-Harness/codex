@@ -258,10 +258,12 @@ async fn config_summary_entries_include_runtime_workspace_roots() {
             .map(|(key, value)| format!("{key}: {value}"))
             .collect::<Vec<_>>()
             .join("\n");
-        insta::assert_snapshot!(reasoning, @"
-        reasoning effort: high
-        reasoning summaries: detailed
-        ");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(reasoning, @"
+            reasoning effort: high
+            reasoning summaries: detailed
+            ");
+        }
     }
 }
 
