@@ -83,3 +83,39 @@ func TestProbeReplayPreservesOpaqueValueAndTypedContent(t *testing.T) {
 		t.Fatal("replay did not preserve the opaque value and typed content")
 	}
 }
+
+func TestProbeTextRequiresSemanticCompletion(t *testing.T) {
+	cases := []struct {
+		name, body string
+		complete   bool
+	}{
+		{"completed_item_without_envelope_status", `{"output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}`, true},
+		{"partial_response", `{"status":"in_progress","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}`, false},
+		{"partial_item", `{"status":"completed","output":[{"type":"message","role":"assistant","status":"in_progress","content":[{"type":"output_text","text":"ok"}]}]}`, false},
+		{"error_with_text", `{"status":"completed","error":{"message":"private-key"},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`, false},
+		{"incomplete_details", `{"status":"completed","incomplete_details":{"reason":"private-key"},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`, false},
+		{"text_without_terminal", `{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`, false},
+		{"empty_output", `{"status":"completed","output":[]}`, false},
+		{"user_text", `{"status":"completed","output":[{"type":"message","role":"user","content":[{"type":"output_text","text":"ok"}]}]}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			probe, err := facts.NewProbe(server.URL, "private-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := probe.Text(context.Background(), "fixture")
+			want := facts.Observation{Requests: 1, HTTPStatus: 200, Stage: "text"}
+			if tc.complete {
+				want.Completed, want.TextBytes = true, 2
+			}
+			if (err == nil) != tc.complete || got != want {
+				t.Fatalf("observation = %+v, error = %v; want %+v", got, err, want)
+			}
+		})
+	}
+}
