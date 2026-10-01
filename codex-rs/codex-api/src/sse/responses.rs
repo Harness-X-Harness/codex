@@ -1,9 +1,11 @@
+use super::grok::GrokSequencer;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
 use crate::error::parse_flex_unavailable;
+use crate::provider::ApiDialect;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
@@ -20,6 +22,7 @@ use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -40,6 +43,7 @@ pub fn spawn_response_stream(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    dialect: ApiDialect,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -93,6 +97,7 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             safety_buffering_treatment,
+            dialect,
         )
         .await;
     });
@@ -173,9 +178,9 @@ pub struct ResponsesStreamEvent {
     pub(crate) kind: String,
     pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
-    response: Option<Value>,
+    pub(super) response: Option<Value>,
     error: Option<Value>,
-    item: Option<Value>,
+    pub(super) item: Option<Value>,
     item_id: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
@@ -586,6 +591,7 @@ pub async fn process_sse(
         idle_timeout,
         telemetry,
         SafetyBufferingTreatment::default(),
+        ApiDialect::OpenAi,
     )
     .await;
 }
@@ -596,21 +602,29 @@ async fn process_sse_with_treatment(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    dialect: ApiDialect,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut sequencer = (dialect == ApiDialect::Grok).then(GrokSequencer::default);
+    let mut ready = VecDeque::new();
 
     loop {
         let start = Instant::now();
-        let response = tokio::select! {
-            biased;
-            _ = tx_event.closed() => return,
-            response = timeout(idle_timeout, stream.next()) => response,
+        let (response, normalized) = if let Some(sse) = ready.pop_front() {
+            (Ok(Some(Ok(sse))), true)
+        } else {
+            let response = tokio::select! {
+                biased;
+                _ = tx_event.closed() => return,
+                response = timeout(idle_timeout, stream.next()) => response,
+            };
+            if let Some(t) = telemetry.as_ref() {
+                t.on_sse_poll(&response, start.elapsed());
+            }
+            (response, false)
         };
-        if let Some(t) = telemetry.as_ref() {
-            t.on_sse_poll(&response, start.elapsed());
-        }
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
@@ -641,6 +655,18 @@ async fn process_sse_with_treatment(
 
         trace!("SSE event: {}", &sse.data);
 
+        if let Some(sequencer) = sequencer.as_mut()
+            && !normalized
+        {
+            match sequencer.push(sse) {
+                Ok(events) => ready.extend(events),
+                Err(error) => {
+                    let _ = tx_event.send(Err(error)).await;
+                    return;
+                }
+            }
+            continue;
+        }
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
@@ -695,6 +721,7 @@ async fn process_sse_with_treatment(
             return;
         }
 
+        let is_grok_error = dialect == ApiDialect::Grok && event.kind == "error";
         match process_responses_event(event) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
@@ -705,10 +732,18 @@ async fn process_sse_with_treatment(
                     return;
                 }
             }
+            Ok(None) if is_grok_error => {
+                let _ = tx_event
+                    .send(Err(ApiError::Stream(
+                        "Grok stream reported an error".into(),
+                    )))
+                    .await;
+                return;
+            }
             Ok(None) => {}
             Err(error) => {
                 let error = error.into_api_error();
-                if matches!(error, ApiError::FlexUnavailable) {
+                if dialect == ApiDialect::Grok || matches!(error, ApiError::FlexUnavailable) {
                     let _ = tx_event.send(Err(error)).await;
                     return;
                 }
@@ -1600,6 +1635,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ApiDialect::OpenAi,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1640,6 +1676,7 @@ mod tests {
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ApiDialect::OpenAi,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {

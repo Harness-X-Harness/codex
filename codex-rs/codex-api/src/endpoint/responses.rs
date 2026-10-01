@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::provider::ApiDialect;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
@@ -25,6 +26,7 @@ use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
+    dialect: ApiDialect,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
 }
 
@@ -42,8 +44,16 @@ impl<T: HttpTransport> ResponsesClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
+            dialect: ApiDialect::OpenAi,
             sse_telemetry: None,
         }
+    }
+
+    /// Select typed HTTP semantics independently of name/destination. Grok rejects
+    /// unsupported history/tools/media and raw JSON before transport; OpenAI is default.
+    pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     pub fn with_telemetry(
@@ -53,6 +63,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ) -> Self {
         Self {
             session: self.session.with_request_telemetry(request),
+            dialect: self.dialect,
             sse_telemetry: sse,
         }
     }
@@ -80,8 +91,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = EncodedJsonBody::encode(&request)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let body = match self.dialect {
+            ApiDialect::OpenAi => EncodedJsonBody::encode(&request),
+            ApiDialect::Grok => EncodedJsonBody::encode(&crate::grok_request::build(&request)?),
+        }
+        .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
@@ -114,6 +128,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        if self.dialect == ApiDialect::Grok {
+            return Err(ApiError::Stream(
+                "Grok requires typed stream_request; raw JSON bypasses projection".into(),
+            ));
+        }
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
         self.stream_encoded(body, extra_headers, compression, turn_state)
@@ -154,6 +173,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            self.dialect,
         ))
     }
 }

@@ -63,6 +63,11 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | C8 / #338 | Independently invocable backend Facts. | C0 and C1 Facts foundation. | New invocation/configuration/result-handling tests and affected composition; event/permission/credential prerequisite and actual invocation verification; backend results remain separate. |
 | C8 / #339 | Complete package-to-Live invocation and branch-local operations contract. | C0/C1 and relevant #321/#328/#329/#322 assets/scenarios. | New staging/orchestration tests, complete same-run package inputs, explicit artifact subject validation, and actual entrypoint verification at the claimed level. |
 
+#320/#333 detail serial C1a (typed Basic/reasoning HTTP + bounded SSE), C1b
+(runtime/config closure), and C1c (used Facts/Live) increments. #320 stays open
+until all close with independent canonical proof. Harness fixtures are independent
+of #329; #322/#328 retain Tools/Images ownership; no obligation is retired.
+
 An owner may split only at independently complete green boundaries, updating this
 plan and #333 together. Each semantic owner closes its affected native generator
 outputs, schemas/SDKs, lockfiles, Bazel/build data, fixtures, tests, and harness
@@ -83,10 +88,13 @@ against the event SHA, PR merge parents or canonical push ref, and the caller's
 workflow revision. Logs identify PR HEAD/base, checkout SHA and workflow context;
 the PR test-merge SHA remains distinct from the eventual squash SHA.
 
-The inner `complete` job explicitly needs `subject` and the native `locks` job;
+The inner `complete` job explicitly needs `subject` and native `locks`;
 outer `Cargo` needs the reusable `proof`. Both aggregates run with `always()`
 and accept only `success`. The lock job requires successful subject verification
 and uses native Cargo/Bazel entrypoints plus the existing Provider metadata suite.
+The same job adds the complete codex-api suite and scoped Clippy for Grok and
+affected stock request/ingress/error contracts. Required steps preserve the
+existing fail-closed aggregation and share compiled dependencies.
 Missing, failed, cancelled, skipped, neutral, or empty required proof is non-green.
 PR concurrency is scoped by PR number; canonical concurrency is isolated by run
 ID, so even pending runs from distinct pushes cannot replace one another. The
