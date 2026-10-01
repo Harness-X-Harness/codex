@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Harness-X-Harness/codex/grok/facts"
 )
@@ -118,7 +119,35 @@ func TestProbeTextRequiresSemanticCompletion(t *testing.T) {
 			if (err == nil) != tc.complete || got != want {
 				t.Fatalf("observation = %+v, error = %v; want %+v", got, err, want)
 			}
+			if err != nil && (strings.Contains(err.Error(), "private-key") || strings.Contains(err.Error(), server.URL)) {
+				t.Fatal("parsed backend error leaked private content")
+			}
 		})
+	}
+}
+
+func TestProbeStopsReadingOversizedResponseBeforeEOF(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"padding":"` + strings.Repeat("x", (8<<20)+1)))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	probe, err := facts.NewProbe(server.URL, "private-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := probe.EncryptedReplay(ctx, "fixture")
+	want := facts.Observation{Requests: 1, HTTPStatus: 200, Stage: "initial"}
+	if err == nil || got != want || ctx.Err() != nil {
+		t.Fatalf("read did not stop at the size boundary before EOF: %+v, %v", got, err)
 	}
 }
 
