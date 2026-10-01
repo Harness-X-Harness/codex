@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::AuthError;
 use codex_api::AuthProvider;
@@ -628,3 +629,6 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
 
     Ok(())
 }
+
+#[path = "clients/grok_responses_tests.rs"]
+mod grok_responses_tests;

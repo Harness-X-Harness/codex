@@ -93,9 +93,34 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
 
+  api:
+    name: Responses dialect
+    needs: subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just,nextest@0.9.103
+      - name: Test Grok and affected stock API contracts
+        working-directory: codex-rs
+        run: just test -p codex-api --locked --cargo-profile ci-test --no-tests=fail
+      - name: Fix scoped API lint
+        working-directory: codex-rs
+        run: just fix -p codex-api --locked --profile ci-test
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+
   complete:
     name: Native proof result
-    needs: [subject, locks]
+    needs: [subject, locks, api]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -103,8 +128,9 @@ jobs:
         env:
           SUBJECT_RESULT: ${{ needs.subject.result }}
           LOCKS_RESULT: ${{ needs.locks.result }}
+          API_RESULT: ${{ needs.api.result }}
         run: |
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT"; do
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$API_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1

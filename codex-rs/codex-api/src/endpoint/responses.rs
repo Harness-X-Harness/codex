@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::provider::ApiDialect;
 use crate::provider::Provider;
 use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
@@ -25,6 +26,7 @@ use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
+    dialect: ApiDialect,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
 }
 
@@ -42,8 +44,15 @@ impl<T: HttpTransport> ResponsesClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
+            dialect: ApiDialect::OpenAi,
             sse_telemetry: None,
         }
+    }
+
+    /// Select explicit request/stream semantics without changing transport identity.
+    pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     pub fn with_telemetry(
@@ -53,6 +62,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ) -> Self {
         Self {
             session: self.session.with_request_telemetry(request),
+            dialect: self.dialect,
             sse_telemetry: sse,
         }
     }
