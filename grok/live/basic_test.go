@@ -171,6 +171,12 @@ func fixtureOptions(t *testing.T, mode string) live.Options {
 	if err != nil {
 		t.Fatal(err)
 	}
+	script, _ := json.Marshal(map[string]string{"Mode": mode, "Trace": filepath.Join(t.TempDir(), "rpc")})
+	return live.Options{Subject: binarySubject(t, binary), Model: providerfixture.PrimaryModel, BaseURL: "http://fixture.invalid/v1", APIKey: string(script)}
+}
+
+func binarySubject(t *testing.T, binary string) live.Subject {
+	t.Helper()
 	file, err := os.Open(binary)
 	if err != nil {
 		t.Fatal(err)
@@ -180,11 +186,7 @@ func fixtureOptions(t *testing.T, mode string) live.Options {
 	if _, err := io.Copy(hash, file); err != nil {
 		t.Fatal(err)
 	}
-	script, _ := json.Marshal(map[string]string{"Mode": mode, "Trace": filepath.Join(t.TempDir(), "rpc")})
-	return live.Options{
-		Subject: live.Subject{Binary: binary, SHA256: hex.EncodeToString(hash.Sum(nil)), SourceSHA: strings.Repeat("a", 40), HarnessSHA: strings.Repeat("b", 40), Target: "test-host", Environment: "deterministic"},
-		Model:   providerfixture.PrimaryModel, BaseURL: "http://fixture.invalid/v1", APIKey: string(script),
-	}
+	return live.Subject{Binary: binary, SHA256: hex.EncodeToString(hash.Sum(nil)), SourceSHA: strings.Repeat("a", 40), HarnessSHA: strings.Repeat("b", 40), Target: "test-host", Environment: "deterministic"}
 }
 
 func TestBasicCompletesMatchingTurn(t *testing.T) {
