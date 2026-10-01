@@ -88,8 +88,8 @@ claim. Do not demand a redesign or reopen an owner solely because a hypothetical
 risk can be imagined. Backend refresh remains parallel, but demonstrated defects
 must be triaged on their merits.
 
-For a pending CI gate, give the exact handoff defined in carry-forward.md and
-pause for Grok Bot. Do not poll. For no material finding, report `none`.
+For a pending CI gate, record the exact subject and authoritative result source;
+do not treat pending work as passed. For no material finding, report `none`.
 
 ## Context and authority discipline
 
