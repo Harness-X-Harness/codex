@@ -45,3 +45,41 @@ func TestProbeTextUsesExplicitFixtureAndObservesCompletion(t *testing.T) {
 		t.Fatal("request did not preserve the fixture's explicit model/text input")
 	}
 }
+
+func TestProbeReplayPreservesOpaqueValueAndTypedContent(t *testing.T) {
+	var requests []map[string]any
+	const opaque = "opaque+/=\nunchanged"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error("invalid request JSON")
+		}
+		requests = append(requests, body)
+		output := []any{map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "ok"}}}}
+		if len(requests) == 1 {
+			output = append(output, map[string]any{"type": "reasoning", "encrypted_content": opaque})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "completed", "model": "fixture-primary", "output": output})
+	}))
+	defer server.Close()
+	probe, err := facts.NewProbe(server.URL, "private-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := probe.EncryptedReplay(context.Background(), "fixture-primary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := facts.Observation{Requests: 2, HTTPStatus: 200, Stage: "replay", Completed: true, TextBytes: 2, EncryptedItems: 1, Replayed: true, ReturnedModelMatches: true}
+	if got != want {
+		t.Fatalf("observation = %+v, want %+v", got, want)
+	}
+	textInput := []any{map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Reply with the single word ok."}}}}
+	wantRequests := []map[string]any{
+		{"model": "fixture-primary", "stream": false, "input": textInput, "include": []any{"reasoning.encrypted_content"}},
+		{"model": "fixture-primary", "stream": false, "input": append([]any{map[string]any{"type": "reasoning", "encrypted_content": opaque, "summary": []any{}, "content": []any{map[string]any{"type": "reasoning_text", "text": "x"}}}}, textInput...)},
+	}
+	if !reflect.DeepEqual(requests, wantRequests) {
+		t.Fatal("replay did not preserve the opaque value and typed content")
+	}
+}

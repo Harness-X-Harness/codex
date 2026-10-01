@@ -107,3 +107,8 @@ func (p *Probe) Text(ctx context.Context, model string) (Observation, error) {
 	observation.ReturnedModelMatches = result.Model == model
 	return observation, nil
 }
+
+// EncryptedReplay observes one initial request and one opaque typed-history replay.
+func (p *Probe) EncryptedReplay(ctx context.Context, model string) (Observation, error) {
+	return Observation{}, errors.New("encrypted replay not implemented")
+}
