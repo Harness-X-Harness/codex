@@ -21,6 +21,11 @@ scheduling belong to the owning GitHub issues and PRs.
   tests, and failure history are reference evidence, not current proof. The old
   carry ref remains historical; the old RC source ref is retired.
 
+Exact stock is a trusted upstream input. C0 establishes this contract and the
+admission/proof mechanism. Later increments own their deltas, affected stock
+contracts (including indirect effects), and composition. Neither stock trust nor
+C0 acceptance proves the modified Grok product.
+
 ## Selected decisions and current-stock ownership
 
 KEEP retains the requested behavior; UPDATE adapts its implementation or selected
@@ -46,15 +51,15 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 
 | Position / issue | Complete outcome | Real prerequisites | Minimum native proof |
 | --- | --- | --- | --- |
-| C0 / #337 | This plan and one shared native PR/push baseline. | #319 readiness. | Repository formatting, stock CI-script tests, Cargo/Bazel lock consistency, Linux Rust workspace Clippy and all workspace tests; first required PR `Cargo` and actual squash push proof. |
-| C1 / #320 | Provider/Responses, owned representations, and first used Facts/Live support. | C0. | Identity/dialect, request/history policy, interleaved SSE, recovery/remote boundaries, stock regressions, and meaningful deterministic Go harness tests. |
-| C2 / #323 | Atomic close/snapshot and durable post-close input disposition. | C0. | Queue close/snapshot and post-close injection/history integration, plus stock session/turn regressions. |
+| C0 / #337 | This plan and one demonstrated native admission/proof path. | #319 readiness. | Execution-subject checks; real PR/required `Cargo` and protection evidence; fail-closed aggregation including an executed negative path; event/permission/concurrency review; final-candidate PR and actual canonical-push proof. |
+| C1 / #320 | Provider/Responses, owned representations, and first used Facts/Live support. | C0. | Identity/dialect, request/history policy, interleaved SSE, recovery/remote boundaries; affected OpenAI/ChatGPT serialization, ingress/error/config regressions and composition; meaningful deterministic Go harness tests. |
+| C2 / #323 | Atomic close/snapshot and durable post-close input disposition. | C0. | Queue close/snapshot and post-close injection/history integration, plus affected stock session/turn/mailbox/AgentControl regressions and lifecycle composition. |
 | C3 / #327 | Exact whole-number parsing and current tool call-site wiring. | C0. | Signed/unsigned bounds, integral decimal/exponent forms, fractions, values above 2^53, and exec/stdin/multi-agent argument integration. |
 | C4 / #321 | Structured editing with native local/remote mutation safety and retained scenario source. | C0; C1 harness for Live scenario source. | Engine/runtime/lifecycle, stale snapshots, VerifiedContents, registration/hooks, conditional writes, stock patch/Code Mode/sandbox/symlink/hard-link/cwd regressions, and deterministic harness tests. |
-| C5 / #328 | Updated Grok image dialect and retained image scenario source. | C1. | Projection/normalization/cardinality and fail-closed input policy, stock image regressions, availability/schema agreement, and deterministic image harness tests. |
-| C6 / #329 | Runtime profile/catalog and Provider-bound App Server lifecycle. | C1. | Asset loading, model-list/catalog isolation, Provider-bound fork/resume/compaction/child inheritance, stock regressions, and deterministic shipped-profile harness tests. |
-| C7 / #322 | Complete tool/search/history contract, owned outputs, and scenario source. | C1; other owners only where actual seams require them. | Collision/reverse routing/function/custom/patch grammar, hosted history/follow-up versus local output pairing, search/date precedence and fail-closed policy, owned generators/consistency, deterministic scenarios, and cross-owner composition. |
-| C8 / #338 | Independently invocable backend Facts. | C0 and C1 Facts foundation. | Existing deterministic harness proof plus invocation/event/permission/credential prerequisite verification; backend results remain separate. |
+| C5 / #328 | Updated Grok image dialect and retained image scenario source. | C1. | Projection/normalization/cardinality and fail-closed input policy; stock transparent-background/file-backed edit regressions; availability/schema/request composition and deterministic image harness tests. |
+| C6 / #329 | Runtime profile/catalog and Provider-bound App Server lifecycle. | C1. | Asset loading, model-list/catalog isolation, Provider-bound fork/resume/compaction/child inheritance, stock/non-Grok catalog and lifecycle regressions, and deterministic shipped-profile harness tests. |
+| C7 / #322 | Complete tool/search/history contract, owned outputs, and scenario source. | C1; other owners only where actual seams require them. | Collision/reverse routing/function/custom/patch grammar, hosted history/follow-up versus local output pairing, search/date precedence and fail-closed policy; affected stock planning/routing/serialization/history regressions; owned consistency, deterministic scenarios, and cross-owner composition. |
+| C8 / #338 | Independently invocable backend Facts. | C0 and C1 Facts foundation. | New invocation/configuration/result-handling tests and affected composition; event/permission/credential prerequisite and actual invocation verification; backend results remain separate. |
 | C8 / #339 | Complete package-to-Live invocation and branch-local operations contract. | C0/C1 and relevant #321/#328/#329/#322 assets/scenarios. | New staging/orchestration tests, complete same-run package inputs, explicit artifact subject validation, and actual entrypoint verification at the claimed level. |
 
 An owner may split only at independently complete green boundaries, updating this
@@ -62,51 +67,41 @@ plan and #333 together. Each semantic owner closes its affected native generator
 outputs, schemas/SDKs, lockfiles, Bazel/build data, fixtures, tests, and harness
 pieces in the same increment. C7 closes accumulated behavioral composition;
 process integration owns new orchestration proof rather than deferred semantics.
+Retain earlier still-applicable downstream obligations; reviewed test replacements
+must provide equivalent or stronger coverage. Inspect actual impact through
+callers, shared dependencies, configuration, and runtime boundaries, broadening
+native proof when needed. A genuinely required stock adaptation gets a separately
+named, scoped increment before its consumer, using the same development loop.
 
-## Executable native baseline
+## Native admission/proof mechanism
 
 `.github/workflows/grok.yml` calls the same-revision local `grok-proof.yml` for
 both PR and version-line push events. The stable outer `Cargo` check requires the
-whole reusable proof; its inner aggregate requires every declared native job to
-succeed, including after a failure or cancellation. Missing/skipped results fail.
-PR runs may be superseded by a newer head; each canonical push retains its run.
+whole reusable proof. C0's required `subject` job verifies the actual checkout
+against the event SHA, PR merge parents or canonical push ref, and the caller's
+workflow revision. Logs identify PR HEAD/base, checkout SHA and workflow context;
+the PR test-merge SHA remains distinct from the eventual squash SHA.
 
-C0's required baseline runs on Linux using stock CI/Bazel setup, pinned Rust/nextest,
-the stock V8 artifact verifier, Linux sandbox dependencies, stock-built voice
-SDK/runtime inputs, and built sandbox and Code Mode helpers. Commands remain directly visible: `just fmt-check`,
-`just test-github-scripts`, `just bazel-lock-check`, workspace `just clippy`, helper `cargo build`, and
-workspace `just test` with the stock `ci-test` build profile and explicit failure
-on an empty test selection. The inherited stock platform workflows remain
-stock-owned; C0 does not claim a completed macOS/Windows test run.
+The inner `complete` job explicitly needs `subject`; outer `Cargo` needs the
+reusable `proof`. Both aggregates run with `always()` and accept only `success`.
+Missing, failed, cancelled, skipped, neutral, or empty required proof is non-green.
+PR concurrency is scoped by PR number; canonical concurrency is isolated by run
+ID, so even pending runs from distinct pushes cannot replace one another. The
+callee has no competing concurrency group. Ordinary PRs have read-only contents
+permission and no backend credentials.
 
-The stock voice helper requires GStreamer 1.28, beyond Ubuntu 24.04's default
-packages. Its existing `//third_party/voice:native_runtime`, `native_sdk`, and
-`pkg_config` targets prepare the pinned build and test inputs. Cargo keeps native
-version probes and prioritizes that SDK's metadata, with explicit distro metadata
-for ALSA. Tests use the matching libraries/plugins; this is source-test setup,
-not a distribution package or an executed device/backend claim.
+C0 acceptance requires structural review, an applicable executed negative path,
+actual required-check/protection evidence, fresh final-candidate PR proof and
+same-definition proof on the actual protected squash SHA. Temporary failure
+injection is removed before admission. These results stay in GitHub.
 
-Stock stamps `workspace.package.version` as `0.158.0` while its checked-in lock
-still records the workspace packages as `0.0.0`. C0 normalizes those lock entries
-through native Cargo resolution so the locked baseline can execute. External
-dependency versions, sources, checksums, and edges are preserved. The required
-native Bazel lock refresh/check closes this baseline-owned representation.
-
-The existing Code Mode cancellation fixture also needs the stock
-`ToolDefinition::input_schema_max_bytes` field. C0 supplies `None`, matching its
-absent input schema and the other stock fixtures. An unused matcher import in
-the stock file-upload tests is removed for strict Clippy. These mechanical test
-repairs preserve the existing assertions and product behavior.
-
-Each later owner keeps this baseline and adds its applicable native/harness proof
-to the same workflow and required dependency set. Real-backend opt-ins remain
-outside this deterministic contract. Exact test selections must be non-empty.
-Any stock failure is reported with its tested subject instead of being skipped.
-
-Required PR proof, review, squash admission, and the actual canonical push result
-are verified separately in GitHub. Progress waits for the exact-head result;
-failures are retained and repaired/reverted through an ordinary PR. At a required
-CI wait, the exact tested subject and authoritative result source remain explicit.
+Later owners add delta, affected-stock and composition proof at their real seams,
+with required native environment inputs and non-empty test selections. Keep
+commands directly visible in this shared workflow and extend its explicit
+required dependency graph. A canonical green prefix covers its still-applicable
+downstream obligations; the original stock's baseline certification is upstream
+responsibility. Stock failures retain their original evidence and are triaged
+for actual downstream relevance. C0 contains no stock fixture/version/lock repairs.
 
 ## Evidence and delivery roles
 

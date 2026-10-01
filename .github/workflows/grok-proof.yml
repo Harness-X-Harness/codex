@@ -7,108 +7,61 @@ permissions:
   contents: read
 
 jobs:
-  format:
-    name: Stock formatting and CI scripts
+  subject:
+    name: Execution subject
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 2
           persist-credentials: false
-      - uses: ./.github/actions/setup-bazel-ci
-        with:
-          target: x86_64-unknown-linux-gnu
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        with:
-          components: rustfmt
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.3"
-      - name: Repository formatting
-        run: just fmt-check
-      - name: Stock CI script tests
-        run: just test-github-scripts
-      - name: Cargo-owned Bazel lock consistency
-        run: just bazel-lock-check
-      - name: Check for a clean worktree
-        if: ${{ always() }}
-        uses: ./.github/actions/check-clean-worktree
-
-  rust:
-    name: Stock Rust workspace
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    defaults:
-      run:
-        working-directory: codex-rs
-    env:
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-bazel-ci
-        with:
-          target: x86_64-unknown-linux-gnu
-      - name: Install Linux build and sandbox dependencies
-        run: |
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential cmake pkg-config libcap-dev libasound2-dev bubblewrap
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        with:
-          components: clippy
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: nextest@0.9.103
-      - uses: ./.github/actions/setup-rusty-v8
-        with:
-          target: x86_64-unknown-linux-gnu
-      - name: Prepare stock voice build and test inputs
-        working-directory: ${{ github.workspace }}
-        run: |
-          bazel build //third_party/voice:native_runtime //third_party/voice:native_sdk //third_party/voice:pkg_config
-          voice_runtime="$(realpath "$(bazel cquery 'config(//third_party/voice:native_runtime, target)' --output=files)")"
-          voice_sdk="$(realpath "$(bazel cquery 'config(//third_party/voice:native_sdk, target)' --output=files)")"
-          voice_pkg_config="$(realpath "$(bazel cquery 'config(//third_party/voice:pkg_config, target)' --output=files)")"
-          system_pkg_config_libdir="$(pkg-config --variable=pc_path pkg-config)"
-          # Stock voice metadata takes precedence; ALSA uses installed distro inputs.
-          {
-            echo "PKG_CONFIG=$voice_pkg_config"
-            echo "PKG_CONFIG_LIBDIR=$voice_sdk/lib/pkgconfig:$system_pkg_config_libdir"
-            echo "PKG_CONFIG_PATH="
-            echo "LD_LIBRARY_PATH=$voice_runtime/lib"
-            echo "CODEX_TEST_VOICE_RUNTIME=$voice_runtime"
-            echo "GST_PLUGIN_SYSTEM_PATH_1_0=$voice_runtime/lib/gstreamer-1.0"
-            echo "GST_PLUGIN_PATH_1_0="
-            echo "GST_REGISTRY_FORK=no"
-          } >> "$GITHUB_ENV"
-      - name: Workspace Clippy
-        run: just clippy --workspace --locked --profile ci-test -- -D warnings
-      - name: Build native runtime test helpers
-        run: cargo build --locked --profile ci-test -p codex-linux-sandbox --bin codex-linux-sandbox -p codex-code-mode-host --bin codex-code-mode-host
-      - name: Workspace tests
+      - name: Verify the PR or canonical execution subject
         env:
-          CARGO_BIN_EXE_codex-linux-sandbox: ${{ env.CARGO_TARGET_DIR }}/ci-test/codex-linux-sandbox
-          CARGO_BIN_EXE_codex_linux_sandbox: ${{ env.CARGO_TARGET_DIR }}/ci-test/codex-linux-sandbox
-        run: just test --workspace --locked --cargo-profile ci-test --no-tests=fail
-      - name: Check for a clean worktree
-        if: ${{ always() }}
-        uses: ./.github/actions/check-clean-worktree
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          checkout_sha="$(git rev-parse HEAD)"
+          printf '%s\n' \
+            "repository=$GITHUB_REPOSITORY" \
+            "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+            "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
+            "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
+            "checkout=$checkout_sha" \
+            "workflow_ref=$GITHUB_WORKFLOW_REF" \
+            "workflow_sha=$GITHUB_WORKFLOW_SHA"
+          test "$checkout_sha" = "$GITHUB_SHA"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              test "$GITHUB_REF" = "refs/pull/$PR_NUMBER/merge"
+              test "$(git rev-parse HEAD^1)" = "$PR_BASE_SHA"
+              test "$(git rev-parse HEAD^2)" = "$PR_HEAD_SHA"
+              ;;
+            push)
+              case "$GITHUB_REF" in
+                refs/heads/grok/rust-v*) ;;
+                *) echo "Unexpected canonical ref: $GITHUB_REF" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unexpected proof event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+          esac
+          # The checked-out proof definition must match the caller's workflow revision.
+          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
+            .github/workflows/grok.yml .github/workflows/grok-proof.yml
 
   complete:
     name: Native proof result
-    needs: [format, rust]
+    needs: [subject]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require every native job
         env:
-          FORMAT_RESULT: ${{ needs.format.result }}
-          RUST_RESULT: ${{ needs.rust.result }}
+          SUBJECT_RESULT: ${{ needs.subject.result }}
         run: |
-          for result in "$FORMAT_RESULT" "$RUST_RESULT"; do
-            if [[ "$result" != "success" ]]; then
-              echo "Required native job did not succeed: $result" >&2
-              exit 1
-            fi
-          done
+          if [[ "$SUBJECT_RESULT" != "success" ]]; then
+            echo "Required native job did not succeed: $SUBJECT_RESULT" >&2
+            exit 1
+          fi
