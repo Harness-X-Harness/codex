@@ -164,8 +164,8 @@ jobs:
         env:
           GROK_FACTS: "0"
           GROK_LIVE: "0"
-          GROK_LIVE_NATIVE_BIN: ${{ github.workspace }}/codex-rs/target/ci-test/codex
         run: |
+          export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_LIVE_NATIVE_BIN"
           go test -race -count=1 -timeout=5m -v ./live
       - name: Fix scoped Provider runtime lint
