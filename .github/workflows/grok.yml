@@ -1,0 +1,35 @@
+name: grok
+
+on:
+  pull_request:
+    branches: ["grok/rust-v*"]
+  push:
+    branches: ["grok/rust-v*"]
+
+permissions:
+  contents: read
+
+# A newer PR head may replace its old proof. Each canonical push retains its run.
+concurrency:
+  group: grok-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  proof:
+    name: Native proof
+    uses: ./.github/workflows/grok-proof.yml
+
+  cargo:
+    name: Cargo
+    needs: proof
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the complete native proof
+        env:
+          PROOF_RESULT: ${{ needs.proof.result }}
+        run: |
+          if [[ "$PROOF_RESULT" != "success" ]]; then
+            echo "Native proof did not succeed: $PROOF_RESULT" >&2
+            exit 1
+          fi

@@ -1,0 +1,67 @@
+name: grok-proof
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  subject:
+    name: Execution subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify the PR or canonical execution subject
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          checkout_sha="$(git rev-parse HEAD)"
+          printf '%s\n' \
+            "repository=$GITHUB_REPOSITORY" \
+            "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+            "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
+            "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
+            "checkout=$checkout_sha" \
+            "workflow_ref=$GITHUB_WORKFLOW_REF" \
+            "workflow_sha=$GITHUB_WORKFLOW_SHA"
+          test "$checkout_sha" = "$GITHUB_SHA"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              test "$GITHUB_REF" = "refs/pull/$PR_NUMBER/merge"
+              test "$(git rev-parse HEAD^1)" = "$PR_BASE_SHA"
+              test "$(git rev-parse HEAD^2)" = "$PR_HEAD_SHA"
+              ;;
+            push)
+              case "$GITHUB_REF" in
+                refs/heads/grok/rust-v*) ;;
+                *) echo "Unexpected canonical ref: $GITHUB_REF" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unexpected proof event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+          esac
+          # The checked-out proof definition must match the caller's workflow revision.
+          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
+            .github/workflows/grok.yml .github/workflows/grok-proof.yml
+
+  complete:
+    name: Native proof result
+    needs: [subject]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every native job
+        env:
+          SUBJECT_RESULT: ${{ needs.subject.result }}
+        run: |
+          if [[ "$SUBJECT_RESULT" != "success" ]]; then
+            echo "Required native job did not succeed: $SUBJECT_RESULT" >&2
+            exit 1
+          fi
