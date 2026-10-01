@@ -49,10 +49,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
         }
     }
 
-    /// Select HTTP semantics independently of transport identity.
-    ///
-    /// Grok supports typed Basic/reasoning requests. Unsupported history, tools,
-    /// media and raw JSON fail before transport. OpenAI remains the default.
+    /// Select typed HTTP semantics independently of name/destination. Grok rejects
+    /// unsupported history/tools/media and raw JSON before transport; OpenAI is default.
     pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
         self.dialect = dialect;
         self

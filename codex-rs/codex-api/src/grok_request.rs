@@ -1,6 +1,4 @@
-//! Whitelist for the explicitly selected Basic/reasoning HTTP dialect.
-//! Supported stock fields are classified exhaustively; unsupported history is
-//! rejected before transport. Tools and media are extended by their own owners.
+//! Exhaustive Basic/reasoning whitelist; reject unsupported input before transport.
 
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
@@ -45,25 +43,17 @@ pub(crate) fn build(request: &ResponsesApiRequest) -> Result<Value, ApiError> {
         .enumerate()
         .map(|(index, item)| project_item(index, item))
         .collect::<Result<Vec<_>, _>>()?;
-    let reasoning = reasoning.as_ref().map(|options| {
-        let Reasoning {
-            effort: _,
-            summary: _,
-            context: _,
-        } = options;
-        // Reuse stock's numeric Custom effort encoding, selecting only known keys.
-        let serialized = json!(options);
-        Value::Object(
-            ["effort", "summary"]
-                .into_iter()
-                .filter_map(|key| {
-                    serialized
-                        .get(key)
-                        .map(|value| (key.to_owned(), value.clone()))
-                })
-                .collect(),
-        )
-    });
+    let reasoning = reasoning.as_ref().map(
+        |Reasoning {
+             effort,
+             summary,
+             context: _,
+         }| Reasoning {
+            effort: effort.clone(),
+            summary: *summary,
+            context: None,
+        },
+    );
     let mut body = json!({
         "model": model, "input": input, "reasoning": reasoning,
         "stream": stream, "include": include,
@@ -99,23 +89,21 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
             phase: _,
             internal_chat_message_metadata_passthrough: _,
         } => {
-            let mut parts = Vec::with_capacity(content.len());
-            for part in content {
-                parts.push(match part {
+            let parts = content
+                .iter()
+                .map(|part| match part {
                     ContentItem::InputText { text: _ } | ContentItem::OutputText { text: _ } => {
-                        json!(part)
+                        Ok(json!(part))
                     }
                     ContentItem::InputImage {
                         image: _,
                         detail: _,
                     }
-                    | ContentItem::InputAudio { audio_url: _ } => {
-                        return Err(ApiError::Stream(format!(
-                            "Grok Basic/reasoning does not support media at input[{index}]"
-                        )));
-                    }
-                });
-            }
+                    | ContentItem::InputAudio { audio_url: _ } => Err(ApiError::Stream(format!(
+                        "Grok Basic/reasoning does not support media at input[{index}]"
+                    ))),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             json!({"type": "message", "role": role, "content": parts})
         }
         ResponseItem::Reasoning {

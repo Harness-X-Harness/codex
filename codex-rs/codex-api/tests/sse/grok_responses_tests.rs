@@ -5,10 +5,9 @@ use codex_api::ResponsesOptions;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-async fn run_body(
-    body: String,
-    dialect: ApiDialect,
-) -> Result<Vec<Result<ResponseEvent, ApiError>>> {
+type StreamEvents = Vec<Result<ResponseEvent, ApiError>>;
+
+async fn run_body(body: String, dialect: ApiDialect) -> Result<StreamEvents> {
     let client = ResponsesClient::new(
         FixtureSseTransport::new(body),
         provider("grok"),
@@ -21,10 +20,7 @@ async fn run_body(
     Ok(stream.collect().await)
 }
 
-async fn run_events(
-    events: Vec<Value>,
-    dialect: ApiDialect,
-) -> Result<Vec<Result<ResponseEvent, ApiError>>> {
+async fn run_events(events: Vec<Value>, dialect: ApiDialect) -> Result<StreamEvents> {
     run_body(build_responses_body(events), dialect).await
 }
 
@@ -48,7 +44,7 @@ fn completed() -> Value {
     json!({"type":"response.completed", "response":{"id":"r"}})
 }
 
-fn transcript(events: Vec<Result<ResponseEvent, ApiError>>) -> Result<Vec<Value>> {
+fn transcript(events: StreamEvents) -> Result<Vec<Value>> {
     events
         .into_iter()
         .map(|event| -> Result<Value> {
@@ -67,7 +63,7 @@ fn transcript(events: Vec<Result<ResponseEvent, ApiError>>) -> Result<Vec<Value>
         .collect()
 }
 
-fn assert_failed(events: Vec<Result<ResponseEvent, ApiError>>) {
+fn assert_failed(events: StreamEvents) {
     assert!(events.last().is_some_and(Result::is_err), "{events:?}");
     assert!(
         !events
@@ -80,20 +76,13 @@ fn assert_failed(events: Vec<Result<ResponseEvent, ApiError>>) {
 #[tokio::test]
 async fn grok_interleaving_and_later_index_first_arrival_preserve_item_lifetimes() -> Result<()> {
     let reasoning = json!({"type":"reasoning","id":"r1","summary":[],"encrypted_content":null});
+    let later_index = 1;
     let events = vec![
-        item_frame(
-            "response.output_item.added",
-            /*index*/ 1,
-            reasoning.clone(),
-        ),
-        json!({"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"delta":"R"}),
+        item_frame("response.output_item.added", later_index, reasoning.clone()),
+        json!({"type":"response.reasoning_summary_text.delta","output_index":later_index,"summary_index":0,"delta":"R"}),
         added(/*index*/ 0),
         json!({"type":"response.output_text.delta","output_index":0,"delta":"A"}),
-        item_frame(
-            "response.output_item.done",
-            /*index*/ 1,
-            reasoning.clone(),
-        ),
+        item_frame("response.output_item.done", later_index, reasoning.clone()),
         json!({"type":"response.output_text.delta","output_index":0,"delta":"B"}),
         done(/*index*/ 0),
         json!({"type":"response.completed","response":{"id":"r","output":[message(),reasoning]}}),

@@ -1,6 +1,5 @@
-//! Serialize indexed item lifetimes for stock's single-active-item consumer.
-//! Per-item frames retain arrival order; indexes form a contiguous prefix from
-//! zero. Completion never drains an open item or jumps over a missing index.
+//! Normalize indexed item lifetimes into a contiguous prefix for stock ingress.
+//! Keep per-item arrival order; never drain open items or skip missing indexes.
 
 use super::ResponsesStreamEvent;
 use crate::error::ApiError;

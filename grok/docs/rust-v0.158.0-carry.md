@@ -63,22 +63,10 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | C8 / #338 | Independently invocable backend Facts. | C0 and C1 Facts foundation. | New invocation/configuration/result-handling tests and affected composition; event/permission/credential prerequisite and actual invocation verification; backend results remain separate. |
 | C8 / #339 | Complete package-to-Live invocation and branch-local operations contract. | C0/C1 and relevant #321/#328/#329/#322 assets/scenarios. | New staging/orchestration tests, complete same-run package inputs, explicit artifact subject validation, and actual entrypoint verification at the claimed level. |
 
-### C1 serial boundaries
-
-#320 is split into complete increments: C1a exposes an explicit, typed
-Basic/reasoning HTTP dialect with text/history whitelist, bounded interleaved
-SSE normalization, and fail-closed unsupported input. C1b maps serialized
-`grok_responses` to that API in production, closes Provider defaults and lossless
-remote-config/schema boundaries, and proves runtime composition. C1c introduces
-actually used Facts/Live Basic/Provider/reasoning support and deterministic Go
-proof, with explicit harness model fixtures independent of #329 and accepted
-Story/gate reviews. #320 stays open until all three are complete.
-
-C1a's public client is useful independently of runtime configuration. It rejects
-tools/images and raw JSON in its bounded Grok surface; #322/#328 retain extension
-ownership. Combining request projection and ingress sequencing in C1a avoids
-advertising a half-working dialect. Each stage must obtain its own PR and actual
-canonical-push proof before the next begins; no obligation is retired.
+#320/#333 detail serial C1a (typed Basic/reasoning HTTP + bounded SSE), C1b
+(runtime/config closure), and C1c (used Facts/Live) increments. #320 stays open
+until all close with independent canonical proof. Harness fixtures are independent
+of #329; #322/#328 retain Tools/Images ownership; no obligation is retired.
 
 An owner may split only at independently complete green boundaries, updating this
 plan and #333 together. Each semantic owner closes its affected native generator
@@ -104,10 +92,9 @@ The inner `complete` job explicitly needs `subject` and native `locks`;
 outer `Cargo` needs the reusable `proof`. Both aggregates run with `always()`
 and accept only `success`. The lock job requires successful subject verification
 and uses native Cargo/Bazel entrypoints plus the existing Provider metadata suite.
-The same native job runs the complete codex-api suite and scoped Clippy for
-Grok deltas and affected stock request/ingress/error contracts, sharing setup and
-compiled dependencies. It receives no backend credentials. Sequential required
-steps preserve fail-closed aggregation; C0 topology is unchanged.
+The same job adds the complete codex-api suite and scoped Clippy for Grok and
+affected stock request/ingress/error contracts. Required steps preserve the
+existing fail-closed aggregation and share compiled dependencies.
 Missing, failed, cancelled, skipped, neutral, or empty required proof is non-green.
 PR concurrency is scoped by PR number; canonical concurrency is isolated by run
 ID, so even pending runs from distinct pushes cannot replace one another. The
