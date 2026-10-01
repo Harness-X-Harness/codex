@@ -1,4 +1,5 @@
 use codex_config::LoaderOverrides;
+use codex_core::CodexResponsesMetadata;
 use codex_core::ModelClient;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
@@ -7,8 +8,10 @@ use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout_trace::InferenceTraceContext;
@@ -23,10 +26,18 @@ use serde_json::json;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-#[tokio::test]
-async fn configured_grok_provider_projects_production_request() -> anyhow::Result<()> {
+struct ProviderFixture {
+    _home: TempDir,
+    server: MockServer,
+    model: ModelInfo,
+    client: ModelClient,
+    telemetry: SessionTelemetry,
+    metadata: CodexResponsesMetadata,
+    prompt: Prompt,
+}
+
+async fn provider_fixture() -> anyhow::Result<ProviderFixture> {
     let server = MockServer::start().await;
-    let response = mount_sse_once(&server, sse(vec![ev_completed("r")])).await;
     let home = TempDir::new()?;
     std::fs::write(
         home.path().join("config.toml"),
@@ -64,11 +75,14 @@ wire_api = "grok_responses"
         "test".into(),
         SessionSource::Exec,
     );
+    // The infallible public runtime also accepts metadata that bypasses config validation.
+    let mut provider = config.model_provider.clone();
+    provider.supports_websockets = true;
     let client = ModelClient::new(
         /*auth_manager*/ None,
         AgentIdentityAuthPolicy::JwtOnly,
         thread,
-        config.model_provider.clone(),
+        provider,
         SessionSource::Exec,
         "test_originator".into(),
         /*model_verbosity*/ None,
@@ -103,38 +117,167 @@ wire_api = "grok_responses"
         text: "Say hi".into(),
         provenance: None,
     };
-    let mut session = client.new_session();
-    let mut stream = session
+    Ok(ProviderFixture {
+        _home: home,
+        server,
+        model,
+        client,
+        telemetry,
+        metadata,
+        prompt,
+    })
+}
+
+#[tokio::test]
+async fn configured_grok_provider_projects_production_request_and_stream() -> anyhow::Result<()> {
+    let message = json!({"type":"message","id":"msg_live","role":"assistant","content":[]});
+    let reasoning = json!({"type":"reasoning","id":"rs_live","summary":[],"content":null,"encrypted_content":null});
+    for (frames, expected) in [
+        (
+            vec![
+                json!({"type":"response.output_item.added","output_index":1,"item":reasoning}),
+                json!({"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"delta":"R"}),
+                json!({"type":"response.output_item.added","output_index":0,"item":message}),
+                json!({"type":"response.output_text.delta","output_index":0,"delta":"A"}),
+                json!({"type":"response.output_item.done","output_index":1,"item":reasoning}),
+                json!({"type":"response.output_item.done","output_index":0,"item":message}),
+                ev_completed("r"),
+            ],
+            json!([
+                {"added":message},{"text":"A"},{"done":message},
+                {"added":reasoning},{"summary":"R","index":0},{"done":reasoning},
+                {"completed":"r"}
+            ]),
+        ),
+        (
+            vec![
+                json!({"type":"response.output_item.added","output_index":0,"item":message}),
+                ev_completed("r"),
+                ev_completed("must-not-complete"),
+            ],
+            json!([
+                {"added":message},
+                {"error":"Grok stream: completion has an open item or missing output index"}
+            ]),
+        ),
+    ] {
+        let fixture = provider_fixture().await?;
+        let response = mount_sse_once(&fixture.server, sse(frames)).await;
+        let mut session = fixture.client.new_session();
+        session
+            .preconnect_websocket(
+                &fixture.model,
+                /*service_tier*/ None,
+                &fixture.telemetry,
+                &fixture.metadata,
+            )
+            .await?;
+        session
+            .prewarm_websocket(
+                &fixture.prompt,
+                &fixture.model,
+                &fixture.telemetry,
+                Some(ReasoningEffort::High),
+                ReasoningSummary::Detailed,
+                /*service_tier*/ None,
+                &fixture.metadata,
+            )
+            .await?;
+        assert!(
+            fixture
+                .server
+                .received_requests()
+                .await
+                .expect("request recording")
+                .is_empty()
+        );
+        let mut stream = session
+            .stream(
+                &fixture.prompt,
+                &fixture.model,
+                &fixture.telemetry,
+                Some(ReasoningEffort::High),
+                ReasoningSummary::Detailed,
+                /*service_tier*/ None,
+                &fixture.metadata,
+                &InferenceTraceContext::disabled(),
+            )
+            .await?;
+        let mut trace = Vec::new();
+        while let Some(event) = stream.next().await {
+            trace.push(match event {
+                Ok(ResponseEvent::OutputItemAdded(item)) => json!({"added":item}),
+                Ok(ResponseEvent::OutputItemDone(item)) => json!({"done":item}),
+                Ok(ResponseEvent::OutputTextDelta(text)) => json!({"text":text}),
+                Ok(ResponseEvent::ReasoningSummaryDelta {
+                    delta,
+                    summary_index,
+                }) => json!({"summary":delta,"index":summary_index}),
+                Ok(ResponseEvent::Completed { response_id, .. }) => {
+                    json!({"completed":response_id})
+                }
+                Ok(ResponseEvent::RateLimits(_)) => continue,
+                Err(error) => {
+                    let CodexErrorDetails::Stream(message) = error.details() else {
+                        return Err(error.into());
+                    };
+                    json!({"error":message})
+                }
+                other => anyhow::bail!("unexpected event: {other:?}"),
+            });
+        }
+        assert_eq!(json!(trace), expected);
+        assert_eq!(
+            response.single_request().body_json(),
+            json!({
+                "model":"fixture-provider-model", "instructions":"Say hi",
+                "input":[
+                    {"type":"reasoning","id":"rs_saved","summary":[],"encrypted_content":"cipher"},
+                    {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+                ],
+                "reasoning":{"effort":"high","summary":"detailed"},
+                "stream":true,"include":["reasoning.encrypted_content"],
+                "prompt_cache_key":"fixture-session"
+            })
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_grok_rejects_unsupported_history_before_transport() -> anyhow::Result<()> {
+    let mut fixture = provider_fixture().await?;
+    fixture.prompt.input = vec![ResponseItem::Other];
+    let mut session = fixture.client.new_session();
+    let Err(error) = session
         .stream(
-            &prompt,
-            &model,
-            &telemetry,
+            &fixture.prompt,
+            &fixture.model,
+            &fixture.telemetry,
             Some(ReasoningEffort::High),
             ReasoningSummary::Detailed,
             /*service_tier*/ None,
-            &metadata,
+            &fixture.metadata,
             &InferenceTraceContext::disabled(),
         )
-        .await?;
-    let mut completed = false;
-    while let Some(event) = stream.next().await {
-        if let ResponseEvent::Completed { .. } = event? {
-            completed = true;
-        }
-    }
-    assert!(completed);
+        .await
+    else {
+        anyhow::bail!("unsupported Grok history must fail before transport");
+    };
+    let CodexErrorDetails::Stream(message) = error.details() else {
+        return Err(error.into());
+    };
     assert_eq!(
-        response.single_request().body_json(),
-        json!({
-            "model":"fixture-provider-model", "instructions":"Say hi",
-            "input":[
-                {"type":"reasoning","id":"rs_saved","summary":[],"encrypted_content":"cipher"},
-                {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
-            ],
-            "reasoning":{"effort":"high","summary":"detailed"},
-            "stream":true,"include":["reasoning.encrypted_content"],
-            "prompt_cache_key":"fixture-session"
-        })
+        message,
+        "Grok Basic/reasoning cannot replay this history at input[0]"
+    );
+    assert!(
+        fixture
+            .server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
     );
     Ok(())
 }

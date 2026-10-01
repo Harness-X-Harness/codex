@@ -1,4 +1,5 @@
 use crate::create_model_provider;
+use codex_api::ApiDialect;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use pretty_assertions::assert_eq;
@@ -23,12 +24,15 @@ fn grok_stream_defaults_fill_only_unset_provider_policy() {
         };
         let provider = create_model_provider(configured.clone(), /*auth_manager*/ None);
         assert_eq!(
-            provider.info(),
-            &ModelProviderInfo {
-                stream_idle_timeout_ms: Some(expected_idle),
-                stream_max_retries: Some(expected_retries),
-                ..configured
-            }
+            (provider.info(), provider.api_dialect()),
+            (
+                &ModelProviderInfo {
+                    stream_idle_timeout_ms: Some(expected_idle),
+                    stream_max_retries: Some(expected_retries),
+                    ..configured
+                },
+                ApiDialect::Grok
+            )
         );
         assert_eq!(
             (
@@ -48,7 +52,10 @@ fn responses_stream_policy_ignores_grok_name_and_destination() {
         ..ModelProviderInfo::default()
     };
     let provider = create_model_provider(configured.clone(), /*auth_manager*/ None);
-    assert_eq!(provider.info(), &configured);
+    assert_eq!(
+        (provider.info(), provider.api_dialect()),
+        (&configured, ApiDialect::OpenAi)
+    );
     assert_eq!(
         (
             provider.info().stream_idle_timeout(),

@@ -88,6 +88,9 @@ jobs:
       - name: Fix scoped API lint
         working-directory: codex-rs
         run: just fix -p codex-api --locked --profile ci-test
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
       - name: Retain generated locks on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -97,9 +100,6 @@ jobs:
             codex-rs/Cargo.lock
             MODULE.bazel.lock
           if-no-files-found: error
-      - name: Verify clean worktree
-        if: ${{ always() }}
-        uses: ./.github/actions/check-clean-worktree
 
   runtime:
     name: Native Provider runtime proof
@@ -129,9 +129,40 @@ jobs:
       - name: Regenerate owned configuration schema
         working-directory: codex-rs
         run: just write-config-schema
+      - name: Test Provider policy and configuration boundaries
+        working-directory: codex-rs
+        run: just test -p codex-model-provider -p codex-config --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test affected client and configuration unit contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(client::) | test(client_common::) | test(config::)'
       - name: Test production Provider composition
         working-directory: codex-rs
-        run: just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::)'
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::grok_provider::) | test(suite::client::) | test(suite::client_websockets::)
+          | test(suite::websocket_fallback::) | test(suite::auth_recovery_policy::)
+          | test(suite::gateway_auth::) | test(suite::cloud_config::)'
+      - name: Test CLI display contracts
+        working-directory: codex-rs
+        run: just test -p codex-exec --lib --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test both Responses reasoning displays
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(status::tests::status_snapshot_responses_dialects_show_configured_reasoning)'
+      - name: Fix scoped Provider runtime lint
+        working-directory: codex-rs
+        run: >-
+          just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p codex-exec -p codex-tui --locked --profile ci-test
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Retain native changes on failure
+        if: ${{ failure() }}
+        run: git diff --binary > "$RUNNER_TEMP/provider-native.diff"
       - name: Retain generated representations on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -140,10 +171,8 @@ jobs:
           path: |
             codex-rs/core/config.schema.json
             codex-rs/tui/src/**/*.snap.new
+            ${{ runner.temp }}/provider-native.diff
           if-no-files-found: error
-      - name: Verify clean worktree
-        if: ${{ always() }}
-        uses: ./.github/actions/check-clean-worktree
 
   complete:
     name: Native proof result

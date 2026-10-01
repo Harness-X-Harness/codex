@@ -3,6 +3,23 @@ use crate::StaticThreadConfigLoader;
 use crate::config_toml::ConfigToml;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn grok_config_rejects_websocket_transport() {
+    let error = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.custom]
+name = "Custom endpoint"
+wire_api = "grok_responses"
+supports_websockets = true
+"#,
+    )
+    .expect_err("Grok configuration must use HTTP projection");
+    assert_eq!(
+        error.message(),
+        "model_providers.custom: wire_api grok_responses does not support websockets"
+    );
+}
+
 #[tokio::test]
 async fn remote_loader_rejects_unrepresentable_dialects() {
     for (wire_api, message) in [

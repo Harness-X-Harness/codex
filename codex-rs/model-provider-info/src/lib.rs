@@ -292,6 +292,9 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.wire_api == WireApi::GrokResponses && self.supports_websockets {
+            return Err("wire_api grok_responses does not support websockets".to_string());
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
