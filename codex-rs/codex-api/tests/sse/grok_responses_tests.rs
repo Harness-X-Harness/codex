@@ -92,9 +92,9 @@ async fn grok_interleaving_and_later_index_first_arrival_preserve_item_lifetimes
         json!(item_trace(run_events(events, ApiDialect::Grok).await?)?),
         json!([
             {"added":message()}, {"text":"A"}, {"text":"B"}, {"done":message()},
-            {"added":{"type":"reasoning","id":"r1","summary":[],"encrypted_content":null}},
+            {"added":{"type":"reasoning","id":"r1","summary":[],"content":null,"encrypted_content":null}},
             {"summary":"R","index":0},
-            {"done":{"type":"reasoning","id":"r1","summary":[],"encrypted_content":null}},
+            {"done":{"type":"reasoning","id":"r1","summary":[],"content":null,"encrypted_content":null}},
             {"completed":"r"}
         ])
     );
