@@ -50,6 +50,8 @@ jobs:
           # The checked-out proof definition must match the caller's workflow revision.
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
             .github/workflows/grok.yml .github/workflows/grok-proof.yml
+      - name: Temporary negative-path validation, removed before admission
+        run: exit 1
 
   complete:
     name: Native proof result
