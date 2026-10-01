@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,9 @@ import (
 )
 
 const historyTool = "grok_history_probe"
+
+// This bounds replay evidence, not product tool calls or retries.
+const historyAssistantLimit = 4096
 
 // ReasoningHistory observes two same-thread turns without semantic reinvocation.
 // Native encrypted replay/tool eligibility and Subject provenance are prerequisites;
@@ -38,7 +42,7 @@ func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 	})
 }
 
-// Only the token and bounded current identities/candidate survive parsed frames.
+// Only the token, current turn identities and bounded reply evidence survive frames.
 // Repeated internal calls are counted, never accumulated in a call-ID/event map.
 type historyProbe struct {
 	server                      *appServer
@@ -68,8 +72,13 @@ type historyTurn struct {
 }
 
 type historyReply struct {
-	bytes                            int
-	completed, recall, authoritative bool
+	bytes                                       int
+	completed, recall, authoritative, ambiguous bool
+	identities                                  map[[sha256.Size]byte]historyReplyOutcome
+}
+
+type historyReplyOutcome struct {
+	finalEligible, recall bool
 }
 
 func (probe *historyProbe) toolRequest(message frame) error {
@@ -128,30 +137,34 @@ func (probe *historyProbe) observe(prompt string) error {
 	if probe.previousID != "" {
 		probe.evidence.Stage = "continuation_submitted"
 	}
-	reply := historyReply{}
-	if started.Turn.Status != "inProgress" {
-		if err := probe.completedTurn(started.Turn, &reply); err != nil {
-			return err
-		}
-	}
-	for {
+	reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
+	// Include partial evidence on every exit, including an item-level failure.
+	defer func() {
 		if reply.completed {
 			probe.evidence.Stage = "first_turn_completed"
 			if probe.previousID != "" {
 				probe.evidence.Stage = "continuation_completed"
 			}
 		}
+		recall := reply.recall && !reply.ambiguous
 		if probe.previousID == "" {
-			probe.evidence.FirstCompleted, probe.evidence.FirstRecall, probe.evidence.FirstReplyBytes = reply.completed, reply.recall, reply.bytes
+			probe.evidence.FirstCompleted, probe.evidence.FirstRecall, probe.evidence.FirstReplyBytes = reply.completed, recall, reply.bytes
 		} else {
-			probe.evidence.Completed, probe.evidence.Recalled, probe.evidence.ReplyBytes = reply.completed, reply.recall, reply.bytes
+			probe.evidence.Completed, probe.evidence.Recalled, probe.evidence.ReplyBytes = reply.completed, recall, reply.bytes
 		}
+	}()
+	if started.Turn.Status != "inProgress" {
+		if err := probe.completedTurn(started.Turn, &reply); err != nil {
+			return err
+		}
+	}
+	for {
 		if reply.authoritative && !reply.recall {
 			return errors.New("live: final reply did not recall tool result")
 		}
 		firstProof := probe.evidence.ReasoningItems > 0 && probe.evidence.EncryptedItems > 0 && probe.evidence.CompletedTools > 0
 		// Drain already queued notifications even if the inline reply completed.
-		if len(probe.server.pending) == 0 && reply.completed && reply.recall && (probe.previousID != "" || firstProof) {
+		if len(probe.server.pending) == 0 && reply.completed && reply.recall && !reply.ambiguous && (probe.previousID != "" || firstProof) {
 			return nil
 		}
 		message, err := probe.server.next()
@@ -193,8 +206,8 @@ func (probe *historyProbe) observe(prompt string) error {
 						probe.evidence.EncryptedItems++
 					}
 				}
-			} else {
-				probe.completedItem(completed.Item, &reply)
+			} else if err := probe.completedItem(completed.Item, &reply); err != nil {
+				return err
 			}
 		}
 	}
@@ -209,25 +222,50 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 	// earlier item recalled the token or an older notification is replayed later.
 	for _, item := range turn.Items {
 		if item.Type == "agentMessage" {
-			reply.authoritative = false
-			probe.completedItem(item, reply)
-			reply.authoritative = true
-		} else {
-			probe.completedItem(item, reply)
+			if item.ID == "" {
+				return errors.New("live: assistant item identity not established")
+			}
+			// Summary order overrides deduplication without spending its budget.
+			reply.bytes = len(item.Text)
+			reply.recall = probe.token != "" && (item.Phase == "" || item.Phase == "final_answer") && strings.Contains(item.Text, probe.token)
+			reply.authoritative, reply.ambiguous = true, false
+			reply.identities = nil
+		} else if err := probe.completedItem(item, reply); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) {
-	if item.Type == "agentMessage" && !reply.authoritative {
-		// Missing phase is unknown, not irrevocably final. Every later completed
-		// assistant output replaces the current candidate, including commentary.
-		reply.bytes = len(item.Text)
-		reply.recall = probe.token != "" && (item.Phase == "" || item.Phase == "final_answer") && strings.Contains(item.Text, probe.token)
+func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) error {
+	if item.Type == "agentMessage" {
+		if item.ID == "" {
+			return errors.New("live: assistant item identity not established")
+		}
+		if reply.authoritative {
+			return nil
+		}
+		identity := sha256.Sum256([]byte(item.ID))
+		outcome := historyReplyOutcome{
+			finalEligible: item.Phase == "" || item.Phase == "final_answer",
+			recall:        probe.token != "" && strings.Contains(item.Text, probe.token),
+		}
+		if previous, seen := reply.identities[identity]; seen {
+			if previous != outcome {
+				reply.ambiguous = true
+			}
+			return nil
+		}
+		if len(reply.identities) == historyAssistantLimit {
+			return errors.New("live: assistant identity evidence budget exceeded")
+		}
+		reply.identities[identity] = outcome
+		// Unknown phase remains provisional. Only an unseen item can supersede
+		// it; replay cannot resurrect an old candidate. A summary always wins.
+		reply.bytes, reply.recall = len(item.Text), outcome.finalEligible && outcome.recall
 	}
 	if probe.previousID != "" {
-		return
+		return nil
 	}
 	if item.Type == "reasoning" {
 		probe.evidence.ReasoningItems++
@@ -240,4 +278,5 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 			}
 		}
 	}
+	return nil
 }

@@ -33,6 +33,15 @@ turn N before a single fixed, token-free continuation is submitted. N+1 must
 complete and recall that token; tool requests receive a token-free denial while
 observation continues. No private token, ciphertext, text or identity is returned.
 
+Per turn, reply evidence retains at most 4096 assistant-ID SHA-256 digests and
+final-eligibility/recall bits. Consistent duplicates cannot revive a superseded
+reply; conflicting duplicates prevent proof until an authoritative terminal
+assistant summary reconciles them. A previously unseen delayed final remains
+eligible when that summary is absent. Missing assistant IDs and identity-budget
+overflow fail with static errors. This is a harness memory bound, not a limit on
+product tool calls or retries. Authoritative summaries bypass and release the
+digest map; provisional evidence starts fresh for the continuation.
+
 Deterministic public-stdio tests cover ordering, correlation, terminal evidence,
 secret-safe failures and invocation budgets for both model controls. Actual
 native tool/HTTP composition and real-provider execution require #322; the

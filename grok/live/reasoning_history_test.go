@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,10 @@ func fakeHistoryServer() {
 			scenario := ""
 			if phase == 1 && !strings.HasPrefix(mode, "next_") || phase == 2 && strings.HasPrefix(mode, "next_") {
 				scenario = strings.TrimPrefix(mode, "next_")
+			}
+			if mode == "identity_limit" || mode == "identity_limit_summary" {
+				// Fill independent turn-specific identity sets to prove the budget resets.
+				scenario = mode
 			}
 			turn := "PRIVATE_TURN_ONE"
 			if phase == 2 && scenario != "reused_turn" {
@@ -319,6 +324,119 @@ func fakeHistoryServer() {
 					emit("item/completed", last)
 				}
 			}
+			var afterTerminal any
+			if strings.HasPrefix(scenario, "identity_") {
+				mark("identity_sequence")
+				for _, item := range terminalItems {
+					if item.(map[string]any)["type"] != "agentMessage" {
+						emit("item/completed", item)
+					}
+				}
+				terminalItems = nil
+				assistant := func(id, phase, text string) map[string]any {
+					item := map[string]any{"type": "agentMessage", "id": id, "text": text}
+					if phase != "" {
+						item["phase"] = phase
+					}
+					return item
+				}
+				a, b := "PRIVATE_REPLY_A", "PRIVATE_REPLY_B"
+				switch scenario {
+				case "identity_replay", "identity_replay_final":
+					phase := ""
+					if scenario == "identity_replay_final" {
+						phase = "final_answer"
+					}
+					emit("item/completed", assistant(a, phase, token))
+					emit("item/completed", assistant(b, phase, historyCanary))
+					// EOF after this post-terminal replay proves the reader consumed it.
+					afterTerminal = assistant(a, phase, token)
+				case "identity_delayed_final":
+					emit("item/completed", assistant(a, "commentary", token))
+					afterTerminal = assistant(b, "final_answer", token)
+				case "identity_duplicate":
+					emit("item/completed", assistant(a, "final_answer", token))
+					// The fingerprint is unchanged despite a different text size.
+					emit("item/completed", assistant(a, "final_answer", token+historyCanary))
+				case "identity_conflict_recall":
+					emit("item/completed", assistant(a, "final_answer", historyCanary))
+					emit("item/completed", assistant(a, "final_answer", token))
+				case "identity_conflict_new_final", "identity_conflict_eligibility":
+					phase, text := "final_answer", token
+					if scenario == "identity_conflict_eligibility" {
+						// Both occurrences do not recall; eligibility alone conflicts.
+						phase, text = "commentary", historyCanary
+					}
+					emit("item/completed", assistant(a, phase, text))
+					emit("item/completed", assistant(a, "final_answer", historyCanary))
+					// A new recalling candidate cannot clear an earlier identity conflict.
+					if scenario == "identity_conflict_new_final" {
+						afterTerminal = assistant(b, "final_answer", token)
+					} else {
+						emit("item/completed", assistant(b, "final_answer", token))
+					}
+				case "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_duplicate_no_recall", "identity_authority_changed_no_recall", "identity_authority_last_recall", "identity_authority_last_no_recall":
+					initial, changed, final := token, historyCanary, token
+					if scenario == "identity_authority_changed_recall" || scenario == "identity_authority_duplicate_no_recall" {
+						initial, changed = historyCanary, token
+					}
+					if strings.HasSuffix(scenario, "no_recall") {
+						final = historyCanary
+					}
+					emit("item/completed", assistant(a, "final_answer", initial))
+					emit("item/completed", assistant(a, "final_answer", changed))
+					terminalItems = []any{assistant(a, "final_answer", final)}
+					if strings.Contains(scenario, "_last_") {
+						other := historyCanary
+						if final == historyCanary {
+							other = token
+						}
+						terminalItems = []any{assistant(a, "final_answer", other), assistant(b, "final_answer", final)}
+					}
+				case "identity_missing_item", "identity_empty_item", "identity_missing_summary", "identity_empty_summary":
+					missing := assistant("", "final_answer", token)
+					if strings.Contains(scenario, "_missing_") {
+						delete(missing, "id")
+					}
+					if strings.HasSuffix(scenario, "_summary") {
+						terminalItems = []any{missing}
+					} else {
+						emit("item/completed", missing)
+						return
+					}
+				case "identity_limit", "identity_limit_summary", "identity_overflow", "identity_limit_summary_no_recall":
+					count := 4096
+					if scenario != "identity_limit" {
+						// A terminal summary does not retain another notification identity.
+						count++
+					}
+					for index := 0; index < count; index++ {
+						text := historyCanary
+						if index == count-1 && scenario != "identity_limit_summary_no_recall" {
+							text = token
+						}
+						item := assistant("PRIVATE_REPLY_"+turn+"_"+strconv.Itoa(index), "final_answer", text)
+						if strings.Contains(scenario, "_summary") && index == count-1 {
+							terminalItems = []any{item}
+						} else {
+							emit("item/completed", item)
+						}
+					}
+					if scenario == "identity_overflow" {
+						// Do not close stdout: rejection must precede EOF or cancellation.
+						mark("identity_overflow_sent")
+						if _, ok := read(); ok {
+							mark("unexpected_method")
+						}
+						mark("identity_input_closed")
+						return
+					}
+					if scenario == "identity_limit" {
+						// At capacity, an old duplicate must neither spend budget nor supersede.
+						emit("item/completed", assistant("PRIVATE_REPLY_"+turn+"_0", "final_answer", historyCanary))
+					}
+				}
+			}
 			completed := map[string]any{"id": eventTurn, "status": "completed", "error": nil, "items": terminalItems}
 			if scenario == "failed" || scenario == "partial" {
 				completed["status"] = "failed"
@@ -336,6 +454,9 @@ func fakeHistoryServer() {
 				reply(p, map[string]any{"turn": completed})
 			} else if scenario != "no_terminal" {
 				send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
+			}
+			if afterTerminal != nil {
+				emit("item/completed", afterTerminal)
 			}
 			if scenario == "late" {
 				emit("item/completed", reason)
@@ -356,6 +477,10 @@ func fakeHistoryServer() {
 }
 
 func historySuccess(mode string) bool {
+	switch strings.TrimPrefix(mode, "next_") {
+	case "identity_delayed_final", "identity_duplicate", "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_last_recall", "identity_limit", "identity_limit_summary":
+		return true
+	}
 	switch mode {
 	case "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
 		return true
@@ -368,6 +493,15 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 		"wrong_model", "wrong_provider", "wrong_thread_provider", "request_thread", "request_turn", "request_namespace", "request_empty_namespace", "request_tool", "empty_call", "unsupported", "early_unsupported", "inline_conflict", "provisional_mismatch", "wrong_thread", "wrong_turn",
 		"no_reason", "no_cipher", "missing_cipher", "cipher_wrong_thread", "cipher_wrong_turn", "no_request", "no_tool", "tool_failed", "tool_partial", "tool_namespace", "tool_empty_namespace", "tool_wrong_thread", "tool_wrong_turn", "reply_wrong_thread", "reply_wrong_turn", "wrong_tool", "wrong_output", "no_reply", "missing_reply", "wrong_reply", "commentary", "delta", "legacy_superseded", "legacy_commentary", "summary_replay", "no_terminal", "failed", "partial", "error", "eof", "malformed", "hang",
 		"next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict"}
+	for _, mode := range []string{
+		"identity_replay", "identity_replay_final", "identity_delayed_final", "identity_duplicate",
+		"identity_conflict_recall", "identity_conflict_new_final", "identity_conflict_eligibility",
+		"identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_duplicate_no_recall", "identity_authority_changed_no_recall", "identity_authority_last_recall", "identity_authority_last_no_recall",
+		"identity_missing_item", "identity_empty_item", "identity_missing_summary", "identity_empty_summary",
+		"identity_limit", "identity_limit_summary", "identity_overflow", "identity_limit_summary_no_recall",
+	} {
+		modes = append(modes, mode, "next_"+mode)
+	}
 	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
 		for _, mode := range modes {
 			t.Run(model+"/"+mode, func(t *testing.T) {
@@ -377,6 +511,9 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 				deadline := 5 * time.Second
 				if mode == "hang" {
 					deadline = time.Second
+				}
+				if strings.Contains(mode, "identity_limit") || strings.Contains(mode, "identity_overflow") {
+					deadline = 15 * time.Second
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), deadline)
 				defer cancel()
@@ -399,7 +536,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 						t.Fatal("token-shaped error escaped")
 					}
 				}
-				for _, secret := range []string{historyCanary, "PRIVATE_THREAD", "PRIVATE_TURN", "PRIVATE_CALL", "PRIVATE_REPEAT", "PRIVATE_REPLY", "PRIVATE_REASONING", "PRIVATE_CIPHER", options.APIKey, options.Subject.Binary, options.BaseURL} {
+				for _, secret := range []string{historyCanary, "PRIVATE_THREAD", "PRIVATE_TURN", "PRIVATE_CALL", "PRIVATE_REPEAT", "PRIVATE_REPLY", "PRIVATE_LAST_REPLY", "PRIVATE_REASONING", "PRIVATE_CIPHER", options.APIKey, options.Subject.Binary, options.BaseURL} {
 					if strings.Contains(safe, secret) {
 						t.Fatal("private history evidence escaped")
 					}
@@ -434,6 +571,58 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 				if strings.HasPrefix(mode, "request_") || mode == "empty_call" || mode == "unsupported" || mode == "early_unsupported" {
 					if counts["request_refused"] != 1 {
 						t.Fatal("unrelated request was not explicitly refused")
+					}
+				}
+				if scenario := strings.TrimPrefix(mode, "next_"); strings.HasPrefix(scenario, "identity_") {
+					sequences := 1
+					if mode == "identity_limit" || mode == "identity_limit_summary" {
+						sequences = 2
+					}
+					if counts["identity_sequence"] != sequences || ctx.Err() != nil {
+						t.Fatal("identity sequence was not observed within its deadline")
+					}
+					wantError := ""
+					switch {
+					case strings.HasPrefix(scenario, "identity_replay"), strings.HasPrefix(scenario, "identity_conflict_"):
+						wantError = "live: protocol ended before proof completion"
+					case strings.HasSuffix(scenario, "no_recall"):
+						wantError = "live: final reply did not recall tool result"
+					case strings.HasPrefix(scenario, "identity_missing_"), strings.HasPrefix(scenario, "identity_empty_"):
+						wantError = "live: assistant item identity not established"
+					case strings.HasPrefix(scenario, "identity_overflow"):
+						wantError = "live: assistant identity evidence budget exceeded"
+						if counts["identity_overflow_sent"] != 1 || counts["identity_input_closed"] != 1 {
+							t.Fatal("identity budget was not rejected before child EOF")
+						}
+					}
+					if wantError != "" {
+						if err == nil || err.Error() != wantError {
+							t.Fatal("identity failure did not preserve its static error")
+						}
+						recalled := got.FirstRecall
+						if strings.HasPrefix(mode, "next_") {
+							recalled = got.Recalled
+							if !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 64 {
+								t.Fatal("continuation failure corrupted first-turn proof")
+							}
+						}
+						if recalled {
+							t.Fatal("replayed, ambiguous or invalid identity reported recall")
+						}
+						terminal := scenario != "identity_overflow" && !strings.HasSuffix(scenario, "_item")
+						stage, completed := "turn_submitted", got.FirstCompleted
+						if terminal {
+							stage = "first_turn_completed"
+						}
+						if strings.HasPrefix(mode, "next_") {
+							stage, completed = "continuation_submitted", got.Completed
+							if terminal {
+								stage = "continuation_completed"
+							}
+						}
+						if got.Stage != stage || completed != terminal {
+							t.Fatal("identity failure lost its last successful stage")
+						}
 					}
 				}
 				if historySuccess(mode) {
