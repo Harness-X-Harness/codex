@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Harness-X-Harness/codex/grok/facts"
@@ -117,5 +119,88 @@ func TestProbeTextRequiresSemanticCompletion(t *testing.T) {
 				t.Fatalf("observation = %+v, error = %v; want %+v", got, err, want)
 			}
 		})
+	}
+}
+
+func TestProbeReplayFailuresDoNotResubmitOrLeak(t *testing.T) {
+	const complete = `{"status":"completed","output":[{"type":"reasoning","encrypted_content":"private-opaque"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`
+	cases := []struct {
+		name, body          string
+		status, failRequest int
+		unreadable          bool
+	}{
+		{"HTTP_rejection", `{"error":"private-key private-opaque"}`, 503, 1, false},
+		{"malformed", `{"private-key":`, 200, 1, false},
+		{"oversized", strings.TrimSuffix(complete, "}") + `,"padding":"` + strings.Repeat("x", 8<<20) + `"}`, 200, 1, false},
+		{"unreadable", complete, 200, 1, true},
+		{"partial", `{"status":"incomplete","output":[]}`, 200, 1, false},
+		{"missing_cipher", `{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`, 200, 1, false},
+		{"replay_rejection", `{"error":"private-key private-opaque"}`, 422, 2, false},
+		{"replay_partial", `{"status":"in_progress","output":[]}`, 200, 2, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if int(calls.Add(1)) != tc.failRequest {
+					_, _ = w.Write([]byte(complete))
+					return
+				}
+				if tc.unreadable {
+					w.Header().Set("Content-Length", "99999")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			probe, err := facts.NewProbe(server.URL, "private-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := probe.EncryptedReplay(context.Background(), "fixture")
+			want := facts.Observation{Requests: tc.failRequest, HTTPStatus: tc.status, Stage: "initial"}
+			if tc.name == "missing_cipher" {
+				want.Completed, want.TextBytes = true, 2
+			}
+			if tc.failRequest == 2 {
+				want.Stage, want.EncryptedItems, want.Replayed = "replay", 1, true
+			}
+			if err == nil || got != want || int(calls.Load()) != tc.failRequest {
+				t.Fatalf("observation = %+v, error = %v, calls = %d; want %+v", got, err, calls.Load(), want)
+			}
+			for _, secret := range []string{"private-key", "private-opaque", server.URL} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatal("error leaked private response/configuration")
+				}
+			}
+		})
+	}
+}
+
+func TestProbeRejectsRedirectsAndCancelledTransport(t *testing.T) {
+	var destinationCalls atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		destinationCalls.Add(1)
+	}))
+	defer destination.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	probe, err := facts.NewProbe(server.URL, "private-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cancelled := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if cancelled {
+			cancel()
+		}
+		got, err := probe.Text(ctx, "fixture")
+		cancel()
+		want := facts.Observation{Requests: 1, Stage: "text"}
+		if err == nil || got != want || destinationCalls.Load() != 0 || strings.Contains(err.Error(), server.URL) {
+			t.Fatalf("unsafe redirect/transport observation: %+v, %v", got, err)
+		}
 	}
 }
