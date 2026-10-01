@@ -132,6 +132,10 @@ func (server *appServer) call(method string, params any, result any) error {
 			return err
 		}
 		if message.Method != "" {
+			if len(message.ID) != 0 {
+				_ = server.send(frame{ID: message.ID, Error: json.RawMessage(`{"code":-32601,"message":"Unsupported Live request"}`)})
+				return errors.New("live: unsupported server request")
+			}
 			pendingBytes += message.size
 			if len(server.pending) == 128 || pendingBytes > 8<<20 {
 				return errors.New("live: early evidence budget exceeded")
