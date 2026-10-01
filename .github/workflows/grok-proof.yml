@@ -47,11 +47,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-ci
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
       - name: Install Linux build and sandbox dependencies
         run: |
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential pkg-config libcap-dev libasound2-dev bubblewrap
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential cmake pkg-config libcap-dev libasound2-dev bubblewrap
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: clippy
@@ -61,6 +63,25 @@ jobs:
       - uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu
+      - name: Prepare stock voice build and test inputs
+        working-directory: ${{ github.workspace }}
+        run: |
+          bazel build //third_party/voice:native_runtime //third_party/voice:native_sdk //third_party/voice:pkg_config
+          voice_runtime="$(realpath "$(bazel cquery 'config(//third_party/voice:native_runtime, target)' --output=files)")"
+          voice_sdk="$(realpath "$(bazel cquery 'config(//third_party/voice:native_sdk, target)' --output=files)")"
+          voice_pkg_config="$(realpath "$(bazel cquery 'config(//third_party/voice:pkg_config, target)' --output=files)")"
+          system_pkg_config_libdir="$(pkg-config --variable=pc_path pkg-config)"
+          # Stock voice metadata takes precedence; ALSA uses installed distro inputs.
+          {
+            echo "PKG_CONFIG=$voice_pkg_config"
+            echo "PKG_CONFIG_LIBDIR=$voice_sdk/lib/pkgconfig:$system_pkg_config_libdir"
+            echo "PKG_CONFIG_PATH="
+            echo "LD_LIBRARY_PATH=$voice_runtime/lib"
+            echo "CODEX_TEST_VOICE_RUNTIME=$voice_runtime"
+            echo "GST_PLUGIN_SYSTEM_PATH_1_0=$voice_runtime/lib/gstreamer-1.0"
+            echo "GST_PLUGIN_PATH_1_0="
+            echo "GST_REGISTRY_FORK=no"
+          } >> "$GITHUB_ENV"
       - name: Workspace Clippy
         run: just clippy --workspace --locked --profile ci-test -- -D warnings
       - name: Build native runtime test helpers

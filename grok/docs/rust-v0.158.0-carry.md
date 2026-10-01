@@ -72,12 +72,19 @@ succeed, including after a failure or cancellation. Missing/skipped results fail
 PR runs may be superseded by a newer head; each canonical push retains its run.
 
 C0's required baseline runs on Linux using stock CI/Bazel setup, pinned Rust/nextest,
-the stock V8 artifact verifier, Linux sandbox dependencies, and built sandbox and
-Code Mode helpers. Commands remain directly visible: `just fmt-check`,
+the stock V8 artifact verifier, Linux sandbox dependencies, stock-built voice
+SDK/runtime inputs, and built sandbox and Code Mode helpers. Commands remain directly visible: `just fmt-check`,
 `just test-github-scripts`, `just bazel-lock-check`, workspace `just clippy`, helper `cargo build`, and
 workspace `just test` with the stock `ci-test` build profile and explicit failure
 on an empty test selection. The inherited stock platform workflows remain
 stock-owned; C0 does not claim a completed macOS/Windows test run.
+
+The stock voice helper requires GStreamer 1.28, beyond Ubuntu 24.04's default
+packages. Its existing `//third_party/voice:native_runtime`, `native_sdk`, and
+`pkg_config` targets prepare the pinned build and test inputs. Cargo keeps native
+version probes and prioritizes that SDK's metadata, with explicit distro metadata
+for ALSA. Tests use the matching libraries/plugins; this is source-test setup,
+not a distribution package or an executed device/backend claim.
 
 Stock stamps `workspace.package.version` as `0.158.0` while its checked-in lock
 still records the workspace packages as `0.0.0`. C0 normalizes those lock entries
