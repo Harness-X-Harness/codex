@@ -92,6 +92,12 @@ through native Cargo resolution so the locked baseline can execute. External
 dependency versions, sources, checksums, and edges are preserved. The required
 native Bazel lock refresh/check closes this baseline-owned representation.
 
+The existing Code Mode cancellation fixture also needs the stock
+`ToolDefinition::input_schema_max_bytes` field. C0 supplies `None`, matching its
+absent input schema and the other stock fixtures. An unused matcher import in
+the stock file-upload tests is removed for strict Clippy. These mechanical test
+repairs preserve the existing assertions and product behavior.
+
 Each later owner keeps this baseline and adds its applicable native/harness proof
 to the same workflow and required dependency set. Real-backend opt-ins remain
 outside this deterministic contract. Exact test selections must be non-empty.
