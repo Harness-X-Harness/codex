@@ -88,6 +88,9 @@ jobs:
       - name: Fix scoped API lint
         working-directory: codex-rs
         run: just fix -p codex-api --locked --profile ci-test
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
       - name: Retain generated locks on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -97,13 +100,83 @@ jobs:
             codex-rs/Cargo.lock
             MODULE.bazel.lock
           if-no-files-found: error
+
+  runtime:
+    name: Native Provider runtime proof
+    needs: subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install native Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+      - name: Regenerate owned configuration schema
+        working-directory: codex-rs
+        run: just write-config-schema
+      - name: Test Provider policy and configuration boundaries
+        working-directory: codex-rs
+        run: just test -p codex-model-provider -p codex-config --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test affected client and configuration unit contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(client::) | test(client_common::) | test(config::)'
+      - name: Test production Provider composition
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::grok_provider::) | test(suite::client::) | test(suite::client_websockets::)
+          | test(suite::websocket_fallback::) | test(suite::auth_recovery_policy::)
+          | test(suite::gateway_auth::) | test(suite::cloud_config::)'
+      - name: Test CLI display contracts
+        working-directory: codex-rs
+        run: just test -p codex-exec --lib --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test both Responses reasoning displays
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(status::tests::status_snapshot_responses_dialects_show_configured_reasoning)'
+      - name: Fix scoped Provider runtime lint
+        working-directory: codex-rs
+        run: >-
+          just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p codex-exec -p codex-tui --locked --profile ci-test
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
+      - name: Retain native changes on failure
+        if: ${{ failure() }}
+        run: git diff --binary > "$RUNNER_TEMP/provider-native.diff"
+      - name: Retain generated representations on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: provider-representations-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            codex-rs/core/config.schema.json
+            codex-rs/tui/src/**/*.snap.new
+            ${{ runner.temp }}/provider-native.diff
+          if-no-files-found: error
 
   complete:
     name: Native proof result
-    needs: [subject, locks]
+    needs: [subject, locks, runtime]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -111,8 +184,9 @@ jobs:
         env:
           SUBJECT_RESULT: ${{ needs.subject.result }}
           LOCKS_RESULT: ${{ needs.locks.result }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
         run: |
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT"; do
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1

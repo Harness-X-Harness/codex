@@ -104,12 +104,16 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// The Grok Responses dialect over HTTP/SSE.
+    #[serde(rename = "grok_responses")]
+    GrokResponses,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::GrokResponses => "grok_responses",
         };
         f.write_str(value)
     }
@@ -123,8 +127,12 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
+            "grok_responses" => Ok(Self::GrokResponses),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["responses", "grok_responses"],
+            )),
         }
     }
 }
@@ -284,6 +292,9 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.wire_api == WireApi::GrokResponses && self.supports_websockets {
+            return Err("wire_api grok_responses does not support websockets".to_string());
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
