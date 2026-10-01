@@ -100,13 +100,14 @@ against the event SHA, PR merge parents or canonical push ref, and the caller's
 workflow revision. Logs identify PR HEAD/base, checkout SHA and workflow context;
 the PR test-merge SHA remains distinct from the eventual squash SHA.
 
-The inner `complete` job explicitly needs `subject`, native `locks`, and `api`;
+The inner `complete` job explicitly needs `subject` and native `locks`;
 outer `Cargo` needs the reusable `proof`. Both aggregates run with `always()`
 and accept only `success`. The lock job requires successful subject verification
 and uses native Cargo/Bazel entrypoints plus the existing Provider metadata suite.
-The API job runs the complete codex-api suite and scoped Clippy for Grok deltas
-and affected stock request/ingress/error contracts. It depends on `subject` and
-receives no backend credentials.
+The same native job runs the complete codex-api suite and scoped Clippy for
+Grok deltas and affected stock request/ingress/error contracts, sharing setup and
+compiled dependencies. It receives no backend credentials. Sequential required
+steps preserve fail-closed aggregation; C0 topology is unchanged.
 Missing, failed, cancelled, skipped, neutral, or empty required proof is non-green.
 PR concurrency is scoped by PR number; canonical concurrency is isolated by run
 ID, so even pending runs from distinct pushes cannot replace one another. The

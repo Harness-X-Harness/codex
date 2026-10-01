@@ -49,7 +49,10 @@ impl<T: HttpTransport> ResponsesClient<T> {
         }
     }
 
-    /// Select explicit request/stream semantics without changing transport identity.
+    /// Select HTTP semantics independently of transport identity.
+    ///
+    /// Grok supports typed Basic/reasoning requests. Unsupported history, tools,
+    /// media and raw JSON fail before transport. OpenAI remains the default.
     pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
         self.dialect = dialect;
         self
@@ -90,8 +93,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = EncodedJsonBody::encode(&request)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        let body = match self.dialect {
+            ApiDialect::OpenAi => EncodedJsonBody::encode(&request),
+            ApiDialect::Grok => EncodedJsonBody::encode(&crate::grok_request::build(&request)?),
+        }
+        .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
@@ -124,6 +130,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        if self.dialect == ApiDialect::Grok {
+            return Err(ApiError::Stream(
+                "Grok requires typed stream_request; raw JSON bypasses projection".into(),
+            ));
+        }
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
         self.stream_encoded(body, extra_headers, compression, turn_state)
@@ -164,6 +175,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
+            self.dialect,
         ))
     }
 }

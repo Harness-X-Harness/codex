@@ -1,3 +1,4 @@
+mod grok;
 pub(crate) mod responses;
 
 pub(crate) use responses::ResponsesStreamEvent;
