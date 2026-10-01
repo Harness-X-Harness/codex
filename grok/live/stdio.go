@@ -14,6 +14,7 @@ import (
 )
 
 type frame struct {
+	size   int
 	ID     json.RawMessage `json:"id,omitempty"`
 	Method string          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
@@ -94,6 +95,7 @@ func (server *appServer) read() (frame, error) {
 	if json.Unmarshal(server.output.Bytes(), &message) != nil {
 		return message, errors.New("live: invalid protocol frame")
 	}
+	message.size = len(server.output.Bytes())
 	return message, nil
 }
 
@@ -118,13 +120,16 @@ func (server *appServer) call(method string, params any, result any) error {
 		return err
 	}
 	pendingBytes := 0
+	for _, message := range server.pending {
+		pendingBytes += message.size
+	}
 	for {
 		message, err := server.read()
 		if err != nil {
 			return err
 		}
 		if message.Method != "" {
-			pendingBytes += len(message.Params)
+			pendingBytes += message.size
 			if len(server.pending) == 128 || pendingBytes > 8<<20 {
 				return errors.New("live: early evidence budget exceeded")
 			}

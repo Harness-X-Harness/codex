@@ -89,8 +89,14 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 	defer server.close()
 	evidence.Processes, evidence.Stage = 1, "process_started"
 	evidence.Initializations = 1
-	if err := server.call("initialize", map[string]any{"clientInfo": map[string]any{"name": "grok-live", "version": "1"}, "capabilities": map[string]any{"experimentalApi": true}}, nil); err != nil {
+	var initialized struct {
+		UserAgent string `json:"userAgent"`
+	}
+	if err := server.call("initialize", map[string]any{"clientInfo": map[string]any{"name": "grok-live", "version": "1"}, "capabilities": map[string]any{"experimentalApi": true}}, &initialized); err != nil {
 		return evidence, err
+	}
+	if initialized.UserAgent == "" {
+		return evidence, errors.New("live: initialization evidence unavailable")
 	}
 	if err := server.send(frame{Method: "initialized"}); err != nil {
 		return evidence, err

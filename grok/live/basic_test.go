@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,19 @@ func TestMain(m *testing.M) {
 }
 
 func fakeAppServer() {
+	var script struct {
+		Mode  string
+		Trace string
+	}
+	if json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script) != nil {
+		return
+	}
+	trace, err := os.OpenFile(script.Trace, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer trace.Close()
+	_, _ = io.WriteString(trace, "process\n")
 	input := bufio.NewScanner(os.Stdin)
 	output := json.NewEncoder(os.Stdout)
 	for input.Scan() {
@@ -38,6 +52,7 @@ func fakeAppServer() {
 		if json.Unmarshal(input.Bytes(), &request) != nil {
 			return
 		}
+		_, _ = io.WriteString(trace, request.Method+"\n")
 		var result any
 		switch request.Method {
 		case "initialize":
@@ -73,9 +88,10 @@ func fixtureOptions(t *testing.T) live.Options {
 	if _, err := io.Copy(hash, file); err != nil {
 		t.Fatal(err)
 	}
+	script, _ := json.Marshal(map[string]string{"Mode": "turn", "Trace": filepath.Join(t.TempDir(), "rpc")})
 	return live.Options{
 		Subject: live.Subject{Binary: binary, SHA256: hex.EncodeToString(hash.Sum(nil)), SourceSHA: strings.Repeat("a", 40), HarnessSHA: strings.Repeat("b", 40), Target: "test-host", Environment: "deterministic"},
-		Model:   providerfixture.PrimaryModel, BaseURL: "http://fixture.invalid/v1", APIKey: "fixture-key",
+		Model:   providerfixture.PrimaryModel, BaseURL: "http://fixture.invalid/v1", APIKey: string(script),
 	}
 }
 
@@ -94,5 +110,14 @@ func TestBasicCompletesMatchingTurn(t *testing.T) {
 	want := live.Evidence{SHA256: options.Subject.SHA256, SourceSHA: options.Subject.SourceSHA, HarnessSHA: options.Subject.HarnessSHA, Target: "test-host", Environment: "deterministic", Model: providerfixture.PrimaryModel, Stage: "final_reply", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 13, Bound: true, Completed: true}
 	if got != want {
 		t.Fatalf("evidence = %+v, want %+v", got, want)
+	}
+	var script struct{ Trace string }
+	_ = json.Unmarshal([]byte(options.APIKey), &script)
+	trace, err := os.ReadFile(script.Trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(trace) != "process\ninitialize\ninitialized\nthread/start\nturn/start\n" {
+		t.Fatalf("unexpected invocation transcript: %q", trace)
 	}
 }
