@@ -223,6 +223,7 @@ func TestBasicCompletesMatchingTurn(t *testing.T) {
 
 func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 	for mode, stage := range map[string]string{
+		"artifact": "preflight", "unavailable": "preflight", "metadata": "preflight", "unbounded": "preflight",
 		"wrong_model": "initialized", "wrong_provider": "initialized", "wrong_thread_provider": "initialized",
 		"bad_init": "process_started", "rpc_error": "process_started", "budget": "initialized",
 		"wrong_thread": "turn_submitted", "wrong_turn": "turn_submitted", "failed": "turn_submitted", "partial": "turn_submitted",
@@ -231,12 +232,24 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 	} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, mode)
+			if mode == "artifact" {
+				options.Subject.SHA256 = strings.Repeat("0", 64)
+			}
+			if mode == "unavailable" {
+				options.Subject.Binary += ".PRIVATE_CANARY"
+			}
+			if mode == "metadata" {
+				options.Subject.Environment = "PRIVATE_CANARY/?"
+			}
 			deadline := 5 * time.Second
 			if mode == "hang" {
 				deadline = time.Second
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), deadline)
 			defer cancel()
+			if mode == "unbounded" {
+				ctx = context.Background()
+			}
 			got, err := live.Basic(ctx, options)
 			if err == nil {
 				t.Fatal("insufficient evidence accepted")
@@ -258,6 +271,17 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			}
 			if stage == "reply_observed" {
 				want.ReplyBytes = 13
+			}
+			if stage == "preflight" {
+				want.Processes, want.Initializations, want.Threads, want.Turns, want.Bound = 0, 0, 0, 0, false
+				if mode == "metadata" || mode == "unbounded" {
+					want = live.Evidence{Stage: stage}
+				}
+				var script struct{ Trace string }
+				_ = json.Unmarshal([]byte(options.APIKey), &script)
+				if _, err := os.Stat(script.Trace); !os.IsNotExist(err) {
+					t.Fatal("preflight launched a child")
+				}
 			}
 			if got != want {
 				t.Fatalf("evidence = %+v, want %+v", got, want)
