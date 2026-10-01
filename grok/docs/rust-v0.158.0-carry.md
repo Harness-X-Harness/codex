@@ -52,6 +52,7 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | Position / issue | Complete outcome | Real prerequisites | Minimum native proof |
 | --- | --- | --- | --- |
 | C0 / #337 | This plan and one demonstrated native admission/proof path. | #319 readiness. | Execution-subject checks; real PR/required `Cargo` and protection evidence; fail-closed aggregation including an executed negative path; event/permission/concurrency review; final-candidate PR and actual canonical-push proof. |
+| Before C1 / #343 | Manifest-aligned workspace lock identity for reproducible Provider proof. | C0; first needed by C1. | Native locked Cargo resolution, Cargo-owned Bazel lock generation/consistency, non-empty Provider metadata tests, reviewed aggregation and PR/canonical proof. No stock product/fixture changes. |
 | C1 / #320 | Provider/Responses, owned representations, and first used Facts/Live support. | C0. | Identity/dialect, request/history policy, interleaved SSE, recovery/remote boundaries; affected OpenAI/ChatGPT serialization, ingress/error/config regressions and composition; meaningful deterministic Go harness tests. |
 | C2 / #323 | Atomic close/snapshot and durable post-close input disposition. | C0. | Queue close/snapshot and post-close injection/history integration, plus affected stock session/turn/mailbox/AgentControl regressions and lifecycle composition. |
 | C3 / #327 | Exact whole-number parsing and current tool call-site wiring. | C0. | Signed/unsigned bounds, integral decimal/exponent forms, fractions, values above 2^53, and exec/stdin/multi-agent argument integration. |
@@ -82,8 +83,10 @@ against the event SHA, PR merge parents or canonical push ref, and the caller's
 workflow revision. Logs identify PR HEAD/base, checkout SHA and workflow context;
 the PR test-merge SHA remains distinct from the eventual squash SHA.
 
-The inner `complete` job explicitly needs `subject`; outer `Cargo` needs the
-reusable `proof`. Both aggregates run with `always()` and accept only `success`.
+The inner `complete` job explicitly needs `subject` and the native `locks` job;
+outer `Cargo` needs the reusable `proof`. Both aggregates run with `always()`
+and accept only `success`. The lock job requires successful subject verification
+and uses native Cargo/Bazel entrypoints plus the existing Provider metadata suite.
 Missing, failed, cancelled, skipped, neutral, or empty required proof is non-green.
 PR concurrency is scoped by PR number; canonical concurrency is isolated by run
 ID, so even pending runs from distinct pushes cannot replace one another. The

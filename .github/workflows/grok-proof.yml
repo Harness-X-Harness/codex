@@ -51,17 +51,62 @@ jobs:
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
             .github/workflows/grok.yml .github/workflows/grok-proof.yml
 
+  locks:
+    name: Native lock consistency
+    needs: subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+      - name: Verify locked Cargo resolution
+        working-directory: codex-rs
+        run: cargo metadata --locked --format-version 1 > "$RUNNER_TEMP/cargo-metadata.json"
+      - name: Regenerate and check Cargo-owned Bazel lock
+        run: |
+          just bazel-lock-update
+          just bazel-lock-check
+          git diff --exit-code -- codex-rs/Cargo.lock MODULE.bazel.lock
+      - name: Test Provider metadata with the locked workspace
+        working-directory: codex-rs
+        run: just test -p codex-model-provider-info --locked --cargo-profile ci-test --no-tests=fail
+      - name: Retain generated locks on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: native-locks-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            codex-rs/Cargo.lock
+            MODULE.bazel.lock
+          if-no-files-found: error
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+
   complete:
     name: Native proof result
-    needs: [subject]
+    needs: [subject, locks]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
       - name: Require every native job
         env:
           SUBJECT_RESULT: ${{ needs.subject.result }}
+          LOCKS_RESULT: ${{ needs.locks.result }}
         run: |
-          if [[ "$SUBJECT_RESULT" != "success" ]]; then
-            echo "Required native job did not succeed: $SUBJECT_RESULT" >&2
-            exit 1
-          fi
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required native job did not succeed: $result" >&2
+              exit 1
+            fi
+          done
