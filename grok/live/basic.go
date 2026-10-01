@@ -110,7 +110,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			Provider string `json:"modelProvider"`
 		} `json:"thread"`
 	}
-	if err := server.call("thread/start", map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd, "environments": []any{}}, &thread); err != nil {
+	if err := server.call("thread/start", map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}, &thread); err != nil {
 		return evidence, err
 	}
 	if thread.Thread.ID == "" || thread.Model != options.Model || thread.Provider != "grok" || thread.Thread.Provider != "grok" {

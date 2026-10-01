@@ -37,6 +37,7 @@ enabled = false
 [tools.experimental_request_user_input]
 enabled = false
 [features]
+goals = false
 shell_tool = false
 view_image = false
 sleep_tool = false

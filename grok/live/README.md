@@ -4,7 +4,6 @@
 initialize, one fixture-bound thread, one text turn, matching completion and a
 nonempty final reply. Primary/pinned fixtures use `internal/providerfixture`
 controls and an isolated text-only profile/catalog, independent of `grok/dist`.
-The Basic thread selects no execution environments or their contributed tools.
 
 Supply an absolute binary path and expected SHA-256, caller-established source,
 harness/target/environment metadata, model, Provider base URL and key. The binary
