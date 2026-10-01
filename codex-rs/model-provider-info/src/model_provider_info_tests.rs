@@ -6,6 +6,27 @@ use std::num::NonZeroU64;
 use tempfile::tempdir;
 
 #[test]
+fn grok_wire_identity_survives_provider_config_roundtrip() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Custom endpoint"
+base_url = "https://example.com/v1"
+wire_api = "grok_responses"
+stream_max_retries = 0
+stream_idle_timeout_ms = 1234
+"#,
+    )
+    .expect("explicit Grok provider config");
+
+    assert_eq!(provider.wire_api.to_string(), "grok_responses");
+    let encoded = toml::to_string(&provider).expect("serialize provider config");
+    assert_eq!(
+        toml::from_str::<ModelProviderInfo>(&encoded).expect("reload provider config"),
+        provider
+    );
+}
+
+#[test]
 fn test_api_provider_applies_current_managed_residency() {
     let info = ModelProviderInfo {
         http_headers: Some(maplit::hashmap! {
