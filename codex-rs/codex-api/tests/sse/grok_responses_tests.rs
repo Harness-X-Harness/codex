@@ -44,9 +44,10 @@ fn completed() -> Value {
     json!({"type":"response.completed", "response":{"id":"r"}})
 }
 
-fn transcript(events: StreamEvents) -> Result<Vec<Value>> {
+fn item_trace(events: StreamEvents) -> Result<Vec<Value>> {
     events
         .into_iter()
+        .filter(|event| !matches!(event, Ok(ResponseEvent::RateLimits(_))))
         .map(|event| -> Result<Value> {
             Ok(match event? {
                 ResponseEvent::OutputItemAdded(item) => json!({"added":item}),
@@ -88,7 +89,7 @@ async fn grok_interleaving_and_later_index_first_arrival_preserve_item_lifetimes
         json!({"type":"response.completed","response":{"id":"r","output":[message(),reasoning]}}),
     ];
     assert_eq!(
-        json!(transcript(run_events(events, ApiDialect::Grok).await?)?),
+        json!(item_trace(run_events(events, ApiDialect::Grok).await?)?),
         json!([
             {"added":message()}, {"text":"A"}, {"text":"B"}, {"done":message()},
             {"added":{"type":"reasoning","id":"r1","summary":[],"encrypted_content":null}},
@@ -181,7 +182,7 @@ async fn stock_ingress_preserves_arrival_order_and_ignores_unknown_index_shape()
         json!({"type":"response.completed","output_index":"ignored","response":{"id":"r"}}),
     ];
     assert_eq!(
-        json!(transcript(run_events(events, ApiDialect::OpenAi).await?)?),
+        json!(item_trace(run_events(events, ApiDialect::OpenAi).await?)?),
         json!([
             {"added":message()}, {"text":"stock"},
             {"completed":"r"}
@@ -189,7 +190,7 @@ async fn stock_ingress_preserves_arrival_order_and_ignores_unknown_index_shape()
     );
     let body = "data: malformed-json\n\n".to_owned() + &build_responses_body(vec![completed()]);
     assert_eq!(
-        json!(transcript(run_body(body, ApiDialect::OpenAi).await?)?),
+        json!(item_trace(run_body(body, ApiDialect::OpenAi).await?)?),
         json!([
             {"completed":"r"}
         ])
