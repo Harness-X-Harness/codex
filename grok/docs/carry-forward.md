@@ -185,12 +185,10 @@ optional and governed by [distribution.md](./distribution.md).
 
 ## Execution, scope, and maintenance
 
-When progress genuinely waits on CI, identify one exact wait object: repository,
-run/attempt, HEAD and PR context if relevant, authoritative status source,
-settlement condition, and the action to resume. Pause immediately. Grok Bot
-monitors and notifies; the coordinating assistant neither polls nor creates a
-ChatGPT watcher. Missing permission or an unavailable entrypoint is a different
-external blocker and must be named honestly.
+When a check required by policy is pending, do not treat it as completed.
+Bind any later conclusion to the exact repository, revision/PR subject, and
+authoritative settled result. Missing permission or an unavailable entrypoint is
+a different external blocker and must be named honestly.
 
 Issue maps coordinate outcomes and real dependencies; they do not replace tests
 or create another authority. Fix the owning issue rather than duplicating it.
