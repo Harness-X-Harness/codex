@@ -37,6 +37,7 @@ use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
 use codex_protocol::ThreadId;
@@ -282,6 +283,44 @@ fn permissions_text_for_width(config: &Config, width: u16) -> Option<String> {
                 .map(str::trim)
                 .map(ToString::to_string)
         })
+}
+
+#[tokio::test]
+async fn status_snapshot_responses_dialects_show_configured_reasoning() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+    for wire_api in [WireApi::Responses, WireApi::GrokResponses] {
+        config.model_provider = ModelProviderInfo {
+            name: "Custom endpoint".into(),
+            wire_api,
+            ..ModelProviderInfo::default()
+        };
+        let composite = new_status_output(
+            &config,
+            /*account_display*/ None,
+            /*token_info*/ None,
+            &TokenUsage::default(),
+            &None,
+            /*thread_name*/ None,
+            /*forked_from*/ None,
+            /*rate_limits*/ None,
+            /*_plan_type*/ None,
+            Local::now(),
+            "fixture-model",
+            /*collaboration_mode*/ None,
+            Some(Some(ReasoningEffort::High)),
+        );
+        let lines = render_lines(&composite.display_lines(/*width*/ 80));
+        let model = lines
+            .iter()
+            .find_map(|line| line.split_once("Model:").map(|(_, model)| model))
+            .expect("model row")
+            .trim()
+            .trim_end_matches('│')
+            .trim();
+        assert_snapshot!(model, @"fixture-model (reasoning high, summaries detailed)");
+    }
 }
 
 #[tokio::test]

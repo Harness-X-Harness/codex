@@ -93,17 +93,15 @@ wire_api = "grok_responses"
         /*parent_thread_id*/ None,
         TestCodexResponsesRequestKind::Turn,
     );
-    let prompt = Prompt {
-        input: serde_json::from_value::<Vec<ResponseItem>>(json!([
-            {"type":"reasoning","id":"rs_saved","summary":[],"encrypted_content":"cipher",
-                "content":[{"type":"reasoning_text","text":"private"}]},
-            {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
-        ]))?,
-        base_instructions: BaseInstructions {
-            text: "Say hi".into(),
-            provenance: None,
-        },
-        ..Prompt::default()
+    let mut prompt = Prompt::default();
+    prompt.input = serde_json::from_value::<Vec<ResponseItem>>(json!([
+        {"type":"reasoning","id":"rs_saved","summary":[],"encrypted_content":"cipher",
+            "content":[{"type":"reasoning_text","text":"private"}]},
+        {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+    ]))?;
+    prompt.base_instructions = BaseInstructions {
+        text: "Say hi".into(),
+        provenance: None,
     };
     let mut session = client.new_session();
     let mut stream = session

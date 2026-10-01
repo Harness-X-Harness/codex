@@ -6515,6 +6515,13 @@
             "responses"
           ],
           "type": "string"
+        },
+        {
+          "description": "The Grok Responses dialect over HTTP/SSE.",
+          "enum": [
+            "grok_responses"
+          ],
+          "type": "string"
         }
       ]
     },
