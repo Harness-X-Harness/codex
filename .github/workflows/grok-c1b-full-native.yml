@@ -1,0 +1,51 @@
+name: C1b full workspace diagnostic
+
+on:
+  push:
+    branches: [codex/grok-c1b-workspace-diagnostic]
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install native Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+      - name: Record diagnostic subject
+        env:
+          PRODUCT_SHA: c840a21ee8f9373b07d9b60b8a11c0dd44b3d03f
+        run: |
+          git rev-parse HEAD HEAD^1
+          test "$(git rev-parse HEAD^1)" = "$PRODUCT_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code "$PRODUCT_SHA" HEAD -- . ':!.github/workflows/grok-c1b-full-native.yml'
+      - name: Run full native workspace suite
+        working-directory: codex-rs
+        shell: bash
+        run: just test --workspace --locked --cargo-profile ci-test --no-tests=fail --test-threads 2 2>&1 | tee "$RUNNER_TEMP/full-native.log"
+      - name: Retain native diagnostic log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: c1b-full-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-native.log
+          if-no-files-found: warn
