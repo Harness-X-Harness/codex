@@ -39,6 +39,7 @@ func fakeAppServer() {
 	}
 	defer trace.Close()
 	_, _ = io.WriteString(trace, "process\n")
+	_, _ = io.WriteString(os.Stderr, "PRIVATE_CANARY\n")
 	input := bufio.NewScanner(os.Stdin)
 	output := json.NewEncoder(os.Stdout)
 	for input.Scan() {
@@ -53,14 +54,39 @@ func fakeAppServer() {
 			return
 		}
 		_, _ = io.WriteString(trace, request.Method+"\n")
+		if script.Mode == "budget" && (request.Method == "initialize" || request.Method == "thread/start") {
+			for range 40 {
+				_ = output.Encode(map[string]any{"method": "noop", "error": strings.Repeat("x", 120<<10)})
+			}
+			if request.Method == "thread/start" {
+				time.Sleep(time.Hour)
+				return
+			}
+		}
 		var result any
 		switch request.Method {
 		case "initialize":
 			result = map[string]any{"userAgent": "fixture"}
+			if script.Mode == "bad_init" {
+				result = nil
+			}
+			if script.Mode == "rpc_error" {
+				_ = output.Encode(map[string]any{"id": request.ID, "error": map[string]any{"message": "PRIVATE_CANARY"}})
+				return
+			}
 		case "initialized":
 			continue
 		case "thread/start":
 			result = map[string]any{"model": request.Params.Model, "modelProvider": "grok", "thread": map[string]any{"id": "thread", "modelProvider": "grok"}}
+			if script.Mode == "wrong_model" {
+				result.(map[string]any)["model"] = "PRIVATE_CANARY"
+			}
+			if script.Mode == "wrong_provider" {
+				result.(map[string]any)["modelProvider"] = "PRIVATE_CANARY"
+			}
+			if script.Mode == "wrong_thread_provider" {
+				result.(map[string]any)["thread"].(map[string]any)["modelProvider"] = "PRIVATE_CANARY"
+			}
 		case "turn/start":
 			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "inProgress"}}
 		default:
@@ -70,12 +96,40 @@ func fakeAppServer() {
 		if script.Mode == "legacy" {
 			delete(agent, "phase")
 		}
+		if script.Mode == "commentary" {
+			agent["phase"] = "commentary"
+		}
+		if script.Mode == "empty" {
+			agent["text"] = " "
+		}
 		item := map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn", "item": agent}}
 		if request.Method == "turn/start" && script.Mode == "early" {
 			_ = output.Encode(item)
 		}
+		if request.Method == "turn/start" && script.Mode == "inline" {
+			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "completed", "error": nil, "items": []any{agent}}}
+		}
 		_ = output.Encode(map[string]any{"id": request.ID, "result": result})
 		if request.Method == "turn/start" {
+			switch script.Mode {
+			case "inline":
+				return
+			case "hang":
+				time.Sleep(time.Hour)
+				return
+			case "malformed":
+				_, _ = io.WriteString(os.Stdout, "PRIVATE_CANARY\n")
+				return
+			case "oversized":
+				_ = output.Encode(map[string]any{"method": "noop", "params": strings.Repeat("x", 17<<20)})
+				time.Sleep(time.Hour)
+				return
+			case "request":
+				_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{"tool": "PRIVATE_CANARY"}})
+			case "only_reply":
+				_ = output.Encode(item)
+				return
+			}
 			items := []any{agent}
 			if script.Mode == "item" || script.Mode == "early" || script.Mode == "late" {
 				items = nil
@@ -83,7 +137,26 @@ func fakeAppServer() {
 			if script.Mode == "item" {
 				_ = output.Encode(item)
 			}
-			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": map[string]any{"id": "turn", "status": "completed", "error": nil, "items": items}}})
+			if script.Mode == "delta" {
+				items = nil
+				_ = output.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "thread", "turnId": "turn", "delta": "PRIVATE_CANARY"}})
+			}
+			completed := map[string]any{"id": "turn", "status": "completed", "error": nil, "items": items}
+			threadID := "thread"
+			if script.Mode == "wrong_thread" {
+				threadID = "PRIVATE_CANARY"
+			}
+			if script.Mode == "wrong_turn" {
+				completed["id"] = "PRIVATE_CANARY"
+			}
+			if script.Mode == "failed" {
+				completed["status"] = "failed"
+				completed["error"] = map[string]any{"message": "PRIVATE_CANARY"}
+			}
+			if script.Mode == "partial" {
+				completed["status"] = "inProgress"
+			}
+			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
 			if script.Mode == "late" {
 				_ = output.Encode(item)
 			}
@@ -115,7 +188,7 @@ func fixtureOptions(t *testing.T, mode string) live.Options {
 }
 
 func TestBasicCompletesMatchingTurn(t *testing.T) {
-	for _, mode := range []string{"turn", "pinned", "item", "early", "late", "legacy"} {
+	for _, mode := range []string{"turn", "pinned", "item", "early", "late", "legacy", "inline"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, mode)
 			if mode == "pinned" {
@@ -143,6 +216,57 @@ func TestBasicCompletesMatchingTurn(t *testing.T) {
 			}
 			if string(trace) != "process\ninitialize\ninitialized\nthread/start\nturn/start\n" {
 				t.Fatalf("unexpected invocation transcript: %q", trace)
+			}
+		})
+	}
+}
+
+func TestBasicRejectsInsufficientEvidence(t *testing.T) {
+	for mode, stage := range map[string]string{
+		"wrong_model": "initialized", "wrong_provider": "initialized", "wrong_thread_provider": "initialized",
+		"bad_init": "process_started", "rpc_error": "process_started", "budget": "initialized",
+		"wrong_thread": "turn_submitted", "wrong_turn": "turn_submitted", "failed": "turn_submitted", "partial": "turn_submitted",
+		"request": "turn_submitted", "malformed": "turn_submitted", "oversized": "turn_submitted", "hang": "turn_submitted",
+		"empty": "turn_completed", "commentary": "turn_completed", "delta": "turn_completed", "only_reply": "reply_observed",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, mode)
+			deadline := 5 * time.Second
+			if mode == "hang" {
+				deadline = time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), deadline)
+			defer cancel()
+			got, err := live.Basic(ctx, options)
+			if err == nil {
+				t.Fatal("insufficient evidence accepted")
+			}
+			encoded, _ := json.Marshal(got)
+			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_CANARY") || strings.Contains(string(encoded)+err.Error(), options.Subject.Binary) || strings.Contains(string(encoded)+err.Error(), options.BaseURL) {
+				t.Fatal("private diagnostics escaped")
+			}
+			got.ObservedAt = ""
+			want := live.Evidence{SHA256: options.Subject.SHA256, SourceSHA: options.Subject.SourceSHA, HarnessSHA: options.Subject.HarnessSHA, Target: "test-host", Environment: "deterministic", Model: options.Model, Stage: stage, Processes: 1, Initializations: 1, Threads: 1, Turns: 1, Bound: true}
+			if stage == "initialized" {
+				want.Turns, want.Bound = 0, false
+			}
+			if stage == "process_started" {
+				want.Threads, want.Turns, want.Bound = 0, 0, false
+			}
+			if stage == "turn_completed" {
+				want.Completed = true
+			}
+			if stage == "reply_observed" {
+				want.ReplyBytes = 13
+			}
+			if got != want {
+				t.Fatalf("evidence = %+v, want %+v", got, want)
+			}
+			if mode == "oversized" && err.Error() != "live: protocol frame budget exceeded" {
+				t.Fatal("frame cap not observed before EOF")
+			}
+			if mode == "budget" && err.Error() != "live: early evidence budget exceeded" {
+				t.Fatal("retained cap not observed before EOF")
 			}
 		})
 	}
