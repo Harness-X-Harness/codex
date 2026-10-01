@@ -19,7 +19,13 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "app-server" {
-		fakeAppServer()
+		var script struct{ Mode string }
+		_ = json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script)
+		if strings.HasPrefix(script.Mode, "history:") {
+			fakeHistoryServer()
+		} else {
+			fakeAppServer()
+		}
 		os.Exit(0)
 	}
 	os.Exit(m.Run())

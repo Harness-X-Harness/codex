@@ -19,7 +19,7 @@ import (
 )
 
 // Subject's source/target provenance and native eligibility are caller-established.
-// Basic verifies the executable digest; it does not infer provenance from labels.
+// The runner verifies the executable digest; it does not infer provenance from labels.
 type Subject struct {
 	Binary, SHA256, SourceSHA, HarnessSHA, Target, Environment string
 }
@@ -35,11 +35,19 @@ type Evidence struct {
 	SHA256, SourceSHA, HarnessSHA, Target, Environment, Model, ObservedAt, Stage string
 	Processes, Initializations, Threads, Turns, ReplyBytes                       int
 	Bound, Completed                                                             bool
+	ReasoningItems, EncryptedItems, ToolCalls, CompletedTools, DeniedToolCalls      int
+	FirstReplyBytes                                                              int
+	FirstCompleted, FirstRecall, Recalled                                         bool
 }
 
 // Basic initiates one process, initialization, thread and text turn without retry.
 // A successful observation assumes the caller established Subject's prerequisites.
 func Basic(ctx context.Context, options Options) (Evidence, error) {
+	return runFixture(ctx, options, nil, observeBasic)
+}
+
+// runFixture owns the shared artifact, process, initialization and thread binding.
+func runFixture(ctx context.Context, options Options, threadOptions map[string]any, observe func(*appServer, string, *Evidence) error) (Evidence, error) {
 	evidence := Evidence{Stage: "preflight", ObservedAt: time.Now().UTC().Format(time.RFC3339)}
 	deadline, bounded := ctx.Deadline()
 	subject := options.Subject
@@ -110,21 +118,31 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			Provider string `json:"modelProvider"`
 		} `json:"thread"`
 	}
-	if err := server.call("thread/start", map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}, &thread); err != nil {
+	threadParams := map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}
+	for key, value := range threadOptions {
+		threadParams[key] = value
+	}
+	if err := server.call("thread/start", threadParams, &thread); err != nil {
 		return evidence, err
 	}
 	if thread.Thread.ID == "" || thread.Model != options.Model || thread.Provider != "grok" || thread.Thread.Provider != "grok" {
 		return evidence, errors.New("live: fixture binding not established")
 	}
-	evidence.Bound, evidence.Stage, evidence.Turns = true, "thread_bound", 1
+	evidence.Bound, evidence.Stage = true, "thread_bound"
+	err = observe(server, thread.Thread.ID, &evidence)
+	return evidence, err
+}
+
+func observeBasic(server *appServer, threadID string, evidence *Evidence) error {
+	evidence.Turns = 1
 	var started struct {
 		Turn turn `json:"turn"`
 	}
-	if err := server.call("turn/start", map[string]any{"threadId": thread.Thread.ID, "input": []any{map[string]any{"type": "text", "text": "Reply with a short confirmation that this turn completed.", "textElements": []any{}}}}, &started); err != nil {
-		return evidence, err
+	if err := server.call("turn/start", map[string]any{"threadId": threadID, "input": []any{map[string]any{"type": "text", "text": "Reply with a short confirmation that this turn completed.", "textElements": []any{}}}}, &started); err != nil {
+		return err
 	}
 	if started.Turn.ID == "" {
-		return evidence, errors.New("live: turn identity unavailable")
+		return errors.New("live: turn identity unavailable")
 	}
 	evidence.Stage = "turn_submitted"
 	observeReply := func(item item) {
@@ -147,16 +165,16 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 	}
 	if started.Turn.Status != "inProgress" {
 		if err := observeTurn(started.Turn); err != nil {
-			return evidence, err
+			return err
 		}
 	}
 	for !evidence.Completed || evidence.ReplyBytes == 0 {
 		message, err := server.next()
 		if err != nil {
-			return evidence, err
+			return err
 		}
 		if len(message.ID) != 0 {
-			return evidence, server.refuse(message.ID)
+			return server.refuse(message.ID)
 		}
 		if message.Method != "turn/completed" && message.Method != "item/completed" {
 			continue
@@ -168,9 +186,9 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			Item     item   `json:"item"`
 		}
 		if json.Unmarshal(message.Params, &completed) != nil {
-			return evidence, errors.New("live: invalid completion evidence")
+			return errors.New("live: invalid completion evidence")
 		}
-		if completed.ThreadID != thread.Thread.ID {
+		if completed.ThreadID != threadID {
 			continue
 		}
 		if message.Method == "item/completed" {
@@ -183,12 +201,12 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 				continue
 			}
 			if err := observeTurn(completed.Turn); err != nil {
-				return evidence, err
+				return err
 			}
 		}
 	}
 	evidence.Stage = "final_reply"
-	return evidence, nil
+	return nil
 }
 
 var (

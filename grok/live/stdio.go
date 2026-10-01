@@ -29,6 +29,7 @@ type appServer struct {
 	output  *bufio.Scanner
 	nextID  int
 	pending []frame
+	request func(frame) error
 }
 
 func startServer(ctx context.Context, binary, home, cwd, key string) (*appServer, error) {
@@ -138,7 +139,13 @@ func (server *appServer) call(method string, params any, result any) error {
 		}
 		if message.Method != "" {
 			if len(message.ID) != 0 {
-				return server.refuse(message.ID)
+				if server.request == nil {
+					return server.refuse(message.ID)
+				}
+				if err := server.request(message); err != nil {
+					return err
+				}
+				continue
 			}
 			pendingBytes += message.size
 			if len(server.pending) == 128 || pendingBytes > 8<<20 {
