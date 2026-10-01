@@ -106,13 +106,22 @@ func fakeAppServer() {
 		if request.Method == "turn/start" && script.Mode == "early" {
 			_ = output.Encode(item)
 		}
-		if request.Method == "turn/start" && script.Mode == "inline" {
+		if request.Method == "turn/start" && (script.Mode == "inline_request" || script.Mode == "await_request") {
+			_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{"tool": "PRIVATE_CANARY"}})
+			if script.Mode == "await_request" {
+				if !input.Scan() || string(input.Bytes()) != `{"id":99,"error":{"code":-32601,"message":"Unsupported Live request"}}` {
+					return
+				}
+				_, _ = io.WriteString(trace, "unsupported_rejected\n")
+			}
+		}
+		if request.Method == "turn/start" && (script.Mode == "inline" || script.Mode == "inline_request" || script.Mode == "await_request") {
 			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "completed", "error": nil, "items": []any{agent}}}
 		}
 		_ = output.Encode(map[string]any{"id": request.ID, "result": result})
 		if request.Method == "turn/start" {
 			switch script.Mode {
-			case "inline":
+			case "inline", "inline_request", "await_request":
 				return
 			case "hang":
 				time.Sleep(time.Hour)
@@ -228,6 +237,7 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 		"artifact": "preflight", "unavailable": "preflight", "metadata": "preflight", "unbounded": "preflight",
 		"wrong_model": "initialized", "wrong_provider": "initialized", "wrong_thread_provider": "initialized",
 		"bad_init": "process_started", "rpc_error": "process_started", "budget": "initialized",
+		"inline_request": "thread_bound", "await_request": "thread_bound",
 		"wrong_thread": "turn_submitted", "wrong_turn": "turn_submitted", "failed": "turn_submitted", "partial": "turn_submitted",
 		"request": "turn_submitted", "malformed": "turn_submitted", "oversized": "turn_submitted", "hang": "turn_submitted",
 		"empty": "turn_completed", "commentary": "turn_completed", "delta": "turn_completed", "only_reply": "reply_observed",
@@ -293,6 +303,14 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			}
 			if mode == "budget" && err.Error() != "live: early evidence budget exceeded" {
 				t.Fatal("retained cap not observed before EOF")
+			}
+			if mode == "await_request" {
+				var script struct{ Trace string }
+				_ = json.Unmarshal([]byte(options.APIKey), &script)
+				trace, readErr := os.ReadFile(script.Trace)
+				if readErr != nil || string(trace) != "process\ninitialize\ninitialized\nthread/start\nturn/start\nunsupported_rejected\n" {
+					t.Fatal("server request was not refused before the RPC response")
+				}
 			}
 		})
 	}
