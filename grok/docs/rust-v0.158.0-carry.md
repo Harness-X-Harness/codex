@@ -66,7 +66,9 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 #320/#333 detail serial C1a (typed Basic/reasoning HTTP + bounded SSE), C1b
 (runtime/config closure), and C1c (used Facts/Live) increments. C1c first lands
 C1c1 (Basic/pinned/reasoning Facts and deterministic HTTP proof), then C1c2
-(consumed Live runner and scenarios with deterministic App Server proof).
+(consumed Live runner and scenarios with deterministic App Server proof):
+C1c2a closes Basic binary/process/fixture observation, including real App Server
+and controlled HTTP composition; C1c2b adds reasoning/tool/history continuation.
 Each uses its own PR/squash/canonical proof. #320 stays open until all close.
 Harness fixtures are independent
 of #329; #322/#328 retain Tools/Images ownership; no obligation is retired.

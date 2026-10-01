@@ -152,6 +152,22 @@ jobs:
         run: >-
           just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(status::tests::status_snapshot_responses_dialects_show_configured_reasoning)'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Build the exact CLI for the Basic fixture
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
+      - name: Test real App Server and controlled Grok HTTP composition
+        working-directory: grok
+        env:
+          GROK_FACTS: "0"
+          GROK_LIVE: "0"
+        run: |
+          export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
+          test -x "$GROK_LIVE_NATIVE_BIN"
+          go test -race -count=1 -timeout=5m -v ./live
       - name: Fix scoped Provider runtime lint
         working-directory: codex-rs
         run: >-
@@ -175,7 +191,7 @@ jobs:
           if-no-files-found: error
 
   go:
-    name: Deterministic Facts proof
+    name: Deterministic Facts and Live proof
     needs: subject
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -190,9 +206,9 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
-      - name: Test the Facts HTTP boundary without backend calls
+      - name: Test Facts HTTP and Live stdio boundaries without backend calls
         working-directory: grok
-        run: go test -race -count=1 -v ./facts
+        run: go test -race -count=1 -timeout=4m -v ./facts ./live
       - name: Vet the consumed Go foundation
         working-directory: grok
         run: go vet ./...
