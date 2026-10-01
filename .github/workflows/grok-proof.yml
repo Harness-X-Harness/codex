@@ -101,9 +101,53 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
 
+  runtime:
+    name: Native Provider runtime proof
+    needs: subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install native Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+      - name: Regenerate owned configuration schema
+        working-directory: codex-rs
+        run: just write-config-schema
+      - name: Test production Provider composition
+        working-directory: codex-rs
+        run: just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::)'
+      - name: Retain generated representations on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: provider-representations-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            codex-rs/core/config.schema.json
+            codex-rs/tui/src/**/*.snap.new
+          if-no-files-found: error
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+
   complete:
     name: Native proof result
-    needs: [subject, locks]
+    needs: [subject, locks, runtime]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -111,8 +155,9 @@ jobs:
         env:
           SUBJECT_RESULT: ${{ needs.subject.result }}
           LOCKS_RESULT: ${{ needs.locks.result }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
         run: |
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT"; do
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1
