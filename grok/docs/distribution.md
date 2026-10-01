@@ -79,7 +79,8 @@ Do not repair a test by weakening its contract solely to make the run green.
 Backend refresh is parallel unless the product contract explicitly requires it.
 Keep package execution separate from source initialization acceptance.
 
-At a genuine CI wait, hand off the exact run/attempt/subject to Grok Bot and pause.
-Do not add blind reruns, polling, proof ledgers, publisher state machines, or
-post-merge historical PR searches. Practical artifact retention may remove a
-package without altering its accepted source history.
+A pending workflow result is not evidence. Bind any later conclusion to the
+exact run/attempt/subject and its authoritative settled status. Do not add blind
+reruns, proof ledgers, publisher state machines, or post-merge historical PR
+searches. Practical artifact retention may remove a package without altering its
+accepted source history.
