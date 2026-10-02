@@ -56,7 +56,10 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | C1 / #320 | Provider/Responses, owned representations, and first used Facts/Live support. | C0. | Identity/dialect, request/history policy, interleaved SSE, recovery/remote boundaries; affected OpenAI/ChatGPT serialization, ingress/error/config regressions and composition; meaningful deterministic Go harness tests. |
 | C2 / #323 | Atomic close/snapshot and durable post-close input disposition. | C0. | Queue close/snapshot and post-close injection/history integration through the real completion window, plus affected stock session/turn/mailbox/AgentControl, public injection/steering and goal-advice contracts. |
 | After C2: C1 correction / #320 | Keep compaction capability consistent with explicit Grok dialect under provider aliases. | C1; C2 is the selected landing order, not a semantic input. | Grok versus stock Responses capability controls, actual alias manual/automatic local summary and continuation, and affected stock local/V2/TokenBudget consumers. |
-| C3 / #327 | Exact whole-number parsing and current tool call-site wiring. | C0. | Signed/unsigned bounds, integral decimal/exponent forms, fractions, values above 2^53, and exec/stdin/multi-agent argument integration. |
+| Before C3a: stock host-fixture prerequisite / #327 | Align the existing interrupt fixture with the current ToolDefinition so the consumed host integration target compiles. | C0; demonstrated consumer C3a. | Pinned stock V8 setup, exact host build, separately nonempty existing interrupt regression, scoped host format/lint, and all prior applicable proof. |
+| C3a / #327 | Exact whole-number exec arguments and their producer paths. | Stock host-fixture prerequisite. | Complete private helper, exact bounds/forms and field wiring, real exec effects, Bash/Code Mode and standalone stdio/gRPC precision composition, and owned feature/lock closure. |
+| C3b / #327 | Exact stdin arguments and their trace consumers. | C3a's complete shared helper. | Real stdin delivery/rejection and returned-ID composition, exact trace limit parsing, canonical numeric session keys, reducer replay and affected stock behavior. |
+| C3c / #327 | Exact wait/fork consumers and agent composition. | The same helper from C3a/C3b. | Legacy/v2 wait policy, numeric fork with retained string modes, actual mailbox/history selection, no-child rejection, generic updatedInput hooks and affected stock behavior. |
 | C4 / #321 | Structured editing with native local/remote mutation safety and retained scenario source. | C0; C1 harness for Live scenario source. | Engine/runtime/lifecycle, stale snapshots, VerifiedContents, registration/hooks, conditional writes, stock patch/Code Mode/sandbox/symlink/hard-link/cwd regressions, and deterministic harness tests. |
 | C5 / #328 | Updated Grok image dialect and retained image scenario source. | C1. | Projection/normalization/cardinality and fail-closed input policy; stock transparent-background/file-backed edit regressions; availability/schema/request composition and deterministic image harness tests. |
 | C6 / #329 | Runtime profile/catalog and Provider-bound App Server lifecycle. | C1. | Asset loading, model-list/catalog isolation, Provider-bound fork/resume/compaction/child inheritance, stock/non-Grok catalog and lifecycle regressions, and deterministic shipped-profile harness tests. |
@@ -84,6 +87,26 @@ Grok retains the existing local compactor; stock Responses capability rules and
 all unrelated capabilities remain unchanged. This correction has its own
 reviewed PR/squash/canonical proof before C3. Prior successful executions remain
 historical evidence; no new backend or universal compaction claim is introduced.
+
+The separately named stock host-fixture prerequisite supplies the existing
+interrupt fixture's omitted `input_schema_max_bytes: None` and the first
+consumed host proof inputs. The field has no effect when that fixture's input
+schema is absent. Its independent reviewed PR/squash/canonical loop precedes
+C3a; the numeric increments inherit the accepted setup and regression once.
+No numeric parser, tool behavior, V8 version/feature or protocol shape is changed
+by this prerequisite.
+
+C3 uses three independently useful increments under the same #327 owner. C3a
+completes the private helper and exec paths with their producer and native effect
+proof. C3b pairs stdin admission with its trace reducer: exact limit parsing and
+canonical numeric session keys. Exec trace projection uses normalized runtime
+fields; only stdin reparses these original numeric arguments. When that second
+consumer needs it, move the same helper to the existing protocol dependency.
+C3c adds wait/fork and agent composition. No unused future adapter or duplicate
+parser is introduced. Each increment closes its source, owned outputs and proof
+through the ordinary reviewed PR/squash/canonical loop before the next starts.
+#327 closes only after all three; no numeric or earlier applicable proof
+obligation is retired.
 
 An owner may split only at independently complete green boundaries, updating this
 plan and #333 together. Each semantic owner closes its affected native generator
