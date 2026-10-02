@@ -45,8 +45,7 @@ async fn closed_turn_input_returns_snapshot_and_rejects_later_appends() {
         .lock()
         .await
         .set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
-    let (activity_rx, pending_activity) =
-        input_queue.subscribe_activity(Some(turn_state)).await;
+    let (activity_rx, pending_activity) = input_queue.subscribe_activity(Some(turn_state)).await;
     assert_eq!(pending_activity, None);
 
     for late in [vec![second, first], Vec::new()] {
@@ -95,7 +94,9 @@ async fn sampling_drain_keeps_turn_input_open() {
         .lock()
         .await
         .set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
-    let (mut activity_rx, _) = input_queue.subscribe_activity(Some(turn_state.as_ref())).await;
+    let (mut activity_rx, _) = input_queue
+        .subscribe_activity(Some(turn_state.as_ref()))
+        .await;
     input_queue
         .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
             turn_state.as_ref(),

@@ -684,7 +684,13 @@ impl Session {
         }
         // Completion detaches the task under the active-turn lock before closing
         // its queue. Reject defensively before consuming input or changing context.
-        if active_turn.turn_state.lock().await.pending_input.is_closed() {
+        if active_turn
+            .turn_state
+            .lock()
+            .await
+            .pending_input
+            .is_closed()
+        {
             return Err(NotSubmittedReason::NoActiveTurn);
         }
         let mut pending_input = merge_additional_context_input(self, additional_context).await;

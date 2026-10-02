@@ -69,7 +69,10 @@ async fn generic_inject_preserves_envelopes_and_reserved_open_slot() {
     assert!(turn_state.lock().await.pending_input.is_empty());
     let active = session.active_turn.lock().await;
     assert!(active.as_ref().unwrap().task.is_none());
-    assert!(Arc::ptr_eq(&active.as_ref().unwrap().turn_state, &turn_state));
+    assert!(Arc::ptr_eq(
+        &active.as_ref().unwrap().turn_state,
+        &turn_state
+    ));
 }
 
 #[tokio::test]
@@ -200,7 +203,10 @@ async fn client_inject_records_history_after_turn_input_is_closed(retain_client_
     assert!(turn_state.lock().await.pending_input.is_empty());
     let active = session.active_turn.lock().await;
     assert!(active.as_ref().unwrap().task.is_none());
-    assert!(Arc::ptr_eq(&active.as_ref().unwrap().turn_state, &turn_state));
+    assert!(Arc::ptr_eq(
+        &active.as_ref().unwrap().turn_state,
+        &turn_state
+    ));
 }
 
 #[tokio::test]
@@ -239,7 +245,10 @@ async fn no_new_turn_inject_records_history_after_turn_input_is_closed() {
     assert!(turn_state.lock().await.pending_input.is_empty());
     let active = session.active_turn.lock().await;
     assert!(active.as_ref().unwrap().task.is_none());
-    assert!(Arc::ptr_eq(&active.as_ref().unwrap().turn_state, &turn_state));
+    assert!(Arc::ptr_eq(
+        &active.as_ref().unwrap().turn_state,
+        &turn_state
+    ));
 }
 
 #[tokio::test]

@@ -202,7 +202,9 @@ async fn closed_completion_redirects_client_items_and_survives_resume(
         (client_items[1].clone(), true, false),
         (client_items[2].clone(), true, false),
     ];
-    test.codex.inject_response_items(client_items.clone()).await?;
+    test.codex
+        .inject_response_items(client_items.clone())
+        .await?;
     let recorded = test.codex.load_history(/*include_archived*/ true).await?;
     assert_eq!(
         recorded_client_items(&recorded.items, &client_items),
@@ -309,9 +311,11 @@ async fn closed_completion_redirects_client_items_and_survives_resume(
     ] {
         assert!(!request.body_contains_text(text));
     }
-    assert!(request.input().iter().all(|item| {
-        item.get("metadata").is_none() && item.get("client_authored").is_none()
-    }));
+    assert!(
+        request.input().iter().all(|item| {
+            item.get("metadata").is_none() && item.get("client_authored").is_none()
+        })
+    );
     assert_eq!(window.starts.load(Ordering::SeqCst), 2);
     resumed.thread.shutdown_and_wait().await?;
     Ok(())
@@ -405,9 +409,10 @@ async fn start_or_steer_preserves_payload_while_old_completion_finishes() -> any
     timeout(GATE_TIMEOUT, reached_replacement).await??;
     let flushes_before_release = store.calls().await.flush_thread;
     release_stop.send(()).expect("old completion is held");
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(event) if event.turn_id == old_turn_id)
-    })
+    wait_for_event(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnComplete(event) if event.turn_id == old_turn_id),
+    )
     .await;
     // The replacement is held before task registration, so it cannot flush.
     // The old terminal flush happens after the Arc-checked slot clearance.
@@ -486,7 +491,10 @@ async fn start_or_steer_preserves_payload_while_old_completion_finishes() -> any
             .as_str()
             .expect("canonical turn metadata"),
     )?;
-    assert_eq!(turn_metadata["completion_test_client"], "replacement metadata");
+    assert_eq!(
+        turn_metadata["completion_test_client"],
+        "replacement metadata"
+    );
     assert_eq!(window.starts.load(Ordering::SeqCst), 2);
     assert_eq!(initial_response.requests().len(), 1);
     test.codex.shutdown_and_wait().await?;

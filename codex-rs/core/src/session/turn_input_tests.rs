@@ -922,7 +922,10 @@ async fn closed_running_queue_rejects_before_consuming_steer_or_hook_input() {
         session.state.lock().await.additional_context,
         original_context
     );
-    assert_eq!(session.reserve_user_input_order().await, expected_next_order);
+    assert_eq!(
+        session.reserve_user_input_order().await,
+        expected_next_order
+    );
     assert_eq!(
         turn_context.turn_metadata_state.workspace_kind(),
         original_workspace_kind
