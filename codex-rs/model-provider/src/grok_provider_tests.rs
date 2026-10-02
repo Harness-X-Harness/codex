@@ -1,3 +1,5 @@
+use crate::ProviderCapabilities;
+use crate::RemoteCompactionSupport;
 use crate::create_model_provider;
 use codex_api::ApiDialect;
 use codex_model_provider_info::ModelProviderInfo;
@@ -63,4 +65,60 @@ fn responses_stream_policy_ignores_grok_name_and_destination() {
         ),
         (Duration::from_millis(300_000), 5)
     );
+}
+
+#[test]
+fn compaction_capability_respects_explicit_dialect_before_provider_aliases() {
+    for (name, base_url, responses_support) in [
+        (
+            "Grok",
+            "https://api.x.ai/v1",
+            RemoteCompactionSupport::Unsupported,
+        ),
+        (
+            "OpenAI",
+            "https://example.test/v1",
+            RemoteCompactionSupport::V2,
+        ),
+        (
+            "Azure",
+            "https://example.test/v1",
+            RemoteCompactionSupport::V2,
+        ),
+        (
+            "Custom",
+            "https://example.openai.azure.com/openai/v1",
+            RemoteCompactionSupport::V2,
+        ),
+    ] {
+        for (wire_api, dialect, remote_compaction) in [
+            (
+                WireApi::GrokResponses,
+                ApiDialect::Grok,
+                RemoteCompactionSupport::Unsupported,
+            ),
+            (WireApi::Responses, ApiDialect::OpenAi, responses_support),
+        ] {
+            let provider = create_model_provider(
+                ModelProviderInfo {
+                    name: name.to_string(),
+                    base_url: Some(base_url.to_string()),
+                    wire_api,
+                    ..ModelProviderInfo::default()
+                },
+                /*auth_manager*/ None,
+            );
+            assert_eq!(
+                (provider.api_dialect(), provider.capabilities()),
+                (
+                    dialect,
+                    ProviderCapabilities {
+                        remote_compaction,
+                        ..ProviderCapabilities::default()
+                    }
+                ),
+                "{name} at {base_url}"
+            );
+        }
+    }
 }

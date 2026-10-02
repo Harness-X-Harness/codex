@@ -55,6 +55,7 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | Before C1 / #343 | Manifest-aligned workspace lock identity for reproducible Provider proof. | C0; first needed by C1. | Native locked Cargo resolution, Cargo-owned Bazel lock generation/consistency, non-empty Provider metadata tests, reviewed aggregation and PR/canonical proof. No stock product/fixture changes. |
 | C1 / #320 | Provider/Responses, owned representations, and first used Facts/Live support. | C0. | Identity/dialect, request/history policy, interleaved SSE, recovery/remote boundaries; affected OpenAI/ChatGPT serialization, ingress/error/config regressions and composition; meaningful deterministic Go harness tests. |
 | C2 / #323 | Atomic close/snapshot and durable post-close input disposition. | C0. | Queue close/snapshot and post-close injection/history integration through the real completion window, plus affected stock session/turn/mailbox/AgentControl, public injection/steering and goal-advice contracts. |
+| After C2: C1 correction / #320 | Keep compaction capability consistent with explicit Grok dialect under provider aliases. | C1; C2 is the selected landing order, not a semantic input. | Grok versus stock Responses capability controls, actual alias manual/automatic local summary and continuation, and affected stock local/V2/TokenBudget consumers. |
 | C3 / #327 | Exact whole-number parsing and current tool call-site wiring. | C0. | Signed/unsigned bounds, integral decimal/exponent forms, fractions, values above 2^53, and exec/stdin/multi-agent argument integration. |
 | C4 / #321 | Structured editing with native local/remote mutation safety and retained scenario source. | C0; C1 harness for Live scenario source. | Engine/runtime/lifecycle, stale snapshots, VerifiedContents, registration/hooks, conditional writes, stock patch/Code Mode/sandbox/symlink/hard-link/cwd regressions, and deterministic harness tests. |
 | C5 / #328 | Updated Grok image dialect and retained image scenario source. | C1. | Projection/normalization/cardinality and fail-closed input policy; stock transparent-background/file-backed edit regressions; availability/schema/request composition and deterministic image harness tests. |
@@ -75,6 +76,14 @@ cannot establish that composition or a real Story result.
 Each uses its own PR/squash/canonical proof. #320 stays open until all close.
 Harness fixtures are independent
 of #329; #322/#328 retain Tools/Images ownership; no obligation is retired.
+
+The scoped C1 correction after C2 closes a discovered capability mismatch:
+OpenAI/Azure name or URL heuristics must not select remote V2 compaction for the
+explicit Grok dialect, whose request projection does not support its trigger.
+Grok retains the existing local compactor; stock Responses capability rules and
+all unrelated capabilities remain unchanged. This correction has its own
+reviewed PR/squash/canonical proof before C3. Prior successful executions remain
+historical evidence; no new backend or universal compaction claim is introduced.
 
 An owner may split only at independently complete green boundaries, updating this
 plan and #333 together. Each semantic owner closes its affected native generator

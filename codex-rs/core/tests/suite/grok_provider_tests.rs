@@ -26,6 +26,9 @@ use serde_json::json;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
+#[path = "grok_compaction_tests.rs"]
+mod compaction;
+
 struct ProviderFixture {
     _home: TempDir,
     server: MockServer,
