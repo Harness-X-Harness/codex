@@ -62,7 +62,8 @@ fn stdin_numeric_fields_reject_fractions_wrong_kinds_and_out_of_range_values() {
             r#"{"$serde_json::private::RawValue":"1"}"#,
         ] {
             assert!(
-                parse_arguments::<WriteStdinArgs>(&format!(r#"{{{base}"{field}":{token}}}"#)).is_err(),
+                parse_arguments::<WriteStdinArgs>(&format!(r#"{{{base}"{field}":{token}}}"#))
+                    .is_err(),
                 "{field}={token}",
             );
         }

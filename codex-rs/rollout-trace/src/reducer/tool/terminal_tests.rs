@@ -622,7 +622,10 @@ fn whole_number_stdin_replay_joins_runtime_sessions_and_preserves_limits() -> an
         let mut operation_ids = vec!["terminal_operation:1".to_string()];
         for (tool_call_id, yield_time_ms, max_output_tokens, payloads) in recorded {
             let tool = &rollout.tool_calls[&tool_call_id];
-            let operation_id = tool.terminal_operation_id.as_ref().expect("stdin operation");
+            let operation_id = tool
+                .terminal_operation_id
+                .as_ref()
+                .expect("stdin operation");
             let operation = &rollout.terminal_operations[operation_id];
             operation_ids.push(operation_id.clone());
             assert_eq!(
@@ -756,7 +759,8 @@ fn whole_number_stdin_replay_preserves_historical_keys_and_raw_evidence() -> any
 }
 
 #[test]
-fn whole_number_stdin_replay_rejects_invalid_limits_and_missing_session_keys() -> anyhow::Result<()> {
+fn whole_number_stdin_replay_rejects_invalid_limits_and_missing_session_keys() -> anyhow::Result<()>
+{
     let mut arguments = Vec::new();
     for field in ["yield_time_ms", "max_output_tokens"] {
         for value in [
@@ -816,7 +820,8 @@ fn append_dispatch_stdin(
         "tool_namespace": null,
         "payload": {"type": "function", "arguments": arguments}
     });
-    let invocation_payload = writer.write_json_payload(RawPayloadKind::ToolInvocation, &invocation)?;
+    let invocation_payload =
+        writer.write_json_payload(RawPayloadKind::ToolInvocation, &invocation)?;
     writer.append_with_context(
         trace_context("turn-1"),
         RawTraceEventPayload::ToolCallStarted {
@@ -838,7 +843,10 @@ fn append_dispatch_stdin(
             result_payload: Some(response_payload.clone()),
         },
     )?;
-    Ok([(invocation_payload, invocation), (response_payload, response)])
+    Ok([
+        (invocation_payload, invocation),
+        (response_payload, response),
+    ])
 }
 
 fn append_inference_with_tool_call(writer: &TraceWriter) -> anyhow::Result<()> {

@@ -2332,7 +2332,11 @@ async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes()
         &server,
         vec![
             sse(vec![
-                ev_function_call("stdin-numeric-start", "exec_command", &start_args.to_string()),
+                ev_function_call(
+                    "stdin-numeric-start",
+                    "exec_command",
+                    &start_args.to_string(),
+                ),
                 ev_completed("resp-start"),
             ]),
             sse(vec![
@@ -2457,14 +2461,16 @@ async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes()
     let decimal_item = request.function_call_output("stdin-decimal");
     let decimal = parse_unified_exec_output(extract_output_text(&decimal_item).unwrap())?;
     assert_eq!(decimal.process_id.as_deref(), Some(session_id.as_str()));
-    assert!(decimal.output.contains("FIRST:decimal"), "{decimal:?}");
     let exponent_item = request.function_call_output("stdin-exponent");
     let exponent = parse_unified_exec_output(extract_output_text(&exponent_item).unwrap())?;
     assert_eq!(
         (exponent.process_id.as_deref(), exponent.exit_code),
         (None, Some(0)),
     );
-    assert!(exponent.output.contains("SECOND:exponent"), "{exponent:?}");
+    let output = format!("{}{}", decimal.output, exponent.output);
+    let first = output.find("FIRST:decimal").expect("first line delivered");
+    let second = output.find("SECOND:exponent").expect("second line delivered");
+    assert!(first < second, "{output}");
     Ok(())
 }
 

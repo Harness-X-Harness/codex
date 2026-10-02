@@ -3972,7 +3972,10 @@ async fn code_mode_write_stdin_numeric_inputs_use_returned_session() -> Result<(
         .with_model("test-gpt-5.1-codex")
         .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
         .with_config(|config| {
-            config.features.enable(Feature::CodeMode).expect("Code Mode");
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("Code Mode");
             config
                 .features
                 .enable(Feature::CodeModeHost)
@@ -4019,11 +4022,13 @@ const exponent = await tools.write_stdin({
   yield_time_ms: JSON.rawJSON("184467440737095516150e-1"),
   max_output_tokens: null,
 });
+const output = decimal.output + exponent.output;
+const first = output.indexOf("FIRST:decimal");
+const second = output.indexOf("SECOND:exponent");
 text(JSON.stringify({
   rejected,
   same_session: decimal.session_id === started.session_id,
-  first_line: decimal.output.includes("FIRST:decimal"),
-  second_line: exponent.output.includes("SECOND:exponent"),
+  lines_delivered_in_order: first >= 0 && second > first,
   exit_code: exponent.exit_code,
   exited: exponent.session_id === undefined,
 }));
@@ -4044,7 +4049,9 @@ text(JSON.stringify({
     .await;
     test.submit_turn("Compose stdin writes with the real exec session")
         .await?;
-    let request = written.last_request().expect("Code Mode completion request");
+    let request = written
+        .last_request()
+        .expect("Code Mode completion request");
     let items = custom_tool_output_items(&request, "stdin-numeric");
     let mut result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
     let rejected = result.as_object_mut().unwrap().remove("rejected").unwrap();
@@ -4062,8 +4069,7 @@ text(JSON.stringify({
         result,
         serde_json::json!({
             "same_session": true,
-            "first_line": true,
-            "second_line": true,
+            "lines_delivered_in_order": true,
             "exit_code": 0,
             "exited": true,
         }),
