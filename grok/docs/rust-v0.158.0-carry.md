@@ -68,7 +68,10 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 C1c1 (Basic/pinned/reasoning Facts and deterministic HTTP proof), then C1c2
 (consumed Live runner and scenarios with deterministic App Server proof):
 C1c2a closes Basic binary/process/fixture observation, including real App Server
-and controlled HTTP composition; C1c2b adds reasoning/tool/history continuation.
+and controlled HTTP composition; C1c2b adds the shared-runner reasoning/tool/history
+scenario and deterministic public-stdio proof. Actual native tool/HTTP composition
+and real-provider reasoning continuation require #322's tool support; C1c2b alone
+cannot establish that composition or a real Story result.
 Each uses its own PR/squash/canonical proof. #320 stays open until all close.
 Harness fixtures are independent
 of #329; #322/#328 retain Tools/Images ownership; no obligation is retired.
