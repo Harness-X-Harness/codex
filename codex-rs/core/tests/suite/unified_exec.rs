@@ -1887,16 +1887,16 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
     let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-metadata";
-    let args = serde_json::json!({
+    let args = r#"{
         "cmd": "printf 'token one token two token three token four token five token six token seven'",
-        "yield_time_ms": 500,
-        "max_output_tokens": 6,
-    });
+        "yield_time_ms": 5e2,
+        "max_output_tokens": 6.0
+    }"#;
 
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "exec_command", args),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -3340,16 +3340,16 @@ shell_tool = true
     let test = builder.build_with_auto_env(&server).await?;
     let late_marker = test.config.cwd.join("one-shot-late-marker");
     let call_id = "managed-one-shot";
-    let args = json!({
+    let args = r#"{
         "cmd": "sleep 1; printf late > one-shot-late-marker",
-        "timeout_ms": 10,
-    });
+        "timeout_ms": 1e1
+    }"#;
     let request_log = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+                ev_function_call(call_id, "exec_command", args),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
