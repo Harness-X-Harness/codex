@@ -3962,6 +3962,118 @@ text(JSON.stringify(results));
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_write_stdin_numeric_inputs_use_returned_session() -> Result<()> {
+    core_test_support::skip_if_target_windows!(Ok(()), "uses a POSIX read/printf fixture");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
+        .with_config(|config| {
+            config.features.enable(Feature::CodeMode).expect("Code Mode");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("native Code Mode host");
+            config.code_mode.disable_in_process_fallback = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let code = r#"
+const started = await tools.exec_command({
+  cmd: "stty -echo; IFS= read -r first; printf 'FIRST:%s\\n' \"$first\"; IFS= read -r second; printf 'SECOND:%s\\n' \"$second\"",
+  tty: true,
+  yield_time_ms: 250,
+});
+if (!Number.isInteger(started.session_id)) throw new Error("missing live session_id");
+const rejected = [];
+for (const [field, token] of [
+  ["session_id", String(started.session_id) + ".0000000000000001"],
+  ["session_id", "2147483648.0"],
+  ["yield_time_ms", "1.0000000000000001"],
+  ["yield_time_ms", "18446744073709551616"],
+  ["max_output_tokens", "9007199254740993.1"],
+  ["max_output_tokens", "18446744073709551616"],
+]) {
+  try {
+    await tools.write_stdin({
+      session_id: started.session_id,
+      chars: "invalid\n",
+      [field]: JSON.rawJSON(token),
+    });
+    rejected.push(null);
+  } catch (error) {
+    rejected.push(String(error));
+  }
+}
+const decimal = await tools.write_stdin({
+  session_id: JSON.rawJSON(String(started.session_id) + ".0"),
+  chars: "decimal\n",
+  yield_time_ms: JSON.rawJSON("250.0"),
+  max_output_tokens: JSON.rawJSON("1e3"),
+});
+const exponent = await tools.write_stdin({
+  session_id: JSON.rawJSON(String(started.session_id) + "e0"),
+  chars: "exponent\n",
+  yield_time_ms: JSON.rawJSON("184467440737095516150e-1"),
+  max_output_tokens: null,
+});
+text(JSON.stringify({
+  rejected,
+  same_session: decimal.session_id === started.session_id,
+  first_line: decimal.output.includes("FIRST:decimal"),
+  second_line: exponent.output.includes("SECOND:exponent"),
+  exit_code: exponent.exit_code,
+  exited: exponent.session_id === undefined,
+}));
+"#;
+    let written = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_custom_tool_call("stdin-numeric", "exec", code),
+                ev_completed("resp-stdin"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Compose stdin writes with the real exec session")
+        .await?;
+    let request = written.last_request().expect("Code Mode completion request");
+    let items = custom_tool_output_items(&request, "stdin-numeric");
+    let mut result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
+    let rejected = result.as_object_mut().unwrap().remove("rejected").unwrap();
+    let errors = rejected.as_array().expect("numeric rejection results");
+    assert_eq!(errors.len(), 6);
+    for error in errors {
+        assert!(
+            error
+                .as_str()
+                .is_some_and(|message| message.contains("failed to parse function arguments")),
+            "expected a typed argument rejection: {error}",
+        );
+    }
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "same_session": true,
+            "first_line": true,
+            "second_line": true,
+            "exit_code": 0,
+            "exited": true,
+        }),
+        "invalid calls must leave both lines for later writes to the same session",
+    );
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_write_stdin_calls_run_in_parallel_across_sessions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

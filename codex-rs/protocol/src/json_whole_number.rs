@@ -1,9 +1,13 @@
+//! Exact JSON-number adapters for the existing i32, u64, and usize tool fields.
+//! Decimal and exponent spellings retain integer precision without an f64 step.
+
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::de::Error;
 use serde_json::value::RawValue;
 
-pub(super) fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+/// Deserialize a whole JSON number into a supported integer target.
+pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: TryFrom<i128>,
@@ -12,7 +16,9 @@ where
     from_raw(&raw).map_err(D::Error::custom)
 }
 
-pub(super) fn deserialize_optional<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+/// Deserialize an optional supported integer, preserving explicit JSON null.
+/// Missing-field defaults remain the containing type's responsibility.
+pub fn deserialize_optional<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: TryFrom<i128>,

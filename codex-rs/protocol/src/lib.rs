@@ -27,6 +27,7 @@ mod environment;
 pub mod error;
 pub mod exec_output;
 pub mod items;
+pub mod json_whole_number;
 mod legacy_events;
 pub mod local_media;
 pub mod mcp;

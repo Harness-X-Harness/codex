@@ -9,6 +9,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_protocol::json_whole_number;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
@@ -541,7 +542,17 @@ fn json_text_content(value: &JsonValue) -> Option<String> {
 fn terminal_id_from_json(value: &JsonValue) -> Option<String> {
     match value {
         JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
-        JsonValue::Number(value) => Some(value.to_string()),
+        JsonValue::Number(value) => {
+            let mut deserializer = serde_json::Deserializer::from_str(value.as_str());
+            Some(
+                json_whole_number::deserialize::<_, i32>(&mut deserializer).map_or_else(
+                    // Failed historical calls still need their original display
+                    // key. This fallback does not admit a runtime tool argument.
+                    |_| value.to_string(),
+                    |session_id| session_id.to_string(),
+                ),
+            )
+        }
         _ => None,
     }
 }
@@ -581,7 +592,9 @@ struct DispatchedWriteStdinArgs {
     session_id: JsonValue,
     #[serde(default)]
     chars: String,
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     yield_time_ms: Option<u64>,
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     max_output_tokens: Option<usize>,
 }
 
