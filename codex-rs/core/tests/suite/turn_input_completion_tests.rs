@@ -71,7 +71,11 @@ impl TurnLifecycleContributor for CompletionWindow {
     fn on_turn_start<'a>(&'a self, _input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if self.starts.fetch_add(1, Ordering::SeqCst) == 1 {
-                let gate = self.replacement_start.lock().unwrap().take();
+                let gate = self
+                    .replacement_start
+                    .lock()
+                    .expect("replacement-start gate mutex should not be poisoned")
+                    .take();
                 if let Some(gate) = gate {
                     gate.wait().await;
                 }
@@ -81,7 +85,11 @@ impl TurnLifecycleContributor for CompletionWindow {
 
     fn on_turn_stop<'a>(&'a self, _input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            let gate = self.stop.lock().unwrap().take();
+            let gate = self
+                .stop
+                .lock()
+                .expect("completion-stop gate mutex should not be poisoned")
+                .take();
             if let Some(gate) = gate {
                 gate.wait().await;
             }
@@ -153,7 +161,7 @@ async fn closed_completion_redirects_client_items_and_survives_resume(
             config
                 .features
                 .enable(Feature::RetainClientDeveloperMessages)
-                .unwrap();
+                .expect("client developer message retention should be available");
         })
         .build_with_auto_env(&server)
         .await?;
