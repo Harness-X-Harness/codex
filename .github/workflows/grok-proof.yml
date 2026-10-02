@@ -131,9 +131,9 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103
-      - name: Check input-queue crate formatting
+      - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-core -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -- --config imports_granularity=Item --check
       - name: Regenerate owned configuration schema
         working-directory: codex-rs
         run: just write-config-schema
@@ -152,6 +152,15 @@ jobs:
           -E 'test(suite::grok_provider::) | test(suite::client::) | test(suite::client_websockets::)
           | test(suite::websocket_fallback::) | test(suite::auth_recovery_policy::)
           | test(suite::gateway_auth::) | test(suite::cloud_config::)'
+      - name: Test explicit-dialect compaction and stock consumers
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::compaction::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::compact::summarize_context_three_requests_and_instructions)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::compact::auto_compact_runs_after_token_limit_hit)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::compact_remote::remote_compact_v2_reuses_compaction_trigger_for_followups)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::token_budget::token_budget_context_uses_new_window_after_compaction)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::token_budget::token_budget_mid_turn_auto_compaction_resets_before_active_follow_up)'
       - name: Test queue admission and affected lifecycle contracts
         working-directory: codex-rs
         run: >-

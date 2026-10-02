@@ -422,8 +422,9 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        let remote_compaction = if self.info.is_openai()
-            || is_azure_responses_provider(&self.info.name, self.info.base_url.as_deref())
+        let remote_compaction = if self.api_dialect() == ApiDialect::OpenAi
+            && (self.info.is_openai()
+                || is_azure_responses_provider(&self.info.name, self.info.base_url.as_deref()))
         {
             RemoteCompactionSupport::V2
         } else {
