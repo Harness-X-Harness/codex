@@ -88,9 +88,11 @@ jobs:
       - name: Fix scoped API lint
         working-directory: codex-rs
         run: just fix -p codex-api --locked --profile ci-test
+      # Cargo fix caps diagnostics at warn. A distinct maximal cap rechecks
+      # the existing lint policy instead of reusing the fixer's cached result.
       - name: Check scoped API lint
         working-directory: codex-rs
-        run: just clippy -p codex-api --locked --profile ci-test -- --no-deps
+        run: just clippy -p codex-api --locked --profile ci-test -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
@@ -213,7 +215,7 @@ jobs:
         working-directory: codex-rs
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p codex-exec -p codex-tui --locked --profile ci-test -- --no-deps
+          -p codex-core -p codex-exec -p codex-tui --locked --profile ci-test -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
