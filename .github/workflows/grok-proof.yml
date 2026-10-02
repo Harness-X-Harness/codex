@@ -162,6 +162,9 @@ jobs:
         run: >-
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(suite::turn_input_completion::)'
+      - name: Build the exact CLI for native integrations and Basic fixture
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
       - name: Test affected input, mailbox, hook and shell composition
         working-directory: codex-rs
         run: >-
@@ -189,9 +192,6 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
-      - name: Build the exact CLI for the Basic fixture
-        working-directory: codex-rs
-        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
       - name: Test real App Server and controlled Grok HTTP composition
         working-directory: grok
         env:
