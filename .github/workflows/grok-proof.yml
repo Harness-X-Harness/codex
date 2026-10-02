@@ -88,6 +88,11 @@ jobs:
       - name: Fix scoped API lint
         working-directory: codex-rs
         run: just fix -p codex-api --locked --profile ci-test
+      # Cargo fix caps diagnostics at warn. A distinct maximal cap rechecks
+      # the existing lint policy instead of reusing the fixer's cached result.
+      - name: Check scoped API lint
+        working-directory: codex-rs
+        run: just clippy -p codex-api --locked --profile ci-test -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
@@ -102,10 +107,10 @@ jobs:
           if-no-files-found: error
 
   runtime:
-    name: Native Provider runtime proof
+    name: Native runtime proof
     needs: subject
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_BUILD_JOBS: "2"
@@ -122,10 +127,13 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103
+      - name: Check input-queue crate formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-core -- --config imports_granularity=Item --check
       - name: Regenerate owned configuration schema
         working-directory: codex-rs
         run: just write-config-schema
@@ -144,6 +152,39 @@ jobs:
           -E 'test(suite::grok_provider::) | test(suite::client::) | test(suite::client_websockets::)
           | test(suite::websocket_fallback::) | test(suite::auth_recovery_policy::)
           | test(suite::gateway_auth::) | test(suite::cloud_config::)'
+      - name: Test queue admission and affected lifecycle contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(session::) | test(tasks::) | test(agent::control::)'
+      - name: Test each required close-boundary regression
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::input_queue::close_tests::closed_turn_input_returns_snapshot_and_rejects_later_appends)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::inject::tests::client_inject_records_history_after_turn_input_is_closed)'
+      - name: Test the real turn-completion input boundary
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::turn_input_completion::)'
+      - name: Build the exact CLI for native integrations and Basic fixture
+        working-directory: codex-rs
+        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
+      - name: Test affected input, mailbox, hook and shell composition
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::turn_input_submission::) | test(suite::turn_state::)
+          | test(suite::scenarios::mailbox_preemption::) | test(suite::hooks::async_hook_)
+          | test(suite::user_shell_cmd::) | test(suite::interrupt_hooks::)'
+      - name: Test public injection and steering APIs
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::v2::thread_inject_items::) | test(suite::v2::turn_steer::)'
+      - name: Test goal state and advisory steering contracts
+        working-directory: codex-rs
+        run: just test -p codex-goal-extension --locked --cargo-profile ci-test --no-tests=fail
       - name: Test CLI display contracts
         working-directory: codex-rs
         run: just test -p codex-exec --lib --locked --cargo-profile ci-test --no-tests=fail
@@ -156,9 +197,6 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
-      - name: Build the exact CLI for the Basic fixture
-        working-directory: codex-rs
-        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
       - name: Test real App Server and controlled Grok HTTP composition
         working-directory: grok
         env:
@@ -173,6 +211,11 @@ jobs:
         run: >-
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui --locked --profile ci-test
+      - name: Check scoped Provider runtime lint
+        working-directory: codex-rs
+        run: >-
+          just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p codex-exec -p codex-tui --locked --profile ci-test -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree

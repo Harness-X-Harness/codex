@@ -9,7 +9,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 
 impl Session {
-    /// Returns the input if there is no active turn to inject into.
+    /// Returns the unchanged input if there is no open active-turn queue.
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -19,22 +19,27 @@ impl Session {
         input: Vec<T>,
     ) -> Result<(), Vec<T>> {
         let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(active_turn) => {
-                self.input_queue
-                    .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                        active_turn.turn_state.as_ref(),
-                        input
-                            .into_iter()
-                            .map(Into::into)
-                            .map(PendingTurnInput::ResponseItem)
-                            .collect(),
-                    )
-                    .await;
-                Ok(())
-            }
-            None => Err(input),
+        let Some(active_turn) = active.as_mut() else {
+            return Err(input);
+        };
+        let mut turn_state = active_turn.turn_state.lock().await;
+        // A completion slot can remain occupied after its final input snapshot.
+        // Check before converting input so rejection preserves the original T.
+        if turn_state.pending_input.is_closed() {
+            return Err(input);
         }
+        let queued = input
+            .into_iter()
+            .map(Into::into)
+            .map(PendingTurnInput::ResponseItem)
+            .collect();
+        assert!(
+            super::input_queue::push_turn_input_if_open(&mut turn_state, queued).is_ok(),
+            "turn input cannot close while its lock is held"
+        );
+        drop(turn_state);
+        self.input_queue.signal_steer();
+        Ok(())
     }
 
     /// Injects hook context into the running turn atomically.
@@ -53,24 +58,25 @@ impl Session {
         if active_turn.task.is_none() {
             return Err(input);
         }
-        self.input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                input
-                    .into_iter()
-                    .map(ResponseItemEnvelope::new)
-                    .map(PendingTurnInput::ResponseItem)
-                    .collect(),
-            )
-            .await;
+        let mut turn_state = active_turn.turn_state.lock().await;
+        if turn_state.pending_input.is_closed() {
+            return Err(input);
+        }
+        let queued = input
+            .into_iter()
+            .map(ResponseItemEnvelope::new)
+            .map(PendingTurnInput::ResponseItem)
+            .collect();
+        assert!(
+            super::input_queue::push_turn_input_if_open(&mut turn_state, queued).is_ok(),
+            "turn input cannot close while its lock is held"
+        );
+        drop(turn_state);
+        self.input_queue.signal_steer();
         Ok(())
     }
 
     /// Preserves trusted client provenance while items wait for an active turn.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub(crate) async fn inject_client_response_items(
         &self,
         items: Vec<ResponseItem>,
@@ -80,20 +86,9 @@ impl Session {
             .into_iter()
             .map(|item| self.annotate_client_response_item(item))
             .collect::<Vec<_>>();
-        let mut active = self.active_turn.lock().await;
-        if let Some(active_turn) = active.as_mut() {
-            self.input_queue
-                .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                    active_turn.turn_state.as_ref(),
-                    items
-                        .into_iter()
-                        .map(PendingTurnInput::ResponseItem)
-                        .collect(),
-                )
-                .await;
+        let Err(items) = self.inject_if_running(items).await else {
             return;
-        }
-        drop(active);
+        };
         self.record_annotated_conversation_items(turn_context, turn_context.model_info(), items)
             .await;
     }
