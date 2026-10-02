@@ -856,6 +856,90 @@ async fn steer_only_requires_active_turn() {
 }
 
 #[tokio::test]
+async fn closed_running_queue_rejects_before_consuming_steer_or_hook_input() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+    let turn_state = session
+        .input_queue
+        .turn_state_for_sub_id(&session.active_turn, &turn_context.sub_id)
+        .await
+        .expect("running task");
+    // Normal completion detaches the task first. Exercise the defensive guard
+    // with a deliberately closed running-task fixture, before any side effects.
+    session
+        .input_queue
+        .take_pending_input_for_turn_state(turn_state.as_ref())
+        .await;
+    let (activity_rx, _) = session
+        .input_queue
+        .subscribe_activity(Some(turn_state.as_ref()))
+        .await;
+    let original_input = SubmittedTurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "Keep this complete request for the fallback.".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: Some("retry-client".to_string()),
+    };
+    let mut input = original_input.clone();
+    let original_context = session.state.lock().await.additional_context.clone();
+    let expected_next_order = session.reserve_user_input_order().await + 1;
+    let original_workspace_kind = turn_context.turn_metadata_state.workspace_kind();
+
+    assert_eq!(
+        session
+            .steer_input(
+                &mut input,
+                BTreeMap::from([(
+                    "late-context".to_string(),
+                    AdditionalContextEntry {
+                        value: "Must remain available to the fallback.".to_string(),
+                        kind: codex_protocol::protocol::AdditionalContextKind::Application,
+                    },
+                )]),
+                Some(&turn_context.sub_id),
+                /*required_final_output_json_schema*/ None,
+                Some(HashMap::from([(
+                    "workspace_kind".to_string(),
+                    "rejected".to_string(),
+                )])),
+                UserInputOrigin::Heartbeat,
+            )
+            .await,
+        Err(NotSubmittedReason::NoActiveTurn)
+    );
+    assert_eq!(input, original_input);
+    assert_eq!(
+        session.state.lock().await.additional_context,
+        original_context
+    );
+    assert_eq!(session.reserve_user_input_order().await, expected_next_order);
+    assert_eq!(
+        turn_context.turn_metadata_state.workspace_kind(),
+        original_workspace_kind
+    );
+    let hook_input = vec![user_message("late hook context")];
+    assert_eq!(
+        session
+            .inject_hook_context_if_running(hook_input.clone())
+            .await,
+        Err(hook_input)
+    );
+    assert!(!activity_rx.has_changed().unwrap());
+    assert!(turn_state.lock().await.pending_input.is_empty());
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
 async fn steer_only_enforces_expected_turn_id() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     turn_context

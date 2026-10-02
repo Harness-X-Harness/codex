@@ -682,6 +682,11 @@ impl Session {
         {
             return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
         }
+        // Completion detaches the task under the active-turn lock before closing
+        // its queue. Reject defensively before consuming input or changing context.
+        if active_turn.turn_state.lock().await.pending_input.is_closed() {
+            return Err(NotSubmittedReason::NoActiveTurn);
+        }
         let mut pending_input = merge_additional_context_input(self, additional_context).await;
 
         if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
@@ -709,12 +714,16 @@ impl Session {
             input => pending_turn_input(self, input.clone(), active_turn_id, origin).await,
         };
         pending_input.push(input);
-        self.input_queue
-            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
-                active_turn.turn_state.as_ref(),
-                pending_input,
-            )
-            .await;
+        assert!(
+            self.input_queue
+                .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                    active_turn.turn_state.as_ref(),
+                    pending_input,
+                )
+                .await
+                .is_ok(),
+            "active-turn lock keeps the running task's input queue open"
+        );
         Ok(active_turn_id.clone())
     }
 }

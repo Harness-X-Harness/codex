@@ -215,6 +215,8 @@ mod tool_lifecycle;
 mod tool_parallelism;
 mod tools;
 mod truncation;
+#[path = "turn_input_completion_tests.rs"]
+mod turn_input_completion;
 mod turn_input_submission;
 mod turn_state;
 mod unified_exec;
