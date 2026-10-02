@@ -135,9 +135,33 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu
+      - name: Check Code Mode host fixture formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
+      - name: Build the consumed Code Mode host
+        working-directory: codex-rs
+        run: cargo build -p codex-code-mode-host --bin codex-code-mode-host --locked --profile ci-test
+      - name: Test the adapted host interrupt fixture
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(interrupt_yields_observations_without_stopping_the_cell)'
+      - name: Fix scoped Code Mode host lint
+        working-directory: codex-rs
+        run: cargo clippy --fix --allow-dirty -p codex-code-mode-host --test stdio --locked --profile ci-test
+      - name: Check scoped Code Mode host lint
+        working-directory: codex-rs
+        run: cargo clippy -p codex-code-mode-host --test stdio --locked --profile ci-test -- --no-deps --cap-lints=forbid
+      - name: Test standalone Code Mode numeric forwarding
+        working-directory: codex-rs
+        run: |
+          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(remote_session_persists_values_forwards_delegates_and_controls_cells)'
+          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
+          just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(tcp_session_persists_values_and_forwards_tools_notifications_and_closure)'
+          just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p codex-code-mode-host -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -- --config imports_granularity=Item --check
       - name: Regenerate owned configuration schema
         working-directory: codex-rs
         run: just write-config-schema
@@ -201,9 +225,6 @@ jobs:
         run: >-
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(suite::v2::thread_inject_items::) | test(suite::v2::turn_steer::)'
-      - name: Build the consumed Code Mode host
-        working-directory: codex-rs
-        run: cargo build -p codex-code-mode-host --bin codex-code-mode-host --locked --profile ci-test
       - name: Test numeric exec producer composition
         working-directory: codex-rs
         run: |
@@ -212,13 +233,6 @@ jobs:
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_block_rejects_code_mode_tool_promise_before_execution)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_return_exec_command_output)'
-      - name: Test standalone Code Mode numeric forwarding
-        working-directory: codex-rs
-        run: |
-          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(remote_session_persists_values_forwards_delegates_and_controls_cells)'
-          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
-          just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(tcp_session_persists_values_and_forwards_tools_notifications_and_closure)'
-          just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
       - name: Test goal state and advisory steering contracts
         working-directory: codex-rs
         run: just test -p codex-goal-extension --locked --cargo-profile ci-test --no-tests=fail
