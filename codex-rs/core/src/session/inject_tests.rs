@@ -11,6 +11,7 @@ use codex_login::CodexAuth;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ConfigurationReasoning;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
@@ -151,6 +152,17 @@ async fn client_inject_records_history_after_turn_input_is_closed(retain_client_
         item
     })
     .collect::<Vec<_>>();
+    // Stock preparation classifies previously unclassified message content.
+    let mut expected_items = items.clone();
+    for item in &mut expected_items {
+        if let ResponseItem::Message {
+            internal_chat_message_metadata_passthrough: Some(metadata),
+            ..
+        } = item
+        {
+            metadata.content_item_kinds = Some(vec![ContentItemKind("unknown".to_string())]);
+        }
+    }
     session
         .inject_client_response_items(items.clone(), &turn_context)
         .await;
@@ -167,7 +179,7 @@ async fn client_inject_records_history_after_turn_input_is_closed(retain_client_
             .iter()
             .map(|envelope| envelope.item.clone())
             .collect::<Vec<_>>(),
-        items
+        expected_items
     );
     assert_eq!(
         recorded[0]
@@ -199,7 +211,7 @@ async fn client_inject_records_history_after_turn_input_is_closed(retain_client_
             _ => {}
         }
     }
-    assert_eq!(raw_items, items);
+    assert_eq!(raw_items, expected_items);
     assert!(turn_state.lock().await.pending_input.is_empty());
     let active = session.active_turn.lock().await;
     assert!(active.as_ref().unwrap().task.is_none());
