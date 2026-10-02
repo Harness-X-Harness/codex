@@ -33,7 +33,10 @@ fn from_raw<T: TryFrom<i128>>(raw: &RawValue) -> Result<T, &'static str> {
     let negative = token.starts_with('-');
     let unsigned = token.trim_start_matches('-');
     let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
-    let Some(first) = mantissa.bytes().position(|byte| matches!(byte, b'1'..=b'9')) else {
+    let Some(first) = mantissa
+        .bytes()
+        .position(|byte| matches!(byte, b'1'..=b'9'))
+    else {
         return T::try_from(0).map_err(|_| RANGE_ERROR);
     };
     let last = mantissa

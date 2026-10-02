@@ -54,10 +54,8 @@ fn exec_numeric_fields_reject_fractions_wrong_kinds_and_null_scalars() {
             r#"{"$serde_json::private::RawValue":"1"}"#,
         ] {
             assert!(
-                parse_arguments::<ExecCommandArgs>(&format!(
-                    r#"{{"cmd":"ok","{field}":{token}}}"#
-                ))
-                .is_err(),
+                parse_arguments::<ExecCommandArgs>(&format!(r#"{{"cmd":"ok","{field}":{token}}}"#))
+                    .is_err(),
                 "{field}={token}"
             );
         }
