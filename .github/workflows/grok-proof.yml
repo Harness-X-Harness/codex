@@ -131,6 +131,10 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103
+      - name: Set up pinned Code Mode V8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
         run: cargo fmt -p codex-model-provider -p codex-core -p codex-code-mode-host -- --config imports_granularity=Item --check
