@@ -205,7 +205,13 @@ async fn closed_completion_redirects_client_items_and_survives_resume(
     test.codex
         .inject_response_items(client_items.clone())
         .await?;
-    let recorded = test.codex.load_history(/*include_archived*/ true).await?;
+    let recorded = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: true,
+        })
+        .await?;
     assert_eq!(
         recorded_client_items(&recorded.items, &client_items),
         expected_recorded
