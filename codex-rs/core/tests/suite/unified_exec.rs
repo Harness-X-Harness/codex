@@ -2469,7 +2469,9 @@ async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes()
     );
     let output = format!("{}{}", decimal.output, exponent.output);
     let first = output.find("FIRST:decimal").expect("first line delivered");
-    let second = output.find("SECOND:exponent").expect("second line delivered");
+    let second = output
+        .find("SECOND:exponent")
+        .expect("second line delivered");
     assert!(first < second, "{output}");
     Ok(())
 }
