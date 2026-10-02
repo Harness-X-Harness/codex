@@ -32,9 +32,12 @@ use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[path = "support/exact_numbers.rs"]
+mod exact_numbers;
 #[path = "support/recording_delegate.rs"]
 mod recording_delegate;
 
+use exact_numbers::assert_exact_numbers;
 use recording_delegate::RecordingDelegate;
 use recording_delegate::cell_id;
 
@@ -407,7 +410,14 @@ async fn remote_session_persists_values_forwards_delegates_and_controls_cells() 
 
     let mut callback_request = execute_request(
         r#"
-const result = await tools.echo({ value: String(load("key")) });
+const result = await tools.echo({
+  value: String(load("key")),
+  numbers: {
+    beyond_binary64: JSON.rawJSON("9007199254740993.0"),
+    u64_boundary: JSON.rawJSON("184467440737095516150e-1"),
+    fraction: JSON.rawJSON("1.0000000000000001"),
+  },
+});
 notify("notice");
 text(result.value);
 "#,
@@ -434,16 +444,22 @@ text(result.value);
             error_text: None,
         }
     );
-    assert_eq!(
-        *delegate.invocations.lock().expect("invocations lock"),
-        vec![CodeModeNestedToolCall {
-            cell_id: cell_id("2"),
-            runtime_tool_call_id: "tool-1".to_string(),
-            tool_name: ToolName::plain("echo"),
-            tool_kind: CodeModeToolKind::Function,
-            input: Some(json!({ "value": "persisted" })),
-        }]
-    );
+    {
+        let invocations = delegate.invocations.lock().expect("invocations lock");
+        assert_eq!(invocations.len(), 1);
+        let numbers = &invocations[0].input.as_ref().expect("tool input")["numbers"];
+        assert_exact_numbers(numbers);
+        assert_eq!(
+            *invocations,
+            vec![CodeModeNestedToolCall {
+                cell_id: cell_id("2"),
+                runtime_tool_call_id: "tool-1".to_string(),
+                tool_name: ToolName::plain("echo"),
+                tool_kind: CodeModeToolKind::Function,
+                input: Some(json!({ "value": "persisted", "numbers": numbers })),
+            }]
+        );
+    }
     assert_eq!(
         *delegate.notifications.lock().expect("notifications lock"),
         vec![("call-2".to_string(), cell_id("2"), "notice".to_string())]

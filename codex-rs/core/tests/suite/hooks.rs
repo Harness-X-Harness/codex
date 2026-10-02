@@ -4063,7 +4063,10 @@ async fn pre_tool_use_rewrites_exec_command_before_execution() -> Result<()> {
                 ev_function_call(
                     &call_id,
                     "exec_command",
-                    &serde_json::to_string(&serde_json::json!({ "cmd": original_command }))?,
+                    &format!(
+                        r#"{{"cmd":{},"yield_time_ms":250.0,"timeout_ms":1e4,"max_output_tokens":1000.0}}"#,
+                        serde_json::to_string(&original_command)?,
+                    ),
                 ),
                 ev_completed("resp-1"),
             ]),
@@ -4110,8 +4113,13 @@ async fn pre_tool_use_rewrites_exec_command_before_execution() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case("250.0"; "whole_decimal")]
+#[test_case::test_case("2.5e2"; "whole_exponent")]
+#[test_case::test_case("1.0000000000000001"; "fraction_rejected")]
 #[tokio::test]
-async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution() -> Result<()> {
+async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution(
+    numeric_yield: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -4128,8 +4136,17 @@ async fn pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution() 
         serde_json::to_string(&original_command).context("serialize original command")?;
     let code = format!(
         r#"
-const output = await tools.exec_command({{ cmd: {original_command_json} }});
-text(output.output);
+try {{
+  const output = await tools.exec_command({{
+    cmd: {original_command_json},
+    yield_time_ms: JSON.rawJSON("{numeric_yield}"),
+    timeout_ms: JSON.rawJSON("10000.0"),
+    max_output_tokens: JSON.rawJSON("1e3"),
+  }});
+  text(output.output);
+}} catch (error) {{
+  text("numeric-rejected: " + String(error));
+}}
 "#
     );
     let responses = mount_sse_sequence(
@@ -4152,12 +4169,18 @@ text(output.output);
     let updated_input = serde_json::json!({ "command": rewritten_command });
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
+        .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
         .with_pre_build_hook(move |home| {
             write_updating_pre_tool_use_hook(home, "^Bash$", &updated_input)
                 .expect("failed to write updating pre tool use hook fixture");
         })
         .with_config(|config| {
             let _ = config.features.enable(Feature::CodeMode);
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("Code Mode host");
+            config.code_mode.disable_in_process_fallback = true;
             trust_discovered_hooks(config);
         });
     let test = builder.build(&server).await?;
@@ -4172,6 +4195,25 @@ text(output.output);
     assert_eq!(requests.len(), 2);
     let output_item = requests[1].custom_tool_call_output(call_id);
     let output = code_mode_custom_tool_output_text(&output_item);
+    if numeric_yield == "1.0000000000000001" {
+        assert!(output.contains("numeric-rejected:"), "{output}");
+        assert!(
+            !original_marker.exists(),
+            "fractional input must not execute"
+        );
+        assert!(
+            !rewritten_marker.exists(),
+            "fractional input must not execute a rewrite"
+        );
+        assert!(
+            !test
+                .codex_home_path()
+                .join("pre_tool_use_hook_log.jsonl")
+                .exists(),
+            "invalid numeric input must fail the typed pre-hook check",
+        );
+        return Ok(());
+    }
     assert!(
         output.contains("git version"),
         "code mode should receive the rewritten command result"
