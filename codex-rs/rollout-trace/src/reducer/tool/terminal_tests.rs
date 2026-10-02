@@ -679,6 +679,8 @@ fn whole_number_stdin_replay_preserves_historical_keys_and_raw_evidence() -> any
         (r#""1.23e2""#, "1.23e2"),
         (r#""pty-1""#, "pty-1"),
         (r#"" 123 ""#, " 123 "),
+        (r#"{"$serde_json::private::Number":"456.0"}"#, "456.0"),
+        (r#"{"$serde_json::private::RawValue":"789.0"}"#, "789.0"),
         ("123.5", "123.5"),
         ("123.50", "123.50"),
         ("123.00000000000000000001", "123.00000000000000000001"),

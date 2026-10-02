@@ -18,7 +18,7 @@ codex-code-mode = { workspace = true }
 codex-protocol = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["arbitrary_precision"] }
+serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
