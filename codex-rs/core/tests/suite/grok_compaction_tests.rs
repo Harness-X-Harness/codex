@@ -73,7 +73,10 @@ async fn grok_compaction_keeps_local_summary_across_provider_aliases(
         "node_repl_disabled": true,
         "tool_mode": "direct"
     }]});
-    std::fs::write(home.path().join("models.json"), serde_json::to_vec(&catalog)?)?;
+    std::fs::write(
+        home.path().join("models.json"),
+        serde_json::to_vec(&catalog)?,
+    )?;
     let base_url = format!("{}/v1", server.uri());
     std::fs::write(
         home.path().join("config.toml"),
