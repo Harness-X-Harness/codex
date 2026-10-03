@@ -28,7 +28,13 @@ use super::run_command;
 #[cfg(windows)]
 use crate::fs_helper::FsHelperPayload;
 #[cfg(windows)]
+use crate::fs_helper::FsHelperRequest;
+#[cfg(windows)]
+use crate::protocol::FsReadFileParams;
+#[cfg(windows)]
 use crate::protocol::FsReadFileResponse;
+#[cfg(windows)]
+use crate::protocol::FsWriteFileParams;
 #[cfg(windows)]
 use crate::protocol::FsWriteFileResponse;
 
@@ -173,9 +179,23 @@ async fn completed_windows_image_read_does_not_wait_for_a_stuck_helper() {
             "[Console]::In.ReadLine() | Out-Null\n{operation}\n[Console]::Out.Flush()\n[Threading.Thread]::Sleep(30000)"
         );
         let command = powershell_command(&script, &path).expect("PowerShell helper command");
+        let request = if matches!(&expected, FsHelperPayload::WriteFile(_)) {
+            FsHelperRequest::WriteFile(FsWriteFileParams {
+                path: PathUri::from_host_native_path(&path).expect("write URI"),
+                data_base64: "aW1hZ2U=".to_string(),
+                follow_symlinks: None,
+                sandbox: None,
+            })
+        } else {
+            FsHelperRequest::ReadFile(FsReadFileParams {
+                path: PathUri::from_host_native_path(&path).expect("read URI"),
+                follow_symlinks: None,
+                sandbox: None,
+            })
+        };
         let result = tokio::time::timeout(
             Duration::from_secs(/*secs*/ 8),
-            run_command(command, b"{}".to_vec()),
+            run_command(command, request),
         )
         .await
         .expect("the completed operation must not wait for helper termination")
@@ -184,6 +204,21 @@ async fn completed_windows_image_read_does_not_wait_for_a_stuck_helper() {
         assert_eq!(result, expected);
     }
     assert_eq!(std::fs::read(&path).expect("created file"), b"image");
+    let file_system: std::sync::Arc<dyn crate::ExecutorFileSystem> =
+        std::sync::Arc::new(crate::LocalFileSystem::unsandboxed());
+    assert_eq!(
+        file_system
+            .write_file_if_unchanged(
+                &PathUri::from_host_native_path(&path).expect("path URI"),
+                b"image".to_vec(),
+                b"updated".to_vec(),
+                crate::WriteFileOptions::default(),
+                /*sandbox*/ None,
+            )
+            .await
+            .expect("validated terminal response leaves mutation admission open"),
+        crate::ConditionalWriteResult::Written
+    );
 }
 
 #[cfg(windows)]
@@ -252,4 +287,107 @@ fn powershell_command(script: &str, path: &Path) -> anyhow::Result<SandboxExecRe
         permission_profile: PermissionProfile::Disabled,
         arg0: None,
     })
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn unconfirmed_windows_helper_effect_closes_mutation_admission() {
+    const CHILD_ENV: &str = "CODEX_FS_UNKNOWN_EFFECT_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // The deliberately closed process-wide owner must not contaminate other unit tests.
+        let output = tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 20),
+            tokio::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args(["--exact", "fs_sandbox::windows_tests::unconfirmed_windows_helper_effect_closes_mutation_admission", "--nocapture"])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        ).await.expect("isolated uncertainty fixture completes").expect("isolated test process");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("running 1 test") && stdout.contains("1 passed; 0 failed"),
+            "the isolated helper test must execute exactly once: {stdout}"
+        );
+        assert!(
+            output.status.success(),
+            "isolated unknown-effect test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("file");
+    std::fs::write(&path, b"before").expect("initial bytes");
+    let command = powershell_command(
+        "[Console]::In.ReadLine() | Out-Null\n[Console]::Out.WriteLine('invalid response')\n[Console]::Out.Flush()\n[Threading.Thread]::Sleep(30000)",
+        &path,
+    ).expect("helper command");
+    run_command(
+        command,
+        FsHelperRequest::WriteFile(FsWriteFileParams {
+            path: PathUri::from_host_native_path(&path).expect("path URI"),
+            data_base64: "YWZ0ZXI=".to_string(),
+            follow_symlinks: None,
+            sandbox: None,
+        }),
+    )
+    .await
+    .expect_err("invalid response without observed normal exit is uncertain");
+    let file_system: std::sync::Arc<dyn crate::ExecutorFileSystem> =
+        std::sync::Arc::new(crate::LocalFileSystem::unsandboxed());
+    let error = file_system
+        .write_file_if_unchanged(
+            &PathUri::from_host_native_path(&path).expect("path URI"),
+            b"before".to_vec(),
+            b"after".to_vec(),
+            crate::WriteFileOptions::default(),
+            /*sandbox*/ None,
+        )
+        .await
+        .expect_err("admission stays closed after unconfirmed effect");
+    assert!(error.to_string().contains("admission closed"), "{error}");
+    assert_eq!(std::fs::read(path).expect("unchanged bytes"), b"before");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn terminal_windows_helper_error_settles_partial_effect_before_slow_exit() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("file");
+    let command = powershell_command(
+        r#"[Console]::In.ReadLine() | Out-Null
+[IO.File]::WriteAllText($env:CODEX_FS_HELPER_TEST_PATH, 'partial')
+[Console]::Out.WriteLine('{"status":"error","payload":{"code":-32602,"message":"controlled settled error","data":null}}')
+[Console]::Out.Flush()
+[Threading.Thread]::Sleep(30000)"#,
+        &path,
+    ).expect("helper command");
+    let error = run_command(
+        command,
+        FsHelperRequest::WriteFile(FsWriteFileParams {
+            path: PathUri::from_host_native_path(&path).expect("path URI"),
+            data_base64: "cGFydGlhbA==".to_string(),
+            follow_symlinks: None,
+            sandbox: None,
+        }),
+    )
+    .await
+    .expect_err("terminal helper error is preserved");
+    assert_eq!(error.message, "controlled settled error");
+    let file_system: std::sync::Arc<dyn crate::ExecutorFileSystem> =
+        std::sync::Arc::new(crate::LocalFileSystem::unsandboxed());
+    assert_eq!(
+        file_system
+            .write_file_if_unchanged(
+                &PathUri::from_host_native_path(&path).expect("path URI"),
+                b"partial".to_vec(),
+                b"after".to_vec(),
+                crate::WriteFileOptions::default(),
+                /*sandbox*/ None,
+            )
+            .await
+            .expect("settled error releases admission"),
+        crate::ConditionalWriteResult::Written
+    );
+    assert_eq!(std::fs::read(path).expect("successor bytes"), b"after");
 }
