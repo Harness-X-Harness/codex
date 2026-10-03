@@ -79,23 +79,47 @@ jobs:
           just bazel-lock-update
           just bazel-lock-check
           git diff --exit-code -- codex-rs/Cargo.lock MODULE.bazel.lock
+      - name: Fix scoped API lint
+        working-directory: codex-rs
+        run: just fix -p codex-api --locked --profile ci-test --timings
+      - name: Require unchanged API construction input
+        uses: ./.github/actions/check-clean-worktree
       - name: Test Provider metadata with the locked workspace
         working-directory: codex-rs
         run: just test -p codex-model-provider-info --locked --cargo-profile ci-test --no-tests=fail
       - name: Test Grok and affected stock API contracts
         working-directory: codex-rs
         run: just test -p codex-api --locked --cargo-profile ci-test --no-tests=fail
-      - name: Fix scoped API lint
-        working-directory: codex-rs
-        run: just fix -p codex-api --locked --profile ci-test
       # Cargo fix caps diagnostics at warn. A distinct maximal cap rechecks
       # the existing lint policy instead of reusing the fixer's cached result.
       - name: Check scoped API lint
         working-directory: codex-rs
-        run: just clippy -p codex-api --locked --profile ci-test -- --no-deps --cap-lints=forbid
+        run: just clippy -p codex-api --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
+      - name: Retain API changes on failure
+        if: ${{ failure() }}
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --binary > "$RUNNER_TEMP/api-native.diff"
+          {
+            printf '%s\n' "repository=$GITHUB_REPOSITORY" \
+              "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT job=$GITHUB_JOB" \
+              "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
+              "checkout=$(git rev-parse HEAD)" \
+              "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
+              "workflow_sha=$GITHUB_WORKFLOW_SHA"
+            cargo --version || echo "cargo unavailable"
+            rustfmt --version || echo "rustfmt unavailable"
+            cargo clippy --version || echo "clippy unavailable"
+          } > "$RUNNER_TEMP/api-native-subject.txt"
+          if [[ $(wc -c < "$RUNNER_TEMP/api-native.diff") -gt 10485760 ]]; then
+            echo "Patch exceeds 10 MiB; omitted for manual diagnosis." >> "$RUNNER_TEMP/api-native-subject.txt"
+            rm "$RUNNER_TEMP/api-native.diff"
+          fi
       - name: Retain generated locks on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -104,6 +128,8 @@ jobs:
           path: |
             codex-rs/Cargo.lock
             MODULE.bazel.lock
+            ${{ runner.temp }}/api-native.diff
+            ${{ runner.temp }}/api-native-subject.txt
           if-no-files-found: error
 
   runtime:
@@ -124,6 +150,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: clippy, rustfmt
+      - name: Normalize scoped Rust formatting
+        working-directory: codex-rs
+        run: |
+          cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -- --config imports_granularity=Item
+      - name: Require unchanged formatting input
+        uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
         working-directory: codex-rs
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
@@ -137,24 +170,119 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103
+      - name: Record bounded native build inputs
+        continue-on-error: true
+        run: |
+          cat > "$RUNNER_TEMP/grok-build-resources.py" <<'PYCODE'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+
+          def read_metric(path):
+              try:
+                  with path.open() as source:
+                      return source.read(512).strip()
+              except OSError:
+                  return "unavailable"
+
+
+          def disk_metric(variable):
+              try:
+                  usage = shutil.disk_usage(os.environ[variable])
+                  return dict(zip(("total", "used", "free"), usage))
+              except (KeyError, OSError):
+                  return "unavailable"
+
+
+          result = {"cpu_count": os.cpu_count()}
+          try:
+              result["affinity_cpu_count"] = len(os.sched_getaffinity(0))
+          except (AttributeError, OSError):
+              result["affinity_cpu_count"] = "unavailable"
+          try:
+              result["physical_memory_kib"] = next(
+                  int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
+                  if line.startswith("MemTotal:")
+              )
+          except (OSError, StopIteration, ValueError):
+              result["physical_memory_kib"] = "unavailable"
+          result["cgroup_v2_leaf_then_ancestors"] = "unavailable"
+          try:
+              relative = next(
+                  line.split(":", 2)[2] for line in Path("/proc/self/cgroup").read_text().splitlines()
+                  if line.startswith("0::")
+              )
+              root = Path("/sys/fs/cgroup")
+              group = (root / relative.lstrip("/")).resolve()
+              groups = []
+              while group.is_relative_to(root) and len(groups) < 16:
+                  groups.append({name: read_metric(group / name) for name in (
+                      "cpu.max", "memory.max", "memory.peak", "memory.events"
+                  )})
+                  group = group.parent
+              result["cgroup_v2_leaf_then_ancestors"] = groups or "unavailable"
+              result["cgroup_ancestors_truncated"] = group.is_relative_to(root)
+          except (OSError, StopIteration):
+              pass
+          result["workspace_disk_bytes"] = disk_metric("GITHUB_WORKSPACE")
+          result["target_disk_bytes"] = disk_metric("CARGO_TARGET_DIR")
+          try:
+              size = subprocess.run(
+                  ["du", "-sb", "--", os.environ["CARGO_TARGET_DIR"]],
+                  check=True, capture_output=True, text=True, timeout=10,
+              )
+              result["target_apparent_bytes"] = int(size.stdout.split()[0])
+          except (KeyError, OSError, ValueError, subprocess.SubprocessError):
+              result["target_apparent_bytes"] = "unavailable"
+          print(json.dumps(result, sort_keys=True))
+          PYCODE
+          {
+            rustc --version --verbose
+            cargo --version
+            cargo nextest --version
+            printf '%s\n' "build_jobs=$CARGO_BUILD_JOBS incremental=$CARGO_INCREMENTAL" \
+              "dev_debug=$CARGO_PROFILE_DEV_DEBUG ci_test_debug=$CARGO_PROFILE_CI_TEST_DEBUG"
+            python3 "$RUNNER_TEMP/grok-build-resources.py"
+          } | tee "$RUNNER_TEMP/grok-runtime-resources-start.txt"
       - name: Set up pinned Code Mode V8 artifacts
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu
       - name: Build the consumed Code Mode host
         working-directory: codex-rs
-        run: cargo build -p codex-code-mode-host --bin codex-code-mode-host --locked --profile ci-test
+        run: cargo build -p codex-code-mode-host --bin codex-code-mode-host --locked --profile ci-test --timings
+      - name: Fix scoped Code Mode host lint
+        working-directory: codex-rs
+        run: cargo clippy --fix --allow-dirty -p codex-code-mode-host --test stdio --locked --profile ci-test --timings
+      - name: Require unchanged host construction input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Fix scoped Provider runtime lint
+        working-directory: codex-rs
+        run: >-
+          just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test --timings
+      - name: Require unchanged runtime construction input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Regenerate owned configuration schema
+        working-directory: codex-rs
+        run: |
+          just write-config-schema --locked --profile ci-test --timings
+          # The profile may change build reuse, never the owned schema bytes.
+          git show HEAD:codex-rs/core/config.schema.json | cmp - core/config.schema.json
+      - name: Freeze unchanged native proof input
+        uses: ./.github/actions/check-clean-worktree
       - name: Test the adapted host interrupt fixture
         working-directory: codex-rs
         run: >-
           just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(interrupt_yields_observations_without_stopping_the_cell)'
-      - name: Fix scoped Code Mode host lint
-        working-directory: codex-rs
-        run: cargo clippy --fix --allow-dirty -p codex-code-mode-host --test stdio --locked --profile ci-test
       - name: Check scoped Code Mode host lint
         working-directory: codex-rs
-        run: cargo clippy -p codex-code-mode-host --test stdio --locked --profile ci-test -- --no-deps --cap-lints=forbid
+        run: cargo clippy -p codex-code-mode-host --test stdio --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Test standalone Code Mode numeric forwarding
         working-directory: codex-rs
         run: |
@@ -162,9 +290,6 @@ jobs:
           just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
           just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(tcp_session_persists_values_and_forwards_tools_notifications_and_closure)'
           just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
-      - name: Regenerate owned configuration schema
-        working-directory: codex-rs
-        run: just write-config-schema
       - name: Test Provider policy and configuration boundaries
         working-directory: codex-rs
         run: just test -p codex-model-provider -p codex-config --locked --cargo-profile ci-test --no-tests=fail
@@ -234,7 +359,7 @@ jobs:
           -E 'test(suite::turn_input_completion::)'
       - name: Build the exact CLI for native integrations and Basic fixture
         working-directory: codex-rs
-        run: cargo build -p codex-cli --bin codex --locked --profile ci-test
+        run: cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
       - name: Test affected input, mailbox, hook and shell composition
         working-directory: codex-rs
         run: >-
@@ -290,24 +415,57 @@ jobs:
           export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_LIVE_NATIVE_BIN"
           go test -race -count=1 -timeout=5m -v ./live
-      - name: Fix scoped Provider runtime lint
-        working-directory: codex-rs
-        run: >-
-          just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test
       - name: Check scoped Provider runtime lint
         working-directory: codex-rs
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test -- --no-deps --cap-lints=forbid
+          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
+      - name: Record final native build resources
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          if [[ -r "$RUNNER_TEMP/grok-build-resources.py" ]]; then
+            python3 "$RUNNER_TEMP/grok-build-resources.py"
+          else
+            echo "native resource measurements unavailable"
+          fi | tee "$RUNNER_TEMP/grok-runtime-resources-end.txt"
+      - name: Retain native build measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: native-build-measurements-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/grok-runtime-resources-*.txt
+            ${{ env.CARGO_TARGET_DIR }}/cargo-timings/cargo-timing-*.html
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain native changes on failure
         if: ${{ failure() }}
-        run: git diff --binary > "$RUNNER_TEMP/provider-native.diff"
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --binary > "$RUNNER_TEMP/provider-native.diff"
+          {
+            printf '%s\n' "repository=$GITHUB_REPOSITORY" \
+              "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT job=$GITHUB_JOB" \
+              "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
+              "checkout=$(git rev-parse HEAD)" \
+              "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
+              "workflow_sha=$GITHUB_WORKFLOW_SHA"
+            cargo --version || echo "cargo unavailable"
+            rustfmt --version || echo "rustfmt unavailable"
+            cargo clippy --version || echo "clippy unavailable"
+          } > "$RUNNER_TEMP/provider-native-subject.txt"
+          if [[ $(wc -c < "$RUNNER_TEMP/provider-native.diff") -gt 10485760 ]]; then
+            echo "Patch exceeds 10 MiB; omitted for manual diagnosis." >> "$RUNNER_TEMP/provider-native-subject.txt"
+            rm "$RUNNER_TEMP/provider-native.diff"
+          fi
       - name: Retain generated representations on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -317,6 +475,7 @@ jobs:
             codex-rs/core/config.schema.json
             codex-rs/tui/src/**/*.snap.new
             ${{ runner.temp }}/provider-native.diff
+            ${{ runner.temp }}/provider-native-subject.txt
           if-no-files-found: error
 
   go:
