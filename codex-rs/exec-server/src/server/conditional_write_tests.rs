@@ -115,8 +115,8 @@ impl Connection {
             .await
             .expect("server handles disconnect")
             .expect("server task");
-        let requests = self.requests.lock().expect("captured requests").clone();
-        requests
+
+        self.requests.lock().expect("captured requests").clone()
     }
 }
 

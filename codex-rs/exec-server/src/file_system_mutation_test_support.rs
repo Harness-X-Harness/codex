@@ -141,7 +141,10 @@ pub(crate) async fn observe_pending<T>(
     path: &codex_utils_path_uri::PathUri,
     future: impl Future<Output = T>,
 ) -> T {
-    let native = path.to_abs_path().ok().map(|path| path.into_path_buf());
+    let native = path
+        .to_abs_path()
+        .ok()
+        .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf);
     tokio::pin!(future);
     std::future::poll_fn(|context| {
         let result = future.as_mut().poll(context);
