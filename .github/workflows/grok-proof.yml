@@ -161,7 +161,7 @@ jobs:
           just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -- --config imports_granularity=Item --check
       - name: Regenerate owned configuration schema
         working-directory: codex-rs
         run: just write-config-schema
@@ -173,12 +173,18 @@ jobs:
         run: >-
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(client::) | test(client_common::) | test(config::)'
-      - name: Test exact exec numeric admission
+      - name: Test exact exec and stdin numeric admission
         working-directory: codex-rs
         run: |
-          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::json_whole_number::tests::)'
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(json_whole_number::tests::)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::unified_exec::numeric_tests::)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::unified_exec::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::unified_exec::write_stdin::numeric_tests::)'
+      - name: Test stdin trace replay and affected stock reducers
+        working-directory: codex-rs
+        run: |
+          just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(whole_number_stdin_replay_)'
+          just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail
       - name: Test production Provider composition
         working-directory: codex-rs
         run: >-
@@ -233,6 +239,12 @@ jobs:
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_block_rejects_code_mode_tool_promise_before_execution)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_return_exec_command_output)'
+      - name: Test stdin delivery and native Code Mode composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::unified_exec::write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_write_stdin_numeric_inputs_use_returned_session)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_write_stdin_calls_run_in_parallel_across_sessions)'
       - name: Test goal state and advisory steering contracts
         working-directory: codex-rs
         run: just test -p codex-goal-extension --locked --cargo-profile ci-test --no-tests=fail
@@ -261,12 +273,14 @@ jobs:
         working-directory: codex-rs
         run: >-
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host --locked --profile ci-test
+          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test
       - name: Check scoped Provider runtime lint
         working-directory: codex-rs
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host --locked --profile ci-test -- --no-deps --cap-lints=forbid
+          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree

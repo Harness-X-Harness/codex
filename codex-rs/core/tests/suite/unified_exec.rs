@@ -2315,6 +2315,168 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes() -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses a POSIX read/printf fixture");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let start_args = json!({
+        "cmd": "stty -echo; IFS= read -r first; printf 'FIRST:%s\\n' \"$first\"; IFS= read -r second; printf 'SECOND:%s\\n' \"$second\"",
+        "tty": true,
+        "yield_time_ms": 250,
+    });
+    let started = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(
+                    "stdin-numeric-start",
+                    "exec_command",
+                    &start_args.to_string(),
+                ),
+                ev_completed("resp-start"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-start", "ready"),
+                ev_completed("resp-start-done"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Start a process that reads two lines")
+        .await?;
+    let start_request = started.last_request().expect("start completion request");
+    let start_item = start_request.function_call_output("stdin-numeric-start");
+    let start_output = parse_unified_exec_output(
+        extract_output_text(&start_item).expect("start tool output text"),
+    )?;
+    let session_id = start_output.process_id.expect("real running session");
+
+    let fractional_session = format!("{session_id}.0000000000000001");
+    let invalid_calls = [
+        (
+            "stdin-fractional-session",
+            fractional_session.as_str(),
+            "250",
+            "1000",
+        ),
+        ("stdin-overflow-session", "2147483648.0", "250", "1000"),
+        (
+            "stdin-fractional-yield",
+            session_id.as_str(),
+            "1.0000000000000001",
+            "1000",
+        ),
+        (
+            "stdin-overflow-yield",
+            session_id.as_str(),
+            "18446744073709551616",
+            "1000",
+        ),
+        (
+            "stdin-fractional-limit",
+            session_id.as_str(),
+            "250",
+            "9007199254740993.1",
+        ),
+        (
+            "stdin-overflow-limit",
+            session_id.as_str(),
+            "250",
+            "18446744073709551616",
+        ),
+    ];
+    let mut responses = invalid_calls
+        .iter()
+        .map(|(call_id, session, yield_ms, limit)| {
+            let arguments = format!(
+                r#"{{"session_id":{session},"chars":"invalid\n","yield_time_ms":{yield_ms},"max_output_tokens":{limit}}}"#,
+            );
+            sse(vec![
+                ev_function_call(call_id, "write_stdin", &arguments),
+                ev_completed(call_id),
+            ])
+        })
+        .collect::<Vec<_>>();
+    for (call_id, arguments) in [
+        (
+            "stdin-decimal",
+            format!(
+                r#"{{"session_id":{session_id}.0,"chars":"decimal\n","yield_time_ms":250.0,"max_output_tokens":1e3}}"#
+            ),
+        ),
+        (
+            "stdin-exponent",
+            format!(
+                r#"{{"session_id":{session_id}e0,"chars":"exponent\n","yield_time_ms":184467440737095516150e-1,"max_output_tokens":null}}"#
+            ),
+        ),
+    ] {
+        responses.push(sse(vec![
+            ev_function_call(call_id, "write_stdin", &arguments),
+            ev_completed(call_id),
+        ]));
+    }
+    responses.push(sse(vec![
+        ev_assistant_message("msg-done", "done"),
+        ev_completed("resp-done"),
+    ]));
+    let written = mount_sse_sequence(&server, responses).await;
+    submit_unified_exec_turn(
+        &test,
+        "Write to the returned session",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    let mut interactions = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::TerminalInteraction(event) => {
+                interactions.push((event.process_id, event.stdin));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        interactions,
+        vec![
+            (session_id.clone(), "decimal\n".to_owned()),
+            (session_id.clone(), "exponent\n".to_owned()),
+        ],
+        "rejected calls must not interact with the live process",
+    );
+    let request = written.last_request().expect("stdin completion request");
+    for (call_id, _, _, _) in invalid_calls {
+        let item = request.function_call_output(call_id);
+        let output = extract_output_text(&item).expect("rejection text");
+        assert!(
+            output.contains("failed to parse function arguments"),
+            "{call_id}: {output}",
+        );
+    }
+    let decimal_item = request.function_call_output("stdin-decimal");
+    let decimal = parse_unified_exec_output(extract_output_text(&decimal_item).unwrap())?;
+    assert_eq!(decimal.process_id.as_deref(), Some(session_id.as_str()));
+    let exponent_item = request.function_call_output("stdin-exponent");
+    let exponent = parse_unified_exec_output(extract_output_text(&exponent_item).unwrap())?;
+    assert_eq!(
+        (exponent.process_id.as_deref(), exponent.exit_code),
+        (None, Some(0)),
+    );
+    let output = format!("{}{}", decimal.output, exponent.output);
+    let first = output.find("FIRST:decimal").expect("first line delivered");
+    let second = output
+        .find("SECOND:exponent")
+        .expect("second line delivered");
+    assert!(first < second, "{output}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     // TODO(anp): Remove after unified-exec interactive fixtures support Windows/ConPTY.
     skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and EOF semantics");
