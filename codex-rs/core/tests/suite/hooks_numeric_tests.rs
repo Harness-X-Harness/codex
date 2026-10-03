@@ -1,4 +1,5 @@
 use super::*;
+use core_test_support::responses::ev_function_call_with_namespace;
 use pretty_assertions::assert_eq;
 
 fn write_literal_wait_pre_tool_use_hook(home: &Path, timeout_literal: &str) -> Result<()> {
@@ -25,7 +26,7 @@ sys.stdout.write({output_string})
     let hooks = json!({
         "hooks": {
             "PreToolUse": [{
-                "matcher": "^wait_agent$",
+                "matcher": "^collaborationwait_agent$",
                 "hooks": [{
                     "type": "command",
                     "command": format!("python3 {}", script_path.display()),
@@ -61,8 +62,9 @@ async fn pre_tool_use_rewrites_wait_agent_exact_numeric_timeout() -> Result<()> 
             vec![
                 sse(vec![
                     ev_response_created("resp-1"),
-                    ev_function_call(
+                    ev_function_call_with_namespace(
                         call_id,
+                        "collaboration",
                         "wait_agent",
                         &serde_json::to_string(&original_args)?,
                     ),
@@ -101,20 +103,13 @@ async fn pre_tool_use_rewrites_wait_agent_exact_numeric_timeout() -> Result<()> 
         let output = output_item["output"]
             .as_str()
             .expect("wait_agent function output string");
-        match error_message {
-            Some(message) => assert!(
-                output.contains(message),
-                "timeout literal {timeout_literal}: {output}"
-            ),
-            None => assert_eq!(
-                serde_json::from_str::<Value>(output)?,
-                json!({"message": "Wait timed out.", "timed_out": true}),
-                "timeout literal {timeout_literal}"
-            ),
-        }
-
+        let output_preview: String = output.chars().take(512).collect();
         let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
-        assert_eq!(hook_inputs.len(), 1, "timeout literal {timeout_literal}");
+        assert_eq!(
+            hook_inputs.len(),
+            1,
+            "timeout literal {timeout_literal}, call {call_id}, output {output_preview:?}"
+        );
         assert_eq!(
             json!({
                 "hook_event_name": hook_inputs[0]["hook_event_name"],
@@ -124,12 +119,27 @@ async fn pre_tool_use_rewrites_wait_agent_exact_numeric_timeout() -> Result<()> 
             }),
             json!({
                 "hook_event_name": "PreToolUse",
-                "tool_name": "wait_agent",
+                "tool_name": "collaborationwait_agent",
                 "tool_use_id": call_id,
                 "tool_input": original_args,
             }),
             "timeout literal {timeout_literal}"
         );
+        match error_message {
+            Some(message) => assert!(
+                output.contains(message),
+                "timeout literal {timeout_literal}, call {call_id}, output {output_preview:?}"
+            ),
+            None => assert_eq!(
+                serde_json::from_str::<Value>(output).with_context(|| {
+                    format!(
+                        "decode wait result for literal {timeout_literal}, call {call_id}, output {output_preview:?}"
+                    )
+                })?,
+                json!({"message": "Wait timed out.", "timed_out": true}),
+                "timeout literal {timeout_literal}"
+            ),
+        }
     }
 
     Ok(())
