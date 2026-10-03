@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::ThreadHistoryMode;
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 

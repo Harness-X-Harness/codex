@@ -1,4 +1,5 @@
 use super::*;
+use pretty_assertions::assert_eq;
 
 fn write_literal_wait_pre_tool_use_hook(home: &Path, timeout_literal: &str) -> Result<()> {
     let script_path = home.join("pre_tool_use_hook.py");
