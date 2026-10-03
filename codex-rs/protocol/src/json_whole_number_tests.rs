@@ -46,6 +46,23 @@ fn target_bounds_are_exact() {
     for token in ["2147483648", "-2147483649.0"] {
         assert!(parse::<i32>(token).is_err(), "{token}");
     }
+    for token in [
+        "9223372036854775807",
+        "9223372036854775807.0",
+        "92233720368547758070e-1",
+    ] {
+        assert_eq!(parse::<i64>(token), Ok(i64::MAX));
+    }
+    for token in [
+        "-9223372036854775808",
+        "-9223372036854775808.0",
+        "-92233720368547758080e-1",
+    ] {
+        assert_eq!(parse::<i64>(token), Ok(i64::MIN));
+    }
+    for token in ["9223372036854775808", "-9223372036854775809.0"] {
+        assert!(parse::<i64>(token).is_err(), "{token}");
+    }
     for token in ["18446744073709551615", "184467440737095516150e-1"] {
         assert_eq!(parse::<u64>(token), Ok(u64::MAX));
     }

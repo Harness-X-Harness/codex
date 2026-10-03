@@ -121,13 +121,19 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy, rustfmt
+      - name: Check Code Mode host fixture formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
+      - name: Check affected Provider runtime crate formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        with:
-          components: clippy, rustfmt
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103
@@ -135,9 +141,6 @@ jobs:
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: x86_64-unknown-linux-gnu
-      - name: Check Code Mode host fixture formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Build the consumed Code Mode host
         working-directory: codex-rs
         run: cargo build -p codex-code-mode-host --bin codex-code-mode-host --locked --profile ci-test
@@ -159,9 +162,6 @@ jobs:
           just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
           just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(tcp_session_persists_values_and_forwards_tools_notifications_and_closure)'
           just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
-      - name: Check affected Provider runtime crate formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -- --config imports_granularity=Item --check
       - name: Regenerate owned configuration schema
         working-directory: codex-rs
         run: just write-config-schema
@@ -192,6 +192,22 @@ jobs:
           -E 'test(suite::grok_provider::) | test(suite::client::) | test(suite::client_websockets::)
           | test(suite::websocket_fallback::) | test(suite::auth_recovery_policy::)
           | test(suite::gateway_auth::) | test(suite::cloud_config::)'
+      - name: Test exact wait and fork numeric admission
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::wait::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents_v2::wait::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents_v2::spawn::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::tests::wait_numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::tests::fork_numeric_tests::)'
+      - name: Test affected wait and fork handler contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(tools::handlers::multi_agents::tests::wait_agent_)
+          | test(tools::handlers::multi_agents::tests::multi_agent_v2_wait_agent_)
+          | test(tools::handlers::multi_agents::tests::multi_agent_v2_spawn_)
+          | test(full_history_fork_inherits_root_service_tier)'
       - name: Test explicit-dialect compaction and stock consumers
         working-directory: codex-rs
         run: |
@@ -248,6 +264,11 @@ jobs:
       - name: Test goal state and advisory steering contracts
         working-directory: codex-rs
         run: just test -p codex-goal-extension --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test generic numeric hook composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::numeric_tests::pre_tool_use_rewrites_wait_agent_exact_numeric_timeout)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_local_function_tool_before_execution)'
       - name: Test CLI display contracts
         working-directory: codex-rs
         run: just test -p codex-exec --lib --locked --cargo-profile ci-test --no-tests=fail

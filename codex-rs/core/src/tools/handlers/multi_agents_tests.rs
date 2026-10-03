@@ -91,6 +91,9 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+#[path = "multi_agents_wait_numeric_tests.rs"]
+mod wait_numeric_tests;
+
 fn set_agent_control(
     session: &mut crate::session::session::Session,
     control: crate::agent::LocalAgentControl,
@@ -3051,7 +3054,9 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
                     session,
                     turn,
                     "wait_agent",
-                    function_payload(json!({"timeout_ms": 10_000})),
+                    ToolPayload::Function {
+                        arguments: r#"{"timeout_ms":10000.0}"#.to_string(),
+                    },
                 ))
                 .await
         }
@@ -3425,10 +3430,9 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
         Arc::new(session),
         Arc::new(turn),
         "wait_agent",
-        function_payload(json!({
-            "targets": [agent_id.to_string()],
-            "timeout_ms": 10
-        })),
+        ToolPayload::Function {
+            arguments: format!(r#"{{"targets":["{agent_id}"],"timeout_ms":10.0}}"#),
+        },
     );
 
     let early = timeout(
@@ -3474,10 +3478,9 @@ async fn wait_agent_returns_final_status_without_timeout() {
         Arc::new(session),
         Arc::new(turn),
         "wait_agent",
-        function_payload(json!({
-            "targets": [agent_id.to_string()],
-            "timeout_ms": 10_000
-        })),
+        ToolPayload::Function {
+            arguments: format!(r#"{{"targets":["{agent_id}"],"timeout_ms":1e4}}"#),
+        },
     );
     let output = WaitAgentHandler::default()
         .handle(invocation)
@@ -3551,7 +3554,9 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
                     session,
                     turn,
                     "wait_agent",
-                    function_payload(json!({"timeout_ms": 10_000})),
+                    ToolPayload::Function {
+                        arguments: r#"{"timeout_ms":1e4}"#.to_string(),
+                    },
                 ))
                 .await
         }
@@ -4736,3 +4741,6 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .expect("approval policy set");
     assert_eq!(config, expected);
 }
+
+#[path = "multi_agents_fork_numeric_tests.rs"]
+mod fork_numeric_tests;
