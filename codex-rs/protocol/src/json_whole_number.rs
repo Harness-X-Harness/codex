@@ -1,7 +1,7 @@
 //! Exact JSON-number adapters for the existing i32, i64, u64, and usize tool fields.
 //! Decimal and exponent spellings retain integer precision without an f64 step.
 
-use serde::Deserialize;
+use  serde::Deserialize;
 use serde::Deserializer;
 use serde::de::Error;
 use serde_json::value::RawValue;
