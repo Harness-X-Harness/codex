@@ -91,6 +91,9 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+#[path = "multi_agents_wait_numeric_tests.rs"]
+mod wait_numeric_tests;
+
 fn set_agent_control(
     session: &mut crate::session::session::Session,
     control: crate::agent::LocalAgentControl,
@@ -3051,7 +3054,9 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
                     session,
                     turn,
                     "wait_agent",
-                    function_payload(json!({"timeout_ms": 10_000})),
+                    ToolPayload::Function {
+                        arguments: r#"{"timeout_ms":10000.0}"#.to_string(),
+                    },
                 ))
                 .await
         }
@@ -3367,8 +3372,13 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
     assert_eq!(success, None);
 }
 
+#[test_case::test_case(Some("10000"), 10_000; "integer")]
+#[test_case::test_case(None, 30_000; "missing_default")]
+#[test_case::test_case(Some("null"), 30_000; "null_default")]
+#[test_case::test_case(Some("10.0"), 10_000; "minimum_clamp")]
+#[test_case::test_case(Some("9.223372036854775807e18"), 3_600_000; "maximum_clamp")]
 #[tokio::test]
-async fn wait_agent_times_out_when_status_is_not_final() {
+async fn wait_agent_times_out_when_status_is_not_final(timeout: Option<&str>, expected_ms: u64) {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     set_agent_control(&mut session, manager.agent_control());
@@ -3378,19 +3388,32 @@ async fn wait_agent_times_out_when_status_is_not_final() {
         .await
         .expect("start thread");
     let agent_id = thread.thread_id;
+    let status = thread.thread.subscribe_status().borrow().clone();
+    assert!(!crate::agent::status::is_final(&status));
+    let timeout_field = timeout
+        .map(|token| format!(r#", "timeout_ms":{token}"#))
+        .unwrap_or_default();
+    tokio::time::pause();
+    let started_at = tokio::time::Instant::now();
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
         "wait_agent",
-        function_payload(json!({
-            "targets": [agent_id.to_string()],
-            "timeout_ms": MIN_WAIT_TIMEOUT_MS
-        })),
+        ToolPayload::Function {
+            arguments: format!(r#"{{"targets":["{agent_id}"]{timeout_field}}}"#),
+        },
     );
     let output = WaitAgentHandler::default()
         .handle(invocation)
         .await
         .expect("wait_agent should succeed");
+    let elapsed = started_at.elapsed();
+    tokio::time::resume();
+    assert!(
+        elapsed >= Duration::from_millis(expected_ms)
+            && elapsed <= Duration::from_millis(expected_ms + 1),
+        "legacy timeout policy must remain effective: {elapsed:?}"
+    );
     let (content, success) = expect_text_output(output);
     let result: wait::WaitAgentResult =
         serde_json::from_str(&content).expect("wait_agent result should be json");
@@ -3425,10 +3448,9 @@ async fn wait_agent_clamps_short_timeouts_to_minimum() {
         Arc::new(session),
         Arc::new(turn),
         "wait_agent",
-        function_payload(json!({
-            "targets": [agent_id.to_string()],
-            "timeout_ms": 10
-        })),
+        ToolPayload::Function {
+            arguments: format!(r#"{{"targets":["{agent_id}"],"timeout_ms":10.0}}"#),
+        },
     );
 
     let early = timeout(
@@ -3474,10 +3496,9 @@ async fn wait_agent_returns_final_status_without_timeout() {
         Arc::new(session),
         Arc::new(turn),
         "wait_agent",
-        function_payload(json!({
-            "targets": [agent_id.to_string()],
-            "timeout_ms": 10_000
-        })),
+        ToolPayload::Function {
+            arguments: format!(r#"{{"targets":["{agent_id}"],"timeout_ms":1e4}}"#),
+        },
     );
     let output = WaitAgentHandler::default()
         .handle(invocation)
@@ -3551,7 +3572,9 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
                     session,
                     turn,
                     "wait_agent",
-                    function_payload(json!({"timeout_ms": 10_000})),
+                    ToolPayload::Function {
+                        arguments: r#"{"timeout_ms":1e4}"#.to_string(),
+                    },
                 ))
                 .await
         }
@@ -4736,3 +4759,6 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .expect("approval policy set");
     assert_eq!(config, expected);
 }
+
+#[path = "multi_agents_fork_numeric_tests.rs"]
+mod fork_numeric_tests;

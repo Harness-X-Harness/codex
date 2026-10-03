@@ -1,4 +1,4 @@
-//! Exact JSON-number adapters for the existing i32, u64, and usize tool fields.
+//! Exact JSON-number adapters for the existing i32, i64, u64, and usize tool fields.
 //! Decimal and exponent spellings retain integer precision without an f64 step.
 
 use serde::Deserialize;
@@ -29,7 +29,7 @@ where
 }
 
 // RawValue validates JSON syntax before this converter sees the token. Keep the
-// arithmetic bounded by the selected i32/u64/usize targets, not its exponent.
+// arithmetic bounded by the selected i32/i64/u64/usize targets, not its exponent.
 fn from_raw<T: TryFrom<i128>>(raw: &RawValue) -> Result<T, &'static str> {
     const RANGE_ERROR: &str = "expected an in-range whole number";
     let token = raw.get();

@@ -89,6 +89,9 @@ use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
+#[path = "hooks_numeric_tests.rs"]
+mod numeric_tests;
+
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
 const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";

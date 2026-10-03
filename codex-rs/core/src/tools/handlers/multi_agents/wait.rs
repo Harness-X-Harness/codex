@@ -6,6 +6,7 @@ use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::json_whole_number;
 use codex_tools::ToolSpec;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -292,8 +293,13 @@ impl CoreToolRuntime for Handler {
 struct WaitArgs {
     #[serde(default)]
     targets: Vec<String>,
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     timeout_ms: Option<i64>,
 }
+
+#[cfg(test)]
+#[path = "../multi_agent_wait_fields_tests.rs"]
+mod numeric_tests;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct WaitAgentResult {
