@@ -1,0 +1,97 @@
+name: grok-windows-stock-diagnostic
+
+# One bounded comparison. This workflow supplies no PR or canonical acceptance credit.
+on:
+  push:
+    branches: [grok/diagnostic-c4a-windows-baseline-20261003]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: Diagnostic only - accepted Windows filesystem baseline
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: 3e0b0df140d0354bfe74695559dd07464f002a12
+          persist-credentials: false
+      - name: Verify and record the isolated baseline subject
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/grok/diagnostic-c4a-windows-baseline-20261003
+          test "$(git rev-parse HEAD)" = 3e0b0df140d0354bfe74695559dd07464f002a12
+          test "$(git rev-parse 'HEAD^{tree}')" = cbb32fc81e3eda3713cc132b58769f80f93f2f2a
+          mkdir -p "$RUNNER_TEMP/grok-windows-baseline"
+          {
+            printf '%s\n' 'role=diagnostic-baseline; acceptance-credit=none' \
+              "repository=$GITHUB_REPOSITORY run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+              "workflow_sha=$GITHUB_WORKFLOW_SHA workflow_ref=$GITHUB_WORKFLOW_REF" \
+              "diagnostic_commit=$GITHUB_SHA diagnostic_ref=$GITHUB_REF" \
+              "baseline_commit=$(git rev-parse HEAD) baseline_tree=$(git rev-parse 'HEAD^{tree}')" \
+              "runner_os=$RUNNER_OS runner_arch=$RUNNER_ARCH" \
+              "image_os=${ImageOS:-unavailable} image_version=${ImageVersion:-unavailable}" \
+              'comparison=same supported runner class; not the same machine or state'
+          } | tee "$RUNNER_TEMP/grok-windows-baseline/subject.txt"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+      - name: Record pinned baseline tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            rustc --version
+            cargo --version
+            cargo nextest --version
+            just --version
+          } | tee "$RUNNER_TEMP/grok-windows-baseline/tools.txt"
+      - name: Diagnose exactly seven unchanged filesystem cases
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cases=(
+            'shared::file_system_write_file_writes_bytes::local_sandboxed_no_follow'
+            'shared::file_system_write_file_writes_bytes::remote_sandboxed_no_follow'
+            'shared::file_system_remove_no_follow_removes_file_and_empty_directory::local_sandboxed'
+            'shared::file_system_remove_no_follow_removes_file_and_empty_directory::remote_sandboxed'
+            'file_system_operations_can_reject_junctions_in_any_path_component::local'
+            'file_system_operations_can_reject_junctions_in_any_path_component::remote'
+            'file_system_private_desktop_survives_helper_exits_and_separates_permissions'
+          )
+          printf '%s\n' "${cases[@]}" | tee "$RUNNER_TEMP/grok-windows-baseline/expected-tests.txt"
+          selection=""
+          for case_name in "${cases[@]}"; do
+            selection="${selection:+$selection | }test(=$case_name)"
+          done
+          # The repository wrapper uses --no-fail-fast and its unchanged local retry policy.
+          # Retain success output, including any visible stock capability-skip messages.
+          # Six selected cases can return Ok on token error87, often without a message:
+          # a green baseline alone does not prove all seven operations actually ran.
+          just test -p codex-exec-server --test file_system_windows --locked \
+            --cargo-profile ci-test --no-tests=fail --success-output immediate -E "$selection" \
+            2>&1 | tee "$RUNNER_TEMP/grok-windows-baseline/tests.log"
+      - name: Verify unchanged baseline source
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Retain baseline diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-stock-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-windows-baseline/
+          if-no-files-found: error
+          retention-days: 7
