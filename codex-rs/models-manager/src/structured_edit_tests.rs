@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::StructuredEditToolType;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn structured_edit_capability_survives_file_cache_and_model_loading() {

@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::openai_models::StructuredEditToolType;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn structured_edit_registration_follows_capability_and_environment() {
