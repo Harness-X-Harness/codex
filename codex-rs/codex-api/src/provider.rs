@@ -1,13 +1,13 @@
 pub use codex_client::Provider;
 pub use codex_client::RetryConfig;
 
-/// Responses request and stream semantics, independent of destination and name.
+/// API request and response semantics, independent of destination and name.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ApiDialect {
-    /// Preserve the stock OpenAI/ChatGPT Responses contract.
+    /// Preserve the stock OpenAI/ChatGPT API contracts.
     #[default]
     OpenAi,
-    /// Apply the explicit Grok Responses contract.
+    /// Apply the explicit Grok Responses and Images contracts.
     Grok,
 }
 

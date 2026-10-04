@@ -28,6 +28,7 @@ type Subject struct {
 type Options struct {
 	Subject                Subject
 	Model, BaseURL, APIKey string
+	imageFixture           bool
 }
 
 // Evidence contains only safe metadata and observations, never private traffic.

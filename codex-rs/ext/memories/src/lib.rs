@@ -23,3 +23,7 @@ pub(crate) const SEARCH_TOOL_NAME: &str = "search";
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "memory_schema_bounds_tests.rs"]
+mod memory_schema_bounds_tests;

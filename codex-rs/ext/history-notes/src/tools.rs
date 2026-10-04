@@ -409,3 +409,7 @@ impl ToolOutput for HistoryNotesToolOutput {
 #[cfg(test)]
 #[path = "tools_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tools_bounds_tests.rs"]
+mod bounds_tests;

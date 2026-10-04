@@ -145,6 +145,91 @@ callers, shared dependencies, configuration, and runtime boundaries, broadening
 native proof when needed. A genuinely required stock adaptation gets a separately
 named, scoped increment before its consumer, using the same development loop.
 
+## C5 image boundary
+
+The active `ModelProvider::api_dialect()` selects image HTTP semantics independently
+of Provider names and URLs. The existing image extension, tool lifecycle, history
+selection and persistence remain the owners. Grok exposes three edit references;
+stock keeps five and its existing transparency control. Grok omits that unsupported
+control from its schema and description and rejects any explicit
+`transparent_background` key before dispatch, including false and null. Grok
+arguments must be JSON objects; positional arrays cannot bypass that policy.
+
+The Grok Images adapter requires `grok-imagine-image-2.0`, asks for `b64_json`,
+and accepts only the retained single-image defaults: absent/auto background,
+absent/one count, absent/auto quality and absent/auto size. Other explicit options
+fail before HTTP. One edit reference uses `image`, two or three use `images`.
+The shared latest-image window still counts both Inline and File references;
+selected File references fail at the Grok boundary rather than exposing an older
+image in their place. Stock File request serialization remains unchanged.
+
+Generated-image items, persisted history, model/Code Mode output and artifact
+names currently own a PNG representation. Grok results are decoded before completion:
+PNG's default image and full container/checksums are validated before its bytes are
+retained, while still JPEG/WebP pixels are encoded
+as PNG using the existing image utility's RGB ICC and EXIF metadata handling,
+including orientation. Incompatible non-RGB profiles are not copied onto decoded
+RGB pixels. PNG alpha is preserved. Animated WebP is explicitly unsupported rather
+than silently reduced to one frame. Other codecs and malformed images fail through
+the existing correlated failed-item lifecycle, without a successful output/artifact.
+The existing 32 MiB generated-image byte budget is also applied before Grok base64
+allocation, to source bytes and decoded pixels with codec allocation limits, and
+to normalized output. This is a local resource policy, not an xAI service limit.
+
+Proof includes real ImagesClient HTTP requests; installed extension/configuration
+through actual image backend HTTP; exact normalized result/saved/output/history-edit
+bytes; the complete stock image extension and image utility suites; stock App Server
+image/transparency/Code Mode/read-resume behavior; and affected planning, extension
+adapter, Responses-lite and filesystem/sandbox compositions. Build data for both
+consumed descriptions lands with the source. No public protocol or config shape
+changes are needed. Composition tests reuse the pinned workspace wiremock and
+tempfile dependencies; Cargo and Bazel lock closure remains a required gate.
+
+The callable retained generation/history-edit scenario uses the common bounded
+runner and an independent image-capable harness fixture. Its deterministic scripts
+prove exact current-thread/call/image lineage, decodable payload-matching fresh
+artifacts, distinct edit output and truthful partial failure, without a broad home
+scan. Its accepted packaged-Grok/backend Story remains unproven. C7 owns actual
+Grok Responses tool/media/history wire composition; C6 owns shipped catalog and
+lifecycle; C8 owns package invocation. Images stay UPDATE / not rerun until #331
+supplies actual backend evidence.
+
+### Necessary shared schema-owner adaptation
+
+The image tool's existing generated limits were discarded by the shared
+`codex-tools::JsonSchema` representation. C5 retains `minimum` and `maximum` as
+JSON Numbers and `maxItems` as an optional exact whole u64, including equivalent
+3/3.0/3e0 spellings. Missing/null bounds remain omitted. No new float conversion,
+clamp, cross-field validator or runtime argument validator is introduced.
+Contradictory and type-inapplicable valid bounds remain declarations. Existing
+unsupported keywords and schema-inference rules stay unchanged.
+
+This intentionally changes other consumers of that owner: memories, web-search,
+history/notes, message-board, TUI dynamic tools, external MCP/dynamic inputs and
+catalog parameter overrides now retain their declared bounds. Newly recognized
+malformed bound types, or negative/fractional/out-of-u64-range maxItems, reject
+rather than disappear. Dynamic-tool registration can therefore reject such an
+input, and a malformed catalog override uses its existing bundled fallback.
+Numeric guarantees begin at the existing Value/Number boundary; they cannot
+recover precision lost before that boundary. Owned config/protocol generated
+schemas and output-schema handling use separate representations and do not change.
+
+A streaming AdditionalProperties adapter preserves boolean/map and legacy
+positional schema forms while allowing the existing exact-number decoder in
+nested schemas. New fields are appended/defaulted so existing positions remain.
+Production admission first parses Value and retains its depth/number limits.
+Direct raw owner deserialization now skips unknown fields instead of buffering
+them through serde's untagged Content, so ignored unknown subtrees can exceed the
+old buffering depth/number bounds. Known schema children retain their deserializer
+limits. This explicitly bounded compatibility change is covered by owner and
+production-boundary tests; it is not a promise of universal raw serde equivalence.
+
+Native proof covers normal/trusted/direct/compacted/nested owner paths, numeric
+round trips, legacy forms, size-policy thresholds, direct Responses and Code Mode
+transfer, actual catalog encryption/fallback and dynamic registration/model-request
+composition, and affected generated/literal producer specs. Existing argument
+validation, schema compaction policies and thresholds remain authoritative.
+
 ## Native admission/proof mechanism
 
 `.github/workflows/grok.yml` calls the same-revision local `grok-proof.yml` for

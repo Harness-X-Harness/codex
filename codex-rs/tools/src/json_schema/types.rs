@@ -1,7 +1,13 @@
 //! Define serializable tool schema types and their constructors.
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::MapAccess;
+use serde::de::SeqAccess;
+use serde::de::Visitor;
+use serde::de::value::MapAccessDeserializer;
+use serde::de::value::SeqAccessDeserializer;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
@@ -72,6 +78,19 @@ pub struct JsonSchema {
     pub defs: Option<BTreeMap<String, JsonSchema>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definitions: Option<BTreeMap<String, JsonSchema>>,
+    // Append defaulted bounds to preserve existing struct-sequence field order.
+    #[serde(
+        default,
+        rename = "maxItems",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "codex_protocol::json_whole_number::deserialize_optional"
+    )]
+    pub max_items: Option<u64>,
+    // Retain declarations without validating instances or comparing bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<serde_json::Number>,
 }
 
 impl JsonSchema {
@@ -167,11 +186,48 @@ impl JsonSchema {
 }
 
 /// Whether additional properties are allowed, and if so, any required schema.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum AdditionalProperties {
     Boolean(bool),
     Schema(Box<JsonSchema>),
+}
+
+// Untagged enum buffering would erase RawValue support before nested maxItems
+// reaches the exact whole-number decoder. Forward maps/sequences to their owner.
+// Production schema admission is Value-first. Direct raw JSON now skips unknown
+// fields through that owner's IgnoredAny path, rather than buffering their depth
+// and numbers as Content; known children retain the original deserializer.
+impl<'de> Deserialize<'de> for AdditionalProperties {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AdditionalPropertiesVisitor;
+
+        impl<'de> Visitor<'de> for AdditionalPropertiesVisitor {
+            type Value = AdditionalProperties;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean or schema")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(AdditionalProperties::Boolean(value))
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+                JsonSchema::deserialize(MapAccessDeserializer::new(map))
+                    .map(Box::new)
+                    .map(AdditionalProperties::Schema)
+            }
+
+            fn visit_seq<S: SeqAccess<'de>>(self, seq: S) -> Result<Self::Value, S::Error> {
+                JsonSchema::deserialize(SeqAccessDeserializer::new(seq))
+                    .map(Box::new)
+                    .map(AdditionalProperties::Schema)
+            }
+        }
+
+        deserializer.deserialize_any(AdditionalPropertiesVisitor)
+    }
 }
 
 impl From<bool> for AdditionalProperties {

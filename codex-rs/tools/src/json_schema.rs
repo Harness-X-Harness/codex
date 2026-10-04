@@ -416,3 +416,7 @@ fn singleton_null_schema_error() -> serde_json::Error {
 #[cfg(test)]
 #[path = "json_schema_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "json_schema_bounds_tests.rs"]
+mod bounds_tests;

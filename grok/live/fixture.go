@@ -20,6 +20,9 @@ func writeFixture(home, cwd string, options Options, edit *editFixture) error {
 		"node_repl_disabled": true, "tool_mode": "direct",
 	}
 	sandbox := "read-only"
+	if options.imageFixture {
+		model["input_modalities"] = []string{"text", "image"}
+	}
 	if edit != nil {
 		model["structured_edit_tool_type"] = "exact_match"
 		sandbox = "workspace-write"
@@ -50,14 +53,15 @@ multi_agent = false
 multi_agent_v2 = false
 code_mode = false
 apps = false
-image_generation = false
+image_generation = %t
+omit_app_server_notification_media = false
 tool_suggest = false
 current_time_reminder = false
 send_message_to_user_async = false
 token_budget = false
 request_permissions_tool = false
 deferred_executor = false
-`, options.Model, catalogPath, sandbox, options.BaseURL)
+`, options.Model, catalogPath, sandbox, options.BaseURL, options.imageFixture)
 	if os.Mkdir(cwd, 0700) != nil || os.WriteFile(catalogPath, catalog, 0600) != nil || os.WriteFile(filepath.Join(home, "config.toml"), []byte(profile), 0600) != nil {
 		return errors.New("live: isolated fixture creation failed")
 	}

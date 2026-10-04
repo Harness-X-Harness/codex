@@ -25,6 +25,8 @@ func TestMain(m *testing.M) {
 			fakeHistoryServer()
 		} else if strings.HasPrefix(script.Mode, "edit:") {
 			fakeEditServer()
+		} else if strings.HasPrefix(script.Mode, "image:") {
+			fakeImageServer()
 		} else {
 			fakeAppServer()
 		}
