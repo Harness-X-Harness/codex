@@ -233,6 +233,8 @@ pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<(
         )?;
         let mut file = std::fs::File::from(handle);
         validate_regular_file(&file, &path)?;
+        #[cfg(test)]
+        crate::file_system_mutation::test_support::pause_blocking(&path);
         file.set_len(0)?;
         file.write_all(&contents)
     })
@@ -323,9 +325,13 @@ fn remove_sync(path: &Path, recursive: bool, force: bool) -> io::Result<()> {
 }
 
 pub(super) async fn remove(path: PathBuf, recursive: bool, force: bool) -> io::Result<()> {
-    tokio::task::spawn_blocking(move || remove_sync(&path, recursive, force))
-        .await
-        .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
+    tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        crate::file_system_mutation::test_support::pause_blocking(&path);
+        remove_sync(&path, recursive, force)
+    })
+    .await
+    .map_err(|error| io::Error::other(format!("filesystem task failed: {error}")))?
 }
 
 #[cfg(test)]

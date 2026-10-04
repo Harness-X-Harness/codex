@@ -75,10 +75,28 @@ pub(crate) async fn create_file_system_context(
 
 #[cfg(windows)]
 pub(crate) fn is_unsupported_restricted_token_host<T>(result: &std::io::Result<T>) -> bool {
-    result
+    // Required native proof checks this case's actual operation, never a separate host probe.
+    let required = std::env::var_os("CODEX_TEST_REQUIRE_WINDOWS_FS").is_some();
+    let unsupported = result
         .as_ref()
         .err()
-        .is_some_and(|err| err.to_string().contains("CreateRestrictedToken failed: 87"))
+        .is_some_and(|err| err.to_string().contains("CreateRestrictedToken failed: 87"));
+    if unsupported {
+        eprintln!("Windows filesystem operation evidence: unsupported restricted token (error 87)");
+        assert!(
+            !required,
+            "required Windows filesystem capability unavailable for this operation: CreateRestrictedToken failed: 87"
+        );
+    } else if required {
+        match result {
+            Ok(_) => eprintln!("Windows filesystem operation evidence: completed successfully"),
+            Err(error) => eprintln!(
+                "Windows filesystem operation evidence: completed with {:?}; case assertions still apply",
+                error.kind()
+            ),
+        }
+    }
+    unsupported
 }
 
 pub(crate) fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
