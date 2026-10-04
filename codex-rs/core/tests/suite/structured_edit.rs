@@ -263,18 +263,39 @@ async fn structured_edit_exact_bytes_lifecycle_and_continuation_history() -> Res
         unified_diff.contains("-α") && unified_diff.contains("+β"),
         "{unified_diff}"
     );
+    let committed_index = events
+        .iter()
+        .position(|event| {
+            matches!(event, EventMsg::ItemCompleted(event) if matches!(&event.item, TurnItem::FileChange(item) if item.id == call_id))
+        })
+        .expect("matching completed file change");
     let diffs = events
         .iter()
-        .filter_map(|event| match event {
-            EventMsg::TurnDiff(diff) => Some(diff.unified_diff.as_str()),
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            EventMsg::TurnDiff(diff) => Some((index, diff.unified_diff.as_str())),
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(diffs.len(), 1);
+    let (last_diff_index, committed_diff) =
+        diffs.last().expect("committed edit must emit a turn diff");
+    assert!(*last_diff_index > committed_index);
     assert!(
-        diffs[0].contains("exact.txt") && diffs[0].contains("+β"),
-        "{diffs:?}"
+        committed_diff.starts_with("diff --git a/exact.txt b/exact.txt\n")
+            && committed_diff
+                .ends_with(&format!("--- a/exact.txt\n+++ b/exact.txt\n{unified_diff}")),
+        "{committed_diff}"
     );
+    assert_eq!(committed_diff.matches("diff --git ").count(), 1);
+    // Tool completion and later sampling completions may publish the same
+    // aggregate snapshot. They must not precede or change the committed edit.
+    for (index, diff) in &diffs {
+        if *index < committed_index {
+            assert!(diff.is_empty());
+        } else {
+            assert_eq!(diff, committed_diff);
+        }
+    }
     assert_eq!(fs::read(&path)?, "β\r\nuntouched\r\ntail".as_bytes());
 
     harness
