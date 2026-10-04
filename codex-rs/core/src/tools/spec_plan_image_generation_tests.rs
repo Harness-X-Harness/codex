@@ -5,7 +5,7 @@ use codex_model_provider::ProviderAccountResult;
 use codex_model_provider::ProviderCapabilities;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider_info::WireApi;
-use codex_models_manager::SharedModelsManager;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
