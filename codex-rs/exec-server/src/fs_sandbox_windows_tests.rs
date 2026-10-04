@@ -14,6 +14,8 @@ use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
 #[cfg(windows)]
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::Child;
+use codex_utils_pty::ChildStdin;
 use codex_utils_pty::Command;
 use pretty_assertions::assert_eq;
 #[cfg(windows)]
@@ -71,7 +73,7 @@ async fn noisy_failing_helper_preserves_exit_status_and_bounded_stderr() {
     let mut command = {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
-            "printf 'expected helper diagnostic' >&2; i=0; while [ \"$i\" -lt 1024 ]; do printf '%0128d' 0 >&2; i=$((i + 1)); done; exit 7",
+            "printf 'ready\\n'; read -r ready; [ \"$ready\" = go ] || exit 9; printf 'expected helper diagnostic' >&2; i=0; while [ \"$i\" -lt 1024 ]; do printf '%0128d' 0 >&2; i=$((i + 1)); done; exit 7",
         );
         command
     };
@@ -87,12 +89,14 @@ async fn noisy_failing_helper_preserves_exit_status_and_bounded_stderr() {
         command
             .arg("-NoProfile")
             .arg("-Command")
-            .arg("[Console]::Error.Write('expected helper diagnostic' + ('x' * 131072)); exit 7");
+            .arg("[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); if ([Console]::In.ReadLine() -ne 'go') { exit 9 }; [Console]::Error.Write('expected helper diagnostic' + ('x' * 131072)); exit 7");
         command
     };
     command.envs(std::env::vars_os());
+    command.stdin(ChildStdin::Piped);
     let mut child = command.spawn().expect("noisy helper process");
     let stderr = drain_helper_stderr(&mut child);
+    release_started_helper(&mut child).await;
 
     let error = tokio::time::timeout(
         Duration::from_secs(/*secs*/ 8),
@@ -117,7 +121,7 @@ async fn helper_stderr_is_drained_before_the_response() {
     let mut command = {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
-            "printf 'expected pre-response diagnostic' >&2; i=0; while [ \"$i\" -lt 1024 ]; do printf '%0128d' 0 >&2; i=$((i + 1)); done; printf 'completed after noisy stderr\\n'",
+            "printf 'ready\\n'; read -r ready; [ \"$ready\" = go ] || exit 9; printf 'expected pre-response diagnostic' >&2; i=0; while [ \"$i\" -lt 1024 ]; do printf '%0128d' 0 >&2; i=$((i + 1)); done; printf 'completed after noisy stderr\\n'",
         );
         command
     };
@@ -131,14 +135,16 @@ async fn helper_stderr_is_drained_before_the_response() {
             .join("powershell.exe");
         let mut command = Command::new(powershell);
         command.arg("-NoProfile").arg("-Command").arg(
-            "[Console]::Error.Write('expected pre-response diagnostic' + ('x' * 131072)); [Console]::Out.WriteLine('completed after noisy stderr')",
+            "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); if ([Console]::In.ReadLine() -ne 'go') { exit 9 }; [Console]::Error.Write('expected pre-response diagnostic' + ('x' * 131072)); [Console]::Out.WriteLine('completed after noisy stderr')",
         );
         command
     };
     command.envs(std::env::vars_os());
+    command.stdin(ChildStdin::Piped);
     let mut child = command.spawn().expect("noisy helper process");
-    let stdout = child.stdout.take().expect("helper stdout");
     let stderr = drain_helper_stderr(&mut child);
+    release_started_helper(&mut child).await;
+    let stdout = child.stdout.take().expect("helper stdout");
 
     let response = tokio::time::timeout(
         Duration::from_secs(/*secs*/ 2),
@@ -152,6 +158,26 @@ async fn helper_stderr_is_drained_before_the_response() {
     reap_helper_after_response(child, stderr)
         .await
         .expect("noisy helper should be cleaned up after its response");
+}
+
+// Bound interpreter startup separately; the response/cleanup assertions below still cover
+// the actual pipe-filling work and keep their original deadlines.
+async fn release_started_helper(child: &mut Child) {
+    let ready = tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 10),
+        read_helper_response(child.stdout.as_mut().expect("helper stdout")),
+    )
+    .await
+    .expect("helper interpreter starts")
+    .expect("helper readiness response");
+    assert_eq!(ready.trim_ascii_end(), b"ready");
+    child
+        .stdin
+        .as_mut()
+        .expect("helper stdin")
+        .write_all(b"go\n")
+        .await
+        .expect("release actual noisy helper work");
 }
 
 #[cfg(windows)]
