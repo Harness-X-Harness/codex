@@ -47,3 +47,18 @@ secret-safe failures and invocation budgets for both model controls. Actual
 native tool/HTTP composition and real-provider execution require #322; the
 current product rejects nonempty Grok tools. This harness increment does not
 establish backend success, unchanged native encrypted replay, or Story PROVEN.
+
+`StructuredEdit`, `StructuredEditApprovalDeclined`,
+`StructuredEditPinnedPreviousModel` and `StructuredEditReplaceAll` use the shared
+runner with a capability-enabled seeded workspace. Their effectful stdio tests
+prove deterministic support only. The [structured-edit Story](../docs/stories/grok-structured-edit.md)
+owns acceptance, invocation budgets, downstream prerequisites and retention.
+
+`StructuredEditEvidence` returns counts, fixture hashes and separate first/current
+terminal facts (`FirstCompleted`, `TurnCompleted`); `Completed` requires the whole
+scenario. `BytesMatch` and `AfterSHA256` describe the current turn's comparison
+and reset when a turn begins. A later failure preserves observed terminal facts
+without reporting overall completion. The observer uses one settled thread read
+per turn, at most 4096 preterminal frames, 4096 argument bytes, 64 KiB per output,
+and one in-memory call/output/change correlation. It collects no outbound HTTP
+request or raw session artifact.

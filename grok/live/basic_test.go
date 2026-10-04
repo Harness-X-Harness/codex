@@ -23,6 +23,8 @@ func TestMain(m *testing.M) {
 		_ = json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script)
 		if strings.HasPrefix(script.Mode, "history:") {
 			fakeHistoryServer()
+		} else if strings.HasPrefix(script.Mode, "edit:") {
+			fakeEditServer()
 		} else {
 			fakeAppServer()
 		}

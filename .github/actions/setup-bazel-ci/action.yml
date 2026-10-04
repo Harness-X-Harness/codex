@@ -1,6 +1,10 @@
 name: setup-bazel-ci
 description: Prepare a Bazel CI runner with shared caches.
 inputs:
+  configure-linux-user-namespaces:
+    description: Pass through Linux runner user-namespace sysctl provisioning policy.
+    required: false
+    default: "true"
   target:
     description: Target triple used for cache namespacing.
     required: true
@@ -14,6 +18,8 @@ runs:
   steps:
     - id: setup_ci
       uses: ./.github/actions/setup-ci
+      with:
+        configure-linux-user-namespaces: ${{ inputs.configure-linux-user-namespaces }}
 
     - name: Set up Bazel
       uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0

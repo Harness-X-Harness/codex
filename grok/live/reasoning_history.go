@@ -27,7 +27,7 @@ func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		}},
 	}
-	return runFixture(ctx, options, threadOptions, func(server *appServer, threadID string, evidence *Evidence) error {
+	return runFixture(ctx, options, nil, threadOptions, func(server *appServer, threadID string, evidence *Evidence) error {
 		probe := historyProbe{server: server, threadID: threadID, evidence: evidence}
 		if err := probe.observe("Call grok_history_probe, reason about its returned token, then include the exact token in your final reply."); err != nil {
 			return err
@@ -45,10 +45,10 @@ func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 // Only the token, current turn identities and bounded reply evidence survive frames.
 // Repeated internal calls are counted, never accumulated in a call-ID/event map.
 type historyProbe struct {
-	server                      *appServer
-	evidence                    *Evidence
+	server                       *appServer
+	evidence                     *Evidence
 	threadID, turnID, previousID string
-	token                       string
+	token                        string
 }
 
 type historyItem struct {

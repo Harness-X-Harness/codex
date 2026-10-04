@@ -43,7 +43,7 @@ func fakeHistoryServer() {
 		Method string          `json:"method"`
 		Params map[string]any  `json:"params"`
 		Result struct {
-			Success      *bool                        `json:"success"`
+			Success      *bool                         `json:"success"`
 			ContentItems []struct{ Type, Text string } `json:"contentItems"`
 		} `json:"result"`
 		Error struct{ Code int } `json:"error"`

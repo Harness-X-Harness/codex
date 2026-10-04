@@ -14,6 +14,7 @@ use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -22,11 +23,14 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::StructuredEditToolType;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -50,6 +54,7 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use test_case::test_case;
 use tokio::time::timeout;
@@ -407,14 +412,49 @@ async fn required_model_bypasses_extension_approval_when_guardian_v2_is_disabled
 async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
+    guardian_editor_model_override(GuardianEditor::StockPatch, GuardianOutcome::Allow).await
+}
 
+#[derive(Clone, Copy, PartialEq)]
+enum GuardianEditor {
+    StockPatch,
+    Structured,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum GuardianOutcome {
+    Allow,
+    Deny,
+}
+
+// Required Linux composition has no skip gates: unavailable prerequisites fail.
+#[cfg(target_os = "linux")]
+#[test_case(GuardianEditor::Structured, GuardianOutcome::Allow; "structured allow")]
+#[test_case(GuardianEditor::Structured, GuardianOutcome::Deny; "structured deny")]
+#[test_case(GuardianEditor::StockPatch, GuardianOutcome::Allow; "stock patch allow")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_edit_and_stock_patch_guardian(
+    editor: GuardianEditor,
+    outcome: GuardianOutcome,
+) -> Result<()> {
+    guardian_editor_model_override(editor, outcome).await
+}
+
+async fn guardian_editor_model_override(
+    editor: GuardianEditor,
+    outcome: GuardianOutcome,
+) -> Result<()> {
     let server = MockServer::start().await;
     let model = "remote-auto-review-parent";
     let review_model = "remote-auto-review-reviewer";
+    let mut parent_model = remote_model_with_auto_review_override(model, review_model);
+    if editor == GuardianEditor::Structured {
+        parent_model.structured_edit_tool_type = Some(StructuredEditToolType::ExactMatch);
+    }
     Mock::given(method("GET"))
         .and(path("/v1/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
-            models: vec![remote_model_with_auto_review_override(model, review_model)],
+            models: vec![parent_model],
         }))
         .expect(1..)
         .mount(&server)
@@ -430,7 +470,22 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         },
     });
     let patch_call_id = "auto-review-patch-call";
-    let patch = "*** Begin Patch\n*** Add File: auto-review-model-override.txt\n+exercise Guardian model selection\n*** End Patch\n";
+    let file_name = "auto-review-model-override.txt";
+    let expected_bytes = "exercise Guardian model selection\n";
+    let patch = "*** Begin Patch\n*** Update File: auto-review-model-override.txt\n@@\n-before\n+exercise Guardian model selection\n*** End Patch\n";
+    let edit_call = match editor {
+        GuardianEditor::StockPatch => ev_apply_patch_custom_tool_call(patch_call_id, patch),
+        GuardianEditor::Structured => ev_function_call(
+            patch_call_id,
+            "structured_edit",
+            &json!({
+                "file_path": file_name,
+                "old_string": "before",
+                "new_string": "exercise Guardian model selection",
+            })
+            .to_string(),
+        ),
+    };
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -445,7 +500,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
             ]),
             sse(vec![
                 ev_response_created("resp-parent-2"),
-                ev_apply_patch_custom_tool_call(patch_call_id, patch),
+                edit_call,
                 ev_completed("resp-parent-2"),
             ]),
             sse(vec![
@@ -453,10 +508,10 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
                 ev_assistant_message(
                     "msg-guardian",
                     &json!({
-                        "risk_level": "low",
-                        "user_authorization": "high",
-                        "outcome": "allow",
-                        "rationale": "The patch only exercises Guardian model selection.",
+                        "risk_level": if outcome == GuardianOutcome::Allow { "low" } else { "high" },
+                        "user_authorization": if outcome == GuardianOutcome::Allow { "high" } else { "low" },
+                        "outcome": if outcome == GuardianOutcome::Allow { "allow" } else { "deny" },
+                        "rationale": "Guardian editor decision control.",
                     })
                     .to_string(),
                 ),
@@ -492,6 +547,8 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         thread_manager,
         ..
     } = builder.build(&server).await?;
+    let target = cwd.path().join(file_name);
+    std::fs::write(&target, "before\n")?;
 
     let models_manager = thread_manager.get_models_manager();
     timeout(
@@ -569,9 +626,22 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         })
         .await?;
 
+    let mut events = Vec::new();
     wait_for_event_with_timeout(
         &codex,
-        |event| matches!(event, EventMsg::TurnComplete(_)),
+        |event| {
+            events.push(event.clone());
+            match event {
+                EventMsg::ApplyPatchApprovalRequest(event) => {
+                    panic!("strict Guardian review must not prompt the user: {event:?}")
+                }
+                EventMsg::TurnComplete(event) => {
+                    assert!(event.error.is_none(), "{:?}", event.error);
+                    true
+                }
+                _ => false,
+            }
+        },
         Duration::from_secs(15),
     )
     .await;
@@ -591,6 +661,94 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
         Some(review_model)
     );
     assert_eq!(guardian_request.path(), "/v1/responses");
+
+    let prompt = guardian_request
+        .input()
+        .iter()
+        .filter_map(|item| item["content"].as_array())
+        .flatten()
+        .filter_map(|content| content["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    let action_text = prompt
+        .split_once("Planned action JSON:\n")
+        .context("Guardian must receive the planned edit")?
+        .1
+        .split_once(">>> APPROVAL REQUEST END")
+        .context("Guardian action must be bounded")?
+        .0;
+    let action: Value = serde_json::from_str(action_text.trim())?;
+    assert_eq!(action["tool"], "apply_patch");
+    assert_eq!(
+        action["environment_id"],
+        codex_exec_server::LOCAL_ENVIRONMENT_ID
+    );
+    assert_eq!(action["cwd"], cwd.path().to_string_lossy().as_ref());
+    assert_eq!(action["files"], json!([target.to_string_lossy()]));
+    assert!(
+        action["patch"]
+            .as_str()
+            .context("reviewed patch")?
+            .contains("+exercise Guardian model selection")
+    );
+    let expected_status = if outcome == GuardianOutcome::Allow {
+        GuardianAssessmentStatus::Approved
+    } else {
+        GuardianAssessmentStatus::Denied
+    };
+    let assessment_index = events
+        .iter()
+        .position(|event| {
+            matches!(event,
+                EventMsg::GuardianAssessment(event)
+                    if event.target_item_id.as_deref() == Some(patch_call_id)
+                        && event.status == expected_status
+            )
+        })
+        .context("actual Guardian decision for the edit")?;
+    assert_eq!(
+        std::fs::read_to_string(&target)?,
+        if outcome == GuardianOutcome::Allow {
+            expected_bytes
+        } else {
+            "before\n"
+        }
+    );
+    let patch_index = events.iter().position(|event| matches!(event,
+        EventMsg::PatchApplyEnd(event)
+            if event.call_id == patch_call_id && event.success == (outcome == GuardianOutcome::Allow)
+    )).context("edit result matching the Guardian decision")?;
+    assert!(
+        assessment_index < patch_index,
+        "Guardian must decide before the edit result"
+    );
+    if outcome == GuardianOutcome::Deny {
+        for event in &events {
+            match event {
+                EventMsg::ItemCompleted(event) => {
+                    if let TurnItem::FileChange(item) = &event.item {
+                        assert_ne!(item.status, Some(PatchApplyStatus::Completed));
+                    }
+                }
+                EventMsg::TurnDiff(event) => assert!(event.unified_diff.is_empty()),
+                _ => {}
+            }
+        }
+    }
+    let final_request = responses.last_request().context("edit continuation")?;
+    let output = match editor {
+        GuardianEditor::StockPatch => final_request.custom_tool_call_output(patch_call_id),
+        GuardianEditor::Structured => final_request.function_call_output(patch_call_id),
+    };
+    assert!(
+        output["output"]
+            .to_string()
+            .contains(if outcome == GuardianOutcome::Allow {
+                "Success"
+            } else {
+                "Guardian editor decision control"
+            })
+    );
 
     timeout(Duration::from_secs(10), codex.shutdown_and_wait()).await??;
 
@@ -639,6 +797,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+        structured_edit_tool_type: None,
         web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,

@@ -35,19 +35,19 @@ type Evidence struct {
 	SHA256, SourceSHA, HarnessSHA, Target, Environment, Model, ObservedAt, Stage string
 	Processes, Initializations, Threads, Turns, ReplyBytes                       int
 	Bound, Completed                                                             bool
-	ReasoningItems, EncryptedItems, ToolCalls, CompletedTools, DeniedToolCalls      int
+	ReasoningItems, EncryptedItems, ToolCalls, CompletedTools, DeniedToolCalls   int
 	FirstReplyBytes                                                              int
-	FirstCompleted, FirstRecall, Recalled                                         bool
+	FirstCompleted, FirstRecall, Recalled                                        bool
 }
 
 // Basic initiates one process, initialization, thread and text turn without retry.
 // A successful observation assumes the caller established Subject's prerequisites.
 func Basic(ctx context.Context, options Options) (Evidence, error) {
-	return runFixture(ctx, options, nil, observeBasic)
+	return runFixture(ctx, options, nil, nil, observeBasic)
 }
 
 // runFixture owns the shared artifact, process, initialization and thread binding.
-func runFixture(ctx context.Context, options Options, threadOptions map[string]any, observe func(*appServer, string, *Evidence) error) (Evidence, error) {
+func runFixture(ctx context.Context, options Options, edit *editFixture, threadOptions map[string]any, observe func(*appServer, string, *Evidence) error) (Evidence, error) {
 	evidence := Evidence{Stage: "preflight", ObservedAt: time.Now().UTC().Format(time.RFC3339)}
 	deadline, bounded := ctx.Deadline()
 	subject := options.Subject
@@ -86,7 +86,7 @@ func runFixture(ctx context.Context, options Options, threadOptions map[string]a
 	}
 	defer os.RemoveAll(home)
 	cwd := filepath.Join(home, "workspace")
-	if err := writeFixture(home, cwd, options); err != nil {
+	if err := writeFixture(home, cwd, options, edit); err != nil {
 		return evidence, err
 	}
 	evidence.Stage = "fixture_ready"

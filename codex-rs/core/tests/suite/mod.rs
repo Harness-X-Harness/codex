@@ -87,6 +87,14 @@ mod guardian_authorization_refresh;
 mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
+#[cfg(target_os = "linux")]
+mod structured_edit;
+#[cfg(target_os = "linux")]
+mod structured_edit_code_mode;
+#[cfg(target_os = "linux")]
+mod structured_edit_remote;
+#[cfg(target_os = "linux")]
+mod structured_edit_support;
 // Uses the same command-approval harness as guardian_review below.
 mod canonical_plugin_connectors;
 mod gateway_auth;

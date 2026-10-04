@@ -49,7 +49,8 @@ jobs:
           esac
           # The checked-out proof definition must match the caller's workflow revision.
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
-            .github/workflows/grok.yml .github/workflows/grok-proof.yml
+            .github/workflows/grok.yml .github/workflows/grok-proof.yml \
+            .github/actions/setup-ci/action.yml .github/actions/setup-bazel-ci/action.yml
 
   locks:
     name: Native Provider/API proof
@@ -65,6 +66,7 @@ jobs:
       - uses: ./.github/actions/setup-bazel-ci
         with:
           target: x86_64-unknown-linux-gnu
+          configure-linux-user-namespaces: "false"
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: clippy
@@ -135,7 +137,7 @@ jobs:
   runtime:
     name: Native runtime proof
     needs: subject
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
@@ -147,6 +149,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
+        with:
+          configure-linux-user-namespaces: "false"
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: clippy, rustfmt
@@ -154,7 +158,7 @@ jobs:
         working-directory: codex-rs
         run: |
           cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
-          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
@@ -162,7 +166,7 @@ jobs:
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -170,6 +174,25 @@ jobs:
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest@0.9.103
+      - name: Require sandbox startup capability under existing Linux permissions
+        run: |
+          test "$(id -u)" != "0"
+          for setting in kernel/unprivileged_userns_clone kernel/apparmor_restrict_unprivileged_userns; do
+            if [[ -r "/proc/sys/$setting" ]]; then
+              printf '%s=' "$setting"
+              cat "/proc/sys/$setting"
+            fi
+          done
+          bwrap --version
+          # This checks namespace startup only. Product tests own the supported
+          # proc-mount fallback and actual selected-helper filesystem enforcement.
+          if ! timeout 15s bwrap --unshare-user --unshare-ipc --unshare-pid --unshare-net \
+            --cap-drop ALL --die-with-parent --new-session \
+            --ro-bind / / --dev /dev -- /bin/true; then
+            echo "Required Linux user/IPC/PID/network namespace sandbox cannot start under existing runner permissions." >&2
+            echo "No kernel or AppArmor setting was changed. Use a compatible runner or obtain a separately reviewed permission decision." >&2
+            exit 1
+          fi
       - name: Record bounded native build inputs
         continue-on-error: true
         run: |
@@ -247,6 +270,10 @@ jobs:
               "dev_debug=$CARGO_PROFILE_DEV_DEBUG ci_test_debug=$CARGO_PROFILE_CI_TEST_DEBUG"
             python3 "$RUNNER_TEMP/grok-build-resources.py"
           } | tee "$RUNNER_TEMP/grok-runtime-resources-start.txt"
+      - name: Set up Python for pinned V8 metadata
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
       - name: Set up pinned Code Mode V8 artifacts
         uses: ./.github/actions/setup-rusty-v8
         with:
@@ -264,7 +291,8 @@ jobs:
         run: >-
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test --timings
+          -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
+          -p codex-prompts --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
         uses: ./.github/actions/check-clean-worktree
       - name: Regenerate owned configuration schema
@@ -383,6 +411,59 @@ jobs:
       - name: Build the exact CLI for native integrations and Basic fixture
         working-directory: codex-rs
         run: cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
+      - name: Bind exact editor composition binaries
+        working-directory: codex-rs
+        run: |
+          cargo build -p codex-linux-sandbox --bin codex-linux-sandbox --locked --profile ci-test --timings
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          for binary in codex codex-linux-sandbox codex-code-mode-host; do
+            test -x "$CARGO_TARGET_DIR/ci-test/$binary"
+          done
+          {
+            printf '%s\n' "checkout=$(git rev-parse HEAD)" "profile=ci-test"
+            sha256sum "$CARGO_TARGET_DIR/ci-test/codex" \
+              "$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" \
+              "$CARGO_TARGET_DIR/ci-test/codex-code-mode-host"
+          } | tee "$RUNNER_TEMP/c4b-composition-binaries.txt"
+          printf '%s\n' \
+            "CODEX_C4B_REQUIRED=1" \
+            "CODEX_C4B_TEST_CLI=$CARGO_TARGET_DIR/ci-test/codex" \
+            "CODEX_C4B_TEST_CLI_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex" | cut -d ' ' -f 1)" \
+            "CODEX_TEST_LINUX_SANDBOX_EXE=$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" \
+            "CODEX_TEST_LINUX_SANDBOX_EXE_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" | cut -d ' ' -f 1)" \
+            "CODEX_C4B_CODE_MODE_HOST=$CARGO_TARGET_DIR/ci-test/codex-code-mode-host" \
+            "CODEX_C4B_CODE_MODE_HOST_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex-code-mode-host" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+      - name: Require unchanged editor composition input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Test structured editor metadata and stock catalog loading
+        working-directory: codex-rs
+        run: |
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(openai_models::)'
+          just test -p codex-models-manager --lib --locked --cargo-profile ci-test --no-tests=fail
+          just test -p codex-prompts --lib --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test structured editor planning and shared approval runtime
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::structured_edit::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::spec_plan::tests::structured_edit_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::runtimes::apply_patch::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(safety::) | test(tools::handlers::apply_patch::) | test(tools::events::) | test(turn_diff_tracker::)'
+      - name: Test actual structured editor Local Remote and Code Mode composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_remote::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_code_mode::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::auto_review::structured_edit_and_stock_patch_guardian::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_apply_patch_via_nested_tool)'
+      - name: Test inherited stock patch hook contracts
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::permission_request_hook_allows_apply_patch_with_write_alias)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_blocks_apply_patch_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_blocks_apply_patch_with_write_alias)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_apply_patch_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::post_tool_use_records_additional_context_for_apply_patch)'
       - name: Test stock patch filesystem composition
         working-directory: codex-rs
         run: |
@@ -451,7 +532,8 @@ jobs:
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout-trace --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+          -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
+          -p codex-prompts --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
@@ -472,6 +554,7 @@ jobs:
           name: native-build-measurements-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/grok-runtime-resources-*.txt
+            ${{ runner.temp }}/c4b-composition-binaries.txt
             ${{ env.CARGO_TARGET_DIR }}/cargo-timings/cargo-timing-*.html
           if-no-files-found: warn
           retention-days: 7
@@ -525,6 +608,9 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
+      - name: Require formatted Go scenario source
+        working-directory: grok
+        run: test -z "$(gofmt -l .)"
       - name: Test Facts HTTP and Live stdio boundaries without backend calls
         working-directory: grok
         run: go test -race -count=1 -timeout=4m -v ./facts ./live
