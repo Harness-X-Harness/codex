@@ -29,6 +29,7 @@ use super::structured_edit_remote::fixture::editor_binary;
 use super::structured_edit_remote::selection;
 use super::structured_edit_remote::start_turn;
 use super::structured_edit_support::assert_no_commit;
+use super::structured_edit_support::establish_diff_root;
 use super::structured_edit_support::finish_turn;
 use super::structured_edit_support::mount_edit;
 
@@ -97,6 +98,7 @@ async fn code_mode_structured_edit_uses_real_delegate(
         &local_path
     };
     let target_uri = PathUri::from_host_native_path(target)?;
+    establish_diff_root(&test, environment, target.parent().context("selected cwd")?).await?;
     fixture.observe_path(&target_uri);
     let args = json!({"file_path":"same.txt", "old_string":old, "new_string":new, "environment_id":environment});
     let code = nested_edit(&args);
@@ -176,6 +178,7 @@ async fn code_mode_structured_edit_remote_approval_is_the_actual_edit_boundary(
     let path = remote_root.path().join("same.txt");
     std::fs::write(&path, "before")?;
     let path_uri = PathUri::from_host_native_path(&path)?;
+    establish_diff_root(&test, "remote", remote_root.path()).await?;
     fixture.observe_path(&path_uri);
     let code = nested_edit(
         &json!({"file_path":"same.txt", "old_string":"before", "new_string":"after", "environment_id":"remote"}),
@@ -299,6 +302,7 @@ async fn code_mode_structured_edit_uses_generic_hooks(behavior: &str) -> Result<
     std::fs::write(&local_path, "before")?;
     std::fs::write(&remote_path, "before")?;
     let target_uri = PathUri::from_host_native_path(&remote_path)?;
+    establish_diff_root(&test, "remote", remote_root.path()).await?;
     fixture.observe_path(&target_uri);
     let code = nested_edit(
         &json!({"file_path":"same.txt", "old_string":"before", "new_string":"unrewritten", "environment_id":"local"}),

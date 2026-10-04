@@ -55,6 +55,7 @@ use test_case::test_case;
 
 use super::structured_edit::structured_edit_builder;
 use super::structured_edit_support::assert_no_commit;
+use super::structured_edit_support::establish_diff_root;
 use super::structured_edit_support::finish_turn;
 use super::structured_edit_support::mount_edit;
 
@@ -181,6 +182,7 @@ async fn structured_edit_remote_rejects_cardinality_and_non_text_targets_without
     let remote_path = remote_root.path().join("same.txt");
     let remote_uri = PathUri::from_host_native_path(&remote_path)?;
     std::fs::write(&remote_path, "α\r\nα\r\ntail")?;
+    establish_diff_root(&test, REMOTE_ENVIRONMENT_ID, remote_root.path()).await?;
     fixture.observe_path(&remote_uri);
     let response = mount_edit(&server, responses::ev_function_call("replace-all", "structured_edit", &json!({"file_path":"same.txt","old_string":"α","new_string":"β","replace_all":true,"environment_id":"remote"}).to_string())).await;
     start_turn(
@@ -250,8 +252,15 @@ pub(super) fn assert_committed(events: &[EventMsg], target: &Path, environment: 
         })
         .next_back()
         .expect("committed edit must report a turn diff");
+    let file_name = target
+        .file_name()
+        .expect("selected file name")
+        .to_str()
+        .expect("UTF-8 fixture file name");
+    let display_path = format!("{environment}/{file_name}");
     assert!(
-        diff.contains(&format!("{environment}/same.txt")),
+        diff.starts_with(&format!("diff --git a/{display_path} b/{display_path}\n"))
+            && diff.contains(&format!("\n--- a/{display_path}\n+++ b/{display_path}\n")),
         "selected environment diff: {diff}"
     );
 }
@@ -333,6 +342,7 @@ async fn structured_edit_routes_exact_bytes_to_selected_environment(
         &local_path
     };
     let target_uri = PathUri::from_host_native_path(target)?;
+    establish_diff_root(&test, environment, target.parent().context("selected cwd")?).await?;
     fixture.observe_path(&PathUri::from_host_native_path(&local_path)?);
     fixture.observe_path(&PathUri::from_host_native_path(&remote_path)?);
     let remote = test
@@ -479,6 +489,7 @@ async fn structured_edit_unavailable_remote_never_falls_back_to_usable_local() -
         (std::fs::read(&local_path)?, std::fs::read(&remote_path)?),
         (b"before".to_vec(), b"before".to_vec())
     );
+    establish_diff_root(&test, LOCAL_ENVIRONMENT_ID, test.cwd_path()).await?;
     let local_response = mount_edit(&server, responses::ev_function_call("local", "structured_edit", &json!({"file_path":"same.txt","old_string":"before","new_string":"local remains usable","environment_id":LOCAL_ENVIRONMENT_ID}).to_string())).await;
     start_turn(
         &test,

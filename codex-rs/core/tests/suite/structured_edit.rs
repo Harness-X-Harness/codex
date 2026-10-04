@@ -48,6 +48,7 @@ use serde_json::json;
 use tokio::sync::oneshot;
 
 use super::structured_edit_support::assert_no_commit;
+use super::structured_edit_support::establish_diff_root;
 use super::structured_edit_support::finish_turn;
 
 pub(super) fn structured_edit_builder() -> TestCodexBuilder {
@@ -184,6 +185,12 @@ async fn hooked_harness(outputs: Value) -> Result<TestCodexHarness> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn structured_edit_exact_bytes_lifecycle_and_continuation_history() -> Result<()> {
     let harness = harness().await?;
+    establish_diff_root(
+        harness.test(),
+        codex_exec_server::LOCAL_ENVIRONMENT_ID,
+        harness.test().cwd_path(),
+    )
+    .await?;
     let arguments = args("exact.txt", "α\r\n", "β\r\n");
     harness
         .write_file("exact.txt", "α\r\nuntouched\r\ntail")
