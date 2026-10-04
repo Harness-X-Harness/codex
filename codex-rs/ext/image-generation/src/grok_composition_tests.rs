@@ -177,7 +177,7 @@ fn assert_outputs(
     response.into()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn installed_grok_generation_normalizes_saved_output_and_edits_the_same_history_image() {
     for (source, claimed_mime) in [(PNG, "image/jpeg"), (JPEG, "image/png")] {
         let server = HttpFixture::new(vec![
@@ -382,7 +382,7 @@ async fn installed_schema_and_runtime_reject_unsupported_grok_requests_before_ht
     assert!(!harness.config.codex_home.join("artifacts").exists());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn config_changes_refresh_dialect_availability_auth_route_and_stock_file_transparency() {
     let grok = HttpFixture::new(vec![(200, image_response(PNG, "image/png"))]).await;
     let stock = HttpFixture::new(vec![
