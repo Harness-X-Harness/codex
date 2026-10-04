@@ -116,7 +116,7 @@ fn raw_max_items_keeps_decimal_precision_in_additional_properties() {
         ("184467440737095516150e-1", u64::MAX),
     ] {
         let json = format!(
-            r#"{{"type":"object","properties":{{}},"additionalProperties":{{"type":"array","items":{{"type":"string"}},"maxItems":{token}}}}"#
+            r#"{{"type":"object","properties":{{}},"additionalProperties":{{"type":"array","items":{{"type":"string"}},"maxItems":{token}}}}}"#
         );
         let schema: JsonSchema = serde_json::from_str(&json).expect("nested exact whole number");
         let expected = json!({"type":"object","properties":{},"additionalProperties":{
