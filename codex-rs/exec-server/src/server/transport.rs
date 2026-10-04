@@ -266,3 +266,7 @@ async fn websocket_upgrade_handler(
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "conditional_write_tests.rs"]
+mod conditional_write_tests;

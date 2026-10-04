@@ -34,6 +34,7 @@ use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
@@ -529,6 +530,15 @@ async fn remote_metadata_starts_fresh_after_intervening_filesystem_mutation() {
 
     for (mutation, mutation_response) in [
         (MetadataMutation::Write, Ok(())),
+        (MetadataMutation::Conditional, Ok(())),
+        (
+            MetadataMutation::Conditional,
+            Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                data: None,
+                message: "conditional mutation failed".to_string(),
+            }),
+        ),
         (MetadataMutation::CreateDirectory, Ok(())),
         (MetadataMutation::Remove, Ok(())),
         (MetadataMutation::Copy, Ok(())),
@@ -577,6 +587,16 @@ async fn remote_metadata_starts_fresh_after_intervening_filesystem_mutation() {
                     )
                     .await
             }
+            MetadataMutation::Conditional => file_system
+                .write_file_if_unchanged(
+                    &path,
+                    b"before".to_vec(),
+                    b"updated".to_vec(),
+                    Default::default(),
+                    /*sandbox*/ None,
+                )
+                .await
+                .map(|_| ()),
             MetadataMutation::CreateDirectory => {
                 file_system
                     .create_directory(
@@ -797,6 +817,7 @@ fn metadata_response(size: u64) -> FsGetMetadataResponse {
 #[derive(Clone, Copy)]
 enum MetadataMutation {
     Write,
+    Conditional,
     CreateDirectory,
     Remove,
     Copy,
@@ -831,6 +852,7 @@ async fn record_metadata_params(
                 assert!(matches!(
                     request.method.as_str(),
                     FS_WRITE_FILE_METHOD
+                        | FS_WRITE_FILE_IF_UNCHANGED_METHOD
                         | FS_CREATE_DIRECTORY_METHOD
                         | FS_REMOVE_METHOD
                         | FS_COPY_METHOD
@@ -863,7 +885,11 @@ async fn record_metadata_params(
                 }),
                 MetadataResponse::Mutation(Ok(())) => JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
-                    result: serde_json::json!({}),
+                    result: if request.method == FS_WRITE_FILE_IF_UNCHANGED_METHOD {
+                        serde_json::json!({ "written": true })
+                    } else {
+                        serde_json::json!({})
+                    },
                 }),
                 MetadataResponse::Abandoned(received_tx) => {
                     received_tx
@@ -918,7 +944,7 @@ async fn complete_websocket_initialize(websocket: &mut WebSocketStream<TcpStream
 
 async fn read_jsonrpc_websocket(websocket: &mut WebSocketStream<TcpStream>) -> JSONRPCMessage {
     loop {
-        match timeout(Duration::from_secs(1), websocket.next())
+        match timeout(Duration::from_secs(/*secs*/ 1), websocket.next())
             .await
             .expect("json-rpc websocket read should not time out")
             .expect("websocket should stay open")

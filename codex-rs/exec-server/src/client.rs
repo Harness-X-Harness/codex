@@ -80,6 +80,7 @@ use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WALK_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -103,6 +104,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
+use crate::protocol::FsWriteFileIfUnchangedParams;
+use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
@@ -130,6 +133,7 @@ use crate::protocol::WireFsReadDirectoryParams;
 use crate::protocol::WireFsReadFileParams;
 use crate::protocol::WireFsRemoveParams;
 use crate::protocol::WireFsWalkParams;
+use crate::protocol::WireFsWriteFileIfUnchangedParams;
 use crate::protocol::WireFsWriteFileParams;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
@@ -963,6 +967,17 @@ impl ExecServerClient {
     ) -> Result<FsWriteFileResponse, ExecServerError> {
         self.call(FS_WRITE_FILE_METHOD, &WireFsWriteFileParams::from(params))
             .await
+    }
+
+    pub async fn fs_write_file_if_unchanged(
+        &self,
+        params: FsWriteFileIfUnchangedParams,
+    ) -> Result<FsWriteFileIfUnchangedResponse, ExecServerError> {
+        self.call(
+            FS_WRITE_FILE_IF_UNCHANGED_METHOD,
+            &WireFsWriteFileIfUnchangedParams::from(params),
+        )
+        .await
     }
 
     pub async fn fs_create_directory(

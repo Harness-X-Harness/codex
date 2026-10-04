@@ -273,8 +273,31 @@ jobs:
           just write-config-schema --locked --profile ci-test --timings
           # The profile may change build reuse, never the owned schema bytes.
           git show HEAD:codex-rs/core/config.schema.json | cmp - core/config.schema.json
+      - name: Normalize filesystem API formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item
+      - name: Require unchanged filesystem formatting input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Fix scoped filesystem API lint
+        working-directory: codex-rs
+        run: just fix -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings
+      - name: Require unchanged filesystem construction input
+        uses: ./.github/actions/check-clean-worktree
       - name: Freeze unchanged native proof input
         uses: ./.github/actions/check-clean-worktree
+      - name: Check filesystem API formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item --check
+      - name: Test conditional API and actual mutation ownership
+        working-directory: codex-rs
+        run: |
+          just test -p codex-exec-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(file_system_mutation::tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(server::transport::conditional_write_tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(fs_sandbox::effect_tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(fs_sandbox::windows_tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(local_file_system::) | test(remote_file_system::)'
+          just test -p codex-exec-server --test file_system_unix --locked --cargo-profile ci-test --no-tests=fail
       - name: Test the adapted host interrupt fixture
         working-directory: codex-rs
         run: >-
@@ -360,6 +383,11 @@ jobs:
       - name: Build the exact CLI for native integrations and Basic fixture
         working-directory: codex-rs
         run: cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
+      - name: Test stock patch filesystem composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-apply-patch --locked --cargo-profile ci-test --no-tests=fail
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::apply_patch_cli::) | test(suite::apply_patch_serialization::) | test(suite::apply_patch_system_aliases::)'
       - name: Test affected input, mailbox, hook and shell composition
         working-directory: codex-rs
         run: >-
@@ -415,6 +443,9 @@ jobs:
           export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_LIVE_NATIVE_BIN"
           go test -race -count=1 -timeout=5m -v ./live
+      - name: Check scoped filesystem API lint
+        working-directory: codex-rs
+        run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Check scoped Provider runtime lint
         working-directory: codex-rs
         run: >-
