@@ -372,8 +372,8 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
     );
 }
 
-#[test]
-fn structured_edit_approval_preserves_effective_arguments_and_environment_identity() {
+#[tokio::test]
+async fn structured_edit_approval_preserves_effective_arguments_and_environment_identity() {
     let path = PathUri::from_abs_path(
         &std::env::temp_dir()
             .join("structured-edit-approval.txt")
