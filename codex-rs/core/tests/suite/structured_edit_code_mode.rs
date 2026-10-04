@@ -130,7 +130,7 @@ async fn code_mode_structured_edit_uses_real_delegate(
             text.contains("nested-completed") && text.contains("{}"),
             "stock ApplyPatchToolOutput contract: {text}"
         );
-        assert_committed(&events, target, environment);
+        assert_committed(&events, target, Some(environment));
         assert_eq!(std::fs::read_to_string(target)?, new);
         if environment == "remote" {
             assert_remote_cas(&fixture, &target_uri);
@@ -242,7 +242,7 @@ async fn code_mode_structured_edit_remote_approval_is_the_actual_edit_boundary(
             "nested success result: {text}"
         );
         assert!(!text.contains("nested-rejected"), "{text}");
-        assert_committed(&events, &path, "remote");
+        assert_committed(&events, &path, Some("remote"));
         assert_eq!(std::fs::read_to_string(&path)?, "after");
         assert_remote_cas(&fixture, &path_uri);
     } else {
@@ -332,7 +332,7 @@ async fn code_mode_structured_edit_uses_generic_hooks(behavior: &str) -> Result<
     assert_eq!(hooks[0]["tool_input"]["environment_id"], "local");
     assert_eq!(std::fs::read_to_string(&local_path)?, "before");
     if behavior == "rewrite" {
-        assert_committed(&events, &remote_path, "remote");
+        assert_committed(&events, &remote_path, Some("remote"));
         assert_eq!(std::fs::read_to_string(&remote_path)?, "hook changed");
         assert_remote_cas(&fixture, &target_uri);
         let post = hooks

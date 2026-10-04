@@ -16,6 +16,7 @@ use codex_apply_patch::ApplyPatchOptions;
 use codex_apply_patch::apply_verified_action;
 use codex_core::TurnInputRequest;
 use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentObservedStatus;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
@@ -195,7 +196,7 @@ async fn structured_edit_remote_rejects_cardinality_and_non_text_targets_without
         PermissionProfile::Disabled,
     )
     .await?;
-    assert_committed(&finish_turn(&test).await, &remote_path, "remote");
+    assert_committed(&finish_turn(&test).await, &remote_path, Some("remote"));
     assert_eq!(response.requests().len(), 2);
     assert_eq!(std::fs::read(&remote_path)?, "β\r\nβ\r\ntail".as_bytes());
     assert_eq!(std::fs::read_to_string(&local_path)?, "local sentinel");
@@ -204,7 +205,11 @@ async fn structured_edit_remote_rejects_cardinality_and_non_text_targets_without
     fixture.stop().await
 }
 
-pub(super) fn assert_committed(events: &[EventMsg], target: &Path, environment: &str) {
+pub(super) fn assert_committed(
+    events: &[EventMsg],
+    target: &Path,
+    environment_prefix: Option<&str>,
+) {
     let completed_turn = events
         .iter()
         .find_map(|event| match event {
@@ -257,7 +262,10 @@ pub(super) fn assert_committed(events: &[EventMsg], target: &Path, environment: 
         .expect("selected file name")
         .to_str()
         .expect("UTF-8 fixture file name");
-    let display_path = format!("{environment}/{file_name}");
+    let display_path = environment_prefix.map_or_else(
+        || file_name.to_owned(),
+        |environment| format!("{environment}/{file_name}"),
+    );
     assert!(
         diff.starts_with(&format!("diff --git a/{display_path} b/{display_path}\n"))
             && diff.contains(&format!("\n--- a/{display_path}\n+++ b/{display_path}\n")),
@@ -377,7 +385,7 @@ async fn structured_edit_routes_exact_bytes_to_selected_environment(
     };
     start_turn(&test, selections, AskForApproval::Never, profile).await?;
     let events = finish_turn(&test).await;
-    assert_committed(&events, target, environment);
+    assert_committed(&events, target, Some(environment));
     let requests = response.requests();
     assert_eq!(requests.len(), 2);
     let (_, success) = requests[1]
@@ -489,8 +497,26 @@ async fn structured_edit_unavailable_remote_never_falls_back_to_usable_local() -
         (std::fs::read(&local_path)?, std::fs::read(&remote_path)?),
         (b"before".to_vec(), b"before".to_vec())
     );
+    let selected = test.codex.environment_selections().await;
+    assert_eq!(
+        selected
+            .iter()
+            .map(|selection| selection.environment_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![LOCAL_ENVIRONMENT_ID, REMOTE_ENVIRONMENT_ID]
+    );
+    let manager = test.thread_manager.environment_manager();
+    assert_eq!(
+        manager.get_environment_status(LOCAL_ENVIRONMENT_ID).await,
+        Some(EnvironmentObservedStatus::Ready)
+    );
+    assert!(matches!(
+        manager.get_environment_status(REMOTE_ENVIRONMENT_ID).await,
+        Some(EnvironmentObservedStatus::Disconnected { .. })
+    ));
     establish_diff_root(&test, LOCAL_ENVIRONMENT_ID, test.cwd_path()).await?;
-    let local_response = mount_edit(&server, responses::ev_function_call("local", "structured_edit", &json!({"file_path":"same.txt","old_string":"before","new_string":"local remains usable","environment_id":LOCAL_ENVIRONMENT_ID}).to_string())).await;
+    // Only ready environments contribute to the schema and default routing.
+    let local_response = mount_edit(&server, responses::ev_function_call("local", "structured_edit", &json!({"file_path":"same.txt","old_string":"before","new_string":"local remains usable"}).to_string())).await;
     start_turn(
         &test,
         selections,
@@ -498,8 +524,27 @@ async fn structured_edit_unavailable_remote_never_falls_back_to_usable_local() -
         PermissionProfile::Disabled,
     )
     .await?;
-    assert_committed(&finish_turn(&test).await, &local_path, LOCAL_ENVIRONMENT_ID);
-    assert_eq!(local_response.requests().len(), 2);
+    let events = finish_turn(&test).await;
+    let local_requests = local_response.requests();
+    assert_eq!(local_requests.len(), 2);
+    let advertised = local_requests[0].body_json();
+    let editor = advertised["tools"]
+        .as_array()
+        .context("second-turn tool advertisement")?
+        .iter()
+        .find(|tool| tool["name"] == "structured_edit")
+        .context("advertised structured editor")?;
+    assert!(
+        !editor["parameters"]["properties"]
+            .as_object()
+            .context("advertised editor parameters")?
+            .contains_key("environment_id")
+    );
+    let output = local_requests[1]
+        .function_call_output_text("local")
+        .context("paired Local positive-control output")?;
+    assert!(output.contains("Success. Updated"), "{output}");
+    assert_committed(&events, &local_path, /*environment_prefix*/ None);
     assert_eq!(
         std::fs::read_to_string(&local_path)?,
         "local remains usable"
