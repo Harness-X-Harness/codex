@@ -61,7 +61,7 @@ inputs, rather than requiring every earlier row as a semantic prerequisite.
 | C3b / #327 | Exact stdin arguments and their trace consumers. | C3a's complete shared helper. | Real stdin delivery/rejection and returned-ID composition, exact trace limit parsing, canonical numeric session keys, reducer replay and affected stock behavior. |
 | C3c / #327 | Exact wait/fork consumers and agent composition. | The same helper from C3a/C3b. | Legacy/v2 wait policy, numeric fork with retained string modes, actual mailbox/history selection, no-child rejection, generic updatedInput hooks and affected stock behavior. |
 | Before C4: native proof construction / #333 | Early source normalization, profile-aligned schema generation, and bounded build measurements. | Accepted C3c; existing native proof and ordinary commit path. | Preserve formatter/fixer scopes and warning-level normalization, reject changed input before behavioral validation, inspect bound failure patches, verify schema bytes and unchanged strict/native coverage, then exact PR and canonical proof. Metrics are diagnostic only. |
-| C4a / #321 | Restore the callable public conditional filesystem API. | C0; accepted pre-C4 native proof construction. | Typed/wire/client/router/handler closure; local/remote selected sandbox and follow/no-follow behavior; shared effect ownership through cancellation/disconnect; contention, helper settlement, lost-reply no-resend and affected stock filesystem/link/cwd/patch proof on the required native platforms. |
+| C4a / #321 | Restore the callable public conditional filesystem API. | C0; accepted pre-C4 native proof construction. | Typed/wire/client/router/handler closure; local/remote selected sandbox and follow/no-follow behavior; shared effect ownership through cancellation/disconnect; contention, helper settlement, lost-reply no-resend and affected stock filesystem/link/cwd/patch proof on Linux. |
 | C4b / #321 | Restore the complete structured editor and retained scenarios. | C4a's complete conditional mutation contract; C1 harness for scenario source. | Exact matching and VerifiedContents, tool/model registration, runtime/approval/hook identity, committed deltas, owned representations, real local/remote and Code Mode composition, and deterministic retained scenario support. |
 | C5 / #328 | Updated Grok image dialect and retained image scenario source. | C1. | Projection/normalization/cardinality and fail-closed input policy; stock transparent-background/file-backed edit regressions; availability/schema/request composition and deterministic image harness tests. |
 | C6 / #329 | Runtime profile/catalog and Provider-bound App Server lifecycle. | C1. | Asset loading, model-list/catalog isolation, Provider-bound fork/resume/compaction/child inheritance, stock/non-Grok catalog and lifecycle regressions, and deterministic shipped-profile harness tests. |
@@ -118,12 +118,16 @@ crash durability remain outside its contract. C4b keeps the complete editor and
 retained scenarios together; no C4c or safety/proof deferral is planned. #321 stays
 open through both outcomes, each with reviewed PR/squash and actual canonical proof.
 
-C4a adds a required standard Windows filesystem job alongside the Linux runtime
-proof. It exercises actual local/remote restricted-token operations, native helper
-response/cleanup and descriptor transfer, cancellation, and link behavior. Optional
-MXC execution is not claimed by that job. The required sandbox/junction fixtures
-fail with an explicit capability error when unavailable; a skipped environment is
-not successful proof. The same aggregate requires this platform job to succeed.
+The owner narrowed this carry-forward roadmap's required native verification to
+Linux on 2026-10-04. This scope applies to C4a, C4b and subsequent increments;
+platform-neutral proof obligations in the table mean Linux. Distribution targets
+remain separately specified below. C4a proof covers the actual Linux local/remote
+filesystem, cancellation, helper settlement and affected stock contracts. Windows
+verification is outside this plan and its job is removed from the required
+aggregate. Platform implementations and existing regression tests remain available
+without a Windows acceptance claim. Earlier Windows failures and bounded
+diagnostic results remain historical observations; this scope change does not
+turn them into passing evidence.
 
 An owner may split only at independently complete green boundaries, updating this
 plan and #333 together. Each semantic owner closes its affected native generator
@@ -146,8 +150,7 @@ workflow revision. Logs identify PR HEAD/base, checkout SHA and workflow context
 the PR test-merge SHA remains distinct from the eventual squash SHA.
 
 The inner `complete` job explicitly needs `subject`, native `locks` and `runtime`,
-the consumed deterministic Go proof as it enters with C1c, and C4a's native
-Windows filesystem proof;
+and the consumed deterministic Go proof as it enters with C1c, all on Linux;
 outer `Cargo` needs the reusable `proof`. Both aggregates run with `always()`
 and accept only `success`. The lock job requires successful subject verification
 and uses native Cargo/Bazel entrypoints plus the existing Provider metadata suite.

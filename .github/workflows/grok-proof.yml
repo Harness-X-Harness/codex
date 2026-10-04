@@ -535,99 +535,9 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
 
-  filesystem_windows:
-    name: Native Windows filesystem proof
-    needs: subject
-    runs-on: windows-2025
-    timeout-minutes: 60
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_BUILD_JOBS: "2"
-      CARGO_PROFILE_CI_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-        with:
-          components: clippy, rustfmt
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: nextest@0.9.103
-      - name: Normalize Windows filesystem API formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item
-      - name: Require unchanged Windows formatting input
-        uses: ./.github/actions/check-clean-worktree
-      - name: Fix Windows filesystem API lint
-        working-directory: codex-rs
-        run: just fix -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test
-      - name: Freeze unchanged Windows proof input
-        uses: ./.github/actions/check-clean-worktree
-      - name: Check Windows filesystem API formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item --check
-      - name: Test native Windows effect and transport ownership
-        working-directory: codex-rs
-        run: |
-          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(file_system_mutation::tests::)'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(server::transport::conditional_write_tests::)'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(fs_sandbox::windows_tests::)'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(no_follow::windows::tests::)'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build stock Windows sandbox helpers
-        working-directory: codex-rs
-        run: cargo build -p codex-windows-sandbox --bin codex-windows-sandbox-setup --bin codex-command-runner --locked --profile ci-test
-      - name: Test actual Windows local and remote filesystems
-        working-directory: codex-rs
-        # MXC is a separate optional host capability; this required route uses real restricted tokens.
-        # Each stock token87 branch must report unsupported as a failed required operation.
-        env:
-          CODEX_TEST_REQUIRE_WINDOWS_FS: "1"
-        run: just test -p codex-exec-server --test file_system_windows --locked --cargo-profile ci-test --no-tests=fail --success-output immediate -E 'not test(mxc)'
-      - name: Check Windows filesystem API lint
-        working-directory: codex-rs
-        run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test -- --no-deps --cap-lints=forbid
-      - name: Verify clean Windows worktree
-        if: ${{ always() }}
-        uses: ./.github/actions/check-clean-worktree
-      - name: Retain Windows construction patch on failure
-        if: ${{ failure() }}
-        shell: bash
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          git diff --binary > "$RUNNER_TEMP/windows-filesystem.diff"
-          {
-            printf '%s\n' "repository=$GITHUB_REPOSITORY run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
-              "checkout=$(git rev-parse HEAD)" "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
-              "workflow_sha=$GITHUB_WORKFLOW_SHA"
-            cargo --version || echo "cargo unavailable"
-            rustfmt --version || echo "rustfmt unavailable"
-            cargo clippy --version || echo "clippy unavailable"
-          } > "$RUNNER_TEMP/windows-filesystem-subject.txt"
-          if [[ $(wc -c < "$RUNNER_TEMP/windows-filesystem.diff") -gt 10485760 ]]; then
-            echo "Patch exceeds 10 MiB; omitted for manual diagnosis." >> "$RUNNER_TEMP/windows-filesystem-subject.txt"
-            rm "$RUNNER_TEMP/windows-filesystem.diff"
-          fi
-      - name: Retain Windows filesystem correction evidence
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: windows-filesystem-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/windows-filesystem.diff
-            ${{ runner.temp }}/windows-filesystem-subject.txt
-          if-no-files-found: error
-
   complete:
     name: Native proof result
-    needs: [subject, locks, runtime, go, filesystem_windows]
+    needs: [subject, locks, runtime, go]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -637,9 +547,8 @@ jobs:
           LOCKS_RESULT: ${{ needs.locks.result }}
           RUNTIME_RESULT: ${{ needs.runtime.result }}
           GO_RESULT: ${{ needs.go.result }}
-          WINDOWS_FILESYSTEM_RESULT: ${{ needs.filesystem_windows.result }}
         run: |
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT" "$GO_RESULT" "$WINDOWS_FILESYSTEM_RESULT"; do
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT" "$GO_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1
