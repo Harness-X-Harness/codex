@@ -87,7 +87,32 @@ impl FileSystemSandboxRunner {
         sandbox: &FileSystemSandboxContext,
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-        let command = self.sandbox_command(sandbox)?;
+        let write_request = matches!(&request, FsHelperRequest::WriteFile(_));
+        let write_entries = sandbox
+            .permissions
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.access == codex_protocol::permissions::FileSystemAccessMode::Write
+            })
+            .count();
+        tracing::debug!(phase = "prepare", write_request, write_entries, thread = ?std::thread::current().id(), "filesystem helper diagnostic");
+        let command = self.sandbox_command(sandbox).inspect_err(|error| {
+            tracing::debug!(
+                phase = "prepare_error",
+                write_request,
+                write_entries,
+                rpc_code = error.code,
+                "filesystem helper diagnostic"
+            );
+        })?;
+        tracing::debug!(
+            phase = "prepared",
+            write_request,
+            write_entries,
+            "filesystem helper diagnostic"
+        );
         run_command(command, request).await
     }
 
@@ -392,8 +417,26 @@ async fn run_command(
     command: SandboxExecRequest,
     request: FsHelperRequest,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-    let request_json = serde_json::to_vec(&request).map_err(json_error)?;
-    let mut child = spawn_command(command, ChildStdin::Piped)?;
+    let request_json = serde_json::to_vec(&request)
+        .inspect_err(|_| {
+            tracing::debug!(
+                phase = "request_encode_error",
+                "filesystem helper diagnostic"
+            );
+        })
+        .map_err(json_error)?;
+    tracing::debug!(phase = "spawn", thread = ?std::thread::current().id(), "filesystem helper diagnostic");
+    let spawned = spawn_command(command, ChildStdin::Piped);
+    if let Err(error) = &spawned {
+        tracing::debug!(
+            phase = "spawn_error",
+            rpc_code = error.code,
+            "filesystem helper diagnostic"
+        );
+    }
+    let mut child = spawned?;
+    let helper_pid = child.id();
+    tracing::debug!(phase = "spawned", helper_pid, thread = ?std::thread::current().id(), "filesystem helper diagnostic");
     let mut effect = matches!(
         &request,
         FsHelperRequest::WriteFile(_) | FsHelperRequest::Remove(_) | FsHelperRequest::Copy(_)
@@ -431,15 +474,43 @@ async fn run_command(
             let stdin = stdin.as_mut().ok_or_else(|| {
                 internal_error("failed to open fs sandbox helper stdin".to_string())
             })?;
-            stdin.write_all(&request_json).await.map_err(io_error)?;
-            stdin.flush().await.map_err(io_error)?;
+            stdin.write_all(&request_json).await.inspect_err(|error| {
+                tracing::debug!(phase = "request_write_error", helper_pid, kind = ?error.kind(), raw_os_error = error.raw_os_error(), "filesystem helper diagnostic");
+            }).map_err(io_error)?;
+            stdin.flush().await.inspect_err(|error| {
+                tracing::debug!(phase = "request_flush_error", helper_pid, kind = ?error.kind(), raw_os_error = error.raw_os_error(), "filesystem helper diagnostic");
+            }).map_err(io_error)?;
+            tracing::debug!(phase = "request_sent", helper_pid, "filesystem helper diagnostic");
             let stdout = stdout.as_mut().ok_or_else(|| {
                 internal_error("failed to open fs sandbox helper stdout".to_string())
             })?;
-            let bytes = read_helper_response(stdout).await?;
-            serde_json::from_slice::<FsHelperResponse>(&bytes).map_err(json_error)
+            let bytes = read_helper_response(stdout).await.inspect_err(|error| {
+                tracing::debug!(phase = "response_read_error", helper_pid, rpc_code = error.code, "filesystem helper diagnostic");
+            })?;
+            serde_json::from_slice::<FsHelperResponse>(&bytes).inspect_err(|_| {
+                tracing::debug!(phase = "response_decode_error", helper_pid, "filesystem helper diagnostic");
+            }).map_err(json_error)
         }
         .await;
+        match &response {
+            Ok(FsHelperResponse::Ok(_)) => tracing::debug!(
+                phase = "terminal_success",
+                helper_pid,
+                "filesystem helper diagnostic"
+            ),
+            Ok(FsHelperResponse::Error(error)) => tracing::debug!(
+                phase = "terminal_error",
+                helper_pid,
+                rpc_code = error.code,
+                "filesystem helper diagnostic"
+            ),
+            Err(error) => tracing::debug!(
+                phase = "request_failed",
+                helper_pid,
+                rpc_code = error.code,
+                "filesystem helper diagnostic"
+            ),
+        }
         // The one-request helper emits this only after its effect completes. Cleanup can
         // subsequently fail without turning a validated terminal response into an unknown write.
         if matches!(
@@ -464,6 +535,7 @@ async fn run_command(
         drop(stdin);
         drop(stdout);
         let (exited, cleanup) = finish_helper(&mut child, stderr).await;
+        tracing::debug!(phase = "cleanup", helper_pid, observed_exit = exited, success = cleanup.is_ok(), rpc_code = cleanup.as_ref().err().map(|error| error.code), thread = ?std::thread::current().id(), "filesystem helper diagnostic");
         if exited && let Some(effect) = &mut effect {
             effect.settle();
         }

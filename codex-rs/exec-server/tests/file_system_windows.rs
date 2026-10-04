@@ -566,6 +566,12 @@ async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_private_desktop_survives_helper_exits_and_separates_permissions() -> Result<()>
 {
+    tracing_subscriber::fmt()
+        .with_env_filter("codex_exec_server::fs_sandbox=debug")
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .try_init()
+        .expect("install the process-wide diagnostic subscriber before the owned task starts");
     let context = create_file_system_context(FileSystemImplementation::Local).await?;
     let file_system = context.file_system;
     let tmp = tempfile::TempDir::new()?;

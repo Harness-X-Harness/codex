@@ -1,0 +1,86 @@
+name: grok-windows-phase-diagnostic
+
+# One bounded comparison. This workflow supplies no PR or canonical acceptance credit.
+on:
+  push:
+    branches: [grok/diagnostic-c4a-windows-phases-20261003]
+
+permissions:
+  contents: read
+
+jobs:
+  phase:
+    name: Diagnostic only - Windows helper error phases
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify and record the isolated diagnostic subject
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/grok/diagnostic-c4a-windows-phases-20261003
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^1)" = 3263237c6820639e56303e050407eb2e86be76fb
+          mkdir -p "$RUNNER_TEMP/grok-windows-phases"
+          {
+            printf '%s\n' 'role=diagnostic-helper-phases; acceptance-credit=none' \
+              "repository=$GITHUB_REPOSITORY run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+              "workflow_sha=$GITHUB_WORKFLOW_SHA workflow_ref=$GITHUB_WORKFLOW_REF" \
+              "diagnostic_commit=$GITHUB_SHA diagnostic_ref=$GITHUB_REF" \
+              "source_commit=$(git rev-parse HEAD) source_tree=$(git rev-parse 'HEAD^{tree}')" \
+              "runner_os=$RUNNER_OS runner_arch=$RUNNER_ARCH" \
+              "image_os=${ImageOS:-unavailable} image_version=${ImageVersion:-unavailable}" \
+              'comparison=same supported runner class; not the same machine or state'
+          } | tee "$RUNNER_TEMP/grok-windows-phases/subject.txt"
+      - uses: ./.github/actions/setup-ci
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest@0.9.103
+      - name: Record pinned diagnostic tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            rustc --version
+            cargo --version
+            cargo nextest --version
+            just --version
+          } | tee "$RUNNER_TEMP/grok-windows-phases/tools.txt"
+      - name: Observe the private desktop case once with phase evidence
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case_name=file_system_private_desktop_survives_helper_exits_and_separates_permissions
+          printf '%s\n' "$case_name" | tee "$RUNNER_TEMP/grok-windows-phases/expected-tests.txt"
+          just test -p codex-exec-server --test file_system_windows --locked \
+            --cargo-profile ci-test --no-tests=fail --retries 0 --success-output immediate \
+            -E "test(=$case_name)" 2>&1 | tee "$RUNNER_TEMP/grok-windows-phases/tests.log"
+          if grep -Fq 'Skipping private desktop reuse: this host cannot create restricted tokens' "$RUNNER_TEMP/grok-windows-phases/tests.log"; then
+            echo 'Diagnostic capability unavailable; the operation sequence did not execute.' >&2
+            exit 1
+          fi
+      - name: Verify unchanged diagnostic source
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Retain phase diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windows-helper-phases-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-windows-phases/
+          if-no-files-found: error
+          retention-days: 7
