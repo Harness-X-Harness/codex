@@ -36,8 +36,10 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::runtimes::apply_patch::ApplyPatchHookIdentity;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::runtimes::apply_patch::ApplyPatchWriteMode;
 use crate::tools::sandboxing::ToolCtx;
 use crate::windows_sandbox::windows_sandbox_level_for_legacy_checks;
 use codex_apply_patch::ApplyPatchAction;
@@ -379,6 +381,8 @@ impl ApplyPatchHandler {
                     turn_environment.clone(),
                     Some(&tracker),
                     tool_ctx,
+                    ApplyPatchWriteMode::ReparsePatch,
+                    ApplyPatchHookIdentity::ApplyPatch,
                 )
                 .await?;
                 Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
@@ -484,8 +488,15 @@ pub(crate) async fn intercept_apply_patch(
                 call_id: call_id.to_string(),
                 tool_name: ToolName::plain(tool_name),
             };
-            let content =
-                execute_verified_patch(changes, turn_environment, tracker, tool_ctx).await?;
+            let content = execute_verified_patch(
+                changes,
+                turn_environment,
+                tracker,
+                tool_ctx,
+                ApplyPatchWriteMode::ReparsePatch,
+                ApplyPatchHookIdentity::ApplyPatch,
+            )
+            .await?;
             Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
         }
         codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
@@ -501,11 +512,13 @@ pub(crate) async fn intercept_apply_patch(
     }
 }
 
-async fn execute_verified_patch(
+pub(super) async fn execute_verified_patch(
     action: ApplyPatchAction,
     turn_environment: TurnEnvironment,
     tracker: Option<&SharedTurnDiffTracker>,
     tool_ctx: ToolCtx,
+    write_mode: ApplyPatchWriteMode,
+    hook_identity: ApplyPatchHookIdentity,
 ) -> Result<String, FunctionCallError> {
     let cwd = action.cwd.clone();
     let sandbox_context = turn_environment.sandbox_context(/*additional_permissions*/ None);
@@ -587,6 +600,8 @@ async fn execute_verified_patch(
         exec_approval_requirement: apply.exec_approval_requirement,
         additional_permissions: effective_additional_permissions.additional_permissions,
         permissions_preapproved: effective_additional_permissions.permissions_preapproved,
+        write_mode,
+        hook_identity,
     };
     let mut orchestrator = ToolOrchestrator::new();
     let mut runtime = ApplyPatchRuntime::new();

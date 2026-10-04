@@ -118,6 +118,11 @@ crash durability remain outside its contract. C4b keeps the complete editor and
 retained scenarios together; no C4c or safety/proof deferral is planned. #321 stays
 open through both outcomes, each with reviewed PR/squash and actual canonical proof.
 
+The retained [structured-edit Story](./stories/grok-structured-edit.md) owns the
+four callable scenarios, packaged-Grok acceptance boundary and unproven downstream
+obligations. C4b's Go tests establish deterministic support; its actual editor
+composition proof is provider-neutral Rust on Linux.
+
 The owner narrowed this carry-forward roadmap's required native verification to
 Linux on 2026-10-04. This scope applies to C4a, C4b and subsequent increments;
 platform-neutral proof obligations in the table mean Linux. Distribution targets
