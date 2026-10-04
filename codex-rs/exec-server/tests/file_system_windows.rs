@@ -14,12 +14,15 @@ mod support;
 use std::collections::BTreeSet;
 use std::ffi::c_void;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
@@ -44,6 +47,7 @@ use tokio::time::timeout;
 use uuid::Uuid;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
+use crate::common::exec_server::ExecServerHarness;
 use crate::support::FileSystemImplementation;
 use crate::support::create_file_system_context;
 use crate::support::is_unsupported_restricted_token_host;
@@ -459,28 +463,78 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
 async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
     implementation: FileSystemImplementation,
 ) -> Result<()> {
-    // Both implementations re-enter this test binary; the elevated backend finds its helpers
-    // next to that binary, while Cargo and Bazel provide them separately.
-    let test_exe = std::env::current_exe()?;
-    let resources = test_exe
-        .parent()
-        .context("Windows test executable should have a parent directory")?
-        .join("codex-resources");
-    if let Err(error) = std::fs::create_dir_all(&resources)
-        && !(error.kind() == std::io::ErrorKind::PermissionDenied && resources.is_dir())
-    {
-        return Err(error).context("create Windows sandbox test resources");
-    }
-    for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-        let source = codex_utils_cargo_bin::cargo_bin(name)?;
-        let destination = resources.join(Path::new(name).with_extension("exe"));
-        if let Err(error) = std::fs::copy(&source, &destination)
-            && !(error.kind() == std::io::ErrorKind::PermissionDenied && destination.is_file())
-        {
-            return Err(error).with_context(|| format!("stage Windows sandbox helper {name}"));
+    const PRIVATE_CHILD_ENV: &str = "CODEX_TEST_PRIVATE_WINDOWS_HELPERS_EXE";
+    const LOCAL_CASE: &str = "file_system_elevated_relative_read_denial_uses_policy_cwd::local";
+    if let Some(expected_exe) = std::env::var_os(PRIVATE_CHILD_ENV) {
+        anyhow::ensure!(
+            matches!(implementation, FileSystemImplementation::Local),
+            "private helper child must run the Local case"
+        );
+        let actual_exe = std::env::current_exe()?;
+        anyhow::ensure!(
+            actual_exe.canonicalize()? == PathBuf::from(expected_exe).canonicalize()?,
+            "Local setup must execute in the private copied executable"
+        );
+        let resources = actual_exe
+            .parent()
+            .context("private executable parent")?
+            .join("codex-resources");
+        for name in [
+            "codex-windows-sandbox-setup.exe",
+            "codex-command-runner.exe",
+        ] {
+            anyhow::ensure!(
+                resources.join(name).is_file(),
+                "private Windows helper is missing"
+            );
         }
+        let context = create_file_system_context(FileSystemImplementation::Local).await?;
+        return assert_elevated_relative_read_denial(context.file_system.as_ref()).await;
     }
-    let context = create_file_system_context(implementation).await?;
+
+    // The actual setup caller must be inside this directory, not only a later FS helper.
+    // Every attempt owns fresh bytes; uncertain children cannot collide with a retry.
+    let staged = StagedWindowsHelpers::new()?;
+    if matches!(implementation, FileSystemImplementation::Local) {
+        let output = timeout(
+            Duration::from_secs(/*secs*/ 60),
+            tokio::process::Command::new(&staged.exe)
+                .args(["--exact", LOCAL_CASE, "--nocapture"])
+                .env(PRIVATE_CHILD_ENV, &staged.exe)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .context("private Local filesystem test did not settle")?
+        .context("launch private Local filesystem test")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::ensure!(
+            output.status.success(),
+            "private Local filesystem test failed: {stdout} {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        anyhow::ensure!(
+            stdout.lines().any(|line| line == "running 1 test")
+                && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+            "private Local filesystem test must execute exactly once: {stdout}"
+        );
+        return staged.close();
+    }
+
+    let mut command = tokio::process::Command::new(&staged.exe);
+    command.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
+    let mut server = ExecServerHarness::start(command).await?;
+    let file_system =
+        Environment::create_for_tests(Some(server.websocket_url().to_owned()))?.get_filesystem();
+    let result = assert_elevated_relative_read_denial(file_system.as_ref()).await;
+    drop(file_system);
+    let shutdown = server.shutdown().await;
+    result?;
+    shutdown?;
+    staged.close()
+}
+
+async fn assert_elevated_relative_read_denial(file_system: &dyn ExecutorFileSystem) -> Result<()> {
     let tmp = tempfile::TempDir::new()?;
     let policy_cwd = tmp.path().join("checkout");
     let selected_files = policy_cwd.join("files");
@@ -521,7 +575,6 @@ async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
     );
     sandbox.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
 
-    let file_system = &context.file_system;
     let allowed_neighbor = file_system
         .read_file(
             &PathUri::from_host_native_path(&allowed_neighbor)?,
@@ -561,6 +614,54 @@ async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
         "expected Windows access denial, got: {denied}"
     );
     Ok(())
+}
+
+struct StagedWindowsHelpers {
+    directory: Option<tempfile::TempDir>,
+    exe: PathBuf,
+}
+
+impl StagedWindowsHelpers {
+    fn new() -> Result<Self> {
+        let directory = tempfile::tempdir()?;
+        let source = std::env::current_exe()?;
+        let exe = directory.path().join(
+            source
+                .file_name()
+                .context("Windows test executable should have a file name")?,
+        );
+        std::fs::copy(&source, &exe).context("stage private Windows test executable")?;
+        let resources = directory.path().join("codex-resources");
+        std::fs::create_dir(&resources)?;
+        for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
+            let source = codex_utils_cargo_bin::cargo_bin(name)?;
+            let destination = resources.join(Path::new(name).with_extension("exe"));
+            std::fs::copy(source, destination)
+                .with_context(|| format!("stage private Windows sandbox helper {name}"))?;
+        }
+        Ok(Self {
+            directory: Some(directory),
+            exe,
+        })
+    }
+
+    fn close(mut self) -> Result<()> {
+        self.directory
+            .take()
+            .context("private Windows helper directory missing")?
+            .close()
+            .context("remove settled private Windows helpers")
+    }
+}
+
+impl Drop for StagedWindowsHelpers {
+    fn drop(&mut self) {
+        // Failure or panic can leave an unconfirmed child. Retain that attempt's private bytes
+        // until host cleanup; a fresh attempt gets a different directory and never overwrites it.
+        if let Some(directory) = self.directory.take() {
+            let _ = directory.keep();
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
