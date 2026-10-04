@@ -754,6 +754,10 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
         return false;
     }
 
+    if turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok {
+        return true;
+    }
+
     let provider = turn_context.provider.info();
     provider.uses_openai_actor_authorization()
         || (provider.requires_openai_auth

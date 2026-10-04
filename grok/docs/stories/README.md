@@ -10,10 +10,11 @@ a product Story. Exact execution subjects and results belong in GitHub.
 | [Configured Grok fixture completes a text turn](./grok-provider-fixture-turn.md) | Basic fixture | Selected binary's App Server v2 |
 | [Encrypted reasoning survives same-thread continuation](./grok-encrypted-reasoning-history-continuation.md) | Primary and pinned reasoning fixtures | Selected binary's App Server v2 |
 | [Structured exact-match file edit](./grok-structured-edit.md) | Exact edit/continuation, decline, pinned and replace-all fixtures | Packaged Grok App Server; C4b deterministic support does not complete the Story |
+| [Image generation and same-thread history edit](./grok-image-generation-history-edit.md) | Image-capable generation/history-edit fixture | Packaged Grok App Server; C5 deterministic support does not complete the Story |
 
 The fixture models are controls inherited from the previous accepted reference,
 not shipped defaults or catalog policy. #329 owns shipped profile/catalog checks;
 #322 owns the tool semantics used by the reasoning scenario. #320 introduces
 the consumed harness and scenario source; #321/C4b restores structured-edit
-scenario support. #331 owns actual Live execution and
+scenario support; #328/C5 restores image scenario support. #331 owns actual Live execution and
 #339 owns package-to-Live invocation. No backend execution is claimed here.

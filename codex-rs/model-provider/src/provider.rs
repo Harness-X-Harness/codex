@@ -144,7 +144,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
 
-    /// Selects Responses semantics from explicit configuration, independent of name and URL.
+    /// Selects API semantics from explicit configuration, independent of name and URL.
     fn api_dialect(&self) -> ApiDialect {
         match self.info().wire_api {
             WireApi::Responses => ApiDialect::OpenAi,

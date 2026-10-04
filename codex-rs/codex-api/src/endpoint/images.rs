@@ -1,16 +1,18 @@
 use crate::auth::SharedAuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
+use crate::grok_images;
 use crate::images::ImageEditRequest;
 use crate::images::ImageGenerationRequest;
 use crate::images::ImageResponse;
+use crate::provider::ApiDialect;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_client::TransportError;
 use http::HeaderMap;
 use http::Method;
-use serde::Serialize;
+use serde_json::Value;
 use serde_json::to_value;
 use std::sync::Arc;
 
@@ -18,6 +20,7 @@ const X_CODEX_IMAGEGEN_REQUEST_ID_HEADER: &str = "x-codex-imagegen-request-id";
 
 pub struct ImagesClient<T: HttpTransport> {
     session: EndpointSession<T>,
+    dialect: ApiDialect,
 }
 
 /// Image request failure with the nested ImageGen request ID, when available.
@@ -50,12 +53,19 @@ impl<T: HttpTransport> ImagesClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
+            dialect: ApiDialect::OpenAi,
         }
+    }
+
+    pub fn with_dialect(mut self, dialect: ApiDialect) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
         Self {
             session: self.session.with_request_telemetry(request),
+            dialect: self.dialect,
         }
     }
 
@@ -64,9 +74,18 @@ impl<T: HttpTransport> ImagesClient<T> {
         request: &ImageGenerationRequest,
         extra_headers: HeaderMap,
     ) -> Result<(ImageResponse, Option<String>), ImageRequestError> {
+        let body = match self.dialect {
+            ApiDialect::OpenAi => to_value(request).map_err(|error| {
+                ApiError::Stream(format!(
+                    "failed to encode image generation request: {error}"
+                ))
+            }),
+            ApiDialect::Grok => grok_images::generation_body(request),
+        }
+        .map_err(ImageRequestError::from_api_error)?;
         self.post_image_request(
             "images/generations",
-            request,
+            body,
             extra_headers,
             "image generation",
         )
@@ -78,28 +97,35 @@ impl<T: HttpTransport> ImagesClient<T> {
         request: &ImageEditRequest,
         extra_headers: HeaderMap,
     ) -> Result<(ImageResponse, Option<String>), ImageRequestError> {
-        self.post_image_request("images/edits", request, extra_headers, "image edit")
+        let body = match self.dialect {
+            ApiDialect::OpenAi => to_value(request).map_err(|error| {
+                ApiError::Stream(format!("failed to encode image edit request: {error}"))
+            }),
+            ApiDialect::Grok => grok_images::edit_body(request),
+        }
+        .map_err(ImageRequestError::from_api_error)?;
+        self.post_image_request("images/edits", body, extra_headers, "image edit")
             .await
     }
 
-    async fn post_image_request<R: Serialize>(
+    async fn post_image_request(
         &self,
         path: &str,
-        request: &R,
+        body: Value,
         extra_headers: HeaderMap,
         operation: &str,
     ) -> Result<(ImageResponse, Option<String>), ImageRequestError> {
-        let body = to_value(request).map_err(|e| ImageRequestError {
-            error: ApiError::Stream(format!("failed to encode {operation} request: {e}")),
-            imagegen_request_id: None,
-        })?;
         let resp = self
             .session
             .execute(Method::POST, path, extra_headers, Some(body))
             .await
             .map_err(ImageRequestError::from_api_error)?;
         let imagegen_request_id = imagegen_request_id_from_headers(&resp.headers);
-        let response = serde_json::from_slice(&resp.body).map_err(|e| ImageRequestError {
+        let response = match self.dialect {
+            ApiDialect::OpenAi => serde_json::from_slice(&resp.body),
+            ApiDialect::Grok => grok_images::decode_response(&resp.body),
+        }
+        .map_err(|e| ImageRequestError {
             error: ApiError::Stream(format!("failed to decode {operation} response: {e}")),
             imagegen_request_id: imagegen_request_id.clone(),
         })?;

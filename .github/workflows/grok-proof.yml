@@ -138,7 +138,7 @@ jobs:
     name: Native runtime proof
     needs: subject
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 105
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_BUILD_JOBS: "2"
@@ -158,7 +158,7 @@ jobs:
         working-directory: codex-rs
         run: |
           cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
-          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
@@ -166,7 +166,7 @@ jobs:
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -292,7 +292,7 @@ jobs:
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
-          -p codex-prompts --locked --profile ci-test --timings
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
         uses: ./.github/actions/check-clean-worktree
       - name: Regenerate owned configuration schema
@@ -456,6 +456,20 @@ jobs:
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_code_mode::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::auto_review::structured_edit_and_stock_patch_guardian::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_apply_patch_via_nested_tool)'
+      - name: Test image dialect consumers and codec normalization
+        working-directory: codex-rs
+        run: |
+          just test -p codex-image-generation-extension --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate
+          just test -p codex-utils-image --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate
+          just test -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(dynamic_tools::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(tools::spec_plan::tests::) | test(tools::handlers::mcp_resource_spec::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(tools::handlers::extension_tools::) | test(image_preparation::)'
+      - name: Test stock image model Code Mode history and filesystem composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::imagegen_extension::) | test(suite::v2::dynamic_tools::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::extension_sandbox::) | test(suite::responses_lite::)'
       - name: Test inherited stock patch hook contracts
         working-directory: codex-rs
         run: |
@@ -523,7 +537,7 @@ jobs:
         run: |
           export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_LIVE_NATIVE_BIN"
-          go test -race -count=1 -timeout=5m -v ./live
+          go test -race -count=1 -timeout=6m -v ./live
       - name: Check scoped filesystem API lint
         working-directory: codex-rs
         run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
@@ -533,7 +547,7 @@ jobs:
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
-          -p codex-prompts --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
@@ -596,7 +610,7 @@ jobs:
     name: Deterministic Facts and Live proof
     needs: subject
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       GROK_FACTS: "0"
       GROK_LIVE: "0"
@@ -613,7 +627,7 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Test Facts HTTP and Live stdio boundaries without backend calls
         working-directory: grok
-        run: go test -race -count=1 -timeout=4m -v ./facts ./live
+        run: go test -race -count=1 -timeout=6m -v ./facts ./live
       - name: Vet the consumed Go foundation
         working-directory: grok
         run: go vet ./...

@@ -73,7 +73,9 @@ async fn thread_start_normalizes_legacy_dynamic_tools_into_model_request() -> Re
     let visible_schema = json!({
         "type": "object",
         "properties": {
-            "ticket_id": { "type": "string" }
+            "ticket_id": { "type": "string" },
+            "matches": { "type": "array", "items": { "type": "string" }, "maxItems": 3 },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 3 }
         },
         "required": ["ticket_id"],
         "additionalProperties": false,
@@ -231,6 +233,16 @@ async fn thread_start_rejects_invalid_dynamic_tool_inputs() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     for (dynamic_tools, expected_error) in [
+        (
+            json!([{"type":"function","name":"bad_bound","description":"Invalid bound",
+                "inputSchema":{"type":"object","properties":{"count":{"type":"integer","maximum":"three"}}}}]),
+            "dynamic tool input schema is not supported",
+        ),
+        (
+            json!([{"type":"function","name":"bad_cardinality","description":"Invalid cardinality",
+                "inputSchema":{"type":"object","properties":{"values":{"type":"array","items":{"type":"string"},"maxItems":-1}}}}]),
+            "dynamic tool input schema is not supported",
+        ),
         (
             json!([
                 {

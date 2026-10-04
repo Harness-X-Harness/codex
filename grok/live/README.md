@@ -62,3 +62,66 @@ without reporting overall completion. The observer uses one settled thread read
 per turn, at most 4096 preterminal frames, 4096 argument bytes, 64 KiB per output,
 and one in-memory call/output/change correlation. It collects no outbound HTTP
 request or raw session artifact.
+
+`ImageGenerationEdit(ctx, Options)` consumes an image-capable fixture through
+the same bounded runner: one natural generation turn, then one natural edit
+turn on that thread. `TestGrokImageGenerationEdit` executes deterministic public
+stdio scripts for primary/pinned fixtures. This is prerequisite support for the
+[retained image Story](../docs/stories/grok-image-generation-history-edit.md),
+not actual Grok tool/HTTP/backend or packaged execution.
+
+The observer reconciles each canonical raw call and image output with the
+matching completed public image item and settled `thread/read`. The previous
+image must be selected by the exact latest-image window or its exact saved
+path; later edits may continue the same verified lineage. Missing, stale,
+unrelated or conflicting evidence cannot establish completion. Consistent
+duplicate terminals and a failed tool call followed by a successful internal
+recovery are supported; tool multiplicity is diagnostic.
+Validation or image-file resolution can fail before an image lifecycle item
+starts. An exact image call paired with a nonempty text error and no image item
+remains diagnostic. It cannot establish image lineage or completion, and an
+invalid invocation cannot supply a successful image. A later valid image call
+must satisfy every normal image, artifact, history and terminal requirement.
+This follows `ext/image-generation/src/tool.rs::handle_call` validating before
+`emit_started`, and `core/src/tools/parallel.rs::failure_response` returning a
+same-call text output on failure. A started image still requires its terminal
+item; an incomplete lifecycle cannot use this diagnostic exception.
+
+This fixture explicitly disables view-image, shell, Code Mode, apps and the
+other tool features. Only the image tool is enabled, and explicit Grok
+`transparent_background` arguments are unavailable. The observer rejects tools
+outside this fixture's surface. That isolation does not narrow the retained
+packaged Story: a general profile's view-image-before-edit path remains an
+unproven packaged obligation, not a result established by these scripts.
+
+The source chain is `core/src/session/mod.rs::record_conversation_items` (history
+media preparation, history recording, rollout persistence, then raw events), `core/src/tools/handlers/
+extension_tools.rs` (canonical history passed into `ToolCall`), and
+`ext/image-generation/src/tool.rs::{recent_images,GeneratedImageOutput}`
+(newest-first selection and PNG output). App Server's
+`request_processors/thread_processor.rs::{read_thread_view,load_live_thread_view}`
+reads the exact loaded thread's history; its `extensions.rs` binds the image
+save root to the isolated home. No broad durable-session scan is used.
+
+Stock `core/src/image_preparation.rs` may resize/re-encode the image before
+history recording. The prepared history rendition and public artifact therefore
+retain separate digests. The exact call ID binds the canonical rendition to its
+public image, and the later selector binds that rendition to the edit. Both
+renditions must fully decode. Public payload/file equality remains strict;
+prepared/full-resolution byte equality is not an oracle. The controlled script
+includes a 2048-square PNG prepared as 1600-square PNG. Native C5 image
+preparation tests remain required to prove the real transformation owner.
+
+PNG representation is checked by full codec decode, bounded dimensions, and
+exact payload/file equality. Artifacts must be new under the controlled image
+root, nonsymlink regular files, remain readable, and the edited result must
+differ. A PNG header alone and JPEG mislabeled PNG fail. Each turn caps at
+4096 frames/64 MiB; the scenario retains at most 64 call records, inspects at
+most 256 artifact entries per pre-turn inventory, and arguments to 4096 bytes.
+Image encoded bytes and decoded pixels use the extension's 32 MiB local budget
+(at least four bytes per pixel, eight for 16-bit RGBA). The inherited 16 MiB
+stdio frame and 128-frame/8 MiB early queue budgets still apply, including to
+settled multi-turn reads. A result exceeding an observation budget is not
+proven by this harness; it is not evidence that the product rejected a valid
+image. Failures preserve safe partial terminal/artifact facts; returned
+evidence omits prompts, payloads, paths, credentials and IDs.

@@ -3412,3 +3412,9 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
 
 #[path = "spec_plan_structured_edit_tests.rs"]
 mod structured_edit_tests;
+
+#[path = "spec_plan_image_generation_tests.rs"]
+mod image_generation_tests;
+
+#[path = "spec_plan_schema_bounds_tests.rs"]
+mod schema_bounds_tests;
