@@ -291,11 +291,21 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 let _ = add_allow_ace(p, readonly_sid.as_ptr());
             }
         } else {
-            for p in &allow {
+            for (root_index, p) in allow.iter().enumerate() {
                 let Some(root_sid) = matching_root_capability(p, acl_sids.write_root_sids) else {
                     continue;
                 };
-                let _ = ensure_allow_write_aces(p, &[root_sid.sid.as_ptr()]);
+                diagnostic_grant_snapshot("before", root_index, p, root_sid.sid.as_ptr());
+                let grant = ensure_allow_write_aces(p, &[root_sid.sid.as_ptr()]);
+                diagnostic_grant_record(format_args!(
+                    "phase=grant root={root_index} result={}",
+                    match &grant {
+                        Ok(true) => "changed",
+                        Ok(false) => "unchanged",
+                        Err(_) => "error",
+                    },
+                ));
+                diagnostic_grant_snapshot("after", root_index, p, root_sid.sid.as_ptr());
             }
         }
         for p in &deny {
@@ -343,6 +353,81 @@ pub(crate) fn apply_legacy_session_acl_rules(
         }
     }
     Ok(())
+}
+
+// Temporary diagnostic-only observation. Never log paths, SID values, payloads or error text.
+fn diagnostic_grant_record(record: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    static RECORDS: AtomicUsize = AtomicUsize::new(0);
+    let Some(directory) = std::env::var_os("CODEX_C4A_GRANT_DIAGNOSTIC_DIR") else {
+        return;
+    };
+    let index = RECORDS.fetch_add(1, Ordering::Relaxed);
+    if index >= 64 {
+        return;
+    }
+    let Ok(key) = std::env::var("CODEX_C4A_GRANT_DIAGNOSTIC_KEY") else {
+        return;
+    };
+    if key.is_empty()
+        || key.len() > 64
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'-')
+    {
+        return;
+    }
+    let path = PathBuf::from(directory).join(format!("request-{key}.log"));
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        if index == 63 {
+            let _ = writeln!(file, "phase=record_limit");
+        } else {
+            let _ = writeln!(file, "wrapper={} {record}", std::process::id());
+        }
+    }
+}
+
+fn diagnostic_grant_snapshot(phase: &str, root_index: usize, root: &Path, sid: *mut c_void) {
+    use windows_sys::Win32::Storage::FileSystem::DELETE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+    if root_index >= 4 || std::env::var_os("CODEX_C4A_GRANT_DIAGNOSTIC_DIR").is_none() {
+        return;
+    }
+    // Fixed synthetic fixture children only; no directory enumeration or content reads.
+    for (label, relative) in [
+        ("root", ""),
+        ("new_file", "note.txt"),
+        ("existing_file", "existing.txt"),
+        ("desktop_file", "contents.txt"),
+        ("remove_file", "remove-me.txt"),
+        ("conditional_file", "bytes"),
+        ("junction_file", "real/existing.txt"),
+    ] {
+        let path = root.join(relative);
+        let existence = match std::fs::metadata(&path) {
+            Ok(_) => "present",
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
+            Err(_) => "unavailable",
+        };
+        let mask = |requested| match crate::acl::path_mask_allows(&path, &[sid], requested, true) {
+            Ok(true) => "match",
+            Ok(false) => "no_match_or_unknown",
+            Err(_) => "query_error",
+        };
+        // Matches one non-inherit-only allow ACE, not combined rights or an AccessCheck result.
+        let write = mask(FILE_READ_ATTRIBUTES | FILE_WRITE_DATA | 0x0010_0000);
+        let delete = mask(DELETE | 0x0010_0000);
+        diagnostic_grant_record(format_args!(
+            "phase={phase} root={root_index} probe={label} existence={existence} write_single_allow_ace={write} delete_single_allow_ace={delete}"
+        ));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -1,0 +1,99 @@
+# Diagnostic only. No PR/canonical gate credit; stop after this one reviewed run.
+name: grok-windows-grant-diagnostic
+'on':
+  push:
+    branches:
+    - grok/diagnostic-c4a-windows-grants-20261004
+permissions:
+  contents: read
+jobs:
+  grants:
+    name: Diagnostic only - Windows writable-root grant propagation
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_CI_TEST_DEBUG: '0'
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        persist-credentials: false
+        ref: ${{ github.sha }}
+        fetch-depth: 2
+    - name: Verify and record the diagnostic subject
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$GITHUB_EVENT_NAME" = push
+        test "$GITHUB_REF" = refs/heads/grok/diagnostic-c4a-windows-grants-20261004
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        test "$(git rev-parse HEAD^1)" = b62a95470d88c423fc30cef024864a2a7725a521
+        mkdir -p "$RUNNER_TEMP/grok-windows-grants/observations"
+        {
+          printf '%s\n' 'role=diagnostic-grant-propagation; acceptance-credit=none' \
+            "repository=$GITHUB_REPOSITORY run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+            "workflow_sha=$GITHUB_WORKFLOW_SHA workflow_ref=$GITHUB_WORKFLOW_REF" \
+            "source_commit=$(git rev-parse HEAD) source_tree=$(git rev-parse 'HEAD^{tree}')" \
+            "runner_os=$RUNNER_OS runner_arch=$RUNNER_ARCH" \
+            "image_os=${ImageOS:-unavailable} image_version=${ImageVersion:-unavailable}" \
+            'comparison=R5 full Windows suite context; different machine and instrumentation cost'
+        } | tee "$RUNNER_TEMP/grok-windows-grants/subject.txt"
+    - uses: ./.github/actions/setup-ci
+    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      with:
+        components: clippy, rustfmt
+    - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+      with:
+        tool: nextest@0.9.103
+    - name: Normalize Windows filesystem API formatting
+      working-directory: codex-rs
+      run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item
+    - name: Require unchanged Windows formatting input
+      uses: ./.github/actions/check-clean-worktree
+    - name: Fix Windows filesystem API lint
+      working-directory: codex-rs
+      run: just fix -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test
+    - name: Freeze unchanged Windows proof input
+      uses: ./.github/actions/check-clean-worktree
+    - name: Check Windows filesystem API formatting
+      working-directory: codex-rs
+      run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item
+        --check
+    - name: Test native Windows effect and transport ownership
+      working-directory: codex-rs
+      run: |
+        just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail --retries 0 -E 'test(file_system_mutation::tests::)'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail --retries 0 -E 'test(server::transport::conditional_write_tests::)'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail --retries 0 -E 'test(fs_sandbox::windows_tests::)'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail --retries 0 -E 'test(no_follow::windows::tests::)'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - name: Build stock Windows sandbox helpers
+      working-directory: codex-rs
+      run: cargo build -p codex-windows-sandbox --bin codex-windows-sandbox-setup --bin codex-command-runner --locked --profile
+        ci-test
+    - name: Observe the full Windows filesystem selection once
+      working-directory: codex-rs
+      env:
+        CODEX_TEST_REQUIRE_WINDOWS_FS: '1'
+        CODEX_C4A_GRANT_DIAGNOSTIC_DIR: ${{ runner.temp }}/grok-windows-grants/observations
+      run: |
+        set -euo pipefail
+        just test -p codex-exec-server --test file_system_windows --locked --cargo-profile ci-test \
+          --no-tests=fail --retries 0 --success-output immediate -E 'not test(mxc)' 2>&1 \
+          | tee "$RUNNER_TEMP/grok-windows-grants/tests.log"
+      shell: bash
+    - name: Verify clean Windows worktree
+      if: ${{ always() }}
+      uses: ./.github/actions/check-clean-worktree
+    - name: Retain bounded grant observation artifacts
+      if: ${{ always() }}
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: windows-grant-observations-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/grok-windows-grants/
+        if-no-files-found: error
+        retention-days: 7

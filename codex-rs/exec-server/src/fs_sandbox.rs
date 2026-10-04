@@ -393,7 +393,84 @@ async fn run_command(
     request: FsHelperRequest,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
     let request_json = serde_json::to_vec(&request).map_err(json_error)?;
-    let mut child = spawn_command(command, ChildStdin::Piped)?;
+    #[cfg(windows)]
+    let (command, diagnostic_key) = {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
+        static REQUESTS: AtomicUsize = AtomicUsize::new(0);
+        let mut command = command;
+        let key = if let Some(directory) = std::env::var_os("CODEX_C4A_GRANT_DIAGNOSTIC_DIR") {
+            let key = format!(
+                "{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos(),
+                REQUESTS.fetch_add(1, Ordering::Relaxed)
+            );
+            // Launcher-only metadata; the serialized workload environment is already fixed.
+            command.env.insert(
+                "CODEX_C4A_GRANT_DIAGNOSTIC_DIR".to_owned(),
+                directory.to_string_lossy().into_owned(),
+            );
+            command
+                .env
+                .insert("CODEX_C4A_GRANT_DIAGNOSTIC_KEY".to_owned(), key.clone());
+            key
+        } else {
+            String::new()
+        };
+        (command, key)
+    };
+    let mut child = spawn_command(command, ChildStdin::Piped).inspect_err(|error| {
+        #[cfg(windows)]
+        diagnostic_operation_record(format_args!(
+            "phase=spawn_error key={diagnostic_key} rpc={}",
+            error.code
+        ));
+        #[cfg(not(windows))]
+        let _ = error;
+    })?;
+    #[cfg(windows)]
+    let helper_pid = child.id();
+    #[cfg(windows)]
+    if !diagnostic_key.is_empty()
+        && let Some((operation, path, follow)) = match &request {
+            FsHelperRequest::WriteFile(params) => {
+                Some(("write", &params.path, params.follow_symlinks))
+            }
+            FsHelperRequest::Remove(params) => {
+                Some(("remove", &params.path, params.follow_symlinks))
+            }
+            _ => None,
+        }
+    {
+        let native = path.to_abs_path().ok();
+        let existence = native.as_ref().map_or("unavailable", |path| {
+            match std::fs::metadata(path.as_path()) {
+                Ok(_) => "present",
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
+                Err(_) => "unavailable",
+            }
+        });
+        let label = native
+            .as_ref()
+            .and_then(|path| path.as_path().file_name())
+            .and_then(std::ffi::OsStr::to_str)
+            .map_or("other", |name| match name {
+                "note.txt" => "new_file",
+                "existing.txt" => "existing_file",
+                "contents.txt" => "desktop_file",
+                "remove-me.txt" => "remove_file",
+                "bytes" => "conditional_file",
+                _ => "other",
+            });
+        diagnostic_operation_record(format_args!(
+            "phase=spawned key={diagnostic_key} helper={helper_pid:?} operation={operation} probe={label} existence={existence} follow={}",
+            follow.unwrap_or(true),
+        ));
+    }
     let mut effect = matches!(
         &request,
         FsHelperRequest::WriteFile(_) | FsHelperRequest::Remove(_) | FsHelperRequest::Copy(_)
@@ -440,6 +517,18 @@ async fn run_command(
             serde_json::from_slice::<FsHelperResponse>(&bytes).map_err(json_error)
         }
         .await;
+        diagnostic_operation_record(format_args!(
+            "phase=terminal key={diagnostic_key} helper={helper_pid:?} result={} rpc={}",
+            match &response {
+                Ok(FsHelperResponse::Ok(_)) => "payload",
+                Ok(FsHelperResponse::Error(_)) => "helper_error",
+                Err(_) => "transport_error",
+            },
+            match &response {
+                Ok(FsHelperResponse::Error(error)) | Err(error) => error.code,
+                Ok(_) => 0,
+            },
+        ));
         // The one-request helper emits this only after its effect completes. Cleanup can
         // subsequently fail without turning a validated terminal response into an unknown write.
         if matches!(
@@ -464,6 +553,11 @@ async fn run_command(
         drop(stdin);
         drop(stdout);
         let (exited, cleanup) = finish_helper(&mut child, stderr).await;
+        diagnostic_operation_record(format_args!(
+            "phase=cleanup key={diagnostic_key} helper={helper_pid:?} observed_exit={exited} success={} rpc={}",
+            cleanup.is_ok(),
+            cleanup.as_ref().err().map_or(0, |error| error.code),
+        ));
         if exited && let Some(effect) = &mut effect {
             effect.settle();
         }
@@ -672,6 +766,30 @@ pub(crate) fn spawn_command(
     #[cfg(target_os = "macos")]
     command.descriptor_policy(DescriptorPolicy::Explicit);
     command.spawn().map_err(io_error)
+}
+
+#[cfg(windows)]
+fn diagnostic_operation_record(record: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    static RECORDS: AtomicUsize = AtomicUsize::new(0);
+    if std::env::var_os("CODEX_C4A_GRANT_DIAGNOSTIC_DIR").is_none() {
+        return;
+    }
+    let index = RECORDS.fetch_add(1, Ordering::Relaxed);
+    if index < 63 {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "C4A_GRANT_PARENT pid={} {record}",
+            std::process::id()
+        );
+    } else if index == 63 {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "C4A_GRANT_PARENT phase=record_limit"
+        );
+    }
 }
 
 pub(crate) fn io_error(err: std::io::Error) -> JSONRPCErrorError {
