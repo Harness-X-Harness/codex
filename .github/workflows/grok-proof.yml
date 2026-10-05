@@ -158,7 +158,7 @@ jobs:
         working-directory: codex-rs
         run: |
           cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
-          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
@@ -166,7 +166,7 @@ jobs:
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -292,7 +292,7 @@ jobs:
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
-          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension --locked --profile ci-test --timings
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
         uses: ./.github/actions/check-clean-worktree
       - name: Regenerate owned configuration schema
@@ -470,6 +470,22 @@ jobs:
         run: |
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::imagegen_extension::) | test(suite::v2::dynamic_tools::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::extension_sandbox::) | test(suite::responses_lite::)'
+      - name: Test shipped catalog and Provider-bound lifecycle
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::grok_model_list::) | test(suite::v2::grok_provider_binding::) | test(suite::v2::grok_child_public_listener::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::model_list::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::thread_fork::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::thread_resume::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::compaction::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::model_provider_enforcement::) | test(suite::v2::config_model_provider_requirements::) | test(suite::v2::model_list_requirements_tests::)'
+          just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(models_refresh_worker::tests::) | test(config_manager::)'
+      - name: Test internal model consumers and child ownership
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(guardian::tests::grok::) | test(guardian_review_uses_) | test(guardian_review_records_missing_auto_review_model_in_analytics_metadata)'
+          just test -p codex-memories-write --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(startup_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::tests::grok::) | test(tools::handlers::multi_agents::tests::spawn_agent_) | test(tools::handlers::multi_agents::tests::build_agent_spawn_config_) | test(tools::handlers::multi_agents::tests::multi_agent_v2_followup_task_) | test(agent::role::)'
       - name: Test inherited stock patch hook contracts
         working-directory: codex-rs
         run: |
@@ -547,7 +563,7 @@ jobs:
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
-          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree

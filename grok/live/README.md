@@ -125,3 +125,39 @@ settled multi-turn reads. A result exceeding an observation budget is not
 proven by this harness; it is not evidence that the product rejected a valid
 image. Failures preserve safe partial terminal/artifact facts; returned
 evidence omits prompts, payloads, paths, credentials and IDs.
+
+C6 adds source-backed `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and
+`ShippedChildCollaboration`. These copy the exact embedded `grok/dist` profile
+and catalog, verify the entire public Model DTO response, and keep the existing
+explicit binary/digest/deadline boundary. Catalog-only proof makes no inference
+request. Startup keeps the profile's default effort; collaboration requests Ultra.
+The pinned scenario retains the two-turn named-tool/encrypted-history oracle.
+
+The shipped child observer submits one bounded seed setup turn and then one
+original delegation task. It records separate setup/task budgets, verifies the
+actual public seed prefix in a qualifying child's history, and binds a fresh
+completed child result to a parent terminal reply containing it. Parent prose,
+incidental failed/running children and later child orchestration are permitted
+without being credited. Partial/altered/unrelated history, inherited results,
+wrong Provider/model/lineage and observed terminal conflicts are rejected. No
+setup or task is resubmitted. Only safe counts/booleans/stages leave the runner;
+setup text, result UUIDs and thread IDs do not.
+
+Child discovery uses actual public V2 started activity and matching child paths.
+The existing parent raw-event opt-in is inherited by child listeners. The observer
+retains at most 512 relevant notifications / 1 MiB in memory and requires ordered
+consumed `AgentMessage` inputs, raw result text and matching public child history
+through the credited completed turn. Pre-result supplied nonces and exact credited
+terminal conflicts prevent credit; later mentions and unrelated activity do not.
+Earlier failed own turns need consistent complete input/lifecycle evidence, not
+success. Missing notifications after a durable read are awaited within the original
+deadline and event bound; contradictions settle immediately, without another RPC.
+Absent/partial raw coverage, early closure or opaque pre-result input is
+NOT_PROVEN. No raw content is persisted or returned. The native listener fixture
+uses a real stock Responses V2 child with the existing plaintext tool marker and
+checks opt-in/out inheritance without subscribing to the child separately.
+
+C6's HTTP lifecycle fixtures explicitly disable tools in test copies. Shipped
+assets retain every capability. Full shipped tool/media/history wire composition
+remains C7, package invocation #339 and actual backend Live #331. Deterministic
+scripts and native catalog checks do not establish those outcomes.

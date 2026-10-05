@@ -26,13 +26,19 @@ type Subject struct {
 
 // Options selects an isolated harness fixture, independent of shipped assets.
 type Options struct {
-	Subject                Subject
-	Model, BaseURL, APIKey string
-	imageFixture           bool
+	Subject                     Subject
+	Model, BaseURL, APIKey      string
+	imageFixture                bool
+	shippedProfile, catalogOnly bool
 }
 
 // Evidence contains only safe metadata and observations, never private traffic.
 type Evidence struct {
+	SetupTurns, TaskTurns                                                        int
+	SetupCompleted                                                               bool
+	CatalogModels                                                                int
+	ShippedCatalog                                                               bool
+	ChildBound, ChildCompleted, ChildResultDelivered                             bool
 	SHA256, SourceSHA, HarnessSHA, Target, Environment, Model, ObservedAt, Stage string
 	Processes, Initializations, Threads, Turns, ReplyBytes                       int
 	Bound, Completed                                                             bool
@@ -109,6 +115,14 @@ func runFixture(ctx context.Context, options Options, edit *editFixture, threadO
 	}
 	if err := server.send(frame{Method: "initialized"}); err != nil {
 		return evidence, err
+	}
+	if options.shippedProfile {
+		if err := requireShippedCatalog(server, &evidence); err != nil {
+			return evidence, err
+		}
+		if options.catalogOnly {
+			return evidence, nil
+		}
 	}
 	evidence.Stage, evidence.Threads = "initialized", 1
 	var thread struct {

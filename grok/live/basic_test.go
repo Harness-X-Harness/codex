@@ -21,7 +21,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "app-server" {
 		var script struct{ Mode string }
 		_ = json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script)
-		if strings.HasPrefix(script.Mode, "history:") {
+		if strings.HasPrefix(script.Mode, "shipped:") {
+			fakeShippedServer()
+		} else if strings.HasPrefix(script.Mode, "history:") {
 			fakeHistoryServer()
 		} else if strings.HasPrefix(script.Mode, "edit:") {
 			fakeEditServer()

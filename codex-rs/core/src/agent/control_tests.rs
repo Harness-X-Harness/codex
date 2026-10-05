@@ -825,12 +825,12 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
 #[tokio::test]
 async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
-    check_v2_agent_reload(V2ReloadRoute::Sender).await;
+    check_v2_agent_reload(V2ReloadRoute::Sender, /*grok*/ false).await;
 }
 
 #[tokio::test]
 async fn ensure_v2_child_loaded_preserves_evicted_parent_authority() {
-    check_v2_agent_reload(V2ReloadRoute::NestedParent).await;
+    check_v2_agent_reload(V2ReloadRoute::NestedParent, /*grok*/ false).await;
 }
 
 #[derive(Clone, Copy)]
@@ -867,18 +867,83 @@ async fn spawn_v2_reload_test_child(
         .expect("spawn_agent should succeed")
 }
 
-async fn check_v2_agent_reload(route: V2ReloadRoute) {
+#[test_case::test_case(V2ReloadRoute::Sender; "different_sender")]
+#[test_case::test_case(V2ReloadRoute::NestedParent; "evicted_parent")]
+#[tokio::test]
+async fn grok_v2_child_reload_preserves_owner_and_provider(route: V2ReloadRoute) {
+    check_v2_agent_reload(route, /*grok*/ true).await;
+}
+
+async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
-    config.model = Some("gpt-5.6-sol".to_string());
+    config.model = Some(if grok { "grok-4.7" } else { "gpt-5.6-sol" }.to_string());
+    if grok {
+        config.model_provider_id = "custom-route".into();
+        config.model_provider = codex_model_provider::create_model_provider(
+            codex_model_provider_info::ModelProviderInfo {
+                name: "arbitrary alias".into(),
+                base_url: Some("http://127.0.0.1:9/grok".into()),
+                wire_api: codex_model_provider_info::WireApi::GrokResponses,
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        )
+        .info()
+        .clone();
+        config.model_providers.insert(
+            config.model_provider_id.clone(),
+            config.model_provider.clone(),
+        );
+        config.model_catalog = Some(
+            serde_json::from_slice(
+                &std::fs::read(
+                    codex_utils_cargo_bin::find_resource!("../../grok/dist/models.json").unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+    }
     config.multi_agent_v2.max_concurrent_threads_per_session = 3;
     config.permissions.allow_login_shell = true;
     config
         .permissions
         .set_permission_profile(PermissionProfile::read_only())
         .expect("read-only parent profile");
-    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let harness = if grok {
+        crate::thread_manager::set_thread_manager_test_mode_for_tests(/*enabled*/ true);
+        let state_db = init_state_db(&config).await;
+        let auth = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+        let manager = ThreadManager::new(
+            &config,
+            auth.clone(),
+            crate::thread_manager::build_models_manager(&config, auth),
+            crate::CodexAppsToolsCache::default(),
+            SessionSource::Exec,
+            Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            empty_extension_registry(),
+            Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+            /*analytics_events_client*/ None,
+            crate::thread_manager::passthrough_image_store(),
+            crate::thread_manager::thread_store_from_config(&config, state_db.clone()),
+            crate::thread_manager::local_agent_graph_store_from_state_db(state_db.as_ref()),
+            "11111111-1111-4111-8111-111111111111".into(),
+            /*attestation_provider*/ None,
+            /*external_time_provider*/ None,
+        );
+        let control = manager.agent_control();
+        AgentControlHarness {
+            _home: home,
+            config,
+            state_db,
+            manager,
+            control,
+        }
+    } else {
+        AgentControlHarness::new_with_config(home, config).await
+    };
     let client_mcp_extensions =
         ClientMcpExtensions::new([(OPENAI_FORM_EXTENSION_ID.to_string(), serde_json::json!({}))]);
     let root = harness
@@ -929,7 +994,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     assert!(inherited_instructions.user.is_some());
     assert!(inherited_instructions.thread.is_some());
     let mut child_config = harness.config.clone();
-    child_config.model = Some("gpt-5.6-luna".to_string());
+    child_config.model = Some(if grok { "grok-4.6" } else { "gpt-5.6-luna" }.to_string());
     let spawned_agent =
         spawn_v2_reload_test_child(&control, child_config, &parent_thread, "worker").await;
     let agent_path = spawned_agent
@@ -982,6 +1047,63 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
             _ => panic!("expected ThreadNotFound, got {err:?}"),
         },
         Ok(_) => panic!("expected thread to be removed"),
+    }
+
+    if grok {
+        let wrong_owner = spawn_v2_reload_test_child(
+            &control,
+            harness.config.clone(),
+            &parent_thread,
+            "wrong_owner",
+        )
+        .await;
+        let wrong_parent = harness
+            .manager
+            .get_thread(wrong_owner.thread_id)
+            .await
+            .unwrap();
+        let error = control
+            .ensure_v2_agent_loaded(
+                harness.config.clone(),
+                spawned_agent.thread_id,
+                Some(Arc::clone(&wrong_parent)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("recorded parent ownership is inconsistent")
+        );
+        assert!(
+            harness
+                .manager
+                .get_thread(spawned_agent.thread_id)
+                .await
+                .is_err()
+        );
+        wrong_parent.shutdown_and_wait().await.unwrap();
+        harness.manager.remove_thread(&wrong_owner.thread_id).await;
+        let error = control
+            .ensure_v2_agent_loaded(
+                harness.config.clone(),
+                spawned_agent.thread_id,
+                Some(wrong_parent),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("parent ownership is unavailable")
+        );
+        assert!(
+            harness
+                .manager
+                .get_thread(spawned_agent.thread_id)
+                .await
+                .is_err()
+        );
     }
 
     let mut sender_config = harness.config.clone();
@@ -1040,6 +1162,20 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("reloaded child thread should exist");
+    if grok {
+        let context = reloaded_child.session.new_default_turn().await;
+        assert!(!context.model_info().used_fallback_model_metadata);
+        assert_eq!(context.provider.api_dialect(), codex_api::ApiDialect::Grok);
+        assert_eq!(
+            reloaded_child
+                .session
+                .services
+                .models_manager
+                .get_remote_models()
+                .await,
+            harness.config.model_catalog.as_ref().unwrap().models
+        );
+    }
     let reloaded_instructions = reloaded_child.session.inherited_instructions().await;
     assert_eq!(
         (reloaded_instructions.user, reloaded_instructions.thread),
@@ -1067,7 +1203,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     }
     assert_eq!(
         reloaded_child.config_snapshot().await.model,
-        "gpt-5.6-luna",
+        if grok { "grok-4.6" } else { "gpt-5.6-luna" },
         "residency reload must preserve the worker model instead of inheriting its parent model",
     );
     assert_eq!(

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/facts"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 )
@@ -42,4 +43,22 @@ func TestBackendFacts(t *testing.T) {
 			}
 		})
 	}
+	t.Run("shipped_routes", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, baseURL, err := dist.Defaults()
+		if err != nil {
+			t.Fatal(err)
+		}
+		shippedProbe, err := facts.NewProbe(baseURL+"/responses", key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observations, err := shippedProbe.ShippedRoutes(ctx)
+		t.Logf("SHIPPED_ROUTES observed_at=%s metadata=%+v", time.Now().UTC().Format(time.RFC3339), observations)
+		if err != nil {
+			t.Fatalf("NOT_OBSERVED reason=%s", err)
+		}
+	})
+
 }
