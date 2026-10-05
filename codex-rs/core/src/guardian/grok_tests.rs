@@ -1,5 +1,6 @@
 use super::*;
 use codex_model_provider_info::WireApi;
+use pretty_assertions::assert_eq;
 
 #[test_case::test_case(Some("grok-4.7"); "shipped_primary")]
 #[test_case::test_case(Some("grok-4.6"); "shipped_pinned")]

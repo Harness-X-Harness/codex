@@ -4,6 +4,7 @@ use super::*;
 use codex_model_provider_info::WireApi;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ToolMode;
+use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grok_memory_phases_use_provider_defaults() -> anyhow::Result<()> {

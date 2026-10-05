@@ -4,6 +4,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
+use pretty_assertions::assert_eq;
 
 async fn bind_grok(session: &mut crate::session::session::Session, turn: &mut TurnContext) {
     let catalog = serde_json::from_slice(

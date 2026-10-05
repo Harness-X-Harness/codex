@@ -41,7 +41,7 @@ const SPAWN: &str = "listener-spawn";
 const WAIT: &str = "listener-wait";
 
 fn is_listener_child_request(request: &wiremock::Request) -> bool {
-    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    let body: Value = serde_json::from_slice(&request.body).expect("captured JSON request body");
     body["input"].as_array().is_some_and(|items| {
         items.iter().any(|item| {
             item["type"] == "agent_message" && item["recipient"] == "/root/listener_child"
@@ -179,7 +179,7 @@ async fn initial_child_input_reaches_inherited_public_listener(raw_enabled: bool
                 other => anyhow::bail!("unexpected public message: {other:?}"),
             }
         }
-        anyhow::Ok((parent_turn.unwrap(), events))
+        anyhow::Ok((parent_turn.expect("observed parent turn response"), events))
     })
     .await??;
     let read = app
@@ -194,7 +194,7 @@ async fn initial_child_input_reaches_inherited_public_listener(raw_enabled: bool
         .turns
         .iter()
         .find(|turn| turn.id == parent_turn)
-        .unwrap();
+        .expect("durable parent delegation turn");
     let (child_id, child_path) = delegation
         .items
         .iter()

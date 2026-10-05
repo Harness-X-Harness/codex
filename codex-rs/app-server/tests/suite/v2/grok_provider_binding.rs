@@ -58,7 +58,9 @@ fn write_grok_fixture(home: &std::path::Path, server_uri: &str) -> Result<()> {
     let mut profile: toml::Value = toml::from_str(&std::fs::read_to_string(
         codex_utils_cargo_bin::find_resource!("../../grok/dist/config.toml.example")?,
     )?)?;
-    let provider = profile["model_providers"]["grok"].as_table_mut().unwrap();
+    let provider = profile["model_providers"]["grok"]
+        .as_table_mut()
+        .expect("shipped Grok provider table");
     provider.remove("env_key");
     provider.insert("base_url".into(), format!("{server_uri}/api/codex").into());
     provider.insert("request_max_retries".into(), 0.into());
@@ -66,7 +68,10 @@ fn write_grok_fixture(home: &std::path::Path, server_uri: &str) -> Result<()> {
     let mut catalog: serde_json::Value = serde_json::from_slice(&std::fs::read(
         codex_utils_cargo_bin::find_resource!("../../grok/dist/models.json")?,
     )?)?;
-    for model in catalog["models"].as_array_mut().unwrap() {
+    for model in catalog["models"]
+        .as_array_mut()
+        .expect("shipped catalog model rows")
+    {
         model["shell_type"] = serde_json::json!("disabled");
         model["structured_edit_tool_type"] = serde_json::Value::Null;
         model["node_repl_disabled"] = serde_json::json!(true);
@@ -101,13 +106,13 @@ deferred_executor = false
     )?;
     profile
         .as_table_mut()
-        .unwrap()
-        .extend(controls.as_table().unwrap().clone());
+        .expect("shipped profile table")
+        .extend(controls.as_table().expect("fixture controls table").clone());
     let mut stock = profile["model_providers"]["grok"].clone();
     stock["wire_api"] = "responses".into();
     profile["model_providers"]
         .as_table_mut()
-        .unwrap()
+        .expect("shipped provider definitions")
         .insert("stock".into(), stock);
     std::fs::write(home.join("config.toml"), toml::to_string(&profile)?)?;
     std::fs::write(home.join("models.json"), serde_json::to_vec(&catalog)?)?;
@@ -866,7 +871,10 @@ async fn stock_fork_keeps_current_default_and_accepts_unlisted_model(
         requests
             .requests()
             .iter()
-            .map(|request| request.body_json()["model"].as_str().unwrap().to_owned())
+            .map(|request| request.body_json()["model"]
+                .as_str()
+                .expect("captured request model string")
+                .to_owned())
             .collect::<Vec<_>>(),
         if unresolved {
             vec!["unlisted-stock-selected", "unlisted-stock-default"]
@@ -902,13 +910,13 @@ async fn fork_retention_uses_explicit_dialect_not_provider_id_or_name(
     let mut profile: toml::Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
     let mut provider = profile["model_providers"]
         .as_table_mut()
-        .unwrap()
+        .expect("shipped provider definitions")
         .remove("grok")
-        .unwrap();
+        .expect("shipped Grok provider definition");
     provider["wire_api"] = wire_api.into();
     profile["model_providers"]
         .as_table_mut()
-        .unwrap()
+        .expect("shipped provider definitions")
         .insert(provider_id.into(), provider);
     profile["model_provider"] = provider_id.into();
     std::fs::write(path, toml::to_string(&profile)?)?;
