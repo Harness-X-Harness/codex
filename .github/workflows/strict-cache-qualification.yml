@@ -1,0 +1,144 @@
+# One-shot qualification branch only. This workflow is not part of PR361.
+name: Strict Clippy cache qualification
+
+on:
+  push:
+    branches: [ci/grok-strict-cache-qualification]
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Qualify sccache 0.18.0 with Clippy 1.95.0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: never
+      SCCACHE_GHA_ENABLED: "off"
+      SCCACHE_IDLE_TIMEOUT: "120"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - name: Mask the ephemeral Actions token before the installer exports it
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (token) core.setSecret(token);
+      - name: Install pinned sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+          disable_annotations: true
+      - name: Select private fixture paths
+        run: |
+          {
+            printf '%s\n' "PROBE=$RUNNER_TEMP/grok-strict-cache-fixture"
+            printf '%s\n' "EVIDENCE=$RUNNER_TEMP/grok-strict-cache-evidence"
+            printf '%s\n' "CARGO_HOME=$RUNNER_TEMP/grok-strict-cache-fixture/cargo-home"
+            printf '%s\n' "CARGO_TARGET_DIR=$RUNNER_TEMP/grok-strict-cache-fixture/target"
+            printf '%s\n' "CLIPPY_CONF_DIR=$RUNNER_TEMP/grok-strict-cache-fixture"
+            printf '%s\n' "SCCACHE_CONF=$RUNNER_TEMP/grok-strict-cache-fixture/sccache.toml"
+            printf '%s\n' "SCCACHE_DIR=$RUNNER_TEMP/grok-strict-cache-fixture/cache"
+            printf '%s\n' "SCCACHE_SERVER_UDS=$RUNNER_TEMP/grok-strict-cache.sock"
+          } >> "$GITHUB_ENV"
+      - name: Prepare an isolated dependency-free library and local cache
+        run: |
+          test "$(sccache --version)" = "sccache 0.18.0"
+          rustc --version | grep '^rustc 1[.]95[.]0 '
+          cargo clippy --version | grep '^clippy 0[.]1[.]95 '
+          test -z "${SCCACHE_GHA_VERSION+x}"
+          mkdir -p "$PROBE/src" "$EVIDENCE"
+          printf '[package]\nname="clippy-cache-qualification"\nversion="0.0.0"\nedition="2024"\n[workspace]\n' > "$PROBE/Cargo.toml"
+          printf 'pub fn probe(values: &[u8]) -> bool {\n    std::thread::sleep(std::time::Duration::ZERO);\n    values.len() == 0\n}\n' > "$PROBE/base.rs"
+          cp "$PROBE/base.rs" "$PROBE/src/lib.rs"
+          printf 'disallowed-methods = []\n' > "$PROBE/clippy.toml"
+          : > "$SCCACHE_CONF"
+          printf 'RUSTC_WRAPPER=%s\n' "$SCCACHE_PATH" >> "$GITHUB_ENV"
+          { git rev-parse HEAD; sccache --version; rustc --version --verbose; cargo clippy --version; } > "$EVIDENCE/subject-and-tools.txt"
+          cd "$PROBE"
+          cargo generate-lockfile --offline
+          timeout 15s sccache --start-server
+      - name: Cold strict Clippy succeeds with a warning
+        run: |
+          cd "$PROBE"
+          cargo clean --offline
+          sccache --show-stats --stats-format=json > "$EVIDENCE/cold-before.json"
+          cargo clippy --offline --locked --lib --message-format=json -- -W clippy::len_zero -D clippy::disallowed_methods --cap-lints=forbid > "$EVIDENCE/cold-compiler.jsonl"
+          printf "0\n" > "$EVIDENCE/cold-exit.txt"
+          sleep 1 # Allow the tiny asynchronous local cache write to settle; no compiler retry.
+          sccache --show-stats --stats-format=json > "$EVIDENCE/cold-after.json"
+      - name: Warm strict Clippy replays the same diagnostics
+        run: |
+          cd "$PROBE"
+          cargo clean --offline
+          sccache --show-stats --stats-format=json > "$EVIDENCE/warm-before.json"
+          cargo clippy --offline --locked --lib --message-format=json -- -W clippy::len_zero -D clippy::disallowed_methods --cap-lints=forbid > "$EVIDENCE/warm-compiler.jsonl"
+          printf "0\n" > "$EVIDENCE/warm-exit.txt"
+          sccache --show-stats --stats-format=json > "$EVIDENCE/warm-after.json"
+      - name: Changed source rejects a forbidden panic
+        run: |
+          cd "$PROBE"
+          cargo clean --offline
+          printf '\n#[deny(clippy::panic)]\npub fn negative() { panic!("intentional negative probe"); }\n' >> src/lib.rs
+          sccache --show-stats --stats-format=json > "$EVIDENCE/source-denied-before.json"
+          if cargo clippy --offline --locked --lib --message-format=json -- -W clippy::len_zero -D clippy::disallowed_methods --cap-lints=forbid > "$EVIDENCE/source-denied-compiler.jsonl"; then
+            printf "0\n" > "$EVIDENCE/source-denied-exit.txt"
+          else
+            printf "%s\n" "$?" > "$EVIDENCE/source-denied-exit.txt"
+          fi
+          sccache --show-stats --stats-format=json > "$EVIDENCE/source-denied-after.json"
+      - name: Changed Clippy configuration rejects a forbidden method
+        run: |
+          cd "$PROBE"
+          cargo clean --offline
+          cp base.rs src/lib.rs
+          printf 'disallowed-methods = ["std::thread::sleep"]\n' > clippy.toml
+          sccache --show-stats --stats-format=json > "$EVIDENCE/config-denied-before.json"
+          if cargo clippy --offline --locked --lib --message-format=json -- -W clippy::len_zero -D clippy::disallowed_methods --cap-lints=forbid > "$EVIDENCE/config-denied-compiler.jsonl"; then
+            printf "0\n" > "$EVIDENCE/config-denied-exit.txt"
+          else
+            printf "%s\n" "$?" > "$EVIDENCE/config-denied-exit.txt"
+          fi
+          sccache --show-stats --stats-format=json > "$EVIDENCE/config-denied-after.json"
+      - name: Warn-capped lint arguments still succeed
+        run: |
+          cd "$PROBE"
+          cargo clean --offline
+          printf 'disallowed-methods = []\n' > clippy.toml
+          sccache --show-stats --stats-format=json > "$EVIDENCE/warn-cap-before.json"
+          cargo clippy --offline --locked --lib --message-format=json -- -D clippy::len_zero --cap-lints=warn > "$EVIDENCE/warn-cap-compiler.jsonl"
+          printf "0\n" > "$EVIDENCE/warn-cap-exit.txt"
+          sccache --show-stats --stats-format=json > "$EVIDENCE/warn-cap-after.json"
+      - name: Strict lint arguments reject the same warning
+        run: |
+          cd "$PROBE"
+          cargo clean --offline
+          sccache --show-stats --stats-format=json > "$EVIDENCE/strict-cap-before.json"
+          if cargo clippy --offline --locked --lib --message-format=json -- -D clippy::len_zero --cap-lints=forbid > "$EVIDENCE/strict-cap-compiler.jsonl"; then
+            printf "0\n" > "$EVIDENCE/strict-cap-exit.txt"
+          else
+            printf "%s\n" "$?" > "$EVIDENCE/strict-cap-exit.txt"
+          fi
+          sccache --show-stats --stats-format=json > "$EVIDENCE/strict-cap-after.json"
+      - name: Stop the isolated daemon and retain its final counters
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/grok-strict-cache-evidence"
+          timeout 15s sccache --stop-server > "$RUNNER_TEMP/grok-strict-cache-evidence/stop-server.txt"
+      - name: Check the warm hit, diagnostics, and changed-input rejection
+        run: python3 .github/scripts/check-strict-cache-qualification.py "$EVIDENCE"
+      - name: Retain the bounded compiler and cache evidence
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: strict-cache-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-strict-cache-evidence/
+          if-no-files-found: error
+          retention-days: 7
