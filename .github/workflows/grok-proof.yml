@@ -86,6 +86,44 @@ jobs:
         run: just fix -p codex-api --locked --profile ci-test --timings
       - name: Require unchanged API construction input
         uses: ./.github/actions/check-clean-worktree
+      # Owner construction above stays uncached. Subsequent build/test compilation and
+      # strict Clippy use sccache; every selected test still executes.
+      - name: Mask the ephemeral compiler-cache token
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!token) throw new Error('GitHub Actions cache runtime token is unavailable');
+            core.setSecret(token);
+      - name: Install pinned compiler cache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+          disable_annotations: true
+      - name: Enable measured compiler cache
+        env:
+          SCCACHE_GHA_ENABLED: "on"
+          SCCACHE_GHA_VERSION: grok-compiler-v1
+          # Keep counters across long tests and strict lint steps.
+          SCCACHE_IDLE_TIMEOUT: "0"
+        run: |
+          test "$(sccache --version)" = "sccache 0.18.0"
+          test -n "$ACTIONS_CACHE_SERVICE_V2"
+          test -n "$ACTIONS_RESULTS_URL"
+          test -n "$ACTIONS_RUNTIME_TOKEN"
+          sccache --start-server
+          {
+            sccache --version
+            rustc --version --verbose
+            printf '%s\n' "backend=gha-v2 namespace=$SCCACHE_GHA_VERSION" \
+              "job=$GITHUB_JOB run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+              "checkout=$(git rev-parse HEAD)" \
+              "policy=post-construction-build-test-and-strict-clippy"
+          } | tee "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
+            "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
+            "SCCACHE_GHA_VERSION=$SCCACHE_GHA_VERSION" \
+            "SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT" >> "$GITHUB_ENV"
       - name: Test Provider metadata with the locked workspace
         working-directory: codex-rs
         run: just test -p codex-model-provider-info --locked --cargo-profile ci-test --no-tests=fail
@@ -95,11 +133,35 @@ jobs:
       # Cargo fix caps diagnostics at warn. A distinct maximal cap rechecks
       # the existing lint policy instead of reusing the fixer's cached result.
       - name: Check scoped API lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: just clippy -p codex-api --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
+      - name: Record compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          # Unlike --show-stats alone, shutdown fails if the daemon was lost;
+          # unavailable counters must not masquerade as a healthy zero-hit cache.
+          if command -v sccache >/dev/null && timeout 30s sccache --stop-server >> "$RUNNER_TEMP/grok-sccache-measurements.txt"; then
+            cat "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          else
+            echo "::warning::Compiler-cache statistics unavailable; this run cannot establish cache effectiveness."
+            echo "statistics=unavailable" >> "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          fi
+      - name: Retain compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: compiler-cache-measurements-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-sccache-measurements.txt
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain API changes on failure
         if: ${{ failure() }}
         env:
@@ -316,6 +378,44 @@ jobs:
       - name: Check filesystem API formatting
         working-directory: codex-rs
         run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item --check
+      # Owner construction above stays uncached. Subsequent build/test compilation and
+      # strict Clippy use sccache; every selected test still executes.
+      - name: Mask the ephemeral compiler-cache token
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!token) throw new Error('GitHub Actions cache runtime token is unavailable');
+            core.setSecret(token);
+      - name: Install pinned compiler cache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+          disable_annotations: true
+      - name: Enable measured compiler cache
+        env:
+          SCCACHE_GHA_ENABLED: "on"
+          SCCACHE_GHA_VERSION: grok-compiler-v1
+          # Keep counters across long tests and strict lint steps.
+          SCCACHE_IDLE_TIMEOUT: "0"
+        run: |
+          test "$(sccache --version)" = "sccache 0.18.0"
+          test -n "$ACTIONS_CACHE_SERVICE_V2"
+          test -n "$ACTIONS_RESULTS_URL"
+          test -n "$ACTIONS_RUNTIME_TOKEN"
+          sccache --start-server
+          {
+            sccache --version
+            rustc --version --verbose
+            printf '%s\n' "backend=gha-v2 namespace=$SCCACHE_GHA_VERSION" \
+              "job=$GITHUB_JOB run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+              "checkout=$(git rev-parse HEAD)" \
+              "policy=post-construction-build-test-and-strict-clippy"
+          } | tee "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
+            "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
+            "SCCACHE_GHA_VERSION=$SCCACHE_GHA_VERSION" \
+            "SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT" >> "$GITHUB_ENV"
       - name: Test conditional API and actual mutation ownership
         working-directory: codex-rs
         run: |
@@ -332,6 +432,9 @@ jobs:
           just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(interrupt_yields_observations_without_stopping_the_cell)'
       - name: Check scoped Code Mode host lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: cargo clippy -p codex-code-mode-host --test stdio --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Test standalone Code Mode numeric forwarding
@@ -555,9 +658,15 @@ jobs:
           test -x "$GROK_LIVE_NATIVE_BIN"
           go test -race -count=1 -timeout=6m -v ./live
       - name: Check scoped filesystem API lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Check scoped Provider runtime lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
@@ -567,6 +676,27 @@ jobs:
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
+      - name: Record compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          # Unlike --show-stats alone, shutdown fails if the daemon was lost;
+          # unavailable counters must not masquerade as a healthy zero-hit cache.
+          if command -v sccache >/dev/null && timeout 30s sccache --stop-server >> "$RUNNER_TEMP/grok-sccache-measurements.txt"; then
+            cat "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          else
+            echo "::warning::Compiler-cache statistics unavailable; this run cannot establish cache effectiveness."
+            echo "statistics=unavailable" >> "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          fi
+      - name: Retain compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: compiler-cache-measurements-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-sccache-measurements.txt
+          if-no-files-found: warn
+          retention-days: 7
       - name: Record final native build resources
         if: ${{ always() }}
         continue-on-error: true

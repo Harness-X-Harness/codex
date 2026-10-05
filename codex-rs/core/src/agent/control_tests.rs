@@ -853,7 +853,7 @@ async fn spawn_v2_reload_test_child(
         Some(task_name.to_string()),
     )
     .expect("child source");
-    control
+    let agent = control
         .spawn_agent_with_metadata(
             config,
             text_input("hello child"),
@@ -864,7 +864,42 @@ async fn spawn_v2_reload_test_child(
             },
         )
         .await
-        .expect("spawn_agent should succeed")
+        .expect("spawn_agent should succeed");
+    let thread = control
+        .runtime
+        .upgrade()
+        .expect("reload fixture manager")
+        .get_thread(agent.thread_id)
+        .await
+        .expect("reload fixture child");
+    // Spawn awaits task admission. Interrupt only while the active turn still
+    // owns that task; a detached completion must finish sending its terminal
+    // result before the fixture proceeds.
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let turn_id = {
+                let active = thread.session.active_turn.lock().await;
+                let Some(active) = active.as_ref() else {
+                    break;
+                };
+                active
+                    .task
+                    .as_ref()
+                    .map(|task| task.turn_context.sub_id.clone())
+            };
+            if let Some(turn_id) = turn_id {
+                let _ = thread
+                    .session
+                    .abort_turn_if_active(&turn_id, TurnAbortReason::Interrupted)
+                    .await;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reload fixture initial task should settle");
+    assert!(thread.session.active_turn.lock().await.is_none());
+    agent
 }
 
 #[test_case::test_case(V2ReloadRoute::Sender; "different_sender")]
@@ -973,7 +1008,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
         .local_agent_runtime
         .control(root.thread.session.session_id());
     let parent_thread = match route {
-        V2ReloadRoute::Sender => root.thread,
+        V2ReloadRoute::Sender => Arc::clone(&root.thread),
         V2ReloadRoute::NestedParent => {
             let parent = spawn_v2_reload_test_child(
                 &control,
@@ -1033,6 +1068,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
             .await
             .is_some()
     );
+    control.forget_v2_residency(spawned_agent.thread_id);
     assert_matches!(
         control
             .inspect_agent(spawned_agent.thread_id)
@@ -1049,19 +1085,28 @@ async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
         Ok(_) => panic!("expected thread to be removed"),
     }
 
+    // A live, pinned sibling makes nested reload require an actual parent
+    // eviction. Its terminal result goes to the root, not to the nested owner.
+    let wrong_owner = spawn_v2_reload_test_child(
+        &control,
+        harness.config.clone(),
+        &root.thread,
+        "wrong_owner",
+    )
+    .await;
+    let wrong_parent = harness
+        .manager
+        .get_thread(wrong_owner.thread_id)
+        .await
+        .expect("other owner should be loaded");
+    let state = control.runtime.upgrade().expect("reload fixture manager");
+    let other_owner_residency = control
+        .runtime
+        .pin_v2_residency(&state, &wrong_parent)
+        .await
+        .expect("pin other owner")
+        .expect("other owner is a v2 resident");
     if grok {
-        let wrong_owner = spawn_v2_reload_test_child(
-            &control,
-            harness.config.clone(),
-            &parent_thread,
-            "wrong_owner",
-        )
-        .await;
-        let wrong_parent = harness
-            .manager
-            .get_thread(wrong_owner.thread_id)
-            .await
-            .unwrap();
         let error = control
             .ensure_v2_agent_loaded(
                 harness.config.clone(),
@@ -1074,28 +1119,6 @@ async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
             error
                 .to_string()
                 .contains("recorded parent ownership is inconsistent")
-        );
-        assert!(
-            harness
-                .manager
-                .get_thread(spawned_agent.thread_id)
-                .await
-                .is_err()
-        );
-        wrong_parent.shutdown_and_wait().await.unwrap();
-        harness.manager.remove_thread(&wrong_owner.thread_id).await;
-        let error = control
-            .ensure_v2_agent_loaded(
-                harness.config.clone(),
-                spawned_agent.thread_id,
-                Some(wrong_parent),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("parent ownership is unavailable")
         );
         assert!(
             harness
@@ -1140,14 +1163,27 @@ async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
                 })
                 .await
                 .expect("save parent environments");
+            // The helper settled each initial task. Order the child's already
+            // submitted terminal mail before draining the idle owner's mailbox.
+            parent_thread
+                .update_thread_settings(Default::default())
+                .await
+                .expect("settle queued child results");
             parent_thread.session.mark_interrupted();
-            // The fixture has no task runner to finish the turn or consume child results.
-            *parent_thread.session.active_turn.lock().await = None;
+            assert!(parent_thread.session.active_turn.lock().await.is_none());
             let _ = parent_thread
                 .session
                 .input_queue
                 .drain_mailbox_input_items()
                 .await;
+            assert!(
+                harness
+                    .manager
+                    .get_thread(parent_thread_id)
+                    .await
+                    .is_ok_and(|registered| Arc::ptr_eq(&registered, &parent_thread)),
+                "owner must remain loaded until the intended reload",
+            );
             harness
                 .manager
                 .ensure_multi_agent_v2_child_loaded(spawned_agent.thread_id)
@@ -1253,6 +1289,42 @@ async fn check_v2_agent_reload(route: V2ReloadRoute, grok: bool) {
         .into_iter()
         .find(|entry| captured_op_matches(entry, &expected));
     assert!(captured.is_some());
+
+    drop(other_owner_residency);
+    wrong_parent.shutdown_and_wait().await.unwrap();
+    harness.manager.remove_thread(&wrong_owner.thread_id).await;
+    control.forget_v2_residency(wrong_owner.thread_id);
+    if grok {
+        reloaded_child.shutdown_and_wait().await.unwrap();
+        assert!(
+            harness
+                .manager
+                .remove_thread(&spawned_agent.thread_id)
+                .await
+                .is_some()
+        );
+        control.forget_v2_residency(spawned_agent.thread_id);
+        let error = control
+            .ensure_v2_agent_loaded(
+                harness.config.clone(),
+                spawned_agent.thread_id,
+                Some(wrong_parent),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("parent ownership is unavailable")
+        );
+        assert!(
+            harness
+                .manager
+                .get_thread(spawned_agent.thread_id)
+                .await
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]
