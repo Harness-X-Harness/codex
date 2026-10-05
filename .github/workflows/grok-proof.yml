@@ -86,8 +86,8 @@ jobs:
         run: just fix -p codex-api --locked --profile ci-test --timings
       - name: Require unchanged API construction input
         uses: ./.github/actions/check-clean-worktree
-      # Owner construction above stays uncached. Only subsequent build/test compilation
-      # uses sccache; every selected test and all final strict lint checks still run.
+      # Owner construction above stays uncached. Subsequent build/test compilation and
+      # strict Clippy use sccache; every selected test still executes.
       - name: Mask the ephemeral compiler-cache token
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
@@ -100,11 +100,11 @@ jobs:
         with:
           version: v0.18.0
           disable_annotations: true
-      - name: Enable measured build and test compilation cache
+      - name: Enable measured compiler cache
         env:
           SCCACHE_GHA_ENABLED: "on"
           SCCACHE_GHA_VERSION: grok-compiler-v1
-          # Keep counters across long tests and uncached strict lint steps.
+          # Keep counters across long tests and strict lint steps.
           SCCACHE_IDLE_TIMEOUT: "0"
         run: |
           test "$(sccache --version)" = "sccache 0.18.0"
@@ -118,7 +118,7 @@ jobs:
             printf '%s\n' "backend=gha-v2 namespace=$SCCACHE_GHA_VERSION" \
               "job=$GITHUB_JOB run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
               "checkout=$(git rev-parse HEAD)" \
-              "policy=post-construction-build-test; strict-clippy=uncached"
+              "policy=post-construction-build-test-and-strict-clippy"
           } | tee "$RUNNER_TEMP/grok-sccache-measurements.txt"
           printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
             "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
@@ -134,8 +134,8 @@ jobs:
       # the existing lint policy instead of reusing the fixer's cached result.
       - name: Check scoped API lint
         env:
-          # Fresh strict primary checks are part of the proof contract.
-          RUSTC_WRAPPER: ""
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: just clippy -p codex-api --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
@@ -378,8 +378,8 @@ jobs:
       - name: Check filesystem API formatting
         working-directory: codex-rs
         run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item --check
-      # Owner construction above stays uncached. Only subsequent build/test compilation
-      # uses sccache; every selected test and all final strict lint checks still run.
+      # Owner construction above stays uncached. Subsequent build/test compilation and
+      # strict Clippy use sccache; every selected test still executes.
       - name: Mask the ephemeral compiler-cache token
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
@@ -392,11 +392,11 @@ jobs:
         with:
           version: v0.18.0
           disable_annotations: true
-      - name: Enable measured build and test compilation cache
+      - name: Enable measured compiler cache
         env:
           SCCACHE_GHA_ENABLED: "on"
           SCCACHE_GHA_VERSION: grok-compiler-v1
-          # Keep counters across long tests and uncached strict lint steps.
+          # Keep counters across long tests and strict lint steps.
           SCCACHE_IDLE_TIMEOUT: "0"
         run: |
           test "$(sccache --version)" = "sccache 0.18.0"
@@ -410,7 +410,7 @@ jobs:
             printf '%s\n' "backend=gha-v2 namespace=$SCCACHE_GHA_VERSION" \
               "job=$GITHUB_JOB run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
               "checkout=$(git rev-parse HEAD)" \
-              "policy=post-construction-build-test; strict-clippy=uncached"
+              "policy=post-construction-build-test-and-strict-clippy"
           } | tee "$RUNNER_TEMP/grok-sccache-measurements.txt"
           printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
             "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
@@ -433,8 +433,8 @@ jobs:
           -E 'test(interrupt_yields_observations_without_stopping_the_cell)'
       - name: Check scoped Code Mode host lint
         env:
-          # Fresh strict primary checks are part of the proof contract.
-          RUSTC_WRAPPER: ""
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: cargo clippy -p codex-code-mode-host --test stdio --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Test standalone Code Mode numeric forwarding
@@ -659,14 +659,14 @@ jobs:
           go test -race -count=1 -timeout=6m -v ./live
       - name: Check scoped filesystem API lint
         env:
-          # Fresh strict primary checks are part of the proof contract.
-          RUSTC_WRAPPER: ""
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Check scoped Provider runtime lint
         env:
-          # Fresh strict primary checks are part of the proof contract.
-          RUSTC_WRAPPER: ""
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
         working-directory: codex-rs
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
