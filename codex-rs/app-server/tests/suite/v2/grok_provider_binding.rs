@@ -82,6 +82,8 @@ fn write_grok_fixture(home: &std::path::Path, server_uri: &str) -> Result<()> {
 approval_policy = "never"
 sandbox_mode = "read-only"
 web_search = "disabled"
+[agents]
+enabled = false
 [tools.update_plan]
 enabled = false
 [tools.experimental_request_user_input]
@@ -810,15 +812,11 @@ async fn stock_fork_keeps_current_default_and_accepts_unlisted_model(
     unresolved: bool,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
-    let requests = responses::mount_response_sequence(
-        &server,
-        vec![
-            reply("seed", SEED_REPLY),
-            reply("fork", "STOCK_REPLY"),
-            reply("source", "STOCK_SOURCE_REPLY"),
-        ],
-    )
-    .await;
+    let mut replies = vec![reply("seed", SEED_REPLY), reply("fork", "STOCK_REPLY")];
+    if !unresolved {
+        replies.push(reply("source", "STOCK_SOURCE_REPLY"));
+    }
+    let requests = responses::mount_response_sequence(&server, replies).await;
     let home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_model("unlisted-stock-default")

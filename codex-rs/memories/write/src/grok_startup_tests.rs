@@ -31,6 +31,8 @@ async fn grok_memory_phases_use_provider_routes(shipped_overrides: bool) -> anyh
     let mut profile = std::fs::read_to_string(home.path().join("config.toml"))?;
     profile.push_str(
         r#"
+[agents]
+enabled = false
 [tools.update_plan]
 enabled = false
 [tools.experimental_request_user_input]
