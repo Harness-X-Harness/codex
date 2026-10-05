@@ -9,6 +9,9 @@ import (
 )
 
 func writeFixture(home, cwd string, options Options, edit *editFixture) error {
+	if options.shippedProfile {
+		return writeShippedProfile(home, cwd)
+	}
 	model := map[string]any{
 		"slug": options.Model, "display_name": options.Model, "supported_reasoning_levels": []any{},
 		"shell_type": "disabled", "visibility": "list", "supported_in_api": true, "priority": 0,

@@ -74,6 +74,11 @@ func fakeHistoryServer() {
 			reply(p, map[string]any{"userAgent": "fixture"})
 		case "initialized":
 			mark("initialized")
+		case "model/list":
+			if mode != "shipped" || !copiedShippedAssets() {
+				return
+			}
+			reply(p, fixtureShippedCatalog())
 		case "thread/start":
 			mark("thread/start")
 			tools, _ := p.Params["dynamicTools"].([]any)
@@ -87,7 +92,7 @@ func fakeHistoryServer() {
 			}
 			cwd, _ := os.Getwd()
 			catalog, readErr := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "models.json"))
-			if readErr != nil || p.Params["cwd"] != cwd || !strings.Contains(string(catalog), `"supported_reasoning_levels":[]`) || !strings.Contains(string(catalog), `"supports_reasoning_summary_parameter":false`) {
+			if readErr != nil || p.Params["cwd"] != cwd || (mode != "shipped" && (!strings.Contains(string(catalog), `"supported_reasoning_levels":[]`) || !strings.Contains(string(catalog), `"supports_reasoning_summary_parameter":false`))) || (mode == "shipped" && (!copiedShippedAssets() || p.Params["model"] != "grok-4.6")) {
 				return
 			}
 			mark("thread_valid")
@@ -482,7 +487,7 @@ func historySuccess(mode string) bool {
 		return true
 	}
 	switch mode {
-	case "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
+	case "shipped", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
 		return true
 	}
 	return false

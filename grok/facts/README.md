@@ -48,3 +48,10 @@ routing, complete text observation, unchanged opaque replay, failure isolation,
 bounded reads and secret-safe errors. The invocation workflow belongs to #338.
 Live runner source is the next C1c increment, governed by the
 [Story contracts](../docs/stories/README.md).
+
+`Probe.ShippedRoutes` consumes request slugs from the embedded shipped catalog,
+submits one Text observation per route and stops on failure. The existing backend
+opt-in test obtains its endpoint from the shipped profile for this route group.
+Returned backend model aliases remain diagnostics; they never change request slugs
+or the runtime catalog. This adds consumed scenario source, not the independent
+Facts invocation mechanism owned by C8/#338.

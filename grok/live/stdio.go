@@ -23,13 +23,14 @@ type frame struct {
 }
 
 type appServer struct {
-	cmd     *exec.Cmd
-	cancel  context.CancelFunc
-	input   io.WriteCloser
-	output  *bufio.Scanner
-	nextID  int
-	pending []frame
-	request func(frame) error
+	cmd          *exec.Cmd
+	cancel       context.CancelFunc
+	input        io.WriteCloser
+	output       *bufio.Scanner
+	nextID       int
+	pending      []frame
+	request      func(frame) error
+	notification func(frame) error
 }
 
 func startServer(ctx context.Context, binary, home, cwd, key string) (*appServer, error) {
@@ -105,6 +106,13 @@ func (server *appServer) read() (frame, error) {
 		return message, errors.New("live: invalid protocol frame")
 	}
 	message.size = len(server.output.Bytes())
+	// Observe wire notifications once, including those queued during an RPC.
+	// Draining pending in next must not replay them to the observer.
+	if message.Method != "" && len(message.ID) == 0 && server.notification != nil {
+		if err := server.notification(message); err != nil {
+			return message, err
+		}
+	}
 	return message, nil
 }
 

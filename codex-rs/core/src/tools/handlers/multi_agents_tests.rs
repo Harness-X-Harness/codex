@@ -4762,3 +4762,6 @@ async fn build_agent_resume_config_clears_base_instructions() {
 
 #[path = "multi_agents_fork_numeric_tests.rs"]
 mod fork_numeric_tests;
+
+#[path = "multi_agents_grok_tests.rs"]
+mod grok;
