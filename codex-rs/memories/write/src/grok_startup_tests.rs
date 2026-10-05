@@ -28,7 +28,10 @@ async fn grok_memory_phases_use_provider_routes(shipped_overrides: bool) -> anyh
         include_str!("../../../../grok/dist/models.json"),
     )?;
     // Suppress only fixture tool registration, preserving real memory config/model selection.
-    let mut profile = std::fs::read_to_string(home.path().join("config.toml"))?;
+    let mut profile = format!(
+        "web_search = \"disabled\"\n{}",
+        std::fs::read_to_string(home.path().join("config.toml"))?
+    );
     profile.push_str(
         r#"
 [agents]
@@ -85,6 +88,10 @@ deferred_executor = false
         .build_with_auto_env(&server)
         .await?;
     assert_eq!(test.config.model_provider.wire_api, WireApi::GrokResponses);
+    assert_eq!(
+        test.config.web_search_mode.value(),
+        codex_protocol::config_types::WebSearchMode::Disabled
+    );
     let provider = create_model_provider(
         test.config.model_provider.clone(),
         Some(test.thread_manager.auth_manager()),
