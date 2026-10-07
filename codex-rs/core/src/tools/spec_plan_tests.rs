@@ -3418,3 +3418,62 @@ mod image_generation_tests;
 
 #[path = "spec_plan_schema_bounds_tests.rs"]
 mod schema_bounds_tests;
+
+#[tokio::test]
+async fn finalized_grok_plan_redacts_configured_v2_message_tools() {
+    use crate::tools::context::ToolPayload;
+    use crate::tools::router::ToolCall;
+    use crate::tools::router::ToolCallSource;
+    use codex_model_provider_info::WireApi;
+
+    for (wire_api, expected_source) in [
+        (
+            WireApi::GrokResponses,
+            ToolCallSource::DirectPlaintextMessage,
+        ),
+        (WireApi::Responses, ToolCallSource::Direct),
+    ] {
+        for namespace in [Some("collaboration"), Some("agents"), None] {
+            let (_session, mut turn) = make_session_and_context().await;
+            set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
+            set_web_search_mode(&mut turn, WebSearchMode::Disabled);
+            update_config(&mut turn, |config| {
+                config.multi_agent_v2.tool_namespace = namespace.map(str::to_string);
+                config.multi_agent_v2.disable_direct_message = false;
+                config.model_provider.wire_api = wire_api;
+            });
+            turn.provider = create_model_provider(
+                turn.config.model_provider.clone(),
+                turn.auth_manager.clone(),
+            );
+            let mut model = turn.model_info().clone();
+            model.tool_mode = Some(ToolMode::Direct);
+            model.supports_search_tool = false;
+            let router = plan_with_model(&turn, &model, ToolPlanInputs::default());
+            for name in ["spawn_agent", "send_message", "followup_task"] {
+                let tool_name =
+                    ToolName::new(namespace.map(str::to_string), name).with_default_namespace();
+                assert!(router.registered_tool_names_for_test().contains(&tool_name));
+                assert!(router.exposes_tool(&tool_name));
+                let call = ToolCall {
+                    tool_name,
+                    call_id: "configured-message".into(),
+                    payload: ToolPayload::Function {
+                        arguments: r#"{"message":"private"}"#.into(),
+                    },
+                    encrypted_function_args: None,
+                };
+                assert_eq!(router.direct_source(&call), expected_source);
+            }
+            let unrelated = ToolCall {
+                tool_name: ToolName::new(namespace.map(str::to_string), "list_agents"),
+                call_id: "configured-control".into(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".into(),
+                },
+                encrypted_function_args: None,
+            };
+            assert_eq!(router.direct_source(&unrelated), ToolCallSource::Direct);
+        }
+    }
+}

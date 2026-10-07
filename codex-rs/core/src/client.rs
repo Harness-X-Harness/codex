@@ -908,6 +908,20 @@ impl ModelClient {
             // Filter only the request copy; persisted history remains unchanged.
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
+        // Project only this request copy. Canonical history and router capabilities
+        // remain provider-neutral, including when replaying a resumed session.
+        let projected_tools;
+        let tool_specs = if self.state.provider.api_dialect() == codex_api::ApiDialect::Grok {
+            let (tools, routes) = codex_tools::project_flat_function_tools(&prompt.tools)
+                .map_err(CodexErr::InvalidRequest)?;
+            input = routes
+                .project_history(&input)
+                .map_err(CodexErr::InvalidRequest)?;
+            projected_tools = tools;
+            projected_tools.as_slice()
+        } else {
+            prompt.tools.as_ref()
+        };
         let is_openai = self.state.provider.info().is_openai();
         let (instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
@@ -917,9 +931,9 @@ impl ModelClient {
                 self.state.thread_id.to_string().as_bytes(),
             );
             let tools = if self.state.provider.capabilities().namespace_tools {
-                create_tools_json_for_responses_lite(&prompt.tools)?
+                create_tools_json_for_responses_lite(tool_specs)?
             } else {
-                create_tools_json_for_responses_api(&prompt.tools)?
+                create_tools_json_for_responses_api(tool_specs)?
             };
             let mut prefix = vec![ResponseItem::AdditionalTools {
                 id: Some(ResponseItemId::with_suffix(
@@ -944,7 +958,7 @@ impl ModelClient {
         } else {
             (
                 prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
+                Some(create_tools_raw_json_for_responses_api(tool_specs)?.into()),
             )
         };
         if !is_openai {

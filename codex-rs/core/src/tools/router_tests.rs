@@ -649,3 +649,222 @@ fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<Str
         })
         .unwrap_or_default()
 }
+
+fn flat_router(specs: Vec<ToolSpec>) -> ToolRouter {
+    let (_, routes) = codex_tools::project_flat_function_tools(&specs).unwrap();
+    let mut router = ToolRouter::from_parts(
+        crate::tools::registry::ToolRegistry::default(),
+        specs,
+        codex_protocol::openai_models::ToolMode::Direct,
+        BTreeMap::new(),
+        /*tool_namespaces_info*/ None,
+        &[],
+    );
+    router.flat_tool_routes = Some(routes);
+    router
+}
+
+fn flat_call(name: &ToolName, kind: &str, arguments: &str) -> ResponseItem {
+    serde_json::from_value(json!({
+        "type": "function_call",
+        "id": "fc_flat",
+        "call_id": "call_flat",
+        "name": codex_tools::flat_wire_name(kind, name),
+        "arguments": arguments,
+    }))
+    .unwrap()
+}
+
+fn custom_patch_spec(namespace: Option<&str>) -> ToolSpec {
+    let tool = codex_tools::FreeformTool {
+        name: "apply_patch".into(),
+        description: "Apply a patch.".into(),
+        defer_loading: None,
+        format: codex_tools::FreeformToolFormat {
+            r#type: "grammar".into(),
+            syntax: "lark".into(),
+            definition: "start: /[\\s\\S]+/".into(),
+        },
+    };
+    match namespace {
+        None => ToolSpec::Freeform(tool),
+        Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace.into(),
+            description: "External tools.".into(),
+            tools: vec![ResponsesApiNamespaceTool::Custom(tool)],
+        }),
+    }
+}
+
+#[test]
+fn flat_router_restores_exact_function_arguments_and_keeps_canonical_exposure() {
+    use crate::client_common::ResponseEvent;
+    let spec = ExtensionEchoExecutor.spec();
+    let router = flat_router(vec![spec.clone()]);
+    let name = ToolName::namespaced("extension/", "echo");
+    let arguments = "{\"n\": 9007199254740993, \"message\":\"exact\"}";
+    let call = flat_call(&name, "function", arguments);
+    let Some(ResponseEvent::OutputItemDone(restored)) = router
+        .normalize_response_event(ResponseEvent::OutputItemDone(call.clone()))
+        .unwrap()
+    else {
+        panic!("expected restored completed call");
+    };
+    let expected: ResponseItem = serde_json::from_value(json!({
+        "type": "function_call", "id": "fc_flat", "call_id": "call_flat",
+        "namespace": "extension/", "name": "echo", "arguments": arguments,
+    }))
+    .unwrap();
+    assert_eq!(restored, expected);
+    assert_eq!(router.model_visible_specs().as_ref(), &[spec]);
+    assert!(router.exposes_tool(&name));
+    assert!(
+        router
+            .normalize_response_event(ResponseEvent::OutputItemAdded(call))
+            .unwrap()
+            .is_none()
+    );
+    // A newer plan cannot authorize a symbol absent from this captured router.
+    let newer = flat_router(vec![]);
+    assert!(
+        newer
+            .normalize_response_event(ResponseEvent::OutputItemDone(flat_call(
+                &name, "function", arguments
+            ),))
+            .is_err()
+    );
+}
+
+#[test]
+fn flat_router_checks_patch_grammar_only_for_the_canonical_builtin() {
+    use crate::client_common::ResponseEvent;
+    let name = ToolName::plain("apply_patch");
+    let router = flat_router(vec![custom_patch_spec(/*namespace*/ None)]);
+    for patch in [
+        "echo unsafe",
+        "*** Begin Patch\ninvalid hunk\n*** End Patch",
+        "<<'EOF'\n*** Begin Patch\n*** End Patch\nEOF",
+    ] {
+        let call = flat_call(&name, "custom", &json!({"patch": patch}).to_string());
+        assert!(
+            router
+                .normalize_response_event(ResponseEvent::OutputItemDone(call))
+                .is_err()
+        );
+    }
+    let patch = "*** Begin Patch\n*** Add File: example.txt\n+hello\n*** End Patch\n";
+    let call = flat_call(&name, "custom", &json!({"patch": patch}).to_string());
+    let Some(ResponseEvent::OutputItemDone(restored)) = router
+        .normalize_response_event(ResponseEvent::OutputItemDone(call))
+        .unwrap()
+    else {
+        panic!("expected custom call");
+    };
+    let expected: ResponseItem = serde_json::from_value(json!({
+        "type": "custom_tool_call", "id": "fc_flat", "call_id": "call_flat",
+        "name": "apply_patch", "input": patch,
+    }))
+    .unwrap();
+    assert_eq!(restored, expected);
+    let external = flat_router(vec![custom_patch_spec(Some("external"))]);
+    let call = flat_call(
+        &ToolName::namespaced("external", "apply_patch"),
+        "custom",
+        r#"{"input":"external grammar"}"#,
+    );
+    assert!(
+        external
+            .normalize_response_event(ResponseEvent::OutputItemDone(call))
+            .is_ok()
+    );
+}
+
+#[test]
+fn flat_collaboration_calls_keep_configured_plaintext_logging_redaction() {
+    use crate::client_common::ResponseEvent;
+    for namespace in [Some("collaboration"), Some("agents"), None] {
+        for name in ["spawn_agent", "send_message", "followup_task"] {
+            let ToolSpec::Namespace(mut spec) = ExtensionEchoExecutor.spec() else {
+                unreachable!()
+            };
+            spec.name = namespace.unwrap_or("functions").into();
+            let ResponsesApiNamespaceTool::Function(function) = &mut spec.tools[0] else {
+                unreachable!()
+            };
+            function.name = name.into();
+            let mut router = flat_router(vec![ToolSpec::Namespace(spec)]);
+            let name = ToolName::new(namespace.map(str::to_string), name);
+            router
+                .plaintext_collaboration_tools
+                .insert(name.clone().with_default_namespace());
+            let item = flat_call(&name, "function", r#"{"message":"secret"}"#);
+            let Some(ResponseEvent::OutputItemDone(restored)) = router
+                .normalize_response_event(ResponseEvent::OutputItemDone(item))
+                .unwrap()
+            else {
+                panic!("expected restored collaboration call");
+            };
+            let mut call = ToolRouter::build_tool_call(restored).unwrap().unwrap();
+            assert_eq!(call.encrypted_function_args, None);
+            assert_eq!(
+                router.direct_source(&call),
+                ToolCallSource::DirectPlaintextMessage
+            );
+            assert_eq!(
+                tool_log_payload(&call.payload, &router.direct_source(&call)),
+                "[plaintext arguments]"
+            );
+
+            // Identity alone cannot turn an unrelated custom payload into a message.
+            call.payload = ToolPayload::Custom {
+                input: "custom input".into(),
+            };
+            assert_eq!(router.direct_source(&call), ToolCallSource::Direct);
+            call.payload = ToolPayload::Function {
+                arguments: "{}".into(),
+            };
+            call.tool_name = ToolName::namespaced("unrelated", name.name);
+            assert_eq!(router.direct_source(&call), ToolCallSource::Direct);
+        }
+    }
+}
+
+#[test]
+fn stock_direct_source_keeps_existing_encrypted_marker_behavior() {
+    let router = ToolRouter::from_parts(
+        crate::tools::registry::ToolRegistry::default(),
+        Vec::new(),
+        codex_protocol::openai_models::ToolMode::Direct,
+        BTreeMap::new(),
+        /*tool_namespaces_info*/ None,
+        &[],
+    );
+    for namespace in ["collaboration", "agents", "functions"] {
+        for encrypted_function_args in [None, Some(Vec::new()), Some(vec!["cipher".into()])] {
+            let call = ToolCall {
+                tool_name: ToolName::namespaced(namespace, "send_message"),
+                call_id: "stock".into(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".into(),
+                },
+                encrypted_function_args,
+            };
+            assert_eq!(router.direct_source(&call), call.direct_source());
+        }
+    }
+}
+
+#[test]
+fn stock_router_does_not_decode_flat_looking_calls() {
+    use crate::client_common::ResponseEvent;
+    let mut router = flat_router(vec![]);
+    router.flat_tool_routes = None;
+    let original = flat_call(&ToolName::plain("apply_patch"), "custom", "not JSON");
+    let Some(ResponseEvent::OutputItemDone(actual)) = router
+        .normalize_response_event(ResponseEvent::OutputItemDone(original.clone()))
+        .unwrap()
+    else {
+        panic!("expected stock pass-through");
+    };
+    assert_eq!(actual, original);
+}

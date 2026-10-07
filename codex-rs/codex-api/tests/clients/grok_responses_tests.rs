@@ -138,7 +138,7 @@ async fn grok_rejects_unsupported_history_tools_and_raw_json_before_transport() 
     }
     let mut request = common::basic_request(vec![]);
     let tools: Arc<RawValue> = Arc::from(RawValue::from_string(
-        r#"[{"type":"function","name":"f","parameters":{}}]"#.into(),
+        r#"[{"type":"namespace","name":"ns","tools":[]}]"#.into(),
     )?);
     request.tools = Some(tools.into());
     assert!(matches!(
@@ -159,5 +159,37 @@ async fn grok_rejects_unsupported_history_tools_and_raw_json_before_transport() 
         Err(ApiError::Stream(_))
     ));
     assert!(state.take_stream_requests().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_local_tool_history_reaches_transport_with_exact_arguments() -> Result<()> {
+    let state = RecordingState::default();
+    let client = grok_client(&state);
+    let arguments = "{ \"value\" : 9007199254740993 }\n";
+    let input = json!([
+        {"type":"function_call", "name":"functions__shell", "arguments":arguments,
+         "call_id":"call_1"},
+        {"type":"function_call_output", "call_id":"call_1", "output":"done"}
+    ]);
+    let mut request = common::basic_request(serde_json::from_value(input.clone())?);
+    let tools: Arc<RawValue> = Arc::from(RawValue::from_string(
+        r#"[{"type":"function","name":"functions__shell","parameters":{},"strict":false}]"#.into(),
+    )?);
+    request.tools = Some(tools.into());
+    client
+        .stream_request(request, ResponsesOptions::default())
+        .await?;
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(request_body_bytes(&requests[0]))?,
+        json!({
+            "model":"fixture-grok-model", "input":input,
+            "tools":[{"type":"function","name":"functions__shell","parameters":{}}],
+            "tool_choice":"auto", "reasoning":null, "stream":true,
+            "include":["reasoning.encrypted_content"]
+        })
+    );
     Ok(())
 }

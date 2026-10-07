@@ -559,6 +559,12 @@ jobs:
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_code_mode::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::auto_review::structured_edit_and_stock_patch_guardian::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_apply_patch_via_nested_tool)'
+      - name: Test Grok local tool dispatch history and affected stock routing
+        working-directory: codex-rs
+        run: |
+          just test -p codex-tools --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(flat_projection::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::router::tests::) | test(context_manager::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::tool_roundtrip::)'
       - name: Test image dialect consumers and codec normalization
         working-directory: codex-rs
         run: |
@@ -800,3 +806,4 @@ jobs:
               exit 1
             fi
           done
+

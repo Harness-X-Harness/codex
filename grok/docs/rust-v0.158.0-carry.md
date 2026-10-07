@@ -331,6 +331,37 @@ in test copies; the shipped catalog is unchanged. Full shipped tool/media/histor
 composition remains C7, packages C8/#339 and backend execution #331. None is
 claimed by a deterministic script or native catalog result alone.
 
+## C7 local-tool boundary
+
+The first independently usable #322 increment is the local tool round trip.
+Project the finalized allowed plan into flat function declarations at the explicit
+Grok Provider boundary. Keep the native registry, permission policy and canonical
+function/custom identities authoritative. Bind reverse routing to the immutable
+plan for the actual request; reject collisions, unknown wire names and malformed
+custom wrappers before dispatch. Custom patch input must satisfy the canonical
+patch grammar before the existing executor handles it.
+
+Persist canonical tool calls and outputs. Project only outgoing request copies,
+including older calls whose tools are no longer advertised; reconstruct the same
+wire identity after cold resume. Function arguments retain their exact bytes, and
+custom string input is encoded and decoded without a numeric or whitespace rewrite.
+Keep the stock local output pairing and non-Grok planner/router/history behavior.
+The supported API output surface includes ordered text and inline-image parts;
+file-backed image references, audio, encrypted tool outputs and message media keep
+their explicit unsupported behavior. This does not change C5 image endpoints or
+claim complete standalone image-generation/history composition.
+
+This slice does not close #322. Hosted Web/X request/replay, search restrictions,
+remaining media composition and the retained public ReasoningHistory scenario's
+full native/backend acceptance stay open. Keep the shipped catalog unchanged;
+unsupported hosted tool shapes fail before transport rather than being silently
+removed. Native dispatch, follow-up, cold resume, malformed-input no-mutation and
+affected stock regressions enter the existing Linux proof with their first actual
+consumer. Do not create a separately accepted projection-only library increment.
+
+The complete #322 owner and #362/#363 visibility still need their own exact PR and
+canonical proofs. These boundaries do not change C8 packaging or #331 backend scope.
+
 ## C7 stream-visibility boundary
 
 [Design #364](https://github.com/Harness-X-Harness/codex/issues/364) records the
@@ -415,3 +446,4 @@ discovered defect makes the relevant claim blocking. Product/process completion
 and review against an actual green canonical revision establish the new accepted
 product source in #333. Native green, branch existence, and artifact availability
 each retain their narrower meaning.
+

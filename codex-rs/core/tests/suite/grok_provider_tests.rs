@@ -29,6 +29,9 @@ use wiremock::MockServer;
 #[path = "grok_compaction_tests.rs"]
 mod compaction;
 
+#[path = "grok_tool_roundtrip_tests.rs"]
+mod tool_roundtrip;
+
 struct ProviderFixture {
     _home: TempDir,
     server: MockServer,
@@ -39,7 +42,7 @@ struct ProviderFixture {
     prompt: Prompt,
 }
 
-async fn provider_fixture() -> anyhow::Result<ProviderFixture> {
+async fn provider_fixture(provider_name: &str) -> anyhow::Result<ProviderFixture> {
     let server = MockServer::start().await;
     let home = TempDir::new()?;
     std::fs::write(
@@ -48,7 +51,7 @@ async fn provider_fixture() -> anyhow::Result<ProviderFixture> {
             r#"
 model_provider = "custom"
 [model_providers.custom]
-name = "Custom endpoint"
+name = "{provider_name}"
 base_url = "{}/v1"
 wire_api = "grok_responses"
 "#,
@@ -164,7 +167,7 @@ async fn configured_grok_provider_projects_production_request_and_stream() -> an
             ]),
         ),
     ] {
-        let fixture = provider_fixture().await?;
+        let fixture = provider_fixture("Custom endpoint").await?;
         let response = mount_sse_once(&fixture.server, sse(frames)).await;
         let mut session = fixture.client.new_session();
         session
@@ -249,7 +252,7 @@ async fn configured_grok_provider_projects_production_request_and_stream() -> an
 
 #[tokio::test]
 async fn configured_grok_rejects_unsupported_history_before_transport() -> anyhow::Result<()> {
-    let mut fixture = provider_fixture().await?;
+    let mut fixture = provider_fixture("Custom endpoint").await?;
     fixture.prompt.input = vec![ResponseItem::Other];
     let mut session = fixture.client.new_session();
     let Err(error) = session
@@ -282,5 +285,57 @@ async fn configured_grok_rejects_unsupported_history_before_transport() -> anyho
             .expect("request recording")
             .is_empty()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_collaboration_plaintext_replay_ignores_provider_display_name() -> anyhow::Result<()> {
+    for provider_name in ["Grok", "OpenAI", "Azure"] {
+        let mut fixture = provider_fixture(provider_name).await?;
+        let canonical: Vec<ResponseItem> = serde_json::from_value(json!([
+            {"type":"function_call", "id":"fc_collaboration", "call_id":"collaboration-call",
+                "namespace":"collaboration", "name":"send_message", "arguments":"{ \"message\": \"private\" }",
+                "encrypted_function_args":[]},
+            {"type":"function_call_output", "call_id":"collaboration-call", "output":"delivered"}
+        ]))?;
+        fixture.prompt.input = canonical.clone();
+        let response = mount_sse_once(&fixture.server, sse(vec![ev_completed("replayed")])).await;
+        let mut session = fixture.client.new_session();
+        let mut stream = session
+            .stream(
+                &fixture.prompt,
+                &fixture.model,
+                &fixture.telemetry,
+                Some(ReasoningEffort::High),
+                ReasoningSummary::Detailed,
+                /*service_tier*/ None,
+                &fixture.metadata,
+                &InferenceTraceContext::disabled(),
+            )
+            .await?;
+        let mut completed = false;
+        while let Some(event) = stream.next().await {
+            if matches!(event?, ResponseEvent::Completed { .. }) {
+                completed = true;
+            }
+        }
+        assert!(completed);
+        assert_eq!(
+            fixture.prompt.input, canonical,
+            "canonical logging marker must remain"
+        );
+        let wire_name = codex_tools::flat_wire_name(
+            "function",
+            &codex_tools::ToolName::namespaced("collaboration", "send_message"),
+        );
+        assert_eq!(
+            response.single_request().body_json()["input"],
+            json!([
+                {"type":"function_call", "id":"fc_collaboration", "call_id":"collaboration-call",
+                    "name":wire_name, "arguments":"{ \"message\": \"private\" }"},
+                {"type":"function_call_output", "call_id":"collaboration-call", "output":"delivered"}
+            ])
+        );
+    }
     Ok(())
 }
