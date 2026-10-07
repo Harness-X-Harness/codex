@@ -331,6 +331,71 @@ in test copies; the shipped catalog is unchanged. Full shipped tool/media/histor
 composition remains C7, packages C8/#339 and backend execution #331. None is
 claimed by a deterministic script or native catalog result alone.
 
+## C7 stream-visibility boundary
+
+[Design #364](https://github.com/Harness-X-Harness/codex/issues/364) records the
+background, pinned source evidence, alternatives and detailed acceptance guide.
+It is subordinate to #322 and this #333 plan, not another roadmap or proof system.
+The selected outcome is validated wire-time visibility for supported hosted Web/X
+search while retaining stock transcript, history and follow-up semantics.
+Publication or acceptance of this planning change does not implement that outcome.
+
+Use the current `codex-api/src/sse/grok.rs` owner, not a transplant of the older
+0.157.1 sequencer. Separate validated activity observation from canonical item
+release timing. Preserve contiguous indexes, item lifetimes, terminal/completion
+checks and bounded pending storage; an activity path must not bypass validation.
+A hosted completed item may feed early presentation and later canonical delivery.
+Keep one authoritative item, with no duplicate visible lifecycle or local execution.
+
+Prefer existing stock item/notification primitives only after proving their core,
+App Server v2 and TUI consumers preserve active assistant ownership. Add a minimal,
+actually consumed provider-neutral event only when the existing seam is insufficient.
+Do not expose raw Grok SSE to TUI, invent assistant commentary or copy grok-build's
+channel architecture. Its Messages Narration path is not a Responses wire contract.
+
+Transient activity must not synthesize model-visible history or local tool outputs.
+Preserve stock completed-hosted replay, event logging and opaque reasoning data.
+Cold resume must not resurrect an active spinner or duplicate completed work.
+Scope identity to the request/attempt and item binding; bound any added tracking.
+Cancellation, errors, incomplete streams, EOF, timeouts, retries and turn changes
+must settle activity without false success, stale state or cross-attempt leakage.
+
+The visibility work has two independently complete outcomes under #322:
+
+- [V1 / #362](https://github.com/Harness-X-Harness/codex/issues/362): hosted Web
+  activity before an unrelated message closes, including validation, deduplication,
+  truthful termination, public/TUI behavior, history compatibility and native proof.
+- [V2 / #363](https://github.com/Harness-X-Harness/codex/issues/363): supported
+  hosted X activity with explicit hosted/local classification and mixed Web/X
+  composition, reusing the accepted V1 consumer and retaining all its obligations.
+
+Each needs the relevant retained request/classification/replay capability from
+#322, not closure of that parent. Land a complete prerequisite first or review
+an inseparable boundary together; never create a circular parent-closure gate.
+Existing C7 projection/search/history obligations remain with #322. Shared support
+lands with its first consumer. No inert API, UI-only or deferred-proof increment
+is introduced. Any necessary further boundary change is reviewed in #322/#333.
+
+Prove timing with a controlled SSE barrier: observe the correlated public activity
+while the earlier message's done and response completion are still withheld.
+Final-vector ordering alone is insufficient. Include TUI snapshots, authoritative
+completion before transcript release, actual follow-up/resume, local-output pairing,
+reasoning/display controls, negative paths, bounds and stock/non-Grok regressions.
+An ignored event name does not by itself establish lost prose; classify the original
+missing-message report and retain unresolved findings without claiming a blanket fix.
+Each outcome closes its affected generated/build outputs and activates nonempty
+delta, affected-stock and composition proof in the existing local reusable workflow.
+
+Use the normal reviewed PR, protected squash and exact canonical push-proof loop.
+Record PR head/base/test subject, workflow revision, run/attempt and actual canonical
+SHA/parent. Keep implementation issues open until same-definition required push
+proof succeeds on that exact SHA; missing, skipped, cancelled, neutral, empty,
+pending, wrong-subject or failed required proof is non-green. Do not advance the
+next feature increment before that gate. Non-closing PR references avoid premature
+issue closure. The design closes only after final integrated canonical proof and
+scope review; it does not automatically close #322/#333. Backend claims remain
+separate under #324/#331. No new bot, proof ledger or acceptance state machine.
+
 ## Evidence and delivery roles
 
 - #324 owns backend claim classification and freshness. Historical, not-run, and
