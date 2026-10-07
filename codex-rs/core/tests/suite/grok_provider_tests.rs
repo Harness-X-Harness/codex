@@ -340,74 +340,130 @@ async fn grok_collaboration_plaintext_replay_ignores_provider_display_name() -> 
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grok_unsupported_tool_plans_still_fail_before_transport() -> anyhow::Result<()> {
-    use codex_tools::JsonSchema;
-    use codex_tools::ResponsesApiTool;
-    use codex_tools::ToolSpec;
+    use codex_core::StartThreadOptions;
+    use codex_core::TurnInputRequest;
+    use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+    use codex_protocol::dynamic_tools::DynamicToolSpec;
+    use codex_protocol::openai_models::ConfigShellToolType;
+    use codex_protocol::openai_models::ToolMode;
+    use codex_protocol::openai_models::WebSearchToolType;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::user_input::UserInput;
+    use core_test_support::test_codex::test_codex;
+    use core_test_support::wait_for_event;
+    use std::sync::Arc;
 
-    for unsupported in [
-        ToolSpec::WebSearch {
-            external_web_access: None,
-            indexed_web_access: None,
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: None,
-        },
-        ToolSpec::ToolSearch {
-            execution: "client".into(),
-            description: "Find tools".into(),
-            parameters: JsonSchema::object(
-                Default::default(),
-                Some(Vec::new()),
-                Some(false.into()),
-            ),
-        },
+    for (web_search_mode, unsupported) in [
+        (WebSearchMode::Live, "web_search"),
+        (WebSearchMode::Disabled, "tool_search"),
     ] {
-        let expected_error = format!("flat local tools do not support {}", unsupported.name());
-        let mut fixture = provider_fixture("Grok").await?;
-        fixture.prompt.tools = vec![
-            ToolSpec::Function(ResponsesApiTool {
-                name: "local_tool".into(),
-                description: "A local function".into(),
-                strict: true,
-                defer_loading: None,
-                parameters: JsonSchema::object(
-                    Default::default(),
-                    Some(Vec::new()),
-                    Some(false.into()),
-                ),
-                output_schema: None,
-            }),
-            unsupported,
-        ]
-        .into();
-        let canonical = fixture.prompt.tools.clone();
-        let mut session = fixture.client.new_session();
-        let Err(error) = session
-            .stream(
-                &fixture.prompt,
-                &fixture.model,
-                &fixture.telemetry,
-                Some(ReasoningEffort::High),
-                ReasoningSummary::Detailed,
-                /*service_tier*/ None,
-                &fixture.metadata,
-                &InferenceTraceContext::disabled(),
-            )
-            .await
+        let server = MockServer::start().await;
+        let home = Arc::new(TempDir::new()?);
+        let base_url = format!("{}/v1", server.uri());
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!(
+                r#"
+model_provider = "grok"
+approval_policy = "never"
+sandbox_mode = "read-only"
+[model_providers.grok]
+name = "Grok"
+base_url = "{base_url}"
+wire_api = "grok_responses"
+requires_openai_auth = false
+supports_websockets = false
+[tools.update_plan]
+enabled = false
+[tools.experimental_request_user_input]
+enabled = false
+[features]
+goals = false
+shell_tool = false
+view_image = false
+sleep_tool = false
+multi_agent = false
+multi_agent_v2 = false
+code_mode = false
+apps = false
+image_generation = false
+tool_suggest = false
+standalone_web_search = false
+current_time_reminder = false
+send_message_to_user_async = false
+token_budget = false
+request_permissions_tool = false
+deferred_executor = false
+"#
+            ),
+        )?;
+        let test = test_codex()
+            .with_home(home)
+            .with_model_info_override("gpt-5.4", |model| {
+                model.shell_type = ConfigShellToolType::Disabled;
+                model.apply_patch_tool_type = None;
+                model.structured_edit_tool_type = None;
+                model.tool_mode = Some(ToolMode::Direct);
+                model.supports_search_tool = true;
+                model.use_responses_lite = false;
+                model.web_search_tool_type = WebSearchToolType::Text;
+            })
+            .with_config(move |config| {
+                config.model_provider = config.model_providers["grok"].clone();
+                config.model_provider.stream_max_retries = Some(0);
+                config
+                    .web_search_mode
+                    .set(web_search_mode)
+                    .expect("test web search mode should be accepted");
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        let mut dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+            name: "local_tool".into(),
+            description: "An eager local function.".into(),
+            input_schema: json!({"type":"object", "properties":{}, "additionalProperties":false}),
+            defer_loading: false,
+        })];
+        if unsupported == "tool_search" {
+            dynamic_tools.push(DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "deferred_lookup".into(),
+                description: "A discoverable deferred function.".into(),
+                input_schema: json!({"type":"object", "properties":{}, "additionalProperties":false}),
+                defer_loading: true,
+            }));
+        }
+        // Exercise production plan construction and request projection via public APIs.
+        let codex_core::NewThread { thread, .. } = test
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                dynamic_tools,
+                ..StartThreadOptions::new(test.config.clone())
+            })
+            .await?;
+        thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Use the available tools.".into(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        let EventMsg::TurnComplete(completed) =
+            wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await
         else {
-            anyhow::bail!("unsupported tool plans must fail before transport");
+            unreachable!("event predicate guarantees turn completion");
         };
-        let CodexErrorDetails::InvalidRequest(message) = error.details() else {
-            return Err(error.into());
-        };
-        assert_eq!(message, &expected_error);
-        assert_eq!(fixture.prompt.tools, canonical);
+        let error = completed
+            .error
+            .expect("unsupported tool plan must fail the turn");
+        let expected_error = format!("flat local tools do not support {unsupported}");
         assert!(
-            fixture
-                .server
+            error.message.contains(&expected_error),
+            "unexpected error: {error:?}"
+        );
+        assert!(
+            server
                 .received_requests()
                 .await
                 .expect("request recording")
