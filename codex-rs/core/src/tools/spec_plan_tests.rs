@@ -3446,7 +3446,7 @@ async fn finalized_grok_plan_redacts_configured_v2_message_tools() {
                 turn.config.model_provider.clone(),
                 turn.auth_manager.clone(),
             );
-            let mut model = turn.model_info().clone();
+            let mut model = turn.model_info().as_ref().clone();
             model.tool_mode = Some(ToolMode::Direct);
             model.supports_search_tool = false;
             let router = plan_with_model(&turn, &model, ToolPlanInputs::default());
