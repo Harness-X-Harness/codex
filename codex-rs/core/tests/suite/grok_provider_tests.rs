@@ -339,3 +339,81 @@ async fn grok_collaboration_plaintext_replay_ignores_provider_display_name() -> 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn grok_unsupported_tool_plans_still_fail_before_transport() -> anyhow::Result<()> {
+    use codex_tools::JsonSchema;
+    use codex_tools::ResponsesApiTool;
+    use codex_tools::ToolSpec;
+
+    for unsupported in [
+        ToolSpec::WebSearch {
+            external_web_access: None,
+            indexed_web_access: None,
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+        ToolSpec::ToolSearch {
+            execution: "client".into(),
+            description: "Find tools".into(),
+            parameters: JsonSchema::object(
+                Default::default(),
+                Some(Vec::new()),
+                Some(false.into()),
+            ),
+        },
+    ] {
+        let expected_error = format!("flat local tools do not support {}", unsupported.name());
+        let mut fixture = provider_fixture("Grok").await?;
+        fixture.prompt.tools = vec![
+            ToolSpec::Function(ResponsesApiTool {
+                name: "local_tool".into(),
+                description: "A local function".into(),
+                strict: true,
+                defer_loading: None,
+                parameters: JsonSchema::object(
+                    Default::default(),
+                    Some(Vec::new()),
+                    Some(false.into()),
+                ),
+                output_schema: None,
+            }),
+            unsupported,
+        ]
+        .into();
+        let canonical = fixture.prompt.tools.clone();
+        let mut session = fixture.client.new_session();
+        let Err(error) = session
+            .stream(
+                &fixture.prompt,
+                &fixture.model,
+                &fixture.telemetry,
+                Some(ReasoningEffort::High),
+                ReasoningSummary::Detailed,
+                /*service_tier*/ None,
+                &fixture.metadata,
+                &InferenceTraceContext::disabled(),
+            )
+            .await
+        else {
+            anyhow::bail!("unsupported tool plans must fail before transport");
+        };
+        let CodexErrorDetails::InvalidRequest(message) = error.details() else {
+            return Err(error.into());
+        };
+        assert_eq!(message, &expected_error);
+        assert_eq!(fixture.prompt.tools, canonical);
+        assert!(
+            fixture
+                .server
+                .received_requests()
+                .await
+                .expect("request recording")
+                .is_empty(),
+            "keeping hosted/search in the canonical plan must never silently omit it on the wire"
+        );
+    }
+    Ok(())
+}

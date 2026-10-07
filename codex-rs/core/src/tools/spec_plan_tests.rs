@@ -3477,3 +3477,109 @@ async fn finalized_grok_plan_redacts_configured_v2_message_tools() {
         }
     }
 }
+
+#[tokio::test]
+async fn finalized_grok_plan_retains_hosted_specs_and_binds_only_local_routes() {
+    use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::PlanHandler;
+    use crate::tools::registry::ToolRegistry;
+    use codex_model_provider_info::WireApi;
+    use codex_tools::WireToolRoute;
+
+    let (_session, mut turn) = make_session_and_context().await;
+    set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ false);
+    set_feature(&mut turn, Feature::Collab, /*enabled*/ false);
+    set_web_search_mode(&mut turn, WebSearchMode::Live);
+    let mut model = turn.model_info().as_ref().clone();
+    model.tool_mode = Some(ToolMode::Direct);
+    model.supports_search_tool = true;
+    model.use_responses_lite = false;
+    model.web_search_tool_type = WebSearchToolType::Text;
+    let finalize = |turn: &TurnContext| {
+        let mut registry = ToolRegistry::default();
+        registry.add(PlanHandler);
+        registry.add(ApplyPatchHandler::new(
+            /*include_environment_id*/ false,
+        ));
+        let hosted = append_source_tools(
+            turn,
+            &model,
+            &mut registry,
+            vec![mcp_runtime(
+                "searchable",
+                "mcp__searchable",
+                "lookup",
+                ToolExposure::Deferred,
+            )],
+            Vec::new(),
+            &[dynamic_tool(
+                Some("local"),
+                "echo",
+                /*defer_loading*/ false,
+            )],
+        );
+        ToolRouter::from_registry(turn, &model, registry, hosted, &Default::default())
+    };
+    let stock = finalize(&turn);
+    update_config(&mut turn, |config| {
+        config.model_provider.wire_api = WireApi::GrokResponses;
+    });
+    turn.provider = create_model_provider(
+        turn.config.model_provider.clone(),
+        turn.auth_manager.clone(),
+    );
+    let grok = finalize(&turn);
+    let canonical = grok.model_visible_specs();
+    assert_eq!(canonical, stock.model_visible_specs());
+    assert!(
+        canonical
+            .iter()
+            .any(|spec| matches!(spec, ToolSpec::WebSearch { .. }))
+    );
+    assert!(
+        canonical
+            .iter()
+            .any(|spec| matches!(spec, ToolSpec::ToolSearch { .. }))
+    );
+    let routes = grok
+        .flat_tool_routes
+        .as_ref()
+        .expect("Grok plan owns local routes");
+    for (kind, name, expected) in [
+        (
+            "function",
+            ToolName::plain("update_plan"),
+            WireToolRoute::Function(ToolName::plain("update_plan")),
+        ),
+        (
+            "function",
+            ToolName::namespaced("local", "echo"),
+            WireToolRoute::Function(ToolName::namespaced("local", "echo")),
+        ),
+        (
+            "custom",
+            ToolName::plain("apply_patch"),
+            WireToolRoute::Custom {
+                tool_name: ToolName::plain("apply_patch"),
+                input_key: "patch".into(),
+            },
+        ),
+    ] {
+        assert_eq!(
+            routes.resolve(&codex_tools::flat_wire_name(kind, &name)),
+            Some(&expected)
+        );
+    }
+    for name in [
+        ToolName::plain("web_search"),
+        ToolName::plain("tool_search"),
+        ToolName::namespaced("mcp__searchable", "lookup"),
+    ] {
+        assert_eq!(
+            routes.resolve(&codex_tools::flat_wire_name("function", &name)),
+            None
+        );
+    }
+    // Planning must not hide unsupported declarations to make inference succeed.
+    assert!(codex_tools::project_flat_function_tools(&canonical).is_err());
+}

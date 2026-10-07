@@ -498,7 +498,19 @@ pub(crate) fn finalize_tool_router(
         &child_management_tools,
     );
     if turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok {
-        let (_, routes) = codex_tools::project_flat_function_tools(&router.model_visible_specs())
+        // A router is also built for lifecycle operations that do not infer. Bind
+        // only local reverse routes here; retain the full canonical inventory so
+        // request projection still rejects unsupported hosted/search surfaces.
+        let local_specs = router
+            .model_visible_specs()
+            .iter()
+            .filter(|spec| match spec {
+                ToolSpec::Function(_) | ToolSpec::Freeform(_) | ToolSpec::Namespace(_) => true,
+                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let (_, routes) = codex_tools::project_flat_function_tools(&local_specs)
             .map_err(codex_protocol::error::CodexErr::InvalidRequest)?;
         router.flat_tool_routes = Some(routes);
         if multi_agent_v2_enabled(turn_context) && collab_tools_enabled(turn_context, model_info) {
