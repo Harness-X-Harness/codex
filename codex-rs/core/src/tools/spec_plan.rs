@@ -489,7 +489,7 @@ pub(crate) fn finalize_tool_router(
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    let router = ToolRouter::from_parts(
+    let mut router = ToolRouter::from_parts(
         registry,
         model_visible_specs,
         tool_mode,
@@ -497,6 +497,33 @@ pub(crate) fn finalize_tool_router(
         tool_namespaces_info,
         &child_management_tools,
     );
+    if turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok {
+        // A router is also built for lifecycle operations that do not infer. Bind
+        // only local reverse routes here; retain the full canonical inventory so
+        // request projection still rejects unsupported hosted/search surfaces.
+        let local_specs = router
+            .model_visible_specs()
+            .iter()
+            .filter(|spec| match spec {
+                ToolSpec::Function(_) | ToolSpec::Freeform(_) | ToolSpec::Namespace(_) => true,
+                ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => false,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let (_, routes) = codex_tools::project_flat_function_tools(&local_specs)
+            .map_err(codex_protocol::error::CodexErr::InvalidRequest)?;
+        router.flat_tool_routes = Some(routes);
+        if multi_agent_v2_enabled(turn_context) && collab_tools_enabled(turn_context, model_info) {
+            let namespace = namespace_tools_enabled(turn_context)
+                .then_some(turn_context.config.multi_agent_v2.tool_namespace.clone())
+                .flatten();
+            router.plaintext_collaboration_tools = ["spawn_agent", "send_message", "followup_task"]
+                .into_iter()
+                .map(|name| ToolName::new(namespace.clone(), name).with_default_namespace())
+                .filter(|name| router.exposes_tool(name))
+                .collect();
+        }
+    }
     // Internal workers can inherit MAv2 configuration without using the board.
     if multi_agent_v2_enabled(turn_context)
         && collab_tools_enabled(turn_context, model_info)

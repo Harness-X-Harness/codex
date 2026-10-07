@@ -2585,6 +2585,12 @@ async fn try_run_sampling_request(
             }
         };
 
+        let event = match step_context.tool_router.normalize_response_event(event) {
+            Ok(Some(event)) => event,
+            Ok(None) => continue,
+            Err(error) => break Err(CodexErr::InvalidRequest(error)),
+        };
+
         sess.services
             .session_telemetry
             .record_responses(&handle_responses, &event);
