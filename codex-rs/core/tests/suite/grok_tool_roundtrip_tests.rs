@@ -221,7 +221,19 @@ async fn grok_local_edit_dispatch_and_cold_resume(kind: &str, tool: &str) -> Res
         let body = request.body_json();
         assert_eq!(request.path(), "/v1/responses");
         let tools = body["tools"].as_array().expect("local declarations");
-        assert!(tools.iter().all(|tool| tool["type"] == "function"));
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["type"] == "function" || tool["type"] == "x_search")
+        );
+        assert_eq!(
+            tools
+                .iter()
+                .filter(|tool| tool["type"] == "x_search")
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![json!({"type":"x_search"})]
+        );
         assert!(tools.iter().any(|tool| tool["name"] == wire_name));
     }
     for request in &requests[1..] {

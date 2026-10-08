@@ -320,7 +320,14 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    let call = if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+        && codex_protocol::grok_hosted::is_completed_search(&item)
+    {
+        Ok(None)
+    } else {
+        ToolRouter::build_tool_call(item.clone())
+    };
+    match call {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             call_trace::received(

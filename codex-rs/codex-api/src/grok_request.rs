@@ -6,6 +6,10 @@ use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use crate::common::TextFormat;
 use crate::error::ApiError;
+use crate::grok_search::project_web_search;
+use crate::grok_search::project_x_search;
+use codex_protocol::grok::GrokXSearchOptions;
+use codex_protocol::grok_hosted::is_completed_search;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -16,7 +20,10 @@ use codex_protocol::models::ResponseItem;
 use serde_json::Value;
 use serde_json::json;
 
-pub(crate) fn build(request: &ResponsesApiRequest) -> Result<Value, ApiError> {
+pub(crate) fn build_with_search(
+    request: &ResponsesApiRequest,
+    x_search: Option<&GrokXSearchOptions>,
+) -> Result<Value, ApiError> {
     let ResponsesApiRequest {
         model,
         instructions,
@@ -35,7 +42,7 @@ pub(crate) fn build(request: &ResponsesApiRequest) -> Result<Value, ApiError> {
         client_metadata: _,
         access_programs: _,
     } = request;
-    let tools = project_tools(tools.as_ref())?;
+    let tools = project_tools(tools.as_ref(), x_search)?;
     let input = input
         .iter()
         .enumerate()
@@ -82,19 +89,43 @@ pub(crate) fn build(request: &ResponsesApiRequest) -> Result<Value, ApiError> {
     Ok(body)
 }
 
-fn project_tools(tools: Option<&ResponsesApiTools>) -> Result<Option<Vec<Value>>, ApiError> {
+fn project_tools(
+    tools: Option<&ResponsesApiTools>,
+    x_search: Option<&GrokXSearchOptions>,
+) -> Result<Option<Vec<Value>>, ApiError> {
+    if let Some(defaults) = x_search {
+        defaults.validate().map_err(ApiError::Stream)?;
+    }
     let Some(tools) = tools else {
         return Ok(None);
     };
     let tools: Vec<Value> = serde_json::from_str(tools.as_raw_value().get())
         .map_err(|_| ApiError::Stream("Grok requires a tool array".into()))?;
-    let mut projected = Vec::with_capacity(tools.len());
+    let mut projected = Vec::with_capacity(tools.len() + 1);
+    let mut has_x_search = false;
     for (index, tool) in tools.into_iter().enumerate() {
         let Some(fields) = tool.as_object() else {
             return Err(ApiError::Stream(format!(
-                "Grok requires a function at tools[{index}]"
+                "Grok requires a tool object at tools[{index}]"
             )));
         };
+        match fields.get("type").and_then(Value::as_str) {
+            Some("web_search") => {
+                projected.push(project_web_search(fields, index)?);
+                continue;
+            }
+            Some("x_search") => {
+                if has_x_search {
+                    return Err(ApiError::Stream(
+                        "Grok requires at most one x_search tool".into(),
+                    ));
+                }
+                has_x_search = true;
+                projected.push(project_x_search(fields, x_search)?);
+                continue;
+            }
+            _ => {}
+        }
         if fields.get("type").and_then(Value::as_str) != Some("function")
             || fields
                 .get("name")
@@ -125,6 +156,9 @@ fn project_tools(tools: Option<&ResponsesApiTools>) -> Result<Option<Vec<Value>>
             }
         }
         projected.push(function);
+    }
+    if !projected.is_empty() && !has_x_search {
+        projected.push(project_x_search(&serde_json::Map::new(), x_search)?);
     }
     Ok((!projected.is_empty()).then_some(projected))
 }
@@ -254,6 +288,11 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
             }
             item
         }
+        ResponseItem::WebSearchCall { .. } | ResponseItem::CustomToolCall { .. }
+            if is_completed_search(item) =>
+        {
+            codex_protocol::grok_hosted::project_search_replay(item).map_err(ApiError::Stream)?
+        }
         ResponseItem::AgentMessage { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
@@ -277,6 +316,11 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
         projected["id"] = json!(id);
     }
     Ok(projected)
+}
+
+#[cfg(test)]
+fn build(request: &ResponsesApiRequest) -> Result<Value, ApiError> {
+    build_with_search(request, /*x_search*/ None)
 }
 
 #[cfg(test)]

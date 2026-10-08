@@ -511,9 +511,13 @@ pub(crate) async fn run_turn(
 
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
-                sess.clone_history()
-                    .await
-                    .for_prompt(&step_context.settings.model_info.input_modalities)
+                sess.clone_history().await.for_prompt_except_hosted(
+                    &step_context.settings.model_info.input_modalities,
+                    |item| {
+                        step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+                            && codex_protocol::grok_hosted::is_completed_search(item)
+                    },
+                )
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
@@ -1611,9 +1615,13 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_history()
-                .await
-                .for_prompt(&step_context.settings.model_info.input_modalities)
+            sess.clone_history().await.for_prompt_except_hosted(
+                &step_context.settings.model_info.input_modalities,
+                |item| {
+                    step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+                        && codex_protocol::grok_hosted::is_completed_search(item)
+                },
+            )
         };
         let mut prompt_input = prompt_input;
         sess.services

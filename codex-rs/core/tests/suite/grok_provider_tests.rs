@@ -29,6 +29,9 @@ use wiremock::MockServer;
 #[path = "grok_compaction_tests.rs"]
 mod compaction;
 
+#[path = "grok_hosted_search_tests.rs"]
+mod hosted_search;
+
 #[path = "grok_tool_roundtrip_tests.rs"]
 mod tool_roundtrip;
 
@@ -344,7 +347,9 @@ async fn grok_collaboration_plaintext_replay_ignores_provider_display_name() -> 
 async fn grok_unsupported_tool_plans_still_fail_before_transport() -> anyhow::Result<()> {
     use codex_core::StartThreadOptions;
     use codex_core::TurnInputRequest;
+    use codex_protocol::config_types::WebSearchConfig;
     use codex_protocol::config_types::WebSearchMode;
+    use codex_protocol::config_types::WebSearchUserLocation;
     use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
     use codex_protocol::openai_models::ConfigShellToolType;
@@ -357,7 +362,7 @@ async fn grok_unsupported_tool_plans_still_fail_before_transport() -> anyhow::Re
     use std::sync::Arc;
 
     for (web_search_mode, unsupported) in [
-        (WebSearchMode::Live, "web_search"),
+        (WebSearchMode::Live, "web_search restrictions"),
         (WebSearchMode::Disabled, "tool_search"),
     ] {
         let server = MockServer::start().await;
@@ -414,6 +419,15 @@ deferred_executor = false
             .with_config(move |config| {
                 config.model_provider = config.model_providers["grok"].clone();
                 config.model_provider.stream_max_retries = Some(0);
+                if web_search_mode == WebSearchMode::Live {
+                    config.web_search_config = Some(WebSearchConfig {
+                        user_location: Some(WebSearchUserLocation {
+                            country: Some("US".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    });
+                }
                 config
                     .web_search_mode
                     .set(web_search_mode)
@@ -457,9 +471,13 @@ deferred_executor = false
         let error = completed
             .error
             .expect("unsupported tool plan must fail the turn");
-        let expected_error = format!("flat local tools do not support {unsupported}");
+        let expected_error = if unsupported == "tool_search" {
+            "flat local tools do not support tool_search"
+        } else {
+            "Grok cannot project web_search restrictions"
+        };
         assert!(
-            error.message.contains(&expected_error),
+            error.message.contains(expected_error),
             "unexpected error: {error:?}"
         );
         assert!(

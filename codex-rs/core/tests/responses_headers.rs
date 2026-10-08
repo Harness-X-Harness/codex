@@ -91,6 +91,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -233,6 +234,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -356,6 +358,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 

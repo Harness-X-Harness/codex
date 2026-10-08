@@ -161,3 +161,45 @@ C6's HTTP lifecycle fixtures explicitly disable tools in test copies. Shipped
 assets retain every capability. Full shipped tool/media/history wire composition
 remains C7, package invocation #339 and actual backend Live #331. Deterministic
 scripts and native catalog checks do not establish those outcomes.
+
+
+## C7 hosted-search scenario support
+
+`HostedSearch(ctx, Options, scenario)` retains `web`, `web_allowed`,
+`web_excluded`, `x`, and `x_window` using explicit Grok fixture binding and
+public `thread/start` configuration overrides. The fixed policy controls match
+`facts.SearchPolicy`; the fixture enables hosted Web/X and keeps local execution
+disabled. It starts one search turn and one same-thread follow-up, each once,
+with one settled `thread/read` per completed turn. Failed or incomplete first
+turns never trigger a follow-up. Product-internal transport attempts are not
+constrained by this runner's semantic invocation budget.
+
+The observer requires supported completed canonical hosted items from matching
+`rawResponseItem/completed` notifications, both terminal turns, and authoritative
+nonempty final replies in the settled thread. Consistent duplicate hosted items
+count once; conflicting duplicates, unrelated-only evidence, local calls/outputs,
+missing calls, missing final text and failed follow-up cannot complete it. The
+public raw notification follows canonical history recording in the current
+product source. This observation is not an independent durable-file inspection.
+Per turn, observation is bounded to 4096 frames / 64 MiB and 64 hosted calls of
+at most 64 KiB each, in addition to the existing stdio bounds. Credited identities
+are keyed by turn and item and retained across the single continuation, at most
+128 total. Consistent delayed prior-turn duplicates do not add credit; changed
+payloads or newly appearing hosted items after that turn's settled-read fence
+fail. Supported hosted X may coexist with a Web scenario without being mistaken
+for local custom execution; only the selected scenario earns hosted credit. Only safe metadata,
+counts, booleans and last stage leave the observer.
+
+Deterministic public-stdio fake-process tests execute each retained policy,
+exercise successful and failed first/follow-up turns, validate exact config
+requests, and prohibit runner resubmission. They enter the existing required
+`go test -race -count=1 -timeout=6m -v ./facts ./live` job automatically.
+
+This is deliberately narrower than the historical packaged hosted Stories:
+HTTP wire replay and policy projection require current native composition proof;
+actual packaged/backend execution requires #331/#339 and a reviewed invocation.
+This observer does not establish outbound replay, cold restart, search-result
+relevance, UI streaming completeness or temporal lifecycle behavior (#362/#363).
+No old Story is reintroduced as accepted authority and no Live PROVEN result is
+claimed. The retained source and offline tests cannot close those independent
+obligations.

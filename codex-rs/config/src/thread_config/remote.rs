@@ -188,6 +188,7 @@ fn model_provider_from_proto(
         gateway_oauth: None,
         aws: None,
         wire_api,
+        x_search: None,
         query_params: provider.query_params.map(redacted_string_map),
         http_headers: provider.http_headers.map(redacted_string_map),
         env_http_headers: provider.env_http_headers.map(|map| map.values),
@@ -207,6 +208,10 @@ fn model_provider_to_proto(
     id: impl Into<String>,
     provider: ModelProviderInfo,
 ) -> proto::ModelProvider {
+    assert!(
+        provider.x_search.is_none(),
+        "remote proto cannot encode x_search policy"
+    );
     let ModelProviderInfo {
         name,
         base_url,
@@ -217,6 +222,7 @@ fn model_provider_to_proto(
         auth,
         gateway_oauth: _,
         aws: _,
+        x_search: _,
         wire_api,
         query_params,
         http_headers,
@@ -595,6 +601,7 @@ mod tests {
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
             supports_websockets: true,
+            x_search: None,
             supports_standalone_web_search: true,
             gateway_oauth: None,
             aws: None,

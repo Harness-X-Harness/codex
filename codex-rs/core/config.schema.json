@@ -1789,6 +1789,19 @@
       ],
       "type": "object"
     },
+    "GrokXSearchOptions": {
+      "additionalProperties": false,
+      "description": "Provider defaults for the inclusive X Search date window.\n\nExplicit request dates override defaults independently. Empty options do not disable X Search: a nonempty Grok tool plan always includes it exactly once.",
+      "properties": {
+        "from_date": {
+          "type": "string"
+        },
+        "to_date": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "GuardianV2ConfigToml": {
       "additionalProperties": false,
       "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
@@ -2708,6 +2721,14 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "x_search": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/GrokXSearchOptions"
+            }
+          ],
+          "description": "Grok hosted X-search date defaults; explicit request dates take precedence."
         }
       },
       "type": "object"
@@ -6482,6 +6503,13 @@
         },
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "excluded_domains": {
+          "description": "Grok hosted Web Search only; at most five domains, exclusive with allowed_domains.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"

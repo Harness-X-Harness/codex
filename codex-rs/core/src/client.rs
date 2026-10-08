@@ -920,6 +920,15 @@ impl ModelClient {
             projected_tools = tools;
             projected_tools.as_slice()
         } else {
+            if prompt.tools.iter().any(|spec| {
+                matches!(spec,
+                codex_tools::ToolSpec::WebSearch { filters: Some(filters), .. }
+                    if filters.excluded_domains.as_ref().is_some_and(|domains| !domains.is_empty()))
+            }) {
+                return Err(CodexErr::InvalidRequest(
+                    "excluded_domains requires the Grok Responses dialect".into(),
+                ));
+            }
             prompt.tools.as_ref()
         };
         let is_openai = self.state.provider.info().is_openai();
@@ -1033,7 +1042,10 @@ impl ModelClient {
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
-            if item.id().is_some_and(|id| !id.is_prefixed()) {
+            let preserves_hosted_id = self.state.provider.api_dialect()
+                == codex_api::ApiDialect::Grok
+                && codex_protocol::grok_hosted::is_completed_search(item);
+            if !preserves_hosted_id && item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }
             if !self.state.content_item_kinds_enabled {
@@ -1782,6 +1794,7 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_dialect(self.client.state.provider.api_dialect())
+            .with_grok_x_search(self.client.state.provider.info().x_search.clone())
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 

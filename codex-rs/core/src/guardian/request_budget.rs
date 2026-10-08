@@ -91,7 +91,13 @@ pub(crate) async fn prepare_prompt(
             /*include_internal*/ true,
         )?;
         let mut context = retained.context.clone();
-        context.retain_new_instructions(&history.for_prompt_annotated(&model.input_modalities));
+        context.retain_new_instructions(&history.for_prompt_annotated_except_hosted(
+            &model.input_modalities,
+            |item| {
+                step.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+                    && codex_protocol::grok_hosted::is_completed_search(item)
+            },
+        ));
         let context = context
             .enforce_budget(
                 RequestBudget {

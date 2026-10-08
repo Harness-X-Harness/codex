@@ -447,3 +447,56 @@ and review against an actual green canonical revision establish the new accepted
 product source in #333. Native green, branch existence, and artifact availability
 each retain their narrower meaning.
 
+## C7 hosted/search prerequisite candidate
+
+After the accepted local function/custom round-trip slice (#366), the next complete
+prerequisite is hosted Web/X request policy, terminal persistence, follow-up and
+cold-resume replay. It does not claim wire-time UI visibility (#362/#363), fresh
+backend success, or closure of all C7/#322/#333.
+
+Canonical local planning and reverse routes remain function/custom-only. Grok
+request copies preserve hosted Web declarations and add one X declaration only
+for nonempty plans. Provider X date defaults are semantic configuration, not
+transport state; explicit request dates override defaults per field. Strict
+calendar validation and merged range ordering fail before transport. Empty
+configuration does not disable X; remote/other-dialect policy cannot be silently
+ignored. Web allow/exclude lists are mutually exclusive when nonempty, bounded
+to five domains, and empty lists are omitted. Known cached/indexed/live hints
+retain the explicitly accepted [single Grok wire shape](https://github.com/Harness-X-Harness/codex/blob/b187b716787cf078a4c0f51986eb3555e9f6c6de/grok/docs/request-whitelist.md#L296-L304); no distinct backend enforcement is
+claimed. Other restrictions are rejected, not dropped.
+
+Hosted ingress requires the explicit Grok dialect, its advertised request
+capability and a completed typed item with required replay identity. Following
+#363's newer explicit-classification contract, X support is limited to
+`x_keyword_search`, `x_semantic_search`, `x_user_search` and `x_thread_fetch`.
+This intentionally narrows the old broad completed-custom predicate, whose
+accepted tests also classified arbitrary names; it is not historical equivalence.
+A projected local custom tool with the same name still restores with no hosted
+status and retains local dispatch/output pairing. Unknown/malformed/incomplete
+hosted calls fail closed before persistence or dispatch.
+
+Durable hosted items retain canonical IDs, status and payload exactly once.
+Outgoing Grok replay copies retain Web type/id/action and X type/id/call_id/name/input;
+status is intentionally omitted under the retained wire whitelist. Non-prefixed
+provider IDs are preserved for these validated records. No local work or local
+output is synthesized, including normalization for continuation, compaction,
+Guardian budgeting, prompt inspection and cold restart. Stock normalization
+continues to require ordinary local outputs.
+
+Hosted replay uses the stock 10,000 estimated-token context ceiling (40,000
+serialized UTF-8 bytes), and retains the stream's existing bounds. This is the
+stock bytes/4 estimate, not a measured Grok tokenizer guarantee. Identity
+recognition remains size-independent; admission/replay reject oversize data with
+an explicit error instead of reclassifying it as local or truncating it.
+P0/manual-review note under AGENTS: this bounded context can exceed 1,000 tokens;
+review the explicit cap and original provider-input preservation. No unbounded
+provider text, invented result or new transient UI state is introduced here.
+
+Source authority: [#322](https://github.com/Harness-X-Harness/codex/issues/322),
+[#363](https://github.com/Harness-X-Harness/codex/issues/363),
+[xAI Web Search](https://docs.x.ai/developers/tools/web-search),
+[xAI X Search](https://docs.x.ai/developers/tools/x-search).
+Native proof must execute the new policy/replay/config cases and preserve all
+previously required proof, regenerate all owned public/config/SDK outputs, pass
+independent review, then pass the protected squash's exact canonical push proof.
+A draft candidate or failing construction run is not acceptance evidence.

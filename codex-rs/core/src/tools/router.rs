@@ -165,7 +165,21 @@ impl ToolRouter {
             // canonical custom-tool diff consumers or expose provider-only identities.
             ResponseEvent::OutputItemAdded(ResponseItem::FunctionCall { .. }) => Ok(None),
             ResponseEvent::OutputItemDone(item) => {
-                let item = routes.restore_response_item(item)?;
+                // Only raw hosted completions from the advertised Grok plan bypass
+                // local reverse routing. Restored local custom calls have no status.
+                let hosted = (codex_protocol::grok_hosted::is_completed_x_search(&item)
+                    && !self.model_visible_specs.is_empty())
+                    || (codex_protocol::grok_hosted::is_completed_web_search(&item)
+                        && self
+                            .model_visible_specs
+                            .iter()
+                            .any(|spec| matches!(spec, ToolSpec::WebSearch { .. })));
+                let item = if hosted {
+                    codex_protocol::grok_hosted::project_search_replay(&item)?;
+                    item
+                } else {
+                    routes.restore_response_item(item)?
+                };
                 if let ResponseItem::CustomToolCall {
                     name,
                     namespace,

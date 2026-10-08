@@ -7,13 +7,92 @@ use crate::flat_projection::custom_route;
 use crate::flat_projection::normalize_name;
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 impl FlatToolRoutes {
     pub fn project_history(&self, history: &[ResponseItem]) -> Result<Vec<ResponseItem>, String> {
+        let mut pending_calls: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        let mut local_custom_calls = BTreeSet::new();
+        for (index, item) in history.iter().enumerate() {
+            match item {
+                ResponseItem::FunctionCall { call_id, .. }
+                | ResponseItem::CustomToolCall { call_id, .. } => {
+                    let candidates = pending_calls.entry(call_id.as_str()).or_default();
+                    // Retain a paired occurrence for duplicate outputs only until
+                    // another call with this response-local ID arrives.
+                    if candidates
+                        .first()
+                        .is_some_and(|index| local_custom_calls.contains(index))
+                    {
+                        candidates.clear();
+                    }
+                    candidates.push(index);
+                }
+                ResponseItem::CustomToolCallOutput { call_id, name, .. } => {
+                    let Some(candidates) = pending_calls.get_mut(call_id.as_str()) else {
+                        return Err(format!(
+                            "custom output has no paired custom call: {call_id}"
+                        ));
+                    };
+                    // Local execution outputs can follow intervening hosted items
+                    // from the same response. Prefer the uniquely local-shaped call.
+                    let mut local = candidates.iter().copied().filter(|index| {
+                        !codex_protocol::grok_hosted::is_completed_search(&history[*index])
+                    });
+                    let call_index = match (local.next(), local.next()) {
+                        (Some(index), None) => index,
+                        (None, None) => {
+                            // Historical local X calls can have the hosted shape.
+                            // An explicit output name is additional identity evidence.
+                            let mut matching = candidates.iter().copied().filter(|index| {
+                                matches!(&history[*index], ResponseItem::CustomToolCall {
+                                    name: call_name, ..
+                                } if name.as_ref().is_none_or(|name| name == call_name))
+                            });
+                            let Some(index) = matching.next() else {
+                                return Err(
+                                    "custom output identity differs from its call".to_string()
+                                );
+                            };
+                            if matching.next().is_some() {
+                                return Err(format!("ambiguous custom output history: {call_id}"));
+                            }
+                            index
+                        }
+                        _ => return Err(format!("ambiguous custom output history: {call_id}")),
+                    };
+                    if !matches!(history[call_index], ResponseItem::CustomToolCall { .. }) {
+                        return Err(format!(
+                            "custom output has no paired custom call: {call_id}"
+                        ));
+                    }
+                    local_custom_calls.insert(call_index);
+                    candidates.clear();
+                    candidates.push(call_index);
+                }
+                _ => {}
+            }
+        }
+        // Canonical local custom history may carry completed status, including
+        // X-search names. Only its paired occurrence takes precedence over the
+        // hosted shape; an older output cannot reclassify a later hosted item.
+        let is_hosted = |index: usize, item: &ResponseItem| {
+            codex_protocol::grok_hosted::is_completed_search(item)
+                && !local_custom_calls.contains(&index)
+        };
         let mut routes = self.clone();
         let mut calls = BTreeMap::new();
-        for item in history {
+        for (index, item) in history.iter().enumerate() {
+            if is_hosted(index, item) {
+                codex_protocol::grok_hosted::project_search_replay(item)?;
+                continue;
+            }
             let (call_id, route) = match item {
+                ResponseItem::CustomToolCall {
+                    status: Some(_), ..
+                } if !local_custom_calls.contains(&index) => {
+                    return Err("unsupported hosted custom history".to_string());
+                }
                 ResponseItem::FunctionCall {
                     call_id,
                     name,
@@ -39,7 +118,8 @@ impl FlatToolRoutes {
                 return Err(format!("duplicate history tool call ID: {call_id}"));
             }
         }
-        history.iter().cloned().map(|item| match item {
+        history.iter().cloned().enumerate().map(|(index, item)| match item {
+            item if is_hosted(index, &item) => Ok(item),
             ResponseItem::FunctionCall {
                 id, name, namespace, arguments, encrypted_function_args, call_id,
                 internal_chat_message_metadata_passthrough,
