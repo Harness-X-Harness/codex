@@ -1985,7 +1985,7 @@ impl ChatWidget {
                     self.transcript
                         .search_activity
                         .cells()
-                        .find_map(|cell| cell.transcript_animation_tick())
+                        .find_map(super::history_cell::HistoryCell::transcript_animation_tick)
                 })
                 .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
         })

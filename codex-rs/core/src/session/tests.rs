@@ -12478,7 +12478,8 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
 }
 
 #[tokio::test]
-async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
+async fn tool_calls_reopen_mailbox_delivery_for_current_turn() -> codex_protocol::error::Result<()>
+{
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let communication = InterAgentCommunication::new(
         AgentPath::try_from("/root/worker").expect("worker path should parse"),
@@ -12521,9 +12522,14 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         cancellation_token: CancellationToken::new(),
     };
 
-    let output = handle_output_item_done(&mut ctx, item, /*previously_active_item*/ None)
-        .await
-        .expect("tool call should be handled");
+    let search_activity = crate::session::search_activity::SearchActivityScope::new()?;
+    let output = handle_output_item_done(
+        &mut ctx,
+        item,
+        /*previously_active_item*/ None,
+        &search_activity,
+    )
+    .await?;
 
     assert!(output.needs_follow_up);
     assert!(output.tool_future.is_some());
@@ -12531,6 +12537,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         (sess.input_queue.get_pending_input(&sess.active_turn).await).0,
         vec![TurnInput::InterAgentCommunication(communication)],
     );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

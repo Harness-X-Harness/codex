@@ -316,7 +316,7 @@ async fn grok_public_search_activity_gates_start_settlement_and_exact_transcript
     assert!(
         followup["input"]
             .as_array()
-            .unwrap()
+            .context("follow-up input array")?
             .iter()
             .all(|item| item["call_id"] != "web-1")
     );
@@ -538,7 +538,7 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
         assert_eq!(
             followup["input"]
                 .as_array()
-                .unwrap()
+                .context("same-turn follow-up input array")?
                 .iter()
                 .filter(|item| item["type"] == "web_search_call")
                 .cloned()
@@ -571,7 +571,7 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
             assert!(
                 request["tools"]
                     .as_array()
-                    .unwrap()
+                    .context("advertised tool array")?
                     .iter()
                     .any(|tool| tool["name"] == name)
             );
@@ -617,7 +617,7 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
     assert_eq!(
         followup["input"]
             .as_array()
-            .unwrap()
+            .context("follow-up input array")?
             .iter()
             .filter(|item| item["type"] == "web_search_call")
             .cloned()
@@ -669,13 +669,13 @@ async fn grok_public_search_activity_new_turn_may_reuse_a_retained_provider_id()
     assert_eq!(
         seen.canonical_searches
             .iter()
-            .map(|item| item["query"].as_str().unwrap())
-            .collect::<Vec<_>>(),
+            .map(|item| item["query"].as_str().context("canonical search query"))
+            .collect::<Result<Vec<_>>>()?,
         vec!["first", "second"]
     );
     let read = read_thread(&mut fixture.app, &fixture.thread_id).await?;
     assert_first_search_preserved(&read, &turns[0], &seen.canonical_searches[0])?;
-    assert_eq!(read.thread.turns.iter().find(|turn| turn.id == turns[1]).unwrap().items.iter()
+    assert_eq!(read.thread.turns.iter().find(|turn| turn.id == turns[1]).context("second turn retained history")?.items.iter()
         .filter(|item| matches!(item, ThreadItem::WebSearch(search) if search.id == "web-1" && search.query == "second")).count(), 1);
     Ok(())
 }
@@ -731,8 +731,8 @@ async fn grok_public_search_activity_multiple_interleaved_searches_keep_their_id
     assert_eq!(
         seen.canonical_searches
             .iter()
-            .map(|item| item["id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
+            .map(|item| item["id"].as_str().context("canonical search item ID"))
+            .collect::<Result<Vec<_>>>()?,
         vec!["web-1", "web-2"]
     );
     Ok(())

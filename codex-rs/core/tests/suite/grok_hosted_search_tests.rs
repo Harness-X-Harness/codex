@@ -1047,10 +1047,10 @@ async fn hosted_search_activity_guard_preserves_stock_plan_without_a_preview() -
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].id, "stock-plan-message");
     assert_eq!(
-        messages[0].content,
-        vec![codex_protocol::items::AgentMessageContent::Text {
+        serde_json::to_value(&messages[0].content)?,
+        serde_json::to_value(vec![codex_protocol::items::AgentMessageContent::Text {
             text: "unchanged plan answer".into(),
-        }]
+        }])?
     );
     assert_eq!(mock.requests().len(), 1);
     Ok(())

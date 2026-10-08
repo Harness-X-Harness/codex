@@ -587,10 +587,10 @@ impl ChatWidget {
             }
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
-            ThreadItem::WebSearch(item) => {
-                if !self.has_search_preview(&notification.turn_id, &item.id) {
-                    self.on_web_search_begin(item.id);
-                }
+            ThreadItem::WebSearch(item)
+                if !self.has_search_preview(&notification.turn_id, &item.id) =>
+            {
+                self.on_web_search_begin(item.id);
             }
             ThreadItem::ImageGeneration(_) => {
                 self.on_image_generation_begin();
