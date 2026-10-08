@@ -7,6 +7,7 @@ use axum::Json;
 use axum::Router;
 use axum::body::Body;
 use axum::routing::post;
+use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::SearchActivityKind;
 use codex_app_server_protocol::SearchActivityNotification;
@@ -17,7 +18,9 @@ use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -601,17 +604,29 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
     fixture.server.send(stream, frames).await?;
     let completed: TurnCompletedNotification =
         serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
+    assert_eq!(completed.thread_id, fixture.thread_id);
+    assert_eq!(completed.turn.id, original_turn_id);
     assert_eq!(completed.turn.status, TurnStatus::Failed);
-    let terminal_same_id = completed
-        .turn
-        .items
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<serde_json::Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|item| item["id"] == "web-1")
-        .collect::<Vec<_>>();
-    assert_eq!(terminal_same_id, vec![first_canonical.clone()]);
+    // Failed-turn notifications omit items; read/replay below proves retention.
+    assert_eq!(completed.turn.items_view, TurnItemsView::NotLoaded);
+    assert_eq!(completed.turn.items, Vec::<ThreadItem>::new());
+    let reason = match collision {
+        SearchCollision::SameResponse | SearchCollision::NextSampling => {
+            "search item ID is already used in this turn"
+        }
+        SearchCollision::LaterMessage | SearchCollision::LaterLocalCall => {
+            "retained search item ID cannot be rebound in this turn"
+        }
+    };
+    assert_eq!(
+        completed.turn.error,
+        Some(TurnError {
+            misalignment: None,
+            message: format!("stream disconnected before completion: {reason}"),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: None,
+        })
+    );
 
     assert_eq!(
         seen.activity
