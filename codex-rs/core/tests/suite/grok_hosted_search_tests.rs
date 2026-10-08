@@ -311,7 +311,9 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
         .iter()
         .cloned()
         .map(|mut item| {
-            item.as_object_mut().unwrap().remove("status");
+            item.as_object_mut()
+                .expect("hosted item object")
+                .remove("status");
             item
         })
         .collect::<Vec<_>>();

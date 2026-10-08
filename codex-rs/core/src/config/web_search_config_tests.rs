@@ -65,7 +65,7 @@ excluded_domains = ["example.com"]
             wire_api: WireApi::GrokResponses,
             http_headers: Some(HashMap::from([(
                 "x-openai-actor-authorization".to_string(),
-                "test-actor".to_string(),
+                "test-actor".into(),
             )])),
             ..Default::default()
         },
