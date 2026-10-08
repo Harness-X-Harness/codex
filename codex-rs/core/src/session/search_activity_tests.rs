@@ -177,3 +177,22 @@ async fn search_activity_same_turn_reuse_is_rejected_before_a_second_observation
             .is_err()
     );
 }
+
+#[test]
+fn search_activity_never_becomes_realtime_text() {
+    use crate::session::turn::realtime_text_for_event;
+    for state in [
+        SearchActivityState::Running,
+        SearchActivityState::Completed,
+        SearchActivityState::Cleared,
+    ] {
+        let event = EventMsg::SearchActivity(SearchActivityEvent {
+            attempt_id: 1,
+            output_index: 2,
+            item_id: "web".into(),
+            kind: SearchActivityKind::Web,
+            state,
+        });
+        assert_eq!(realtime_text_for_event(&event), None);
+    }
+}

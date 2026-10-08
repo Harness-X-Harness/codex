@@ -172,13 +172,20 @@ impl GrokSequencer {
                 }
             }
         }
-        Ok(state.map(|state| ResponseEvent::SearchActivity {
+        let Some(state) = state else {
+            return Ok(None);
+        };
+        // Broken admission state must fail the stream, never panic or fabricate activity.
+        let item_id = self
+            .lifetimes
+            .get(&index)
+            .and_then(|bound| bound.id.as_ref())
+            .filter(|id| !id.is_empty())
+            .cloned()
+            .ok_or_else(|| invalid("missing admitted Web item identity"))?;
+        Ok(Some(ResponseEvent::SearchActivity {
             output_index: index,
-            // Only validated, nonempty Web identities can produce an observation.
-            item_id: self.lifetimes[&index]
-                .id
-                .clone()
-                .expect("admitted Web item ID"),
+            item_id,
             kind: codex_protocol::SearchActivityKind::Web,
             state,
         }))
@@ -251,7 +258,7 @@ impl GrokSequencer {
                         let bound = self
                             .lifetimes
                             .remove(&self.next)
-                            .expect("admitted lifetime");
+                            .ok_or_else(|| invalid("missing admitted output item lifetime"))?;
                         self.bytes -= bound.bytes();
                         self.next = self
                             .next

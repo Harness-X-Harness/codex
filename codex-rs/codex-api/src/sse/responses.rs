@@ -39,23 +39,6 @@ const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
-pub fn spawn_response_stream(
-    stream_response: StreamResponse,
-    idle_timeout: Duration,
-    telemetry: Option<Arc<dyn SseTelemetry>>,
-    turn_state: Option<Arc<OnceLock<String>>>,
-    dialect: ApiDialect,
-) -> ResponseStream {
-    spawn_response_stream_with_search(
-        stream_response,
-        idle_timeout,
-        telemetry,
-        turn_state,
-        dialect,
-        SearchActivityAdmission::Disabled,
-    )
-}
-
 pub(crate) fn spawn_response_stream_with_search(
     stream_response: StreamResponse,
     idle_timeout: Duration,
@@ -1659,12 +1642,13 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             stream_response,
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
             ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1700,12 +1684,13 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             stream_response,
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
             ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {

@@ -2059,6 +2059,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
                 .ok()
                 .map(|request| RealtimeEventText::Handoff(format!("{message}\n\n{request}"), None))
         }
+        // A live search preview is visual state, not assistant narration or a handoff.
+        EventMsg::SearchActivity(_) => None,
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::AuthRecoveryStarted(_)
