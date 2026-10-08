@@ -1,4 +1,5 @@
 //! Native Local hosted-search ingress, durable replay, and local dispatch proofs.
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_protocol::config_types::CollaborationMode;
@@ -903,7 +904,7 @@ async fn hosted_search_activity_rejects_contributor_rebinding_and_clears_preview
     assert!(
         request["tools"]
             .as_array()
-            .unwrap()
+            .context("request tool declarations")?
             .iter()
             .any(|tool| tool["type"] == "web_search")
     );
