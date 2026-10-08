@@ -248,3 +248,47 @@ func TestSearchReplayRejectsContinuationLocalExecution(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchReplayRejectsNonHostedCustomCallsWithoutResubmission(t *testing.T) {
+	for _, stage := range []int{1, 2} {
+		for _, local := range []string{
+			`{"type":"custom_tool_call","id":"PRIVATE_LOCAL","call_id":"PRIVATE_LOCAL_CALL","name":"apply_patch","input":"PRIVATE_INPUT"}`,
+			`{"type":"custom_tool_call","id":"PRIVATE_LOCAL","call_id":"PRIVATE_LOCAL_CALL","namespace":"functions","name":"apply_patch","status":"completed","input":"PRIVATE_INPUT"}`,
+			`{"type":"custom_tool_call","id":"PRIVATE_LOCAL","call_id":"PRIVATE_LOCAL_CALL","namespace":"functions","name":"x_keyword_search","status":"completed","input":"PRIVATE_INPUT"}`,
+		} {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				output := `{"type":"custom_tool_call","id":"PRIVATE_HOSTED","call_id":"PRIVATE_CALL","name":"x_keyword_search","status":"completed","input":"PRIVATE_INPUT"},`
+				if requests == stage {
+					output += local + ","
+				}
+				_, _ = w.Write([]byte(`{"status":"completed","output":[` + output + `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+			}))
+			probe, _ := facts.NewProbe(server.URL, "PRIVATE_CANARY")
+			got, err := probe.SearchReplay(context.Background(), "fixture", "x")
+			server.Close()
+			if err == nil || requests != stage || got.Requests != stage || got.Replayed != (stage == 2) || strings.Contains(err.Error(), "PRIVATE_") {
+				t.Fatalf("non-hosted custom execution accepted or resubmitted: %+v, %v; requests=%d", got, err, requests)
+			}
+		}
+	}
+}
+
+func TestSearchReplayAllowsOtherSupportedHostedKind(t *testing.T) {
+	for _, scenario := range []string{"web", "x"} {
+		t.Run(scenario, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				_, _ = w.Write([]byte(`{"status":"completed","output":[{"type":"web_search_call","id":"PRIVATE_WEB","status":"completed","action":{"type":"search","query":"PRIVATE_QUERY"}},{"type":"custom_tool_call","id":"PRIVATE_X","call_id":"PRIVATE_CALL","name":"x_keyword_search","status":"completed","input":"PRIVATE_INPUT"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+			}))
+			defer server.Close()
+			probe, _ := facts.NewProbe(server.URL, "PRIVATE_CANARY")
+			got, err := probe.SearchReplay(context.Background(), "fixture", scenario)
+			if err != nil || !got.Completed || !got.Replayed || got.HostedCalls != 1 || got.Requests != 2 || requests != 2 {
+				t.Fatalf("supported coexisting hosted call rejected: %+v, %v", got, err)
+			}
+		})
+	}
+}

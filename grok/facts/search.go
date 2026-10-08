@@ -86,6 +86,12 @@ func (p *Probe) search(ctx context.Context, model, scenario, stage string, calls
 		switch kind.Type {
 		case "function_call", "function_call_output", "custom_tool_call_output":
 			return observed, nil, errors.New("local execution cannot establish hosted search")
+		case "custom_tool_call":
+			// Hosted X may coexist with a Web fixture. Classification must not
+			// depend on which hosted kind this scenario needs to credit.
+			if _, hosted := searchfixture.ReplayCall(item, "x"); !hosted {
+				return observed, nil, errors.New("local execution cannot establish hosted search")
+			}
 		}
 	}
 	return observed, result.Output, nil

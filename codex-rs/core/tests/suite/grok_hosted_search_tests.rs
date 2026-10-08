@@ -5,6 +5,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use codex_tools::flat_wire_name;
@@ -189,6 +190,251 @@ fn search_history(items: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+fn with_turn_metadata(mut item: Value, turn_id: &str) -> Value {
+    item["internal_chat_message_metadata_passthrough"] = json!({"turn_id":turn_id});
+    item
+}
+
+async fn successful_turn_events(test: &TestCodex, prompt: &str) -> Result<(String, Vec<EventMsg>)> {
+    let submission = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: prompt.into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let TurnInputSubmission::Started { turn_id } = submission else {
+        panic!("expected a new turn, got {submission:?}");
+    };
+    let mut events = Vec::new();
+    let event = wait_for_event(&test.codex, |event| {
+        events.push(event.clone());
+        matches!(event, EventMsg::TurnComplete(completed) if completed.turn_id == turn_id)
+    })
+    .await;
+    let EventMsg::TurnComplete(completed) = event else {
+        unreachable!()
+    };
+    assert!(completed.error.is_none(), "turn failed: {completed:?}");
+    Ok((turn_id, events))
+}
+
+#[derive(Clone, Copy)]
+enum HostedCallTiming {
+    LaterTurn,
+    BeforeLocalOutput,
+}
+
+#[test_case(HostedCallTiming::LaterTurn; "later_turn")]
+#[test_case(HostedCallTiming::BeforeLocalOutput; "before_local_output")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_search_reusing_local_call_id_survives_follow_up_and_cold_resume(
+    timing: HostedCallTiming,
+) -> Result<()> {
+    let server = MockServer::start().await;
+    let home = home(&server, "allowed_domains", WebSearchMode::Live)?;
+    let wire_name = flat_wire_name("custom", &ToolName::plain("apply_patch"));
+    let arguments = json!({"patch":PATCH}).to_string();
+    let local = json!({"type":"function_call", "id":"fc_local", "call_id":CALL_ID,
+        "name":wire_name, "arguments":arguments});
+    // The hosted completion deliberately reuses the earlier local call ID, not its item ID.
+    let hosted = json!({"type":"custom_tool_call", "id":"x_reused_local_call",
+        "call_id":CALL_ID, "status":"completed", "name":"x_keyword_search",
+        "input":"{ \"query\" : \"fixture release\", \"count\" : 3 }"});
+    let mut local_events = vec![
+        responses::ev_response_created("local-edit"),
+        json!({"type":"response.output_item.added", "output_index":0, "item":local}),
+        json!({"type":"response.output_item.done", "output_index":0, "item":local}),
+    ];
+    if let HostedCallTiming::BeforeLocalOutput = timing {
+        let mut pending = hosted.clone();
+        pending["status"] = json!("in_progress");
+        local_events.extend([
+            json!({"type":"response.output_item.added", "output_index":1, "item":pending}),
+            json!({"type":"response.output_item.done", "output_index":1, "item":hosted}),
+        ]);
+    }
+    local_events.push(responses::ev_completed("local-edit"));
+    let mut mocked_responses = vec![responses::sse(local_events), response("local-output", &[])];
+    if let HostedCallTiming::LaterTurn = timing {
+        mocked_responses.push(response("hosted-search", std::slice::from_ref(&hosted)));
+    }
+    mocked_responses.extend([
+        response("immediate-follow-up", &[]),
+        response("cold-resume", &[]),
+    ]);
+    let expected_requests = mocked_responses.len();
+    let mock = responses::mount_sse_sequence(&server, mocked_responses).await;
+    // Explicit Local executor, as in the mixed hosted/local dispatch proof below.
+    let test = builder(Arc::clone(&home)).build(&server).await?;
+    fs::write(test.workspace_path("target.txt"), "before\n")?;
+    let (local_turn_id, mut events) =
+        successful_turn_events(&test, "Change target.txt from before to after.").await?;
+    assert_eq!(mock.requests().len(), 2);
+    assert_eq!(
+        fs::read_to_string(test.workspace_path("target.txt"))?,
+        "after\n"
+    );
+    let initial_history = persisted(&test)
+        .await?
+        .into_iter()
+        .filter(|item| item["call_id"] == CALL_ID)
+        .collect::<Vec<_>>();
+    let local_output = initial_history
+        .iter()
+        .find(|item| item["type"] == "custom_tool_call_output")
+        .expect("the real local edit must produce an output")
+        .clone();
+    assert_eq!(
+        local_output["internal_chat_message_metadata_passthrough"]["turn_id"],
+        local_turn_id
+    );
+    let canonical_local = with_turn_metadata(
+        json!({"type":"custom_tool_call", "id":"fc_local",
+        "call_id":CALL_ID, "name":"apply_patch", "input":PATCH}),
+        &local_turn_id,
+    );
+    let mut canonical_hosted = with_turn_metadata(hosted.clone(), &local_turn_id);
+    let initial_canonical = match timing {
+        HostedCallTiming::LaterTurn => vec![canonical_local.clone(), local_output.clone()],
+        HostedCallTiming::BeforeLocalOutput => vec![
+            canonical_local.clone(),
+            canonical_hosted.clone(),
+            local_output.clone(),
+        ],
+    };
+    assert_eq!(initial_history, initial_canonical);
+
+    if let HostedCallTiming::LaterTurn = timing {
+        let (hosted_turn_id, hosted_events) =
+            successful_turn_events(&test, "Search X for the fixture release.").await?;
+        events.extend(hosted_events);
+        canonical_hosted = with_turn_metadata(hosted.clone(), &hosted_turn_id);
+        assert_eq!(
+            mock.requests().len(),
+            3,
+            "hosted calls need no local follow-up"
+        );
+    }
+    let canonical = match timing {
+        HostedCallTiming::LaterTurn => {
+            vec![canonical_local, local_output.clone(), canonical_hosted]
+        }
+        HostedCallTiming::BeforeLocalOutput => {
+            vec![canonical_local, canonical_hosted, local_output.clone()]
+        }
+    };
+    events.extend(
+        successful_turn_events(&test, "Summarize the saved search.")
+            .await?
+            .1,
+    );
+    assert_eq!(
+        mock.requests().len(),
+        expected_requests - 1,
+        "the immediate replay must succeed"
+    );
+    let before_resume = persisted(&test).await?;
+
+    let resumed = builder(home).restart(&server, &test).await?;
+    events.extend(
+        successful_turn_events(&resumed, "Continue without editing again.")
+            .await?
+            .1,
+    );
+    let after_resume = persisted(&resumed).await?;
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        expected_requests,
+        "the durable replay must succeed"
+    );
+
+    for history in [&before_resume, &after_resume] {
+        assert_eq!(
+            history
+                .iter()
+                .filter(|item| item["call_id"] == CALL_ID)
+                .cloned()
+                .collect::<Vec<_>>(),
+            canonical,
+            "the local pair and hosted identity, completion status, and input stay canonical"
+        );
+        assert_eq!(
+            history
+                .iter()
+                .filter(|item| item["type"] == "function_call_output"
+                    || item["type"] == "custom_tool_call_output")
+                .count(),
+            1,
+            "hosted completions must not synthesize outputs"
+        );
+    }
+
+    let wire_output = requests[1]
+        .input()
+        .into_iter()
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == CALL_ID)
+        .expect("the automatic follow-up must carry the local output");
+    assert_eq!(wire_output["output"], local_output["output"]);
+    let wire_local_pair = vec![local.clone(), wire_output.clone()];
+    let mut wire_hosted = hosted;
+    wire_hosted
+        .as_object_mut()
+        .expect("hosted item")
+        .remove("status");
+    let wire_history = match timing {
+        HostedCallTiming::LaterTurn => vec![local, wire_output, wire_hosted],
+        HostedCallTiming::BeforeLocalOutput => vec![local, wire_hosted, wire_output],
+    };
+    // Include the automatic local-output request: in the interleaved case it
+    // already needs to replay both calls before any further user turn.
+    for (index, request) in requests.iter().enumerate().skip(1) {
+        let input = request.input();
+        assert!(input.iter().all(|item| {
+            item.get("internal_chat_message_metadata_passthrough")
+                .is_none()
+        }));
+        let expected = if matches!(timing, HostedCallTiming::LaterTurn) && index < 3 {
+            &wire_local_pair
+        } else {
+            &wire_history
+        };
+        assert_eq!(request.path(), "/v1/responses");
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| item["call_id"] == CALL_ID)
+                .cloned()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            expected.as_slice(),
+            "warm and cold replay must preserve the hosted item without flattening it"
+        );
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| item["type"] == "function_call_output"
+                    || item["type"] == "custom_tool_call_output")
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, EventMsg::PatchApplyBegin(_)))
+            .count(),
+        1,
+        "the real local edit must execute exactly once across hosted search and replay"
+    );
+    assert_eq!(
+        fs::read_to_string(test.workspace_path("target.txt"))?,
+        "after\n"
+    );
+    Ok(())
+}
+
 #[test_case("allowed_domains", WebSearchMode::Cached; "cached_allowed")]
 #[test_case("excluded_domains", WebSearchMode::Cached; "cached_excluded")]
 #[test_case("allowed_domains", WebSearchMode::Indexed; "indexed_allowed")]
@@ -231,8 +477,13 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
     let test = builder(Arc::clone(&home)).build(&server).await?;
     assert_eq!(test.config.web_search_mode.value(), web_search_mode);
     fs::write(test.workspace_path("target.txt"), "before\n")?;
-    test.submit_text_turn("Search Web and X for the fixture release.")
-        .await?;
+    let (hosted_turn_id, _) =
+        successful_turn_events(&test, "Search Web and X for the fixture release.").await?;
+    let canonical_hosted = hosted
+        .iter()
+        .cloned()
+        .map(|item| with_turn_metadata(item, &hosted_turn_id))
+        .collect::<Vec<_>>();
     assert_eq!(
         mock.requests().len(),
         1,
@@ -243,7 +494,7 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
         "before\n"
     );
     let initial_history = persisted(&test).await?;
-    assert_eq!(search_history(&initial_history), hosted);
+    assert_eq!(search_history(&initial_history), canonical_hosted);
     assert!(
         initial_history.iter().all(|item| {
             item["type"] != "function_call_output" && item["type"] != "custom_tool_call_output"
@@ -251,8 +502,8 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
         "hosted completions must not synthesize local outputs"
     );
 
-    test.submit_text_turn("Now change target.txt from before to after.")
-        .await?;
+    let (local_turn_id, _) =
+        successful_turn_events(&test, "Now change target.txt from before to after.").await?;
     assert_eq!(
         mock.requests().len(),
         3,
@@ -263,7 +514,7 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
         "after\n"
     );
     let before_resume = persisted(&test).await?;
-    assert_eq!(search_history(&before_resume), hosted);
+    assert_eq!(search_history(&before_resume), canonical_hosted);
     let local_pair = before_resume
         .iter()
         .filter(|item| item["call_id"] == CALL_ID)
@@ -272,16 +523,25 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
     assert_eq!(local_pair.len(), 2);
     assert_eq!(
         local_pair[0],
-        json!({"type":"custom_tool_call", "id":"fc_local",
-        "call_id":CALL_ID, "name":"apply_patch", "input":PATCH})
+        with_turn_metadata(
+            json!({"type":"custom_tool_call", "id":"fc_local",
+        "call_id":CALL_ID, "name":"apply_patch", "input":PATCH}),
+            &local_turn_id
+        )
     );
     assert_eq!(local_pair[1]["type"], "custom_tool_call_output");
+    assert_eq!(
+        local_pair[1]["internal_chat_message_metadata_passthrough"]["turn_id"],
+        local_turn_id
+    );
 
     let resumed = builder(home).restart(&server, &test).await?;
     assert_eq!(resumed.config.web_search_mode.value(), web_search_mode);
-    resumed
-        .submit_text_turn("Summarize the saved search without editing again.")
-        .await?;
+    successful_turn_events(
+        &resumed,
+        "Summarize the saved search without editing again.",
+    )
+    .await?;
     let requests = mock.requests();
     assert_eq!(requests.len(), 4);
     for request in &requests {
@@ -319,6 +579,10 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
         .collect::<Vec<_>>();
     for request in &requests[1..] {
         let input = request.input();
+        assert!(input.iter().all(|item| {
+            item.get("internal_chat_message_metadata_passthrough")
+                .is_none()
+        }));
         assert_eq!(
             search_history(&input),
             wire_hosted,
@@ -359,7 +623,7 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
         );
     }
     let after_resume = persisted(&resumed).await?;
-    assert_eq!(search_history(&after_resume), hosted);
+    assert_eq!(search_history(&after_resume), canonical_hosted);
     assert_eq!(
         after_resume
             .iter()

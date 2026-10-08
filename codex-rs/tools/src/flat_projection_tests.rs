@@ -424,3 +424,153 @@ fn x_named_local_custom_still_uses_function_wire_and_required_custom_output() {
     // The paired output distinguishes this canonical local call from hosted X.
     assert_eq!(history[0], local);
 }
+
+#[test]
+fn reused_hosted_call_id_does_not_reclassify_completed_local_history() {
+    for name in ["apply_patch", "x_keyword_search"] {
+        for status in [None, Some("completed")] {
+            for hosted_name in ["x_keyword_search", "x_semantic_search"] {
+                let local = item(json!({
+                    "type":"custom_tool_call", "id":"local-id", "status":status,
+                    "call_id":"reused", "name":name, "input":"local input"
+                }));
+                let output = item(json!({
+                    "type":"custom_tool_call_output", "id":"local-output-id",
+                    "call_id":"reused", "name":name, "output":"local result"
+                }));
+                let hosted = item(json!({
+                    "type":"custom_tool_call", "id":"hosted-id", "status":"completed",
+                    "call_id":"reused", "name":hosted_name, "input":"hosted input"
+                }));
+                let wire = flat_wire_name("custom", &ToolName::plain(name));
+                let input_key = if name == "apply_patch" {
+                    "patch"
+                } else {
+                    "input"
+                };
+                let arguments = json!({(input_key):"local input"}).to_string();
+                let projected_local = item(json!({
+                    "type":"function_call", "id":"local-id", "call_id":"reused",
+                    "name":wire, "arguments":arguments
+                }));
+                let projected_output = item(json!({
+                    "type":"function_call_output", "id":"local-output-id",
+                    "call_id":"reused", "name":wire, "output":"local result"
+                }));
+                // Neither older outputs nor their duplicates change a later hosted item.
+                let mut cases = vec![
+                    (
+                        vec![local.clone(), output.clone(), hosted.clone()],
+                        vec![
+                            projected_local.clone(),
+                            projected_output.clone(),
+                            hosted.clone(),
+                        ],
+                    ),
+                    (
+                        vec![
+                            local.clone(),
+                            output.clone(),
+                            output.clone(),
+                            hosted.clone(),
+                        ],
+                        vec![
+                            projected_local.clone(),
+                            projected_output.clone(),
+                            projected_output.clone(),
+                            hosted.clone(),
+                        ],
+                    ),
+                ];
+                // A known-local call can finish after intervening hosted items. Two
+                // same-name completed X shapes are ambiguous and tested below.
+                // Distinct X names are disambiguated by the output name.
+                if name != hosted_name || status.is_none() {
+                    cases.extend([
+                        (
+                            vec![hosted.clone(), local.clone(), output.clone()],
+                            vec![
+                                hosted.clone(),
+                                projected_local.clone(),
+                                projected_output.clone(),
+                            ],
+                        ),
+                        (
+                            vec![
+                                local.clone(),
+                                hosted.clone(),
+                                output.clone(),
+                                output.clone(),
+                            ],
+                            vec![
+                                projected_local.clone(),
+                                hosted.clone(),
+                                projected_output.clone(),
+                                projected_output.clone(),
+                            ],
+                        ),
+                    ]);
+                }
+                for (history, expected) in cases {
+                    let before = history.clone();
+                    let routes = FlatToolRoutes::default();
+                    assert_eq!(routes.project_history(&history).unwrap(), expected);
+                    assert_eq!(routes.project_history(&history).unwrap(), expected);
+                    assert_eq!(history, before);
+                    assert!(routes.resolve(&wire).is_none());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn occurrence_pairing_keeps_invalid_local_history_fail_closed() {
+    let local = item(json!({
+        "type":"custom_tool_call", "id":"local-id", "status":"completed",
+        "call_id":"reused", "name":"x_keyword_search", "input":"local input"
+    }));
+    let output = item(json!({
+        "type":"custom_tool_call_output", "call_id":"reused", "output":"local result"
+    }));
+    let function = item(json!({
+        "type":"function_call", "id":"function-id", "call_id":"reused",
+        "name":"run", "arguments":"{}"
+    }));
+    let wrong_name = item(json!({
+        "type":"custom_tool_call_output", "call_id":"reused", "name":"other", "output":"result"
+    }));
+    let hosted = item(json!({
+        "type":"custom_tool_call", "id":"hosted-id", "status":"completed",
+        "call_id":"reused", "name":"x_semantic_search", "input":"hosted input"
+    }));
+    let named_output = item(json!({
+        "type":"custom_tool_call_output", "call_id":"reused",
+        "name":"x_keyword_search", "output":"result"
+    }));
+    let mut same_name_hosted = hosted.clone();
+    if let ResponseItem::CustomToolCall { name, .. } = &mut same_name_hosted {
+        *name = "x_keyword_search".to_string();
+    }
+    let known_local = item(json!({
+        "type":"custom_tool_call", "id":"known-local", "call_id":"reused",
+        "name":"apply_patch", "input":"local input"
+    }));
+    let unsupported = item(json!({
+        "type":"custom_tool_call", "id":"unknown-id", "status":"completed",
+        "call_id":"reused", "name":"x_unknown", "input":"input"
+    }));
+    for history in [
+        vec![local.clone(), output.clone(), local.clone(), output.clone()],
+        vec![output.clone(), local.clone()],
+        vec![local.clone(), function, output.clone()],
+        vec![local.clone(), wrong_name.clone()],
+        vec![local.clone(), hosted.clone(), wrong_name],
+        vec![local.clone(), same_name_hosted, named_output.clone()],
+        vec![known_local, local.clone(), named_output],
+        vec![local.clone(), hosted, output.clone()],
+        vec![local, output, unsupported],
+    ] {
+        assert!(FlatToolRoutes::default().project_history(&history).is_err());
+    }
+}

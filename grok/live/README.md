@@ -182,7 +182,12 @@ missing calls, missing final text and failed follow-up cannot complete it. The
 public raw notification follows canonical history recording in the current
 product source. This observation is not an independent durable-file inspection.
 Per turn, observation is bounded to 4096 frames / 64 MiB and 64 hosted calls of
-at most 64 KiB each, in addition to the existing stdio bounds. Only safe metadata,
+at most 64 KiB each, in addition to the existing stdio bounds. Credited identities
+are keyed by turn and item and retained across the single continuation, at most
+128 total. Consistent delayed prior-turn duplicates do not add credit; changed
+payloads or newly appearing hosted items after that turn's settled-read fence
+fail. Supported hosted X may coexist with a Web scenario without being mistaken
+for local custom execution; only the selected scenario earns hosted credit. Only safe metadata,
 counts, booleans and last stage leave the observer.
 
 Deterministic public-stdio fake-process tests execute each retained policy,

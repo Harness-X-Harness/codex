@@ -55,14 +55,14 @@ type searchProbe struct {
 	threadID, turnID, previousID, scenario string
 	evidence                               *Evidence
 	result                                 *SearchEvidence
-	calls                                  map[string]string
+	calls                                  map[string]map[string]string
 	frames, bytes                          int
 	terminal                               bool
 }
 
 func (p *searchProbe) observe(prompt string) error {
 	p.evidence.Turns++
-	p.calls, p.frames, p.bytes, p.terminal = map[string]string{}, 0, 0, false
+	p.frames, p.bytes, p.terminal = 0, 0, false
 	var started struct {
 		Turn turn `json:"turn"`
 	}
@@ -73,6 +73,12 @@ func (p *searchProbe) observe(prompt string) error {
 		return errors.New("live: search turn identity unavailable")
 	}
 	p.turnID, p.evidence.Stage = started.Turn.ID, "search_turn_submitted"
+	if p.calls == nil {
+		p.calls = map[string]map[string]string{}
+	}
+	// Keep the previous settled turn's credited identities through the single
+	// continuation. A reused item ID in a new turn is a separate occurrence.
+	p.calls[p.turnID] = map[string]string{}
 	if started.Turn.Status != "inProgress" {
 		if err := p.complete(started.Turn); err != nil {
 			return err
@@ -189,32 +195,44 @@ func (p *searchProbe) notification(message frame) error {
 	}
 	var kind struct {
 		Type string `json:"type"`
+		ID   string `json:"id"`
 	}
 	if json.Unmarshal(event.Item, &kind) != nil {
 		return errors.New("live: invalid search item")
 	}
-	if localSearchItem(kind.Type) {
+	// Raw canonical hosted X is distinct from local custom execution, even
+	// when the selected scenario credits Web. Public ThreadItem notifications
+	// never use raw custom_tool_call; those remain rejected by localSearchItem.
+	_, hostedX := searchfixture.ReplayCall(event.Item, "x")
+	if localSearchItem(kind.Type) && !(message.Method == "rawResponseItem/completed" && hostedX) {
 		return errors.New("live: local execution cannot establish hosted search")
 	}
-	if event.TurnID != p.turnID || message.Method != "rawResponseItem/completed" {
+	if message.Method != "rawResponseItem/completed" {
 		return nil
 	}
+	credited := p.calls[event.TurnID]
+	old, exists := credited[kind.ID]
 	call, ok := searchfixture.ReplayCall(event.Item, p.scenario)
 	if !ok {
+		if exists {
+			return errors.New("live: conflicting hosted search evidence")
+		}
 		return nil
 	}
 	encoded, _ := json.Marshal(call)
-	id := call["id"].(string)
-	if old, exists := p.calls[id]; exists {
+	if exists {
 		if old != string(encoded) {
 			return errors.New("live: conflicting hosted search evidence")
 		}
 		return nil
 	}
-	if len(p.calls) == 64 {
+	if event.TurnID != p.turnID {
+		return errors.New("live: new hosted search evidence after settled turn")
+	}
+	if len(credited) == 64 {
 		return errors.New("live: hosted search item budget exceeded")
 	}
-	p.calls[id] = string(encoded)
+	credited[kind.ID] = string(encoded)
 	p.result.CanonicalCalls++
 	return nil
 }
@@ -235,7 +253,7 @@ func validateSearchTerminal(value turn) error {
 
 func localSearchItem(kind string) bool {
 	switch kind {
-	case "function_call", "function_call_output", "custom_tool_call_output":
+	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
 		return true
 	// Public ThreadItem variants from app-server-protocol/src/protocol/v2/item.rs.
 	// All these local execution capabilities are disabled in this isolated fixture.
