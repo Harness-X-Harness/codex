@@ -54,7 +54,7 @@ const SEED_REPLY: &str = "SEED_REPLY";
 
 // Only these copied test catalogs disable tools pending C7. Shipped bytes are exercised
 // unchanged by grok_model_list and config::grok_catalog_tests, including every capability.
-fn write_grok_fixture(home: &std::path::Path, server_uri: &str) -> Result<()> {
+pub(super) fn write_grok_fixture(home: &std::path::Path, server_uri: &str) -> Result<()> {
     let mut profile: toml::Value = toml::from_str(&std::fs::read_to_string(
         codex_utils_cargo_bin::find_resource!("../../grok/dist/config.toml.example")?,
     )?)?;

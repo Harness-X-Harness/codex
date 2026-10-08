@@ -221,7 +221,7 @@ jobs:
         working-directory: codex-rs
         run: |
           cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
-          cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
@@ -229,7 +229,7 @@ jobs:
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -354,7 +354,7 @@ jobs:
         run: >-
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
+          -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
         uses: ./.github/actions/check-clean-worktree
@@ -585,6 +585,21 @@ jobs:
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::hosted_search::)'
           just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(schema_fixtures_tests::)'
 
+      - name: Test public hosted Web activity timing and cleanup
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::grok_search_activity::)'
+          just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(notification_media::tests::search_activity_)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(turn_timing::tests::search_activity_)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::search_activity::tests::)'
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity::tests::)'
+          just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(policy::search_activity_tests::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_search_activity_)'
+          just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol_event::tests::transient_search_activity_)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(search_activity)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(chatwidget::tests::reasoning_status_tests::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::web_search::)'
+
       - name: Test image dialect consumers and codec normalization
         working-directory: codex-rs
         run: |
@@ -697,7 +712,7 @@ jobs:
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
+          -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
@@ -766,6 +781,26 @@ jobs:
             echo "Patch exceeds 10 MiB; omitted for manual diagnosis." >> "$RUNNER_TEMP/provider-native-subject.txt"
             rm "$RUNNER_TEMP/provider-native.diff"
           fi
+      - name: Stage owned inline search snapshots on failure
+        if: ${{ failure() }}
+        run: |
+          python3 - <<'PYCODE'
+          import os
+          from pathlib import Path
+          import shutil
+
+          root = Path("codex-rs/tui/src")
+          output = Path(os.environ["RUNNER_TEMP"]) / "grok-search-activity-inline-snapshots"
+          for source in (
+              Path("chatwidget/tests/search_activity_tests.rs"),
+              Path("history_cell/search_tests.rs"),
+          ):
+              pending = root / source.parent / f".{source.name}.pending-snap"
+              if pending.is_file():
+                  destination = output / source.parent / f"{source.name}.pending-snap"
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(pending, destination)
+          PYCODE
       - name: Retain generated representations on failure
         if: ${{ failure() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -777,6 +812,7 @@ jobs:
             sdk/python/src/openai_codex/generated
             sdk/python/src/openai_codex/api.py
             codex-rs/tui/src/**/*.snap.new
+            ${{ runner.temp }}/grok-search-activity-inline-snapshots
             ${{ runner.temp }}/provider-native.diff
             ${{ runner.temp }}/provider-native-subject.txt
           if-no-files-found: error

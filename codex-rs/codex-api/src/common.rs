@@ -85,6 +85,13 @@ pub enum ResponseEvent {
     SafetyBuffering(SafetyBuffering),
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    /// Request-admitted, validated observation; does not advance canonical delivery.
+    SearchActivity {
+        output_index: u64,
+        item_id: String,
+        kind: codex_protocol::SearchActivityKind,
+        state: codex_protocol::SearchActivityState,
+    },
     /// Emitted when the server includes `OpenAI-Model` on the stream response.
     /// This can differ from the requested model when backend safety routing applies.
     ServerModel(String),
@@ -128,6 +135,14 @@ pub enum ResponseEvent {
     },
     RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
+}
+
+/// Derived only from the successfully projected outgoing request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum SearchActivityAdmission {
+    #[default]
+    Disabled,
+    Web,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

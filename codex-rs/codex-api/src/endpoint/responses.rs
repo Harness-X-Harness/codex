@@ -1,6 +1,7 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
+use crate::common::SearchActivityAdmission;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::ApiDialect;
@@ -9,7 +10,7 @@ use crate::requests::Compression;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
-use crate::sse::spawn_response_stream;
+use crate::sse::responses::spawn_response_stream_with_search;
 use crate::telemetry::SseTelemetry;
 use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
@@ -102,12 +103,22 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
+        let mut search_activity = SearchActivityAdmission::Disabled;
         let body = match self.dialect {
             ApiDialect::OpenAi => EncodedJsonBody::encode(&request),
-            ApiDialect::Grok => EncodedJsonBody::encode(&crate::grok_request::build_with_search(
-                &request,
-                self.grok_x_search.as_ref(),
-            )?),
+            ApiDialect::Grok => {
+                let projected =
+                    crate::grok_request::build_with_search(&request, self.grok_x_search.as_ref())?;
+                // Inspect the admitted wire request, not a provider name or an
+                // unvalidated incoming status. Projection remains the policy owner.
+                if projected["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool["type"] == "web_search"))
+                {
+                    search_activity = SearchActivityAdmission::Web;
+                }
+                EncodedJsonBody::encode(&projected)
+            }
         }
         .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
@@ -120,7 +131,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream_encoded(body, headers, compression, turn_state)
+        self.stream_encoded(body, headers, compression, turn_state, search_activity)
             .await
     }
 
@@ -150,8 +161,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
         }
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        self.stream_encoded(body, extra_headers, compression, turn_state)
-            .await
+        self.stream_encoded(
+            body,
+            extra_headers,
+            compression,
+            turn_state,
+            SearchActivityAdmission::Disabled,
+        )
+        .await
     }
 
     async fn stream_encoded(
@@ -160,6 +177,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        search_activity: SearchActivityAdmission,
     ) -> Result<ResponseStream, ApiError> {
         let request_compression = match compression {
             Compression::None => RequestCompression::None,
@@ -183,12 +201,13 @@ impl<T: HttpTransport> ResponsesClient<T> {
             )
             .await?;
 
-        Ok(spawn_response_stream(
+        Ok(spawn_response_stream_with_search(
             stream_response,
             self.session.provider().stream_idle_timeout,
             self.sse_telemetry.clone(),
             turn_state,
             self.dialect,
+            search_activity,
         ))
     }
 }

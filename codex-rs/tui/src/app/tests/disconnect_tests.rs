@@ -13,6 +13,68 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test]
+async fn search_activity_drops_when_delivery_lags_or_reconnects() -> Result<()> {
+    for lagged in [true, false] {
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let session = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        let id = ThreadId::new();
+        app.active_thread_id = Some(id);
+        app.primary_thread_id = Some(id);
+        app.chat_widget
+            .handle_thread_session(test_thread_session(id, app.config.cwd.to_path_buf()));
+        app.chat_widget.handle_server_notification(
+            ServerNotification::TurnStarted(codex_app_server_protocol::TurnStartedNotification {
+                thread_id: id.to_string(),
+                turn: Turn {
+                    id: "turn".into(),
+                    items_view: codex_app_server_protocol::TurnItemsView::Full,
+                    items: Vec::new(),
+                    status: TurnStatus::InProgress,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            }),
+            /*replay_kind*/ None,
+        );
+        let running = ServerNotification::SearchActivity(
+            codex_app_server_protocol::SearchActivityNotification {
+                thread_id: id.to_string(),
+                turn_id: "turn".into(),
+                attempt_id: 1,
+                output_index: 1,
+                item_id: "web".into(),
+                kind: codex_app_server_protocol::SearchActivityKind::Web,
+                state: codex_app_server_protocol::SearchActivityState::Running,
+            },
+        );
+        app.chat_widget
+            .handle_server_notification(running.clone(), /*replay_kind*/ None);
+        assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Searching the web"));
+        app.app_server_target = AppServerTarget::Remote {
+            endpoint: crate::resolve_remote_addr("ws://127.0.0.1:1")?,
+        };
+        let event = if lagged {
+            codex_app_server_client::AppServerEvent::Lagged { skipped: 1 }
+        } else {
+            codex_app_server_client::AppServerEvent::Disconnected {
+                message: "disconnected".into(),
+            }
+        };
+        app.handle_app_server_event(&session, event).await;
+        // A delayed notification from the abandoned attempt cannot recreate the spinner.
+        app.chat_widget
+            .handle_server_notification(running, /*replay_kind*/ None);
+        assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Searching the web"));
+        if !lagged {
+            assert!(app.reconnect.offline);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let id = ThreadId::new();

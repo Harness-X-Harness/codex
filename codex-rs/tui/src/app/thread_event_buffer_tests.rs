@@ -13,6 +13,31 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_protocol::ThreadId;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn search_activity_never_enters_thread_replay_buffer() {
+    let mut store = ThreadEventStore::new(/*capacity*/ 8);
+    for state in [
+        codex_app_server_protocol::SearchActivityState::Running,
+        codex_app_server_protocol::SearchActivityState::Completed,
+        codex_app_server_protocol::SearchActivityState::Cleared,
+    ] {
+        let notification = ServerNotification::SearchActivity(
+            codex_app_server_protocol::SearchActivityNotification {
+                kind: codex_app_server_protocol::SearchActivityKind::Web,
+                thread_id: ThreadId::new().to_string(),
+                turn_id: "turn".into(),
+                attempt_id: 1,
+                output_index: 1,
+                item_id: "web".into(),
+                state,
+            },
+        );
+        store.push_notification_ref(&notification);
+        store.push_notification(notification);
+    }
+    assert!(store.snapshot().events.is_empty());
+}
+
 fn turn_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
     ServerNotification::TurnStarted(TurnStartedNotification {
         thread_id: thread_id.to_string(),

@@ -1,10 +1,14 @@
 //! Native Local hosted-search ingress, durable replay, and local dispatch proofs.
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
@@ -756,5 +760,298 @@ async fn unsupported_hosted_completion_fails_before_local_dispatch(case: &str) -
         )),
         "rejected provider calls and synthesized outputs must not enter canonical history"
     );
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum SearchIdentityRewrite {
+    Preserve,
+    WebId,
+    WebType,
+    AssistantToPendingWeb,
+}
+
+impl codex_extension_api::TurnItemContributor for SearchIdentityRewrite {
+    fn contribute<'a>(
+        &'a self,
+        _thread_store: &'a codex_extension_api::ExtensionData,
+        _turn_store: &'a codex_extension_api::ExtensionData,
+        item: &'a mut codex_protocol::items::TurnItem,
+    ) -> codex_extension_api::ExtensionFuture<'a, Result<(), String>> {
+        use codex_protocol::items::TurnItem;
+        Box::pin(async move {
+            match (self, &mut *item) {
+                (Self::WebId, TurnItem::WebSearch(search)) => search.id = "rewritten-web".into(),
+                (Self::WebType, TurnItem::WebSearch(_)) => {
+                    *item = TurnItem::UserMessage(codex_protocol::items::UserMessageItem::new(&[]));
+                }
+                (Self::AssistantToPendingWeb, TurnItem::AgentMessage(_)) => {
+                    *item = TurnItem::WebSearch(codex_protocol::items::WebSearchItem {
+                        id: "web-hosted".into(),
+                        query: "forged correlation".into(),
+                        action: codex_protocol::models::WebSearchAction::Search {
+                            query: Some("forged correlation".into()),
+                            queries: None,
+                        },
+                        results: None,
+                    });
+                }
+                _ => {}
+            }
+            Ok(())
+        })
+    }
+}
+
+#[test_case(SearchIdentityRewrite::WebId, ModeKind::Default; "web_id")]
+#[test_case(SearchIdentityRewrite::WebType, ModeKind::Default; "web_type")]
+#[test_case(SearchIdentityRewrite::AssistantToPendingWeb, ModeKind::Default; "earlier_message_steals_web_identity")]
+#[test_case(SearchIdentityRewrite::AssistantToPendingWeb, ModeKind::Plan; "plan_mode_message_steals_web_identity")]
+#[tokio::test]
+async fn hosted_search_activity_rejects_contributor_rebinding_and_clears_preview(
+    rewrite: SearchIdentityRewrite,
+    mode: ModeKind,
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let home = home(&server, "allowed_domains", WebSearchMode::Live)?;
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.turn_item_contributor(Arc::new(rewrite));
+    let test = builder(home)
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let item = hosted_items()[0].clone();
+    let mut pending = item.clone();
+    pending["status"] = json!("in_progress");
+    let mut message_added = responses::ev_message_item_added("message-before-search", "");
+    message_added["output_index"] = json!(0);
+    let mut message_done = responses::ev_assistant_message("message-before-search", "AB");
+    message_done["output_index"] = json!(0);
+    let mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("contributor-rebinding"),
+            message_added,
+            json!({"type":"response.output_text.delta","output_index":0,"delta":"A"}),
+            json!({"type":"response.output_item.added","output_index":1,"item":pending}),
+            json!({"type":"response.output_item.done","output_index":1,"item":item}),
+            json!({"type":"response.output_text.delta","output_index":0,"delta":"B"}),
+            message_done,
+            responses::ev_completed("contributor-rebinding"),
+        ]),
+    )
+    .await;
+    let submitted = test
+        .codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Search the fixture".into(),
+                text_elements: vec![],
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode,
+                    settings: Settings {
+                        model: MODEL.into(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let TurnInputSubmission::Started { turn_id } = submitted else {
+        panic!("new turn expected")
+    };
+    let mut events = Vec::new();
+    let terminal = wait_for_event(&test.codex, |event| {
+        events.push(event.clone());
+        matches!(event, EventMsg::TurnComplete(done) if done.turn_id == turn_id)
+    })
+    .await;
+    let EventMsg::TurnComplete(done) = terminal else {
+        unreachable!()
+    };
+    assert!(done.error.is_some());
+    let activity = events
+        .iter()
+        .filter_map(|event| match event {
+            EventMsg::SearchActivity(event) => Some(event.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        activity.iter().map(|event| event.state).collect::<Vec<_>>(),
+        vec![
+            codex_protocol::SearchActivityState::Running,
+            codex_protocol::SearchActivityState::Completed,
+            codex_protocol::SearchActivityState::Cleared,
+        ]
+    );
+    assert!(
+        activity
+            .iter()
+            .all(|event| event.attempt_id == activity[0].attempt_id
+                && event.output_index == 1
+                && event.item_id == "web-hosted")
+    );
+    assert!(!events.iter().any(|event| matches!(event,
+        EventMsg::ItemCompleted(event) if matches!(event.item, codex_protocol::items::TurnItem::WebSearch(_)))));
+    assert!(search_history(&persisted(&test).await?).is_empty());
+    let request = mock.single_request().body_json();
+    assert!(
+        request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["type"] == "web_search")
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_search_activity_cannot_replace_an_earlier_local_call_identity() -> Result<()> {
+    let server = MockServer::start().await;
+    let home = home(&server, "allowed_domains", WebSearchMode::Live)?;
+    let local = json!({"type":"function_call", "id":"local-provider-id", "call_id":CALL_ID,
+        "name":flat_wire_name("custom", &ToolName::plain("apply_patch")),
+        "arguments":json!({"patch":PATCH}).to_string()});
+    let local_response = responses::sse(vec![
+        responses::ev_response_created("local-first"),
+        json!({"type":"response.output_item.added","output_index":0,"item":local}),
+        json!({"type":"response.output_item.done","output_index":0,"item":local}),
+        responses::ev_completed("local-first"),
+    ]);
+    let mut colliding_web = hosted_items()[0].clone();
+    colliding_web["id"] = json!(CALL_ID);
+    colliding_web["action"]["query"] = json!("must not replace local edit");
+    let mock = responses::mount_grok_sse_sequence(
+        &server,
+        vec![local_response, response("colliding-web", &[colliding_web])],
+        &[],
+    )
+    .await;
+    // Exercise the real local edit, as in the retained mixed/local C7 witness.
+    let test = builder(home).build(&server).await?;
+    fs::write(test.workspace_path("target.txt"), "before\n")?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Perform the fixture edit, then search.".into(),
+            text_elements: vec![],
+        }]))
+        .await?;
+    let mut events = Vec::new();
+    let terminal = wait_for_event(&test.codex, |event| {
+        events.push(event.clone());
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::TurnComplete(done) = terminal else {
+        unreachable!()
+    };
+    assert!(done.error.is_some());
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EventMsg::SearchActivity(_)))
+    );
+    assert_eq!(
+        fs::read_to_string(test.workspace_path("target.txt"))?,
+        "after\n"
+    );
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .input()
+            .iter()
+            .any(|item| item["type"] == "function_call_output" && item["call_id"] == CALL_ID)
+    );
+    let durable = persisted(&test).await?;
+    assert!(search_history(&durable).is_empty());
+    assert_eq!(
+        durable
+            .iter()
+            .filter(|item| item["type"] == "custom_tool_call_output" && item["call_id"] == CALL_ID)
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hosted_search_activity_guard_preserves_stock_plan_without_a_preview() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
+    extensions.turn_item_contributor(Arc::new(SearchIdentityRewrite::Preserve));
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_extensions(Arc::new(extensions.build()))
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("stock-plan"),
+            responses::ev_message_item_added("stock-plan-message", ""),
+            responses::ev_assistant_message("stock-plan-message", "unchanged plan answer"),
+            responses::ev_completed("stock-plan"),
+        ]),
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Prepare the plan".into(),
+                text_elements: vec![],
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    settings: Settings {
+                        model: "gpt-5.4".into(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let mut events = Vec::new();
+    let terminal = wait_for_event(&test.codex, |event| {
+        events.push(event.clone());
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::TurnComplete(done) = terminal else {
+        unreachable!()
+    };
+    assert!(done.error.is_none());
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EventMsg::SearchActivity(_)))
+    );
+    let messages = events
+        .iter()
+        .filter_map(|event| match event {
+            EventMsg::ItemCompleted(event) => match &event.item {
+                codex_protocol::items::TurnItem::AgentMessage(message) => Some(message),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, "stock-plan-message");
+    assert_eq!(
+        messages[0].content,
+        vec![codex_protocol::items::AgentMessageContent::Text {
+            text: "unchanged plan answer".into(),
+        }]
+    );
+    assert_eq!(mock.requests().len(), 1);
     Ok(())
 }

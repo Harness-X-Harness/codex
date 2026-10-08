@@ -166,3 +166,5 @@ mod grok_model_list;
 mod grok_provider_binding;
 
 mod grok_child_public_listener;
+
+mod grok_search_activity;
