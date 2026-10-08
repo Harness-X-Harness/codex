@@ -264,7 +264,12 @@ async fn hosted_search_reusing_local_call_id_survives_follow_up_and_cold_resume(
         response("cold-resume", &[]),
     ]);
     let expected_requests = mocked_responses.len();
-    let mock = responses::mount_sse_sequence(&server, mocked_responses).await;
+    let mock = responses::mount_grok_sse_sequence(
+        &server,
+        mocked_responses,
+        std::slice::from_ref(&hosted),
+    )
+    .await;
     // Explicit Local executor, as in the mixed hosted/local dispatch proof below.
     let test = builder(Arc::clone(&home)).build(&server).await?;
     fs::write(test.workspace_path("target.txt"), "before\n")?;
@@ -458,7 +463,12 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
     let arguments = json!({"patch":PATCH}).to_string();
     let local = json!({"type":"function_call", "id":"fc_local", "call_id":CALL_ID,
         "name":wire_name, "arguments":arguments});
-    let mock = responses::mount_sse_sequence(
+    let completed_x_calls = hosted
+        .iter()
+        .filter(|item| item["type"] == "custom_tool_call")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mock = responses::mount_grok_sse_sequence(
         &server,
         vec![
             response("hosted-search", &initial),
@@ -471,6 +481,7 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
             response("local-output", &[]),
             response("cold-resume", &[]),
         ],
+        &completed_x_calls,
     )
     .await;
     // Explicit Local executor: no process-wide remote setting or skip gate changes this proof.

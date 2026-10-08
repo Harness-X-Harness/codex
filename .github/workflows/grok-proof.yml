@@ -221,7 +221,7 @@ jobs:
         working-directory: codex-rs
         run: |
           cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
-          cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
@@ -229,7 +229,7 @@ jobs:
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -353,7 +353,7 @@ jobs:
         working-directory: codex-rs
         run: >-
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
@@ -581,6 +581,7 @@ jobs:
         run: |
           just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(grok::tests::) | test(grok_hosted::tests::) | test(config_types::tests::)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(config::web_search_config_tests::)'
+          just test -p core_test_support --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(responses::grok_tests::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::hosted_search::)'
           just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(schema_fixtures_tests::)'
 
@@ -695,7 +696,7 @@ jobs:
         working-directory: codex-rs
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout-trace -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree

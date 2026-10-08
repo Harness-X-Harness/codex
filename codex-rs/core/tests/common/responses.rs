@@ -36,15 +36,25 @@ use wiremock::http::HeaderValue;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
+#[path = "responses_grok.rs"]
+mod grok;
+use grok::GrokHostedReplay;
+
+#[cfg(test)]
+#[path = "responses_grok_tests.rs"]
+mod grok_tests;
+
 #[derive(Debug, Clone)]
 pub struct ResponseMock {
     requests: Arc<Mutex<Vec<ResponsesRequest>>>,
+    grok_hosted_replay: GrokHostedReplay,
 }
 
 impl ResponseMock {
     fn new() -> Self {
         Self {
             requests: Arc::new(Mutex::new(Vec::new())),
+            grok_hosted_replay: GrokHostedReplay::default(),
         }
     }
 
@@ -731,7 +741,7 @@ impl Match for ResponseMock {
 
         // Enforce invariant checks on every request body captured by the mock.
         // Panic on orphan tool outputs or calls to catch regressions early.
-        validate_request_body_invariants(request);
+        validate_request_body_invariants(request, &self.grok_hosted_replay);
         true
     }
 }
@@ -1100,7 +1110,10 @@ where
 }
 
 fn base_mock() -> (MockBuilder, ResponseMock) {
-    let response_mock = ResponseMock::new();
+    base_mock_with_recorder(ResponseMock::new())
+}
+
+fn base_mock_with_recorder(response_mock: ResponseMock) -> (MockBuilder, ResponseMock) {
     let mock = Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))
         .and(response_mock.clone());
@@ -1454,6 +1467,30 @@ pub async fn mount_function_call_agent_response(
 /// POST to `/v1/responses`. Panics if more requests are received than bodies
 /// provided. Also asserts the exact number of expected calls.
 pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> ResponseMock {
+    mount_sse_sequence_with_recorder(server, bodies, ResponseMock::new()).await
+}
+
+/// Grok-only fixture opt-in: completed X calls replay without local outputs.
+/// Only the exact validated fixture objects (with status omitted) are exempt;
+/// unregistered raw custom calls are rejected. All remaining calls and outputs
+/// still go through the stock pairing checks.
+pub async fn mount_grok_sse_sequence(
+    server: &MockServer,
+    bodies: Vec<String>,
+    completed_x_calls: &[Value],
+) -> ResponseMock {
+    let response_mock = ResponseMock {
+        grok_hosted_replay: GrokHostedReplay::new(completed_x_calls),
+        ..ResponseMock::new()
+    };
+    mount_sse_sequence_with_recorder(server, bodies, response_mock).await
+}
+
+async fn mount_sse_sequence_with_recorder(
+    server: &MockServer,
+    bodies: Vec<String>,
+    response_mock: ResponseMock,
+) -> ResponseMock {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
@@ -1482,7 +1519,7 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
         responses: bodies,
     };
 
-    let (mock, response_mock) = base_mock();
+    let (mock, response_mock) = base_mock_with_recorder(response_mock);
     mock.respond_with(responder)
         .up_to_n_times(num_calls as u64)
         .expect(num_calls as u64)
@@ -1542,7 +1579,10 @@ pub async fn mount_response_sequence(
 /// - Every `tool_search_output` must match a prior `tool_search_call`.
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
 ///   `tool_search_call` in the `input` must have a matching output entry.
-fn validate_request_body_invariants(request: &wiremock::Request) {
+fn validate_request_body_invariants(
+    request: &wiremock::Request,
+    grok_hosted_replay: &GrokHostedReplay,
+) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
         return;
@@ -1561,6 +1601,9 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         .get("input")
         .and_then(Value::as_array)
         .expect("input array not found in request");
+
+    let local_items = grok_hosted_replay.local_items(items);
+    let items = local_items.as_ref();
 
     use std::collections::HashSet;
 
