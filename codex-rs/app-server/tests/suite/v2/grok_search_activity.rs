@@ -124,11 +124,26 @@ impl Fixture {
         super::grok_provider_binding::write_grok_fixture(home.path(), &server.uri)?;
         let path = home.path().join("config.toml");
         let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
-        config["web_search"] = "live".into();
-        config["tools"]["update_plan"]["enabled"] = true.into();
-        config["model_providers"]["grok"]["stream_max_retries"] = i64::from(retries).into();
-        config["model_providers"]["grok"]["stream_idle_timeout_ms"] =
-            i64::try_from(idle_timeout_ms)?.into();
+        let root = config.as_table_mut().context("fixture config table")?;
+        root.insert("web_search".into(), "live".into());
+        let update_plan = root
+            .get_mut("tools")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|tools| tools.get_mut("update_plan"))
+            .and_then(toml::Value::as_table_mut)
+            .context("fixture update_plan tool table")?;
+        update_plan.insert("enabled".into(), true.into());
+        let provider = root
+            .get_mut("model_providers")
+            .and_then(toml::Value::as_table_mut)
+            .and_then(|providers| providers.get_mut("grok"))
+            .and_then(toml::Value::as_table_mut)
+            .context("fixture Grok provider table")?;
+        provider.insert("stream_max_retries".into(), i64::from(retries).into());
+        provider.insert(
+            "stream_idle_timeout_ms".into(),
+            i64::try_from(idle_timeout_ms)?.into(),
+        );
         std::fs::write(path, toml::to_string(&config)?)?;
         let mut app = TestAppServer::builder()
             .with_codex_home(home.path())
