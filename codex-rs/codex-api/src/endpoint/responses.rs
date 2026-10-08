@@ -15,6 +15,7 @@ use codex_client::EncodedJsonBody;
 use codex_client::HttpTransport;
 use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
+use codex_protocol::grok::GrokXSearchOptions;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -27,6 +28,7 @@ use tracing::instrument;
 pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
     dialect: ApiDialect,
+    grok_x_search: Option<GrokXSearchOptions>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
 }
 
@@ -45,6 +47,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Self {
             session: EndpointSession::new(transport, provider, auth),
             dialect: ApiDialect::OpenAi,
+            grok_x_search: None,
             sse_telemetry: None,
         }
     }
@@ -56,6 +59,12 @@ impl<T: HttpTransport> ResponsesClient<T> {
         self
     }
 
+    /// Configure Grok's default X Search dates without changing transport identity.
+    pub fn with_grok_x_search(mut self, options: Option<GrokXSearchOptions>) -> Self {
+        self.grok_x_search = options;
+        self
+    }
+
     pub fn with_telemetry(
         self,
         request: Option<Arc<dyn RequestTelemetry>>,
@@ -64,6 +73,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         Self {
             session: self.session.with_request_telemetry(request),
             dialect: self.dialect,
+            grok_x_search: self.grok_x_search,
             sse_telemetry: sse,
         }
     }
@@ -83,6 +93,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        validate_grok_x_search(self.dialect, self.grok_x_search.as_ref())?;
         let ResponsesOptions {
             session_id,
             thread_id,
@@ -93,7 +104,10 @@ impl<T: HttpTransport> ResponsesClient<T> {
         } = options;
         let body = match self.dialect {
             ApiDialect::OpenAi => EncodedJsonBody::encode(&request),
-            ApiDialect::Grok => EncodedJsonBody::encode(&crate::grok_request::build(&request)?),
+            ApiDialect::Grok => EncodedJsonBody::encode(&crate::grok_request::build_with_search(
+                &request,
+                self.grok_x_search.as_ref(),
+            )?),
         }
         .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
@@ -128,6 +142,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        validate_grok_x_search(self.dialect, self.grok_x_search.as_ref())?;
         if self.dialect == ApiDialect::Grok {
             return Err(ApiError::Stream(
                 "Grok requires typed stream_request; raw JSON bypasses projection".into(),
@@ -177,3 +192,19 @@ impl<T: HttpTransport> ResponsesClient<T> {
         ))
     }
 }
+
+fn validate_grok_x_search(
+    dialect: ApiDialect,
+    options: Option<&GrokXSearchOptions>,
+) -> Result<(), ApiError> {
+    if options.is_some() && dialect != ApiDialect::Grok {
+        return Err(ApiError::Stream(
+            "X Search options require the Grok Responses dialect".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "responses_tests.rs"]
+mod tests;

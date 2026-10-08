@@ -7,13 +7,40 @@ use crate::flat_projection::custom_route;
 use crate::flat_projection::normalize_name;
 use codex_protocol::models::ResponseItem;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 impl FlatToolRoutes {
     pub fn project_history(&self, history: &[ResponseItem]) -> Result<Vec<ResponseItem>, String> {
+        let local_custom_outputs = history
+            .iter()
+            .filter_map(|item| match item {
+                ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        // Canonical local custom history may carry completed status. A matching
+        // local output takes precedence over the provider-hosted shape, including
+        // local tools whose names happen to match an X-search name.
+        let is_hosted = |item: &ResponseItem| {
+            codex_protocol::grok_hosted::is_completed_search(item)
+                && !matches!(item, ResponseItem::CustomToolCall { call_id, .. }
+                    if local_custom_outputs.contains(call_id.as_str()))
+        };
         let mut routes = self.clone();
         let mut calls = BTreeMap::new();
         for item in history {
+            if is_hosted(item) {
+                codex_protocol::grok_hosted::project_search_replay(item)?;
+                continue;
+            }
             let (call_id, route) = match item {
+                ResponseItem::CustomToolCall {
+                    status: Some(_),
+                    call_id,
+                    ..
+                } if !local_custom_outputs.contains(call_id.as_str()) => {
+                    return Err("unsupported hosted custom history".to_string());
+                }
                 ResponseItem::FunctionCall {
                     call_id,
                     name,
@@ -40,6 +67,7 @@ impl FlatToolRoutes {
             }
         }
         history.iter().cloned().map(|item| match item {
+            item if is_hosted(&item) => Ok(item),
             ResponseItem::FunctionCall {
                 id, name, namespace, arguments, encrypted_function_args, call_id,
                 internal_chat_message_metadata_passthrough,

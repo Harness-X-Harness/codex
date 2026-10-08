@@ -237,7 +237,7 @@ fn custom_wrappers_reject_ambiguous_or_malformed_inputs() {
 }
 
 #[test]
-fn hosted_and_search_tools_are_explicitly_unsupported() {
+fn web_specs_preserve_policy_but_tool_search_remains_unsupported() {
     let search = ToolSpec::ToolSearch {
         execution: "client".to_string(),
         description: String::new(),
@@ -252,7 +252,12 @@ fn hosted_and_search_tools_are_explicitly_unsupported() {
         search_context_size: None,
         search_content_types: None,
     };
-    assert!(project_flat_function_tools(&[hosted]).is_err());
+    let (projected, routes) = project_flat_function_tools(&[hosted.clone()]).unwrap();
+    assert_eq!(
+        serde_json::to_value(projected).unwrap(),
+        serde_json::to_value(vec![hosted]).unwrap()
+    );
+    assert!(routes.resolve("web_search").is_none());
     assert!(
         FlatToolRoutes::default()
             .project_history(&[item(json!({"type":"web_search_call"}))])
@@ -373,4 +378,49 @@ fn ingress_rejects_every_encrypted_envelope_before_restoring_any_route() {
             );
         }
     }
+}
+
+#[test]
+fn hosted_history_keeps_identity_without_entering_local_routes() {
+    let hosted = item(
+        json!({"type":"custom_tool_call", "id":"x-id", "call_id":"x-call",
+        "name":"x_keyword_search", "status":"completed", "input":"original input"}),
+    );
+    let web = item(
+        json!({"type":"web_search_call", "id":"web-id", "status":"completed",
+        "action":{"type":"search", "query":"original query"}}),
+    );
+    let history = vec![hosted, web];
+    let routes = FlatToolRoutes::default();
+    assert_eq!(routes.project_history(&history).unwrap(), history);
+    assert_eq!(routes.project_history(&history).unwrap(), history);
+    let unknown = item(
+        json!({"type":"custom_tool_call", "id":"x-id", "call_id":"x-call",
+        "name":"x_unknown", "status":"completed", "input":"input"}),
+    );
+    assert!(routes.project_history(&[unknown]).is_err());
+}
+
+#[test]
+fn x_named_local_custom_still_uses_function_wire_and_required_custom_output() {
+    let local = item(
+        json!({"type":"custom_tool_call", "id":"local-id", "status":"completed", "call_id":"local-x",
+        "name":"x_keyword_search", "input":"local input"}),
+    );
+    let output = item(
+        json!({"type":"custom_tool_call_output", "call_id":"local-x", "output":"local result"}),
+    );
+    let history = vec![local.clone(), output];
+    let projected = FlatToolRoutes::default().project_history(&history).unwrap();
+    assert_eq!(
+        serde_json::to_value(&projected[0]).unwrap()["type"],
+        "function_call"
+    );
+    assert_eq!(
+        serde_json::to_value(&projected[1]).unwrap()["type"],
+        "function_call_output"
+    );
+    assert!(codex_protocol::grok_hosted::is_completed_search(&local));
+    // The paired output distinguishes this canonical local call from hosted X.
+    assert_eq!(history[0], local);
 }

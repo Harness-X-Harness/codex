@@ -85,30 +85,43 @@ func (p *Probe) post(ctx context.Context, model, stage string, input []any, incl
 	if len(include) != 0 {
 		payload["include"] = include
 	}
+	observation, raw, err := p.exchange(ctx, stage, payload)
+	if err != nil {
+		return observation, "", err
+	}
+	return observeResponse(observation, model, raw)
+}
+
+func (p *Probe) exchange(ctx context.Context, stage string, payload map[string]any) (Observation, []byte, error) {
+	observation := Observation{Stage: stage}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return observation, "", errors.New("request encoding failed")
+		return observation, nil, errors.New("request encoding failed")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return observation, "", errors.New("request construction failed")
+		return observation, nil, errors.New("request construction failed")
 	}
 	request.Header.Set("Authorization", "Bearer "+p.apiKey)
 	request.Header.Set("Content-Type", "application/json")
 	observation.Requests++
 	response, err := p.client.Do(request)
 	if err != nil {
-		return observation, "", errors.New("HTTP transport failed")
+		return observation, nil, errors.New("HTTP transport failed")
 	}
 	defer response.Body.Close()
 	observation.HTTPStatus = response.StatusCode
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return observation, "", errors.New("HTTP response rejected")
+		return observation, nil, errors.New("HTTP response rejected")
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (8<<20)+1))
 	if err != nil || len(raw) > 8<<20 {
-		return observation, "", errors.New("response unreadable or oversized")
+		return observation, nil, errors.New("response unreadable or oversized")
 	}
+	return observation, raw, nil
+}
+
+func observeResponse(observation Observation, model string, raw []byte) (Observation, string, error) {
 	var result struct {
 		Status            string          `json:"status"`
 		Model             string          `json:"model"`

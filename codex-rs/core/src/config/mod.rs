@@ -92,6 +92,7 @@ use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
+use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
@@ -109,6 +110,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
@@ -2681,13 +2683,40 @@ fn resolve_web_search_mode(config_toml: &ConfigToml, features: &Features) -> Opt
     None
 }
 
-fn resolve_web_search_config(config_toml: &ConfigToml) -> Option<WebSearchConfig> {
-    config_toml
-        .tools
+fn resolve_web_search_config(
+    tool_config: Option<&WebSearchToolConfig>,
+    model_provider: &ModelProviderInfo,
+) -> std::io::Result<Option<WebSearchConfig>> {
+    let Some(tool_config) = tool_config else {
+        return Ok(None);
+    };
+    let has_excluded_domains = tool_config
+        .excluded_domains
         .as_ref()
-        .and_then(|tools| tools.web_search.as_ref())
-        .cloned()
-        .map(Into::into)
+        .is_some_and(|domains| !domains.is_empty());
+    if has_excluded_domains {
+        if model_provider.wire_api != WireApi::GrokResponses
+            || model_provider.supports_standalone_web_search
+            || model_provider.is_openai()
+            || model_provider.uses_openai_actor_authorization()
+        {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "tools.web_search.excluded_domains requires a Grok hosted-search provider without standalone web search",
+            ));
+        }
+        if tool_config
+            .allowed_domains
+            .as_ref()
+            .is_some_and(|domains| !domains.is_empty())
+        {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "tools.web_search.allowed_domains and tools.web_search.excluded_domains are mutually exclusive",
+            ));
+        }
+    }
+    Ok(Some(tool_config.clone().into()))
 }
 
 fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> bool {
@@ -3755,7 +3784,6 @@ impl Config {
         }
         let web_search_mode =
             resolve_web_search_mode(&cfg, &features).unwrap_or(WebSearchMode::Cached);
-        let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
         let update_plan_enabled = resolve_update_plan_enabled(&cfg);
@@ -3816,6 +3844,11 @@ impl Config {
                 std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
             .clone();
+
+        let web_search_config = resolve_web_search_config(
+            cfg.tools.as_ref().and_then(|tools| tools.web_search.as_ref()),
+            &model_provider,
+        )?;
 
         let shell_environment_policy = ShellEnvironmentPolicy::from(cfg.shell_environment_policy);
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
@@ -4928,3 +4961,7 @@ mod config_loader_tests;
 #[cfg(test)]
 #[path = "grok_catalog_tests.rs"]
 mod grok_catalog_tests;
+
+#[cfg(test)]
+#[path = "web_search_config_tests.rs"]
+mod web_search_config_tests;

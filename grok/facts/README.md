@@ -6,8 +6,7 @@ It does not exercise a product binary or complete a Live Story. The primary
 they are explicit harness fixtures, independent of future `grok/dist` assets.
 
 Retain Basic/pinned request routing and encrypted-reasoning typed-history replay.
-Search/tool policy probes enter with #322, images with #328 and shipped profile
-checks with #329. Do not carry their unused helpers here. Historical accepted
+C7 retains the bounded hosted-search fixtures below. Historical accepted
 observations do not demonstrate present backend behavior.
 
 ## Proposed assertion and evidence matrix
@@ -55,3 +54,34 @@ opt-in test obtains its endpoint from the shipped profile for this route group.
 Returned backend model aliases remain diagnostics; they never change request slugs
 or the runtime catalog. This adds consumed scenario source, not the independent
 Facts invocation mechanism owned by C8/#338.
+
+## Retained hosted Web/X source (C7)
+
+`SearchPolicy` submits one fixed fixture: `web`, `web_allowed`, `web_excluded`,
+`x`, or `x_window`. The domain fixtures advertise only `reuters.com` allowed or
+`example.com` excluded. The X window advertises `2026-08-01` / `2026-08-15`.
+These are independent controls, never a combined allow/exclude policy. A
+completed text response establishes admission of the exact request, not search
+result relevance, domain enforcement, or date-bound inclusivity.
+
+`SearchReplay` submits one search and then at most one continuation. A completed
+assistant response and a supported completed Web call or one of the four named
+X calls must precede replay. It preserves admitted call identity, status and
+action/input fields; it adds no local output and rejects observed local execution.
+Unknown names, missing required identities/action tags/X input, incomplete calls,
+output-paired calls and missing final text cannot authorize continuation. Web
+action query/queries/url/pattern details are optional: absent, null and empty
+values remain valid when their present types match the supported action variant. The existing redirect ban,
+60-second transport timeout, 8 MiB response cap and static errors apply. At most
+64 calls of at most 64 KiB each are retained in memory; no raw traffic is returned.
+
+`TestBackendSearchFacts` is separately selectable, requires `GROK_FACTS=1`, and
+contains five one-POST policy controls plus two at-most-two-POST replay controls
+(maximum nine POSTs, no semantic resubmission). Credentials after opt-in are
+mandatory. This source change does not execute that test against a backend or
+inherit any prior recorded classification. Required CI sets `GROK_FACTS=0` and
+runs local HTTP tests for exact payloads, all four X names, replay fields, missing
+and malformed evidence, failures, invocation counts and secret-safe metadata.
+Native Rust tests own provider/default precedence, strict dates, the five-domain
+bound and fail-closed product restrictions. These Facts do not substitute for
+those product tests or prove a Live Story.

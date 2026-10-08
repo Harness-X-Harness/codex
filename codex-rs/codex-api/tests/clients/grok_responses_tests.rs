@@ -186,7 +186,7 @@ async fn grok_local_tool_history_reaches_transport_with_exact_arguments() -> Res
         serde_json::from_slice::<serde_json::Value>(request_body_bytes(&requests[0]))?,
         json!({
             "model":"fixture-grok-model", "input":input,
-            "tools":[{"type":"function","name":"functions__shell","parameters":{}}],
+            "tools":[{"type":"function","name":"functions__shell","parameters":{}},{"type":"x_search"}],
             "tool_choice":"auto", "reasoning":null, "stream":true,
             "include":["reasoning.encrypted_content"]
         })

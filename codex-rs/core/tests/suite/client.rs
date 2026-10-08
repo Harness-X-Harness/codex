@@ -1657,6 +1657,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -3175,6 +3176,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -3812,6 +3814,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -3898,6 +3901,7 @@ async fn env_var_overrides_loaded_auth() {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 

@@ -500,7 +500,7 @@ pub(crate) fn finalize_tool_router(
     if turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok {
         // A router is also built for lifecycle operations that do not infer. Bind
         // only local reverse routes here; retain the full canonical inventory so
-        // request projection still rejects unsupported hosted/search surfaces.
+        // request projection validates every hosted/search surface independently.
         let local_specs = router
             .model_visible_specs()
             .iter()

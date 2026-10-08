@@ -593,6 +593,7 @@ allowed_domains = ["example.com"]
             web_search: Some(WebSearchToolConfig {
                 context_size: Some(WebSearchContextSize::Low),
                 allowed_domains: Some(vec!["example.com".to_string()]),
+                excluded_domains: None,
                 location: None,
             }),
         }
@@ -967,6 +968,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
         Some(WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: Some(vec!["example.com".to_string()]),
+            excluded_domains: None,
             location: Some(WebSearchLocation {
                 country: Some("US".to_string()),
                 region: None,

@@ -26,6 +26,8 @@ pub mod dynamic_tools;
 mod environment;
 pub mod error;
 pub mod exec_output;
+pub mod grok;
+pub mod grok_hosted;
 pub mod items;
 pub mod json_whole_number;
 mod legacy_events;

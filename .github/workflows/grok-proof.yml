@@ -59,6 +59,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -357,12 +358,22 @@ jobs:
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
         uses: ./.github/actions/check-clean-worktree
-      - name: Regenerate owned configuration schema
+      - name: Install pinned SDK generator runner
+        run: python3 -m pip install uv==0.10.11
+      - name: Regenerate owned configuration and public API schemas
         working-directory: codex-rs
         run: |
           just write-config-schema --locked --profile ci-test --timings
-          # The profile may change build reuse, never the owned schema bytes.
-          git show HEAD:codex-rs/core/config.schema.json | cmp - core/config.schema.json
+          # Run the stock fixture writer with the already-built native profile.
+          export CODEX_APP_SERVER_SCHEMA_ROOT="$GITHUB_WORKSPACE/codex-rs/app-server-protocol/schema"
+          export CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL=0
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail --run-ignored only -E 'test(schema_fixtures_tests::write_schema_fixtures_from_env)'
+          uv run --project ../sdk/python --frozen --only-group test python ../sdk/python/scripts/update_sdk_artifacts.py generate-types --schema-dir app-server-protocol/schema/json
+          export CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL=1
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail --run-ignored only -E 'test(schema_fixtures_tests::write_schema_fixtures_from_env)'
+          # Owned representations must already be committed, on PR and canonical push.
+          git diff --exit-code -- core/config.schema.json app-server-protocol/schema ../sdk/python/src/openai_codex/generated ../sdk/python/src/openai_codex/api.py
+          test -z "$(git ls-files --others --exclude-standard -- app-server-protocol/schema ../sdk/python/src/openai_codex/generated ../sdk/python/src/openai_codex/api.py)"
       - name: Normalize filesystem API formatting
         working-directory: codex-rs
         run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item
@@ -565,6 +576,14 @@ jobs:
           just test -p codex-tools --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(flat_projection::tests::)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::router::tests::) | test(context_manager::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::tool_roundtrip::)'
+      - name: Test Grok hosted search policy replay and affected stock configuration
+        working-directory: codex-rs
+        run: |
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(grok::tests::) | test(grok_hosted::tests::) | test(config_types::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(config::web_search_config_tests::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::hosted_search::)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(schema_fixtures_tests::)'
+
       - name: Test image dialect consumers and codec normalization
         working-directory: codex-rs
         run: |
@@ -753,6 +772,9 @@ jobs:
           name: provider-representations-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             codex-rs/core/config.schema.json
+            codex-rs/app-server-protocol/schema
+            sdk/python/src/openai_codex/generated
+            sdk/python/src/openai_codex/api.py
             codex-rs/tui/src/**/*.snap.new
             ${{ runner.temp }}/provider-native.diff
             ${{ runner.temp }}/provider-native-subject.txt

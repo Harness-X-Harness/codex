@@ -440,6 +440,8 @@ impl WebSearchLocation {
 pub struct WebSearchToolConfig {
     pub context_size: Option<WebSearchContextSize>,
     pub allowed_domains: Option<Vec<String>>,
+    /// Grok hosted Web Search only; at most five domains, exclusive with allowed_domains.
+    pub excluded_domains: Option<Vec<String>>,
     pub location: Option<WebSearchLocation>,
 }
 
@@ -451,6 +453,10 @@ impl WebSearchToolConfig {
                 .allowed_domains
                 .clone()
                 .or_else(|| self.allowed_domains.clone()),
+            excluded_domains: other
+                .excluded_domains
+                .clone()
+                .or_else(|| self.excluded_domains.clone()),
             location: match (&self.location, &other.location) {
                 (Some(location), Some(other_location)) => Some(location.merge(other_location)),
                 (Some(location), None) => Some(location.clone()),
@@ -465,6 +471,8 @@ impl WebSearchToolConfig {
 #[schemars(deny_unknown_fields)]
 pub struct WebSearchFilters {
     pub allowed_domains: Option<Vec<String>>,
+    /// Grok hosted Web Search only; at most five domains, exclusive with allowed_domains.
+    pub excluded_domains: Option<Vec<String>>,
 }
 
 #[derive(
@@ -510,12 +518,18 @@ impl From<WebSearchLocation> for WebSearchUserLocation {
 
 impl From<WebSearchToolConfig> for WebSearchConfig {
     fn from(config: WebSearchToolConfig) -> Self {
+        let excluded_domains = config
+            .excluded_domains
+            .filter(|domains| !domains.is_empty());
+        let filters = match (config.allowed_domains, excluded_domains) {
+            (None, None) => None,
+            (allowed_domains, excluded_domains) => Some(WebSearchFilters {
+                allowed_domains,
+                excluded_domains,
+            }),
+        };
         Self {
-            filters: config
-                .allowed_domains
-                .map(|allowed_domains| WebSearchFilters {
-                    allowed_domains: Some(allowed_domains),
-                }),
+            filters,
             user_location: config.location.map(Into::into),
             search_context_size: config.context_size,
         }
@@ -946,6 +960,7 @@ mod tests {
         let base = WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::Low),
             allowed_domains: Some(vec!["openai.com".to_string()]),
+            excluded_domains: None,
             location: Some(WebSearchLocation {
                 country: Some("US".to_string()),
                 region: Some("CA".to_string()),
@@ -956,6 +971,7 @@ mod tests {
         let overlay = WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: None,
+            excluded_domains: None,
             location: Some(WebSearchLocation {
                 country: None,
                 region: Some("WA".to_string()),
@@ -967,6 +983,7 @@ mod tests {
         let expected = WebSearchToolConfig {
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: Some(vec!["openai.com".to_string()]),
+            excluded_domains: None,
             location: Some(WebSearchLocation {
                 country: Some("US".to_string()),
                 region: Some("WA".to_string()),
@@ -976,5 +993,34 @@ mod tests {
         };
 
         assert_eq!(expected, base.merge(&overlay));
+    }
+
+    #[test]
+    fn web_search_tool_config_merge_preserves_replaces_and_clears_exclusions() {
+        let base = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::Low),
+            excluded_domains: Some(vec!["base.example".to_string()]),
+            ..Default::default()
+        };
+        for (excluded_domains, expected_domains) in [
+            (None, Some(vec!["base.example".to_string()])),
+            (
+                Some(vec!["overlay.example".to_string()]),
+                Some(vec!["overlay.example".to_string()]),
+            ),
+            (Some(Vec::new()), Some(Vec::new())),
+        ] {
+            let overlay = WebSearchToolConfig {
+                excluded_domains,
+                ..Default::default()
+            };
+            assert_eq!(
+                base.merge(&overlay),
+                WebSearchToolConfig {
+                    excluded_domains: expected_domains,
+                    ..base.clone()
+                }
+            );
+        }
     }
 }

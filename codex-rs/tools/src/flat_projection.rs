@@ -142,7 +142,11 @@ pub fn project_flat_function_tools(
                 .cloned()
                 .map(|tool| (Some(namespace.name.clone()), tool))
                 .collect(),
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+            ToolSpec::WebSearch { .. } => {
+                declarations.push(spec.clone());
+                continue;
+            }
+            ToolSpec::ToolSearch { .. } => {
                 return Err(format!("flat local tools do not support {}", spec.name()));
             }
         };
