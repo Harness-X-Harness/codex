@@ -23856,6 +23856,16 @@
             }
           ]
         },
+        "excluded_domains": {
+          "description": "Grok hosted Web Search only; at most five domains, exclusive with allowed_domains.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "location": {
           "anyOf": [
             {

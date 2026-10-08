@@ -6491,6 +6491,12 @@ class WebSearchToolConfig(BaseModel):
     )
     allowed_domains: list[str] | None = None
     context_size: WebSearchContextSize | None = None
+    excluded_domains: Annotated[
+        list[str] | None,
+        Field(
+            description="Grok hosted Web Search only; at most five domains, exclusive with allowed_domains."
+        ),
+    ] = None
     location: WebSearchLocation | None = None
 
 
