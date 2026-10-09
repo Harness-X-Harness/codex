@@ -201,7 +201,7 @@ jobs:
     name: Native runtime proof
     needs: subject
     runs-on: ubuntu-22.04
-    timeout-minutes: 105
+    timeout-minutes: 135
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_BUILD_JOBS: "2"
