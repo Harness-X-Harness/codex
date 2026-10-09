@@ -259,6 +259,9 @@ runs:
       shell: bash
       working-directory: grok
       env:
+        # The Go harness runs on the host; do not inherit the musl C/C++ wrappers.
+        CC: cc
+        CXX: c++
         GROK_LIVE_NATIVE_BIN: ${{ runner.temp }}/grok-dist/${{ inputs.target }}/bin/grok
         GROK_LIVE_NATIVE_TARGET: ${{ inputs.target }}
         TARGET: ${{ inputs.target }}
