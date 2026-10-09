@@ -859,6 +859,8 @@ jobs:
       - name: Require formatted Go scenario source
         working-directory: grok
         run: test -z "$(gofmt -l .)"
+      - name: Test Grok package staging and launcher with synthetic inputs
+        run: python3 grok/package/test_stage.py -v
       - name: Test Facts HTTP and Live stdio boundaries without backend calls
         working-directory: grok
         run: go test -race -count=1 -timeout=6m -v ./facts ./live
