@@ -549,8 +549,7 @@ func TestNativeShippedCatalog(t *testing.T) {
 	if binary == "" {
 		t.Skip("activated by required runtime job")
 	}
-	subject := binarySubject(t, binary)
-	subject.SourceSHA, subject.HarnessSHA = os.Getenv("GITHUB_SHA"), os.Getenv("GITHUB_SHA")
+	subject := nativeSubject(t, binary)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	got, err := live.ShippedCatalog(ctx, subject, "catalog-only-fixture")

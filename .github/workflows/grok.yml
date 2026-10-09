@@ -33,3 +33,37 @@ jobs:
             echo "Native proof did not succeed: $PROOF_RESULT" >&2
             exit 1
           fi
+
+  build-linux-x64-musl:
+    name: Build x86_64-unknown-linux-musl
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    outputs:
+      artifact-id: ${{ steps.package.outputs.artifact-id }}
+      artifact-digest: ${{ steps.package.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        id: package
+        with:
+          target: x86_64-unknown-linux-musl
+
+  build-macos-arm64:
+    name: Build aarch64-apple-darwin
+    runs-on: macos-15
+    timeout-minutes: 170
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        with:
+          target: aarch64-apple-darwin

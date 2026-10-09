@@ -4,6 +4,12 @@ The supported package targets are `x86_64-unknown-linux-musl` and
 `aarch64-apple-darwin`. Availability requires an actual successful Actions build
 and downloadable artifact. Staging tests are not Linux or macOS package smoke.
 
+The complete Linux package is built and smoke-tested on Ubuntu 24.04. The
+`musl` target describes the Rust runtime, not every bundled helper: the pinned
+stock `zsh` is dynamically linked and requires `GLIBC_2.38` symbols absent from
+Ubuntu 22.04. The broader Ubuntu 20.04+/Debian 10+ support statement in stock
+`docs/install.md` has not been verified for this complete Grok package.
+
 Keep the complete extracted directory together:
 
 ```text
