@@ -178,6 +178,80 @@ async fn search_activity_same_turn_reuse_is_rejected_before_a_second_observation
     );
 }
 
+#[tokio::test]
+async fn search_activity_x_canonical_only_completion_uses_the_shared_identity_fence() {
+    use crate::session::tests::make_session_and_context;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::XSearchItem;
+    use codex_protocol::models::ResponseItem;
+    let (_sess, turn) = make_session_and_context().await;
+    let raw:ResponseItem=serde_json::from_value(serde_json::json!({"type":"custom_tool_call","id":"x","call_id":"shared-call","name":"x_keyword_search","status":"completed","input":"exact input\n"})).unwrap();
+    let canonical = TurnItem::XSearch(XSearchItem {
+        id: "x".into(),
+        call_id: "shared-call".into(),
+        name: "x_keyword_search".into(),
+        input: "exact input\n".into(),
+    });
+    let mut first = SearchActivityScope::new().unwrap();
+    let mut corrupted = canonical.clone();
+    if let TurnItem::XSearch(item) = &mut corrupted {
+        item.input = "forged".into();
+    }
+    assert!(
+        first
+            .validate_canonical(&turn, &raw, Some(&corrupted))
+            .is_err()
+    );
+    // A rejected payload did not reserve an ID or prevent the legitimate item.
+    first
+        .validate_canonical(&turn, &raw, Some(&canonical))
+        .unwrap();
+    record_canonical_identity(&turn, &canonical);
+    first.retained(&turn, "x");
+    assert!(first.pending.is_empty());
+    let next = SearchActivityScope::new().unwrap();
+    assert!(
+        next.validate_canonical(&turn, &raw, Some(&canonical))
+            .is_err()
+    );
+    assert!(next.claim_canonical_identity(&turn, "x").is_err());
+    assert!(next.validate_response_identity(&turn, &raw).is_err());
+    // call_id is not a search item identity and remains available to a local call.
+    next.claim_canonical_identity(&turn, "shared-call").unwrap();
+    let (_sess, new_turn) = make_session_and_context().await;
+    let next = SearchActivityScope::new().unwrap();
+    next.claim_canonical_identity(&new_turn, "x").unwrap();
+    assert!(
+        next.validate_canonical(&new_turn, &raw, Some(&canonical))
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn search_activity_x_canonical_only_id_bound_cannot_bypass_the_budget() {
+    use crate::session::tests::make_session_and_context;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::XSearchItem;
+    use codex_protocol::models::ResponseItem;
+    let (_sess, turn) = make_session_and_context().await;
+    for id in [String::new(), "x".repeat(MAX_ITEM_ID_BYTES + 1)] {
+        let raw:ResponseItem=serde_json::from_value(serde_json::json!({"type":"custom_tool_call","id":id,"call_id":"call","name":"x_keyword_search","status":"completed","input":"input"})).unwrap();
+        let canonical = TurnItem::XSearch(XSearchItem {
+            id,
+            call_id: "call".into(),
+            name: "x_keyword_search".into(),
+            input: "input".into(),
+        });
+        assert!(
+            SearchActivityScope::new()
+                .unwrap()
+                .validate_canonical(&turn, &raw, Some(&canonical))
+                .is_err()
+        );
+    }
+    assert!(identity_fence(&turn).0.lock().unwrap().ids.is_empty());
+}
+
 #[test]
 fn search_activity_never_becomes_realtime_text() {
     use crate::session::turn::realtime_text_for_event;

@@ -143,6 +143,8 @@ pub(crate) enum SearchActivityAdmission {
     #[default]
     Disabled,
     Web,
+    X,
+    WebAndX,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

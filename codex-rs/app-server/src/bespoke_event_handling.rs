@@ -1076,6 +1076,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             use codex_app_server_protocol::SearchActivityState;
             let kind = match event.kind {
                 codex_protocol::SearchActivityKind::Web => SearchActivityKind::Web,
+                codex_protocol::SearchActivityKind::X => SearchActivityKind::X,
             };
             let state = match event.state {
                 codex_protocol::SearchActivityState::Running => SearchActivityState::Running,

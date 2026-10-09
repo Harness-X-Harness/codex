@@ -2583,7 +2583,7 @@ impl Session {
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
         // Hosted starts without retention must remain reusable after failed attempts.
-        if !matches!(item, TurnItem::WebSearch(_)) {
+        if !matches!(item, TurnItem::WebSearch(_) | TurnItem::XSearch(_)) {
             search_activity::record_canonical_identity(turn_context, item);
         }
         let started_at_ms = turn_context

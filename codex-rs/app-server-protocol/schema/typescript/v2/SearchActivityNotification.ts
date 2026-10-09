@@ -5,10 +5,10 @@ import type { SearchActivityKind } from "./SearchActivityKind";
 import type { SearchActivityState } from "./SearchActivityState";
 
 /**
- * Transient Web search visibility alongside the ordered item stream.
+ * Transient hosted search visibility alongside the ordered item stream.
  *
  * Scope previews by thread, turn, attempt and output index. Item IDs bind a
- * preview to the corresponding ordered Web item in that attempt. A newer
+ * preview to the corresponding ordered search item in that attempt. A newer
  * attempt supersedes older previews. Ignore older attempts and clear previews
  * on terminal turns, thread replacement and cold replay. Only item/completed
  * creates history or supplies results; completed activity merely stops busy UI.

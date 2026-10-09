@@ -342,6 +342,7 @@ fn searchable_text(item: &ThreadItem) -> Option<Cow<'_, str>> {
         | ThreadItem::CollabAgentToolCall { .. }
         | ThreadItem::SubAgentActivity { .. }
         | ThreadItem::WebSearch(_)
+        | ThreadItem::XSearch(_)
         | ThreadItem::ImageView { .. }
         | ThreadItem::Sleep(_)
         | ThreadItem::ImageGeneration(_)

@@ -149,6 +149,12 @@ fn response(id: &str, items: &[Value]) -> String {
         events.push(json!({
             "type":"response.output_item.added", "output_index":index, "item":pending
         }));
+        if item["type"] == "custom_tool_call" {
+            events.push(
+                json!({"type":"response.custom_tool_call_input.done","output_index":index,
+                "item_id":item["id"],"input":item["input"]}),
+            );
+        }
         events.push(json!({
             "type":"response.output_item.done", "output_index":index, "item":item
         }));
@@ -256,6 +262,7 @@ async fn hosted_search_reusing_local_call_id_survives_follow_up_and_cold_resume(
         pending["status"] = json!("in_progress");
         local_events.extend([
             json!({"type":"response.output_item.added", "output_index":1, "item":pending}),
+            json!({"type":"response.custom_tool_call_input.done","output_index":1,"item_id":hosted["id"],"input":hosted["input"]}),
             json!({"type":"response.output_item.done", "output_index":1, "item":hosted}),
         ]);
     }
@@ -326,6 +333,22 @@ async fn hosted_search_reusing_local_call_id_survives_follow_up_and_cold_resume(
             "hosted calls need no local follow-up"
         );
     }
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| match event {
+                EventMsg::SearchActivity(activity)
+                    if activity.kind == codex_protocol::SearchActivityKind::X =>
+                    Some(activity.state),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            codex_protocol::SearchActivityState::Running,
+            codex_protocol::SearchActivityState::Completed
+        ]
+    );
+    assert_eq!(events.iter().filter(|event| matches!(event, EventMsg::ItemCompleted(event) if matches!(&event.item, codex_protocol::items::TurnItem::XSearch(item) if item.call_id == CALL_ID && item.name == "x_keyword_search"))).count(),1);
     let canonical = match timing {
         HostedCallTiming::LaterTurn => {
             vec![canonical_local, local_output.clone(), canonical_hosted]
@@ -493,8 +516,10 @@ async fn mixed_hosted_search_survives_follow_up_local_dispatch_and_cold_resume(
     let test = builder(Arc::clone(&home)).build(&server).await?;
     assert_eq!(test.config.web_search_mode.value(), web_search_mode);
     fs::write(test.workspace_path("target.txt"), "before\n")?;
-    let (hosted_turn_id, _) =
+    let (hosted_turn_id, hosted_events) =
         successful_turn_events(&test, "Search Web and X for the fixture release.").await?;
+    assert_eq!(hosted_events.iter().filter(|event| matches!(event, EventMsg::SearchActivity(activity) if activity.kind == codex_protocol::SearchActivityKind::X && activity.state == codex_protocol::SearchActivityState::Running)).count(),4);
+    assert_eq!(hosted_events.iter().filter(|event| matches!(event, EventMsg::ItemCompleted(event) if matches!(event.item,codex_protocol::items::TurnItem::XSearch(_)))).count(),4);
     let canonical_hosted = hosted
         .iter()
         .cloned()
@@ -911,6 +936,8 @@ async fn hosted_search_activity_rejects_contributor_rebinding_and_clears_preview
     Ok(())
 }
 
+#[path = "grok_x_search_activity_tests.rs"]
+mod x_activity;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hosted_search_activity_cannot_replace_an_earlier_local_call_identity() -> Result<()> {
     let server = MockServer::start().await;

@@ -2740,7 +2740,8 @@ async fn try_run_sampling_request(
                 };
 
                 let retained_search_id = match &item {
-                    ResponseItem::WebSearchCall { id: Some(id), .. } => Some(id.to_string()),
+                    ResponseItem::WebSearchCall { id: Some(id), .. }
+                    | ResponseItem::CustomToolCall { id: Some(id), .. } => Some(id.to_string()),
                     _ => None,
                 };
                 let output_result = match handle_output_item_done(
@@ -2756,7 +2757,7 @@ async fn try_run_sampling_request(
                     Err(err) => break Err(err),
                 };
                 if let Some(item_id) = retained_search_id
-                    && output_result.retained_web_search_id.as_deref() == Some(item_id.as_str())
+                    && output_result.retained_search_id.as_deref() == Some(item_id.as_str())
                 {
                     search_activity.retained(&turn_context, &item_id);
                 }

@@ -184,7 +184,7 @@ async fn search_activity_retry_reuse_and_late_attempts_cannot_reopen_previews() 
         chat.transcript
             .search_activity
             .cells()
-            .map(WebSearchCell::call_id)
+            .map(crate::history_cell::SearchActivityCell::item_id)
             .collect::<Vec<_>>(),
         vec!["new"]
     );
@@ -328,4 +328,174 @@ async fn search_activity_turn_end_and_replay_discard_transient_success() {
             1
         );
     }
+}
+
+fn send_x_activity(
+    chat: &mut ChatWidget,
+    attempt_id: u64,
+    output_index: u64,
+    item_id: &str,
+    state: SearchActivityState,
+) {
+    let mut notification = activity(chat, attempt_id, output_index, item_id, state);
+    if let ServerNotification::SearchActivity(activity) = &mut notification {
+        activity.kind = codex_app_server_protocol::SearchActivityKind::X;
+    }
+    chat.handle_server_notification(notification, /*replay_kind*/ None);
+}
+
+fn x_item(id: &str) -> ThreadItem {
+    ThreadItem::XSearch(codex_app_server_protocol::XSearchItem {
+        id: id.into(),
+        call_id: "shared-call".into(),
+        name: "x_keyword_search".into(),
+        input: "exact input\n".into(),
+    })
+}
+
+#[tokio::test]
+async fn search_activity_mixed_web_x_keeps_truthful_labels_and_assistant_ownership() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.local_settings.tui.animations = false;
+    handle_turn_started(&mut chat, "turn-1");
+    drain_insert_history(&mut rx);
+    handle_agent_message_delta(&mut chat, "A");
+    send_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "web", Running,
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 2, "x", Running,
+    );
+    insta::assert_snapshot!(lines_to_single_string(&chat.active_cell_transcript_lines(/*width*/ 80).unwrap()), @"
+    • A
+
+    • Searching the web
+
+    • Searching X
+    ");
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Searching X"));
+    // A mismatched kind cannot settle the other search sharing this output index.
+    send_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 2, "x", Completed,
+    );
+    assert!(
+        chat.transcript
+            .search_activity
+            .cells()
+            .last()
+            .unwrap()
+            .raw_lines()[0]
+            .to_string()
+            .contains("Searching X")
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 2, "x", Completed,
+    );
+    send_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "web", Completed,
+    );
+    insta::assert_snapshot!(lines_to_single_string(&chat.active_cell_transcript_lines(/*width*/ 80).unwrap()), @"
+    • A
+
+    • Web search completed
+
+    • X search completed
+    ");
+    assert!(chat.stream_controller.is_some());
+    assert!(chat.active_cell_is_stream_tail());
+    assert!(drain_insert_history(&mut rx).is_empty());
+    handle_agent_message_delta(&mut chat, "B");
+    complete_assistant_message(&mut chat, "msg-1", "AB", /*phase*/ None);
+    complete_web(&mut chat, "web");
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: chat.thread_id.unwrap().to_string(),
+            turn_id: "turn-1".into(),
+            item: x_item("x"),
+            completed_at_ms: 0,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.transcript.search_activity.is_empty());
+    assert_eq!(chat.transcript.last_agent_source.as_deref(), Some("AB"));
+    let rows = drain_insert_history_with(&mut rx, HistoryCell::raw_lines)
+        .into_iter()
+        .flatten()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows.iter()
+            .filter(|line| line.contains("Searched X"))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["• Searched X (x_keyword_search)"]
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|line| line.contains("Searched the web"))
+            .count(),
+        1
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 2, "x", Running,
+    );
+    assert!(chat.transcript.search_activity.is_empty());
+}
+
+#[tokio::test]
+async fn search_activity_x_cleanup_retry_late_turn_and_cold_replay_never_resurrect_preview() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+    drain_insert_history(&mut rx);
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "x", Running,
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "x", Completed,
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "x", Cleared,
+    );
+    assert!(chat.transcript.search_activity.is_empty());
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 2, /*output_index*/ 1, "x", Running,
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "x", Completed,
+    );
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 1, /*output_index*/ 1, "x", Cleared,
+    );
+    insta::assert_snapshot!(lines_to_single_string(&chat.active_cell_transcript_lines(/*width*/ 80).unwrap()), @"• Searching X");
+    handle_turn_interrupted(&mut chat, "turn-1");
+    assert!(chat.transcript.search_activity.is_empty());
+    handle_turn_started(&mut chat, "turn-2");
+    send_x_activity(
+        &mut chat, /*attempt_id*/ 3, /*output_index*/ 1, "x", Running,
+    );
+    assert!(chat.transcript.search_activity.is_empty());
+    chat.replay_thread_item(
+        x_item("x"),
+        "turn-1".into(),
+        ReplayKind::ResumeInitialMessages,
+    );
+    assert!(chat.transcript.search_activity.is_empty());
+    let rows = drain_insert_history_with(&mut rx, HistoryCell::raw_lines)
+        .into_iter()
+        .flatten()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows.iter()
+            .filter(|line| line.contains("Searched X"))
+            .count(),
+        1
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|line| line.contains("Searching X") || line.contains("X search completed"))
+    );
 }

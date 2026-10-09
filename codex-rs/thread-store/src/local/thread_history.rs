@@ -534,6 +534,7 @@ WHERE thread_id = ?
             | ThreadItem::CollabAgentToolCall { .. }
             | ThreadItem::SubAgentActivity { .. }
             | ThreadItem::WebSearch(_)
+            | ThreadItem::XSearch(_)
             | ThreadItem::ImageView { .. }
             | ThreadItem::Sleep(_)
             | ThreadItem::ImageGeneration(_)

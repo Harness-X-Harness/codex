@@ -95,7 +95,7 @@ impl SearchActivityScope {
     }
 
     /// Contributors may decorate items, but cannot steal or rebind an outstanding
-    /// preview. Also catches an earlier message rewritten as another live Web ID.
+    /// preview. Also catches an earlier message rewritten as another live search ID.
     pub(crate) fn validate_canonical(
         &self,
         turn: &TurnContext,
@@ -104,19 +104,44 @@ impl SearchActivityScope {
     ) -> CodexResult<()> {
         use codex_protocol::items::TurnItem;
         use codex_protocol::models::ResponseItem;
+        if matches!(finalized, Some(TurnItem::XSearch(_)))
+            && !codex_protocol::grok_hosted::is_completed_x_search(original)
+        {
+            return Err(CodexErr::Stream(
+                "canonical X item lacks authoritative hosted provenance".into(),
+            ));
+        }
+        if codex_protocol::grok_hosted::is_completed_x_search(original)
+            && !matches!((original, finalized),
+                (ResponseItem::CustomToolCall { id: Some(id), call_id, name, input, .. }, Some(TurnItem::XSearch(search)))
+                    if search.id == id.as_str() && &search.call_id == call_id && &search.name == name && &search.input == input)
+        {
+            return Err(CodexErr::Stream(
+                "canonical X item differs from its authoritative payload".into(),
+            ));
+        }
         let original_id = match original {
-            ResponseItem::WebSearchCall { id: Some(id), .. } => Some(id.as_str()),
+            ResponseItem::WebSearchCall { id: Some(id), .. } => {
+                Some((SearchActivityKind::Web, id.as_str()))
+            }
+            ResponseItem::CustomToolCall { id: Some(id), .. }
+                if codex_protocol::grok_hosted::is_completed_x_search(original) =>
+            {
+                Some((SearchActivityKind::X, id.as_str()))
+            }
             _ => None,
         };
         let canonical_id = match finalized {
-            Some(TurnItem::WebSearch(item)) => Some(item.id.as_str()),
+            Some(TurnItem::WebSearch(item)) => Some((SearchActivityKind::Web, item.id.as_str())),
+            Some(TurnItem::XSearch(item)) => Some((SearchActivityKind::X, item.id.as_str())),
             Some(TurnItem::Extension(codex_extension_items::ExtensionItem::WebSearch(item))) => {
-                Some(item.id.as_str())
+                Some((SearchActivityKind::Web, item.id.as_str()))
             }
             _ => None,
         };
         let touches_preview = self.pending.values().any(|(_, id, _)| {
-            Some(id.as_str()) == original_id || Some(id.as_str()) == canonical_id
+            Some(id.as_str()) == original_id.map(|(_, id)| id)
+                || Some(id.as_str()) == canonical_id.map(|(_, id)| id)
         });
         if touches_preview && original_id != canonical_id {
             return Err(CodexErr::Stream(
@@ -125,16 +150,27 @@ impl SearchActivityScope {
         }
         if let Some(finalized) = finalized {
             let id = finalized.id();
-            let owns_search = self.pending.values().any(|(_, item_id, _)| item_id == &id)
-                && original_id == Some(id.as_str())
-                && canonical_id == Some(id.as_str());
-            identity_fence(turn)
-                .validate_and_record(&id, owns_search.then_some(self.attempt_id))?;
+            let owns_preview = self
+                .pending
+                .values()
+                .any(|(kind, item_id, _)| Some((*kind, item_id.as_str())) == canonical_id)
+                && original_id == canonical_id;
+            let canonical_x = matches!(finalized, TurnItem::XSearch(_));
+            if canonical_x && !owns_preview {
+                // A completed X call may have no supported early signal. It still
+                // needs the same bounded, turn-owned authority before publication.
+                // Payload/provenance checks above must precede this reservation.
+                identity_fence(turn).reserve_search(&id, self.attempt_id)?;
+            }
+            identity_fence(turn).validate_and_record(
+                &id,
+                (owns_preview || canonical_x).then_some(self.attempt_id),
+            )?;
         }
         Ok(())
     }
 
-    /// Reject later raw rebinding before any started item can replace retained Web history.
+    /// Reject later raw rebinding before any started item can replace retained hosted history.
     pub(super) fn validate_response_identity(
         &self,
         turn: &TurnContext,

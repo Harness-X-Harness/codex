@@ -458,10 +458,10 @@ execution and sandbox policies.
 
 # Live search activity
 
-The stable v2 `item/searchActivity` notification provides transient Web search
+The stable v2 `item/searchActivity` notification provides transient hosted Web and X search
 visibility alongside the ordered item stream. Its payload is `{threadId,
-turnId, attemptId, outputIndex, itemId, kind, state}`. The currently supported
-kind is `web`; states are `running`, `completed`, and `cleared`.
+turnId, attemptId, outputIndex, itemId, kind, state}`. The supported
+kinds are `web` and `x`; states are `running`, `completed`, and `cleared`.
 
 `attemptId` is an increasing JavaScript-safe integer scoped to one live server
 process. `outputIndex` is also JavaScript-safe, and `itemId` is nonempty and at
@@ -470,8 +470,8 @@ attempt supersedes old previews; ignore notifications from an older attempt.
 Clear previews on terminal turns, thread replacement, disconnect, or lost event
 delivery. Do not replay activity notifications when reconstructing history.
 
-A validated item start permits `running`. `completed` means an authoritative
-completed Web item arrived, potentially while an earlier assistant item remains
+A validated Web item start or supported X custom-input-done event permits
+`running`. `completed` means an authoritative completed search item arrived, potentially while an earlier assistant item remains
 open; a provider status named completed is insufficient. This stops busy UI but
 does not create history or supply results. `cleared` closes the attempt's
 remaining previews without claiming success or cancellation, including completed
@@ -479,7 +479,7 @@ previews whose canonical item could not be retained.
 
 Keep assistant streaming independent from previews. The existing ordered
 `item/started` and `item/completed` notifications remain authoritative. Within
-the current thread, turn and attempt, match a canonical Web item to its preview
+the current thread, turn and attempt, match a canonical search item to its preview
 by `itemId`, suppress a second start, and promote that preview exactly once.
 Live indexed bindings cannot share an item ID. Once retained, a hosted item ID
 cannot be reused or rebound to another item type in the same turn, including
@@ -496,6 +496,15 @@ sampling replacement. Ordinary canonical work continues if tracking saturates;
 further hosted admission fails closed because an untracked earlier ID could
 collide. Pending reservations count toward the limit and are released on
 abandonment. Ordinary IDs outside the hosted length range cannot collide and
-remain unrestricted. A canonical Web identity changed by a contributor is
-rejected before publication. No preview becomes a model input, local tool call,
+remain unrestricted. A canonical search identity changed by a contributor is
+rejected before publication; X payload and hosted provenance are also preserved. No preview becomes a model input, local tool call,
 synthetic tool output, or durable history item.
+
+Completed hosted X searches are canonical `xSearch` items with `id`, `callId`,
+`name`, and `input`. `name` and `input` preserve the provider's exact retained
+payload; they are not synthesized local results. The supported subtypes are
+`x_keyword_search`, `x_semantic_search`, `x_user_search`, and `x_thread_fetch`.
+The response-local `callId` can repeat and is not a presentation identity.
+A completed X item without a supported early signal still enters ordered history,
+without an invented running preview. Cold history uses the typed canonical item;
+clients must not infer hosted status from an arbitrary custom-tool name.

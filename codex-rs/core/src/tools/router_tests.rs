@@ -868,3 +868,56 @@ fn stock_router_does_not_decode_flat_looking_calls() {
     };
     assert_eq!(actual, original);
 }
+
+#[test]
+fn grok_x_activity_never_activates_a_same_named_local_custom_consumer() {
+    use crate::client_common::ResponseEvent;
+    let ToolSpec::Freeform(mut local_spec) = custom_patch_spec(/*namespace*/ None) else {
+        unreachable!()
+    };
+    local_spec.name = "x_keyword_search".into();
+    let router = flat_router(vec![ToolSpec::Freeform(local_spec)]);
+    let hosted:ResponseItem=serde_json::from_value(json!({"type":"custom_tool_call","id":"x","call_id":"shared-call","name":"x_keyword_search","status":"in_progress","input":"hosted input"})).unwrap();
+    assert!(
+        router
+            .normalize_response_event(ResponseEvent::OutputItemAdded(hosted.clone()))
+            .unwrap()
+            .is_none()
+    );
+    // A local call with exactly the same name still restores and builds its real
+    // custom invocation from the advertised function wrapper, without hosted status.
+    let local = flat_call(
+        &ToolName::plain("x_keyword_search"),
+        "custom",
+        r#"{"input":"local exact input"}"#,
+    );
+    let Some(ResponseEvent::OutputItemDone(local)) = router
+        .normalize_response_event(ResponseEvent::OutputItemDone(local))
+        .unwrap()
+    else {
+        panic!("local completion")
+    };
+    assert!(!codex_protocol::grok_hosted::is_completed_x_search(&local));
+    let call = ToolRouter::build_tool_call(local).unwrap().unwrap();
+    assert_eq!(
+        call.tool_name,
+        ToolName::plain("x_keyword_search").with_default_namespace()
+    );
+    assert!(matches!(call.payload,ToolPayload::Custom {input} if input=="local exact input"));
+    let empty = flat_router(vec![]);
+    assert!(matches!(
+        empty
+            .normalize_response_event(ResponseEvent::OutputItemAdded(hosted.clone()))
+            .unwrap(),
+        Some(ResponseEvent::OutputItemAdded(_))
+    ));
+    let mut stock = router;
+    stock.flat_tool_routes = None;
+    let Some(ResponseEvent::OutputItemAdded(actual)) = stock
+        .normalize_response_event(ResponseEvent::OutputItemAdded(hosted.clone()))
+        .unwrap()
+    else {
+        panic!("stock custom start")
+    };
+    assert_eq!(actual, hosted);
+}

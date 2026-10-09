@@ -399,6 +399,11 @@ impl ChatWidget {
                 ..
             } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_completed(item),
+            ThreadItem::XSearch(item) => {
+                self.reconcile_search_preview(&turn_id, &item.id);
+                self.flush_answer_stream_with_separator();
+                self.add_to_history(history_cell::new_x_search_call(&item.name));
+            }
             ThreadItem::WebSearch(item) => {
                 if !self.reconcile_search_preview(&turn_id, &item.id) {
                     self.on_web_search_begin(item.id.clone());

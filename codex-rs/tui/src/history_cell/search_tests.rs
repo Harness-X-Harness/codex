@@ -3,7 +3,11 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn search_activity_labels_are_transient_and_completion_stops_animation() {
-    let mut cell = WebSearchCell::activity("web".into(), /*animations_enabled*/ true);
+    let mut cell = SearchActivityCell::new(
+        "web".into(),
+        codex_app_server_protocol::SearchActivityKind::Web,
+        /*animations_enabled*/ true,
+    );
     assert!(cell.transcript_animation_tick().is_some());
     insta::assert_snapshot!(cell.raw_lines()[0].to_string(), @"Searching the web");
     cell.complete();
@@ -108,4 +112,22 @@ fn batched_search_retains_each_query() {
         vec![Line::from("Searched the web for first query, second query")]
     );
     insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"• Searched the web for first query, second query");
+}
+
+#[test]
+fn search_activity_x_completion_stops_animation_and_wraps_truthfully() {
+    let mut cell = SearchActivityCell::new(
+        "x".into(),
+        codex_app_server_protocol::SearchActivityKind::X,
+        /*animations_enabled*/ true,
+    );
+    assert!(cell.transcript_animation_tick().is_some());
+    insta::assert_snapshot!(cell.raw_lines()[0].to_string(), @"Searching X");
+    cell.complete();
+    assert_eq!(cell.transcript_animation_tick(), None);
+    insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"• X search completed");
+    insta::assert_snapshot!(cell.transcript_lines(/*width*/ 12).iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"), @"
+    • X search
+      completed
+    ");
 }

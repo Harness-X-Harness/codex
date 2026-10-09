@@ -273,6 +273,7 @@ fn turn_item_type(item: &TurnItem) -> &'static str {
         TurnItem::CollabAgentToolCall(_) => "collab_agent_tool_call",
         TurnItem::SubAgentActivity(_) => "sub_agent_activity",
         TurnItem::WebSearch(_) => "web_search",
+        TurnItem::XSearch(_) => "x_search",
         TurnItem::ImageView(_) => "image_view",
         TurnItem::Extension(_) => "extension",
         TurnItem::ImageGeneration(_) => "image_generation",

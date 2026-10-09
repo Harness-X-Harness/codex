@@ -50,6 +50,9 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 )));
             }
         },
+        ThreadItem::XSearch(item) => {
+            cells.push(Arc::new(history_cell::new_x_search_call(&item.name)));
+        }
         ThreadItem::WebSearch(item) => cells.push(Arc::new(history_cell::new_web_search_call(
             item.id,
             item.query,
