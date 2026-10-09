@@ -3,6 +3,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
+use crate::common::SearchActivityAdmission;
 use crate::error::ApiError;
 use crate::error::parse_flex_unavailable;
 use crate::provider::ApiDialect;
@@ -38,12 +39,13 @@ const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
-pub fn spawn_response_stream(
+pub(crate) fn spawn_response_stream_with_search(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
     dialect: ApiDialect,
+    search_activity: SearchActivityAdmission,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -98,6 +100,7 @@ pub fn spawn_response_stream(
             telemetry,
             safety_buffering_treatment,
             dialect,
+            search_activity,
         )
         .await;
     });
@@ -181,7 +184,7 @@ pub struct ResponsesStreamEvent {
     pub(super) response: Option<Value>,
     error: Option<Value>,
     pub(super) item: Option<Value>,
-    item_id: Option<String>,
+    pub(super) item_id: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
     text: Option<String>,
@@ -592,6 +595,7 @@ pub async fn process_sse(
         telemetry,
         SafetyBufferingTreatment::default(),
         ApiDialect::OpenAi,
+        SearchActivityAdmission::Disabled,
     )
     .await;
 }
@@ -603,11 +607,12 @@ async fn process_sse_with_treatment(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
     dialect: ApiDialect,
+    search_activity: SearchActivityAdmission,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
-    let mut sequencer = (dialect == ApiDialect::Grok).then(GrokSequencer::default);
+    let mut sequencer = (dialect == ApiDialect::Grok).then(|| GrokSequencer::new(search_activity));
     let mut ready = VecDeque::new();
 
     loop {
@@ -659,7 +664,14 @@ async fn process_sse_with_treatment(
             && !normalized
         {
             match sequencer.push(sse) {
-                Ok(events) => ready.extend(events),
+                Ok((activity, events)) => {
+                    if let Some(activity) = activity
+                        && tx_event.send(Ok(activity)).await.is_err()
+                    {
+                        return;
+                    }
+                    ready.extend(events);
+                }
                 Err(error) => {
                     let _ = tx_event.send(Err(error)).await;
                     return;
@@ -1630,12 +1642,13 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             stream_response,
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
             ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1671,12 +1684,13 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             stream_response,
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
             ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {

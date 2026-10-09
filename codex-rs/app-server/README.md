@@ -454,3 +454,48 @@ credential discovery/signing, are disabled while restrictions apply. Supported
 HTTP, WebSocket, and code-mode gRPC requests use the shared destination checks.
 User-directed Git, SSH, shell, and other subprocess traffic retain their existing
 execution and sandbox policies.
+
+
+# Live search activity
+
+The stable v2 `item/searchActivity` notification provides transient Web search
+visibility alongside the ordered item stream. Its payload is `{threadId,
+turnId, attemptId, outputIndex, itemId, kind, state}`. The currently supported
+kind is `web`; states are `running`, `completed`, and `cleared`.
+
+`attemptId` is an increasing JavaScript-safe integer scoped to one live server
+process. `outputIndex` is also JavaScript-safe, and `itemId` is nonempty and at
+most 1024 UTF-8 bytes. A client needs at most 65 simultaneous previews. A newer
+attempt supersedes old previews; ignore notifications from an older attempt.
+Clear previews on terminal turns, thread replacement, disconnect, or lost event
+delivery. Do not replay activity notifications when reconstructing history.
+
+A validated item start permits `running`. `completed` means an authoritative
+completed Web item arrived, potentially while an earlier assistant item remains
+open; a provider status named completed is insufficient. This stops busy UI but
+does not create history or supply results. `cleared` closes the attempt's
+remaining previews without claiming success or cancellation, including completed
+previews whose canonical item could not be retained.
+
+Keep assistant streaming independent from previews. The existing ordered
+`item/started` and `item/completed` notifications remain authoritative. Within
+the current thread, turn and attempt, match a canonical Web item to its preview
+by `itemId`, suppress a second start, and promote that preview exactly once.
+Live indexed bindings cannot share an item ID. Once retained, a hosted item ID
+cannot be reused or rebound to another item type in the same turn, including
+later sampling requests; the stream fails before a second activity is published.
+An abandoned, unretained attempt releases its reservation, so retry can reuse its
+provider IDs. New turns have independent reservations. Old attempts are cleared
+before retry. Retire preview indexes after canonical completion so late activity
+cannot recreate them.
+
+Turn-owned admission tracking holds at most 256 eligible canonical/pending IDs,
+each at most 1024 UTF-8 bytes (at most 256 KiB of identifier bytes, plus bounded
+map overhead). This authority survives model-history truncation, compaction and
+sampling replacement. Ordinary canonical work continues if tracking saturates;
+further hosted admission fails closed because an untracked earlier ID could
+collide. Pending reservations count toward the limit and are released on
+abandonment. Ordinary IDs outside the hosted length range cannot collide and
+remain unrestricted. A canonical Web identity changed by a contributor is
+rejected before publication. No preview becomes a model input, local tool call,
+synthetic tool output, or durable history item.

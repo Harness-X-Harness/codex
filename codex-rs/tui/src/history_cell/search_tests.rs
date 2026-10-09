@@ -2,6 +2,20 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn search_activity_labels_are_transient_and_completion_stops_animation() {
+    let mut cell = WebSearchCell::activity("web".into(), /*animations_enabled*/ true);
+    assert!(cell.transcript_animation_tick().is_some());
+    insta::assert_snapshot!(cell.raw_lines()[0].to_string(), @"Searching the web");
+    cell.complete();
+    assert_eq!(cell.transcript_animation_tick(), None);
+    insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"• Web search completed");
+    insta::assert_snapshot!(cell.transcript_lines(/*width*/ 18).iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"), @"
+    • Web search
+      completed
+    ");
+}
+
+#[test]
 fn web_action_labels_and_missing_details() {
     let url = "https://example.com/docs";
     let actions = [

@@ -1070,6 +1070,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ViewImageToolCall(_) => {}
+        EventMsg::SearchActivity(event) => {
+            use codex_app_server_protocol::SearchActivityKind;
+            use codex_app_server_protocol::SearchActivityNotification;
+            use codex_app_server_protocol::SearchActivityState;
+            let kind = match event.kind {
+                codex_protocol::SearchActivityKind::Web => SearchActivityKind::Web,
+            };
+            let state = match event.state {
+                codex_protocol::SearchActivityState::Running => SearchActivityState::Running,
+                codex_protocol::SearchActivityState::Completed => SearchActivityState::Completed,
+                codex_protocol::SearchActivityState::Cleared => SearchActivityState::Cleared,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::SearchActivity(
+                    SearchActivityNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id.clone(),
+                        attempt_id: event.attempt_id,
+                        output_index: event.output_index,
+                        item_id: event.item_id,
+                        kind,
+                        state,
+                    },
+                ))
+                .await;
+        }
         EventMsg::ItemStarted(event) => {
             let should_emit = match &event.item {
                 // Approval and guardian flows can emit the command start notification before core

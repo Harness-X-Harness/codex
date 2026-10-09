@@ -11,6 +11,10 @@ const MAX_BUFFERED_AGENT_MESSAGE_DELTA_BYTES: usize = 256 * 1024;
 
 impl ThreadEventStore {
     pub(super) fn push_replay_notification(&mut self, notification: Cow<'_, ServerNotification>) {
+        // Activity has no durable payload. Switching threads must not resurrect a preview.
+        if matches!(notification.as_ref(), ServerNotification::SearchActivity(_)) {
+            return;
+        }
         if let ServerNotification::AgentMessageDelta(delta) = notification.as_ref()
             && delta.delta.len() > MAX_BUFFERED_AGENT_MESSAGE_DELTA_BYTES
         {

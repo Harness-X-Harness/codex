@@ -102,6 +102,7 @@ impl ChatWidget {
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
+        self.clear_search_activity();
         if !turns.is_empty() || matches!(replay_kind, ReplayKind::ThreadSnapshot) {
             self.bottom_pane.dismiss_composer_sparkle();
         }
@@ -399,7 +400,9 @@ impl ChatWidget {
             } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_completed(item),
             ThreadItem::WebSearch(item) => {
-                self.on_web_search_begin(item.id.clone());
+                if !self.reconcile_search_preview(&turn_id, &item.id) {
+                    self.on_web_search_begin(item.id.clone());
+                }
                 self.on_web_search_end(
                     item.id,
                     item.query,

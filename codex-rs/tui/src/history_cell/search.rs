@@ -43,6 +43,7 @@ pub(crate) struct WebSearchCell {
     action: Option<WebSearchAction>,
     start_time: Instant,
     completed: bool,
+    activity_preview: bool,
     animations_enabled: bool,
 }
 
@@ -59,12 +60,25 @@ impl WebSearchCell {
             action,
             start_time: Instant::now(),
             completed: false,
+            activity_preview: false,
             animations_enabled,
         }
     }
 
     pub(crate) fn call_id(&self) -> &str {
         &self.call_id
+    }
+
+    /// Render transient Web activity without inventing a query or canonical result.
+    pub(crate) fn activity(call_id: String, animations_enabled: bool) -> Self {
+        let mut cell = Self::new(
+            call_id,
+            String::new(),
+            /*action*/ None,
+            animations_enabled,
+        );
+        cell.activity_preview = true;
+        cell
     }
 
     pub(crate) fn update(&mut self, action: WebSearchAction, query: String) {
@@ -77,6 +91,16 @@ impl WebSearchCell {
     }
 
     fn summary(&self) -> Line<'static> {
+        if self.activity_preview {
+            return Line::from(
+                if self.completed {
+                    "Web search completed"
+                } else {
+                    "Searching the web"
+                }
+                .bold(),
+            );
+        }
         let detail = web_search_detail(self.action.as_ref(), &self.query);
         let (header, separator) = match (&self.action, self.completed) {
             (Some(WebSearchAction::OpenPage { .. }), completed) => (
@@ -155,6 +179,11 @@ impl HistoryCell for WebSearchCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(vec![self.summary()])
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        (self.activity_preview && !self.completed && self.animations_enabled)
+            .then(|| u64::try_from(self.start_time.elapsed().as_millis() / 100).unwrap_or(u64::MAX))
     }
 }
 
