@@ -2,7 +2,7 @@ name: grok
 
 on:
   pull_request:
-    branches: ["grok/rust-v*"]
+    branches: ["grok/rust-v*", "grok/c7-web-activity-20261008"]
   push:
     branches: ["grok/rust-v*"]
 

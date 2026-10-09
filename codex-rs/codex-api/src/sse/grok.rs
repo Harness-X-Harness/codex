@@ -5,7 +5,10 @@ use super::ResponsesStreamEvent;
 use crate::common::ResponseEvent;
 use crate::common::SearchActivityAdmission;
 use crate::error::ApiError;
+use codex_protocol::SearchActivityKind;
 use codex_protocol::SearchActivityState;
+use codex_protocol::grok_hosted::is_completed_x_search;
+use codex_protocol::grok_hosted::is_x_search_name;
 use codex_protocol::grok_hosted::project_search_replay;
 use codex_protocol::models::ResponseItem;
 use eventsource_stream::Event;
@@ -30,12 +33,23 @@ struct Lifetime {
     kind: String,
     closed: bool,
     web: bool,
+    x: Option<XSearchLifetime>,
     status_completed: bool,
+}
+
+struct XSearchLifetime {
+    call_id: String,
+    name: String,
+    input: Option<String>,
 }
 
 impl Lifetime {
     fn bytes(&self) -> usize {
-        self.kind.len() + self.id.as_ref().map_or(0, String::len)
+        self.kind.len()
+            + self.id.as_ref().map_or(0, String::len)
+            + self.x.as_ref().map_or(0, |x| {
+                x.call_id.len() + x.name.len() + x.input.as_ref().map_or(0, String::len)
+            })
     }
 }
 
@@ -84,8 +98,10 @@ impl GrokSequencer {
                 }) {
                     return Err(invalid("output item ID is already bound to another index"));
                 }
-                let web = self.search_activity == SearchActivityAdmission::Web
-                    && matches!(item, ResponseItem::WebSearchCall { .. });
+                let web = matches!(
+                    self.search_activity,
+                    SearchActivityAdmission::Web | SearchActivityAdmission::WebAndX
+                ) && matches!(item, ResponseItem::WebSearchCall { .. });
                 if web
                     && !matches!(&item, ResponseItem::WebSearchCall {
                     id: Some(id), status: Some(status), ..
@@ -93,7 +109,40 @@ impl GrokSequencer {
                 {
                     return Err(invalid("invalid Web search start"));
                 }
-                if web && index > MAX_SAFE_INTEGER {
+                // Local tools are projected as function calls. Only this explicit
+                // raw, unnamespaced custom shape can be hosted X in the admitted plan.
+                let x = match &item {
+                    ResponseItem::CustomToolCall {
+                        id: Some(id),
+                        call_id,
+                        name,
+                        namespace: None,
+                        status,
+                        ..
+                    } if matches!(
+                        self.search_activity,
+                        SearchActivityAdmission::X | SearchActivityAdmission::WebAndX
+                    ) && is_x_search_name(name) =>
+                    {
+                        if id.as_str().is_empty()
+                            || id.as_str().len() > MAX_ITEM_ID_BYTES
+                            || call_id.is_empty()
+                            || call_id.len() > MAX_ITEM_ID_BYTES
+                            || status
+                                .as_deref()
+                                .is_some_and(|status| status != "in_progress")
+                        {
+                            return Err(invalid("invalid X search start"));
+                        }
+                        Some(XSearchLifetime {
+                            call_id: call_id.clone(),
+                            name: name.clone(),
+                            input: None,
+                        })
+                    }
+                    _ => None,
+                };
+                if (web || x.is_some()) && index > MAX_SAFE_INTEGER {
                     return Err(invalid(
                         "search output index exceeds the public integer range",
                     ));
@@ -103,6 +152,7 @@ impl GrokSequencer {
                     kind,
                     closed: false,
                     web,
+                    x,
                     status_completed: false,
                 };
                 if frame_bytes.saturating_add(bound.bytes())
@@ -133,9 +183,9 @@ impl GrokSequencer {
                 }
                 if event.kind == "response.output_item.done" {
                     let (item, id, kind) = parse_item(event)?;
-                    // Stock non-Web completion can omit an ID assigned on start.
-                    // Web observation authority always requires an exact nonempty ID.
-                    let identity_changed = if bound.kind == "web_search_call" {
+                    // Stock non-search completion can omit an ID assigned on start.
+                    // Hosted observation authority requires an exact nonempty ID.
+                    let identity_changed = if bound.kind == "web_search_call" || bound.x.is_some() {
                         bound.id != id
                     } else {
                         bound
@@ -149,12 +199,65 @@ impl GrokSequencer {
                             "completed item differs from its admitted identity/type",
                         ));
                     }
+                    if matches!(
+                        self.search_activity,
+                        SearchActivityAdmission::X | SearchActivityAdmission::WebAndX
+                    ) && is_completed_x_search(&item)
+                        && bound.x.is_none()
+                    {
+                        return Err(invalid("completed X search has no admitted X lifetime"));
+                    }
                     if bound.web {
                         project_search_replay(&item)
                             .map_err(|_| invalid("invalid completed Web search"))?;
                         state = Some(SearchActivityState::Completed);
                     }
+                    if let Some(x) = &bound.x {
+                        if !matches!(&item, ResponseItem::CustomToolCall { call_id, name, namespace: None, input, .. }
+                            if call_id == &x.call_id && name == &x.name && x.input.as_ref().is_none_or(|bound_input| bound_input == input))
+                        {
+                            return Err(invalid(
+                                "completed X search differs from its admitted call",
+                            ));
+                        }
+                        project_search_replay(&item)
+                            .map_err(|_| invalid("invalid completed X search"))?;
+                        // No supported early signal means no invented running preview.
+                        if x.input.is_some() {
+                            state = Some(SearchActivityState::Completed);
+                        }
+                    }
                     bound.closed = true;
+                } else if event.kind.starts_with("response.custom_tool_call_input.")
+                    && let Some(x) = bound.x.as_mut()
+                {
+                    if event.item_id != bound.id {
+                        return Err(invalid("X input has no matching admitted item"));
+                    }
+                    match event.kind.as_str() {
+                        "response.custom_tool_call_input.done" => {
+                            let input = event
+                                .input
+                                .as_ref()
+                                .ok_or_else(|| invalid("X input done is missing input"))?;
+                            if let Some(previous) = &x.input {
+                                if previous != input {
+                                    return Err(invalid("conflicting X input completion"));
+                                }
+                            } else {
+                                if frame_bytes.saturating_add(input.len())
+                                    > MAX_PENDING_BYTES.saturating_sub(self.bytes)
+                                {
+                                    return Err(invalid("pending output buffer limit exceeded"));
+                                }
+                                self.bytes += input.len();
+                                x.input = Some(input.clone());
+                                state = Some(SearchActivityState::Running);
+                            }
+                        }
+                        "response.custom_tool_call_input.delta" if x.input.is_none() => {}
+                        _ => return Err(invalid("invalid X input transition")),
+                    }
                 } else if event.kind.starts_with("response.web_search_call.") {
                     if bound.kind != "web_search_call"
                         || event.item_id != bound.id
@@ -176,17 +279,24 @@ impl GrokSequencer {
             return Ok(None);
         };
         // Broken admission state must fail the stream, never panic or fabricate activity.
-        let item_id = self
+        let bound = self
             .lifetimes
             .get(&index)
-            .and_then(|bound| bound.id.as_ref())
+            .ok_or_else(|| invalid("missing admitted output item lifetime"))?;
+        let item_id = bound
+            .id
+            .as_ref()
             .filter(|id| !id.is_empty())
             .cloned()
-            .ok_or_else(|| invalid("missing admitted Web item identity"))?;
+            .ok_or_else(|| invalid("missing admitted search item identity"))?;
         Ok(Some(ResponseEvent::SearchActivity {
             output_index: index,
             item_id,
-            kind: codex_protocol::SearchActivityKind::Web,
+            kind: if bound.web {
+                SearchActivityKind::Web
+            } else {
+                SearchActivityKind::X
+            },
             state,
         }))
     }

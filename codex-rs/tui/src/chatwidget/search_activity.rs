@@ -1,11 +1,11 @@
-//! Bounded, render-only Web previews. Canonical items remain the history authority.
+//! Bounded, render-only search previews. Canonical items remain the history authority.
 //!
 //! Attempt identities are monotonically increasing within one live server connection.
 //! Core clears an abandoned attempt before retrying, and ingress rejects simultaneously
 //! live item-ID collisions, so a canonical item joins only this turn's current attempt.
 
 use super::*;
-use codex_app_server_protocol::SearchActivityKind;
+use crate::history_cell::SearchActivityCell;
 use codex_app_server_protocol::SearchActivityNotification;
 use codex_app_server_protocol::SearchActivityState;
 use std::collections::BTreeMap;
@@ -22,12 +22,12 @@ pub(super) struct SearchActivityPreviews {
 }
 
 struct SearchPreview {
-    cell: WebSearchCell,
+    cell: SearchActivityCell,
     completed: bool,
 }
 
 impl SearchActivityPreviews {
-    pub(super) fn cells(&self) -> impl Iterator<Item = &WebSearchCell> {
+    pub(super) fn cells(&self) -> impl Iterator<Item = &SearchActivityCell> {
         self.entries.values().map(|entry| &entry.cell)
     }
 
@@ -59,7 +59,10 @@ impl SearchActivityPreviews {
             return replaced;
         }
         if let Some(entry) = self.entries.get_mut(&activity.output_index) {
-            if entry.cell.call_id() != activity.item_id || entry.completed {
+            if entry.cell.item_id() != activity.item_id
+                || entry.cell.kind() != activity.kind
+                || entry.completed
+            {
                 return replaced;
             }
             if activity.state == SearchActivityState::Completed {
@@ -80,7 +83,7 @@ impl SearchActivityPreviews {
         self.entries.insert(
             activity.output_index,
             SearchPreview {
-                cell: WebSearchCell::activity(activity.item_id, animations_enabled),
+                cell: SearchActivityCell::new(activity.item_id, activity.kind, animations_enabled),
                 completed: false,
             },
         );
@@ -88,14 +91,14 @@ impl SearchActivityPreviews {
     }
 
     fn contains(&self, item_id: &str) -> bool {
-        self.cells().any(|cell| cell.call_id() == item_id)
+        self.cells().any(|cell| cell.item_id() == item_id)
     }
 
     fn reconcile(&mut self, item_id: &str) -> bool {
         let Some(index) = self
             .entries
             .iter()
-            .find_map(|(index, entry)| (entry.cell.call_id() == item_id).then_some(*index))
+            .find_map(|(index, entry)| (entry.cell.item_id() == item_id).then_some(*index))
         else {
             return false;
         };
@@ -123,12 +126,10 @@ impl ChatWidget {
         {
             return;
         }
-        let changed = match activity.kind {
-            SearchActivityKind::Web => self.transcript.search_activity.observe(
-                activity,
-                self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
-            ),
-        };
+        let changed = self.transcript.search_activity.observe(
+            activity,
+            self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
+        );
         if changed {
             self.bump_active_cell_revision();
             self.request_redraw();

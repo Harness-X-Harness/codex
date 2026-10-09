@@ -221,7 +221,7 @@ jobs:
         working-directory: codex-rs
         run: |
           cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
-          cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
       - name: Check Code Mode host fixture formatting
@@ -229,7 +229,7 @@ jobs:
         run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
       - name: Check affected Provider runtime crate formatting
         working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
+        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -354,7 +354,7 @@ jobs:
         run: >-
           just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
+          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
       - name: Require unchanged runtime construction input
         uses: ./.github/actions/check-clean-worktree
@@ -600,6 +600,27 @@ jobs:
           just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(chatwidget::tests::reasoning_status_tests::)'
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::web_search::)'
 
+      - name: Test hosted X activity and mixed Web/X composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-api --test sse_end_to_end --locked --cargo-profile ci-test --no-tests=fail -E 'test(grok_x_activity_)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(grok_public_x_activity_)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_x_search_activity_) | test(hosted_search_reusing_local_call_id_) | test(mixed_hosted_search_survives_)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(search_activity_mixed_web_x_) | test(search_activity_x_)'
+          just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity_x_provenance_)'
+          just test -p codex-analytics --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_x_is_not_counted_as_web_search)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity_x_canonical_)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(dynamic_tools::markers::tests::hosted_x_marker_)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(dynamic_tools::tests::hosted_x_summary_)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(dynamic_tools::tests::activity_metadata_is_retained_without_including_outputs)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(dynamic_tools::tests::wait_threads_preserves_snapshots_and_rejects_self_wait)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(app::agent_status_feed::tests::)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(thread_transcript::other_items::tests::)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(summary_items_use_final_answers_and_ignore_commentary)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(list_items_pages_whole_thread_and_per_turn_rows)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(lineage_reads_page_across_parent_and_child_segments)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(inherited_search_excludes_turns_created_after_the_fork)'
+
       - name: Test image dialect consumers and codec normalization
         working-directory: codex-rs
         run: |
@@ -712,7 +733,7 @@ jobs:
         run: >-
           just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout -p codex-rollout-trace -p codex-otel -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
+          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
@@ -794,6 +815,8 @@ jobs:
           for source in (
               Path("chatwidget/tests/search_activity_tests.rs"),
               Path("history_cell/search_tests.rs"),
+              Path("app/agent_status_feed_tests.rs"),
+              Path("thread_transcript/other_items_tests.rs"),
           ):
               pending = root / source.parent / f".{source.name}.pending-snap"
               if pending.is_file():

@@ -4269,11 +4269,9 @@ class ScheduledTaskWeekday(Enum):
     su = "SU"
 
 
-class SearchActivityKind(RootModel[Literal["web"]]):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: Literal["web"]
+class SearchActivityKind(Enum):
+    web = "web"
+    x = "x"
 
 
 class SearchActivityState(Enum):
@@ -5408,6 +5406,19 @@ class SubAgentActivityThreadItem(BaseModel):
     id: str
     kind: SubAgentActivityKind
     type: Annotated[Literal["subAgentActivity"], Field(title="SubAgentActivityThreadItemType")]
+
+
+class XSearchThreadItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    call_id: Annotated[str, Field(alias="callId")]
+    id: Annotated[
+        str, Field(description="Provider item identity, unique among retained items in this turn.")
+    ]
+    input: str
+    name: str
+    type: Annotated[Literal["xSearch"], Field(title="XSearchThreadItemType")]
 
 
 class ImageViewThreadItem(BaseModel):
@@ -11355,6 +11366,7 @@ class ThreadItem(
         | CollabAgentToolCallThreadItem
         | SubAgentActivityThreadItem
         | WebSearchThreadItem
+        | XSearchThreadItem
         | ImageViewThreadItem
         | SleepThreadItem
         | ImageGenerationThreadItem
@@ -11380,6 +11392,7 @@ class ThreadItem(
         | CollabAgentToolCallThreadItem
         | SubAgentActivityThreadItem
         | WebSearchThreadItem
+        | XSearchThreadItem
         | ImageViewThreadItem
         | SleepThreadItem
         | ImageGenerationThreadItem

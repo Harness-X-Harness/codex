@@ -101,6 +101,8 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
                 || matches!(
                     event.item,
                     TurnItem::FunctionCallOutput(_)
+                        // Raw custom calls do not carry trusted hosted provenance.
+                        | TurnItem::XSearch(_)
                         | TurnItem::Plan(_)
                         | TurnItem::Extension(ExtensionItem::Sleep(_))
                 )

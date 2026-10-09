@@ -111,11 +111,16 @@ impl<T: HttpTransport> ResponsesClient<T> {
                     crate::grok_request::build_with_search(&request, self.grok_x_search.as_ref())?;
                 // Inspect the admitted wire request, not a provider name or an
                 // unvalidated incoming status. Projection remains the policy owner.
-                if projected["tools"]
-                    .as_array()
-                    .is_some_and(|tools| tools.iter().any(|tool| tool["type"] == "web_search"))
-                {
-                    search_activity = SearchActivityAdmission::Web;
+                if let Some(tools) = projected["tools"].as_array() {
+                    search_activity = match (
+                        tools.iter().any(|tool| tool["type"] == "web_search"),
+                        tools.iter().any(|tool| tool["type"] == "x_search"),
+                    ) {
+                        (false, false) => SearchActivityAdmission::Disabled,
+                        (true, false) => SearchActivityAdmission::Web,
+                        (false, true) => SearchActivityAdmission::X,
+                        (true, true) => SearchActivityAdmission::WebAndX,
+                    };
                 }
                 EncodedJsonBody::encode(&projected)
             }

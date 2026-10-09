@@ -513,6 +513,7 @@ impl TurnToolCounts {
             | ThreadItem::Plan { .. }
             | ThreadItem::Reasoning { .. }
             | ThreadItem::ImageView { .. }
+            | ThreadItem::XSearch(_)
             | ThreadItem::Sleep(_)
             | ThreadItem::EnteredReviewMode { .. }
             | ThreadItem::ExitedReviewMode { .. }
@@ -2665,6 +2666,7 @@ pub(crate) fn tracked_tool_item_id(item: &ThreadItem) -> Option<&str> {
         | ThreadItem::Reasoning { .. }
         | ThreadItem::SubAgentActivity { .. }
         | ThreadItem::ImageView { .. }
+        | ThreadItem::XSearch(_)
         | ThreadItem::Sleep(_)
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
@@ -4081,6 +4083,21 @@ mod tests {
         assert_eq!(
             safe_plugin_relative_script_path(/*plugin_id*/ None, Some("scripts/run.py"),),
             None
+        );
+    }
+    #[test]
+    fn hosted_x_is_not_counted_as_web_search() {
+        let item = ThreadItem::XSearch(codex_app_server_protocol::XSearchItem {
+            id: "x".into(),
+            call_id: "call".into(),
+            name: "x_keyword_search".into(),
+            input: "exact input".into(),
+        });
+        let mut counts = TurnToolCounts::default();
+        counts.record(&item);
+        assert_eq!(
+            (counts.total, counts.web_search, tracked_tool_item_id(&item)),
+            (0, 0, None)
         );
     }
 }

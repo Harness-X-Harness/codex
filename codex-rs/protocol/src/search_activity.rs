@@ -10,6 +10,7 @@ use ts_rs::TS;
 #[ts(rename_all = "camelCase")]
 pub enum SearchActivityKind {
     Web,
+    X,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS, JsonSchema)]

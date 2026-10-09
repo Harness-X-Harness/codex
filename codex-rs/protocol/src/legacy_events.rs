@@ -556,7 +556,7 @@ impl TurnItem {
             TurnItem::CommandExecution(_)
             | TurnItem::DynamicToolCall(_)
             | TurnItem::CollabAgentToolCall(_) => Vec::new(),
-            TurnItem::SubAgentActivity(_) => Vec::new(),
+            TurnItem::SubAgentActivity(_) | TurnItem::XSearch(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::ImageView(item) => {
                 vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {

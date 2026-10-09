@@ -129,10 +129,16 @@ impl Fixture {
         let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
         let root = config.as_table_mut().context("fixture config table")?;
         root.insert("web_search".into(), "live".into());
-        let update_plan = root
+        let tools = root
             .get_mut("tools")
             .and_then(toml::Value::as_table_mut)
-            .and_then(|tools| tools.get_mut("update_plan"))
+            .context("fixture tools table")?;
+        tools.insert(
+            "web_search".into(),
+            toml::from_str::<toml::Value>("allowed_domains = [\"example.com\"]")?,
+        );
+        let update_plan = tools
+            .get_mut("update_plan")
             .and_then(toml::Value::as_table_mut)
             .context("fixture update_plan tool table")?;
         update_plan.insert("enabled".into(), true.into());
@@ -142,6 +148,10 @@ impl Fixture {
             .and_then(|providers| providers.get_mut("grok"))
             .and_then(toml::Value::as_table_mut)
             .context("fixture Grok provider table")?;
+        provider.insert(
+            "x_search".into(),
+            toml::from_str::<toml::Value>("from_date = \"2026-10-01\"\nto_date = \"2026-10-08\"")?,
+        );
         provider.insert("stream_max_retries".into(), i64::from(retries).into());
         provider.insert(
             "stream_idle_timeout_ms".into(),
@@ -246,7 +256,12 @@ impl Observed {
                     "item/searchActivity" => {
                         self.activity.push(serde_json::from_value(params.clone())?)
                     }
-                    "item/completed" if params["item"]["type"] == "webSearch" => {
+                    "item/completed"
+                        if matches!(
+                            params["item"]["type"].as_str(),
+                            Some("webSearch" | "xSearch")
+                        ) =>
+                    {
                         self.canonical_searches.push(params["item"].clone())
                     }
                     _ => {}
@@ -767,3 +782,6 @@ async fn grok_public_search_activity_multiple_interleaved_searches_keep_their_id
     );
     Ok(())
 }
+
+#[path = "grok_x_search_activity.rs"]
+mod x_search;

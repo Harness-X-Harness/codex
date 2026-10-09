@@ -185,6 +185,7 @@ pub struct ResponsesStreamEvent {
     error: Option<Value>,
     pub(super) item: Option<Value>,
     pub(super) item_id: Option<String>,
+    pub(super) input: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
     text: Option<String>,

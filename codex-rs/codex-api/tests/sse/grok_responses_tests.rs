@@ -493,3 +493,6 @@ async fn grok_search_activity_starts_and_settles_before_canonical_head_can_close
     assert_eq!((text, web_done), ("AB".into(), 1));
     Ok(())
 }
+
+#[path = "grok_x_activity_tests.rs"]
+mod x_activity;

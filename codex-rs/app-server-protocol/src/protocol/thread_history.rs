@@ -641,6 +641,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::DynamicToolCall(_)
             | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
             | codex_protocol::items::TurnItem::SubAgentActivity(_)
+            | codex_protocol::items::TurnItem::XSearch(_)
             | codex_protocol::items::TurnItem::Extension(_)
             | codex_protocol::items::TurnItem::EnteredReviewMode(_)
             | codex_protocol::items::TurnItem::ExitedReviewMode(_) => true,

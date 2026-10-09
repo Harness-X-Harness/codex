@@ -8,12 +8,18 @@ use crate::models::WebSearchAction;
 // context cap even when the stream allows a larger transport frame.
 const MAX_HOSTED_REPLAY_TOKENS: usize = 10_000;
 
+pub fn is_x_search_name(name: &str) -> bool {
+    matches!(
+        name,
+        "x_keyword_search" | "x_semantic_search" | "x_user_search" | "x_thread_fetch"
+    )
+}
+
 pub fn is_completed_x_search(item: &ResponseItem) -> bool {
     matches!(item, ResponseItem::CustomToolCall {
         id: Some(id), status: Some(status), call_id, name, namespace: None, ..
     } if !id.as_str().is_empty() && !call_id.is_empty() && status == "completed"
-        && matches!(name.as_str(), "x_keyword_search" | "x_semantic_search"
-            | "x_user_search" | "x_thread_fetch"))
+        && is_x_search_name(name))
 }
 
 pub fn is_completed_web_search(item: &ResponseItem) -> bool {
