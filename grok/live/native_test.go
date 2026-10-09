@@ -16,6 +16,17 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
+func nativeSubject(t *testing.T, binary string) live.Subject {
+	t.Helper()
+	subject := binarySubject(t, binary)
+	subject.SourceSHA, subject.HarnessSHA = os.Getenv("GITHUB_SHA"), os.Getenv("GITHUB_SHA")
+	subject.Target, subject.Environment = "x86_64-unknown-linux-gnu", "native-fixture"
+	if target := os.Getenv("GROK_LIVE_NATIVE_TARGET"); target != "" {
+		subject.Target, subject.Environment = target, "package-fixture"
+	}
+	return subject
+}
+
 func TestNativeBasicFixture(t *testing.T) {
 	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
 	if binary == "" {
@@ -50,15 +61,15 @@ func TestNativeBasicFixture(t *testing.T) {
 				}
 			}))
 			defer backend.Close()
-			subject := binarySubject(t, binary)
-			subject.SourceSHA, subject.HarnessSHA = os.Getenv("GITHUB_SHA"), os.Getenv("GITHUB_SHA")
-			subject.Target, subject.Environment = "x86_64-unknown-linux-gnu", "native-fixture"
+			subject := nativeSubject(t, binary)
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
 			got, err := live.Basic(ctx, live.Options{Subject: subject, Model: model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
 			if err != nil {
 				t.Fatalf("native fixture: %+v; %v; requests=%d invalid=%t", got, err, requests.Load(), invalid.Load())
 			}
+			encoded, _ := json.Marshal(got)
+			t.Logf("native fixture evidence: %s", encoded)
 			got.ObservedAt = ""
 			want := live.Evidence{SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA, Target: subject.Target, Environment: subject.Environment, Model: model, Stage: "final_reply", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 12, Bound: true, Completed: true}
 			if got != want || requests.Load() == 0 || invalid.Load() {

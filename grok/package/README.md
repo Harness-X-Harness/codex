@@ -46,8 +46,43 @@ Home protection and argument forwarding. They do not execute a real Linux or
 macOS product. The shared native Actions proof runs this same command; local
 results remain development diagnostics, and formal evidence is Actions-only.
 
-This slice does not complete #339. Real build actions, same-run build-to-Live
-dependencies, explicit diagnostic artifact selection, available credentials,
-actual manual workflow registration and full platform/package execution remain
-separate unimplemented or unverified obligations. No stock `main` change or
-registered manual entrypoint is implied by this script.
+## Native target builds and package smoke
+
+The branch-local `grok.yml` runs separate Linux musl and macOS ARM build jobs on
+its ordinary PR and version-line push events. The `build-grok` action builds each
+target's runtime and Code Mode host once with the locked stock release profile,
+uses the stock helper layout/resolvers, and stages the resulting complete
+package. Linux embeds the final stripped `bwrap` digest before building Codex.
+Stock pinned V8 artifacts and their checksum validation remain in use.
+
+Each target executes the staged launcher and runtime, checks the reported version
+against package metadata, starts the Code Mode host's help path, exercises its
+packaged `rg`, `zsh` and Linux `bwrap`, and runs the existing nonempty
+`TestNativeBasicFixture` and `TestNativeShippedCatalog` selection through the
+packaged launcher. The Basic fixture uses a controlled local backend for both
+retained models; the catalog check uses the package's shipped profile/catalog.
+These checks do not make a real-provider request or establish backend claims.
+
+The complete package is uploaded as
+`grok-SOURCE_SHA-TARGET-RUN_ID-RUN_ATTEMPT`, containing
+`grok-SOURCE_SHA-TARGET.tar.gz`. Executable modes survive the archive. A separate
+`grok-package-evidence-SOURCE_SHA-TARGET-RUN_ID-RUN_ATTEMPT` artifact records the
+package file hashes, source/target, runtime and launcher versions, archive hash,
+and actual fixture log. Both artifacts have 30-day retention. The package upload
+runs only after its target's complete smoke succeeds. Partial evidence can be
+retained on failure and is not a successful package claim.
+
+Select the explicit run/attempt and target on the Actions page, then extract the
+tar archive from that target's artifact. Follow its included `INSTALL.md` with a
+new dedicated Home. PR builds identify the tested merge SHA and are diagnostic
+packages; they are not automatically accepted releases. A missing, failed or
+expired target artifact remains unavailable. Each target is a distinct job, so
+one target cannot hide the other's failure. Native `Cargo` continues to depend
+only on `grok-proof.yml`, independently of package or backend availability.
+
+This build/smoke slice remains partial #339 capability. Artifact-backed Live
+orchestration, diagnostic invocation, actual manual workflow registration and
+real-backend execution remain separate unimplemented or unverified obligations.
+No stock `main` change or registered manual entrypoint is implied. Local checks
+are development diagnostics; package/build acceptance requires the exact Actions
+subject and actual target results.
