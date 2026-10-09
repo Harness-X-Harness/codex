@@ -56,10 +56,39 @@ scenario/policy routing, complete and partial results, no-invocation preflight,
 redaction, redirects and interruption. The existing shared `grok-proof.yml` runs
 these tests alongside every existing Facts/Live test with backend opt-ins disabled.
 
+## Actions invocation
+
 Formal acceptance evidence comes only from GitHub Actions. Local command/test
-results are development diagnostics. This command alone does not close #338:
-relevant-change workflow wiring, actual GitHub manual registration/availability,
-credential context and an identified submitted execution remain unimplemented or
-unverified. No default-branch workflow registration is inferred, and stock `main`
-is unchanged. Real observations, packaged Live outcomes, package availability and
-native admission remain separate claims.
+results are development diagnostics. The separate `grok-facts.yml` workflow has
+no native `Cargo` job and does not depend on product package builds.
+
+Relevant version-line pushes select all 11 retained observations only when the
+execution context exposes the existing `GROK_FACTS=1` repository variable. A
+missing opt-in leaves the backend jobs skipped; that is not successful Facts
+execution. No step creates a variable or configures credentials. The ordinary
+PR/push native workflow still runs all deterministic Facts/CLI tests with no
+backend opt-in or secret.
+
+Manual invocation selects one named observation on the explicit version ref.
+Once that ref contains this workflow, the intended operator can submit:
+
+```sh
+gh workflow run 359407907 --repo Harness-X-Harness/codex \
+  --ref grok/rust-v0.158.0 -f scenario=basic-primary
+```
+
+The ID is the existing repository registration for `.github/workflows/grok-facts.yml`;
+its current availability must be checked rather than inferred from a YAML trigger
+or registry state. A historical dispatch failure remains failure evidence until an
+actual new submission and matching run are verified. The workflow admits only this
+repository's version-line refs. An explicit manual request supplies the original
+`GROK_FACTS=1` execution context, and only the invocation step receives the already
+configured backend secret. Checkout/workflow/source, run/attempt, scenario and safe
+result JSON are retained for 30 days. Matrix fail-fast is disabled; observations
+are not automatically retried.
+
+A submitted run is not a completed observation. Missing credentials, skipped jobs,
+empty/invalid selections, changed responses and failed observations cannot become
+backend passes. #324 owns interpretation and freshness of actual Facts results.
+No default-branch edit, registered-entrypoint success, product source promotion,
+Live result or complete #338 acceptance follows from source publication alone.

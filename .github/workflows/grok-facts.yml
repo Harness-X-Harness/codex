@@ -1,0 +1,87 @@
+name: grok-facts
+
+# Independent observations. Required native proof remains in grok-proof.yml.
+on:
+  push:
+    branches: ["grok/rust-v*"]
+    paths:
+      - "grok/facts/**"
+      - "grok/cmd/grok-facts/**"
+      - "grok/internal/providerfixture/**"
+      - "grok/dist/**"
+      - "grok/go.mod"
+      - "grok/go.sum"
+      - ".github/workflows/grok-facts.yml"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: One existing observation to execute once.
+        type: choice
+        required: true
+        default: basic-primary
+        options: [basic-primary, basic-pinned, encrypted-replay, shipped-routes,
+          web, web-allowed, web-excluded, x, x-window, web-replay, x-replay]
+
+permissions:
+  contents: read
+
+# Retain each requested observation; a later invocation does not cancel it.
+concurrency:
+  group: grok-facts-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  facts:
+    name: Facts (${{ matrix.scenario }})
+    if: ${{ github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.GROK_FACTS == '1')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        scenario: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.scenario) || '["basic-primary","basic-pinned","encrypted-replay","shipped-routes","web","web-allowed","web-excluded","x","x-window","web-replay","x-replay"]') }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Record the exact observation subject
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok-facts.yml
+          mkdir "$RUNNER_TEMP/facts-evidence"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          fields = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
+                    "GITHUB_REF", "GITHUB_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA", "SCENARIO")
+          subject = {key: os.environ[key] for key in fields}
+          (Path(os.environ["RUNNER_TEMP"]) / "facts-evidence/subject.json").write_text(json.dumps(subject, sort_keys=True) + "\n")
+          PY
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Build the exact Facts command
+        working-directory: grok
+        run: go build -o "$RUNNER_TEMP/grok-facts" ./cmd/grok-facts
+      - name: Execute the selected observation once
+        env:
+          GROK_FACTS: "1"
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/grok-facts" --scenario "$SCENARIO" --source-sha "$GITHUB_SHA" --timeout 2m \
+            > "$RUNNER_TEMP/facts-evidence/result.json"
+      - name: Retain bounded observation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-facts-${{ matrix.scenario }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/facts-evidence
+          if-no-files-found: warn
+          retention-days: 30
