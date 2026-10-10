@@ -58,13 +58,16 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 		if json.NewDecoder(io.LimitReader(request.Body, 1<<20)).Decode(&body) != nil ||
 			request.Method != "POST" || request.URL.Path != "/v1/responses" ||
 			request.Header.Get("Authorization") != "Bearer fixture-key" ||
-			body.Model != providerfixture.PrimaryModel || len(body.Tools) != 1 || !body.Stream || body.Store {
+			body.Model != providerfixture.PrimaryModel || !body.Stream || body.Store {
 			invalid.Store(true)
-		} else {
-			var tool struct{ Type, Name string }
-			if json.Unmarshal(body.Tools[0], &tool) != nil || tool.Type != "function" || tool.Name != "structured_edit" {
-				invalid.Store(true)
-			}
+			http.Error(writer, "invalid fixture request", http.StatusBadRequest)
+			return
+		}
+		wireName, ok := nativeStructuredEditToolName(body.Tools)
+		if !ok {
+			invalid.Store(true)
+			http.Error(writer, "invalid fixture declarations", http.StatusBadRequest)
+			return
 		}
 		if number == 1 {
 			homes, _ := filepath.Glob(filepath.Join(os.TempDir(), "grok-live-*"))
@@ -131,7 +134,7 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 		emit(map[string]any{"type": "response.created", "response": map[string]any{"id": responseID}})
 		if number == 1 {
 			args, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": "GROK_STRUCTURED_EDIT_SEED_v1", "new_string": "GROK_STRUCTURED_EDIT_REPLACED_v1", "replace_all": false})
-			added := map[string]any{"type": "function_call", "id": "native_edit_item", "call_id": "native_edit_call", "name": "structured_edit", "arguments": ""}
+			added := map[string]any{"type": "function_call", "id": "native_edit_item", "call_id": "native_edit_call", "name": wireName, "arguments": ""}
 			emit(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": added})
 			emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "delta": string(args)})
 			added["arguments"], added["status"] = string(args), "completed"
@@ -167,5 +170,108 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 		got.Turns != 2 || got.Processes != 1 || got.Stage != "edit_continuation_observed" ||
 		requests.Load() != 3 || invalid.Load() {
 		t.Fatalf("native structured-edit evidence mismatch: %+v", got)
+	}
+}
+
+// This fixture is tied to the plain structured_edit capability in the identified
+// Grok package. The name is flat_wire_name("function", ToolName::plain(...));
+// return the declaration's name so the response uses the actual wire identity.
+func nativeStructuredEditToolName(tools []json.RawMessage) (string, bool) {
+	const projectedName = "local___structured_edit_418464e5de0f7b1e"
+	var bound string
+	hosted := false
+	for _, raw := range tools {
+		var tool struct {
+			Type, Name string
+			Parameters struct {
+				Type                 string
+				Properties           map[string]struct{ Type string }
+				Required             []string
+				AdditionalProperties *bool
+			}
+		}
+		if json.Unmarshal(raw, &tool) != nil {
+			return "", false
+		}
+		switch tool.Type {
+		case "x_search":
+			// This scenario configures no date options.
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(raw, &fields) != nil || len(fields) != 1 || hosted {
+				return "", false
+			}
+			hosted = true
+		case "function":
+			schema := tool.Parameters
+			if bound != "" || tool.Name != projectedName || schema.Type != "object" ||
+				schema.AdditionalProperties == nil || *schema.AdditionalProperties ||
+				len(schema.Required) != 3 || len(schema.Properties) < 4 || len(schema.Properties) > 5 {
+				return "", false
+			}
+			required := map[string]bool{"file_path": false, "old_string": false, "new_string": false}
+			for _, name := range schema.Required {
+				seen, known := required[name]
+				if !known || seen {
+					return "", false
+				}
+				required[name] = true
+			}
+			for name, property := range schema.Properties {
+				expected := "string"
+				switch name {
+				case "file_path", "old_string", "new_string", "environment_id":
+				case "replace_all":
+					expected = "boolean"
+				default:
+					return "", false
+				}
+				if property.Type != expected {
+					return "", false
+				}
+			}
+			for _, name := range []string{"file_path", "old_string", "new_string", "replace_all"} {
+				if _, exists := schema.Properties[name]; !exists {
+					return "", false
+				}
+			}
+			bound = tool.Name
+		default:
+			return "", false
+		}
+	}
+	return bound, bound != ""
+}
+
+func TestNativeStructuredEditDeclaration(t *testing.T) {
+	// Mirrors flat_projection + grok_request output, including the independently
+	// appended hosted tool. Descriptions do not alter argument validation.
+	const declaration = `{"type":"function","name":"local___structured_edit_418464e5de0f7b1e","description":"Edit an existing file","parameters":{"type":"object","properties":{"file_path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"},"replace_all":{"type":"boolean"}},"required":["file_path","old_string","new_string"],"additionalProperties":false}}`
+	edit := json.RawMessage(declaration)
+	hosted := json.RawMessage(`{"type":"x_search"}`)
+	for _, tc := range []struct {
+		name  string
+		tools []json.RawMessage
+		want  bool
+	}{
+		{"projected_with_hosted", []json.RawMessage{edit, hosted}, true},
+		{"hosted_first", []json.RawMessage{hosted, edit}, true},
+		{"projected_alone", []json.RawMessage{edit}, true},
+		{"plain_name", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "local___structured_edit_418464e5de0f7b1e", "structured_edit", 1))}, false},
+		{"wrong_identity", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "418464e5de0f7b1e", "418464e5de0f7b1f", 1))}, false},
+		{"duplicate_edit", []json.RawMessage{edit, edit, hosted}, false},
+		{"missing_edit", []json.RawMessage{hosted}, false},
+		{"duplicate_hosted", []json.RawMessage{edit, hosted, hosted}, false},
+		{"other_tool", []json.RawMessage{edit, json.RawMessage(`{"type":"web_search"}`)}, false},
+		{"wrong_parameter_type", []json.RawMessage{json.RawMessage(strings.Replace(declaration, `"type":"boolean"`, `"type":"string"`, 1))}, false},
+		{"missing_required", []json.RawMessage{json.RawMessage(strings.Replace(declaration, `["file_path","old_string","new_string"]`, `["file_path","old_string"]`, 1))}, false},
+		{"duplicate_required", []json.RawMessage{json.RawMessage(strings.Replace(declaration, `["file_path","old_string","new_string"]`, `["file_path","old_string","old_string"]`, 1))}, false},
+		{"additional_arguments", []json.RawMessage{json.RawMessage(strings.Replace(declaration, `"additionalProperties":false`, `"additionalProperties":true`, 1))}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name, ok := nativeStructuredEditToolName(tc.tools)
+			if ok != tc.want || (ok && name != "local___structured_edit_418464e5de0f7b1e") {
+				t.Fatalf("declaration binding = %q, %v; want admitted=%v", name, ok, tc.want)
+			}
+		})
 	}
 }
