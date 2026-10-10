@@ -170,7 +170,7 @@ func observeBasic(server *appServer, threadID string, evidence *Evidence) error 
 	}
 	observeTurn := func(turn turn) error {
 		if turn.Status != "completed" || len(turn.Error) != 0 && string(turn.Error) != "null" {
-			return errors.New("live: turn did not complete successfully")
+			return failedTurn(turn.Status, turn.Error, "live: turn did not complete successfully")
 		}
 		evidence.Completed, evidence.Stage = true, "turn_completed"
 		for _, item := range turn.Items {

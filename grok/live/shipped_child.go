@@ -236,8 +236,11 @@ type productThread struct {
 }
 
 func completedProductTurn(turn productTurn) error {
-	if turn.ID == "" || turn.Status != "completed" || (len(turn.Error) != 0 && string(turn.Error) != "null") {
-		return errors.New("live: bound turn did not complete")
+	if turn.ID == "" {
+		return failedObservation("turn_identity_missing", "live: bound turn did not complete")
+	}
+	if turn.Status != "completed" || (len(turn.Error) != 0 && string(turn.Error) != "null") {
+		return failedTurn(turn.Status, turn.Error, "live: bound turn did not complete")
 	}
 	return nil
 }

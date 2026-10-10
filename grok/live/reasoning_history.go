@@ -130,7 +130,7 @@ func (probe *historyProbe) observe(prompt string) error {
 		return err
 	}
 	if started.Turn.ID == "" || started.Turn.ID == probe.previousID || (probe.turnID != "" && probe.turnID != started.Turn.ID) {
-		return errors.New("live: turn identity not established")
+		return failedObservation("turn_identity_missing", "live: turn identity not established")
 	}
 	probe.turnID = started.Turn.ID
 	probe.evidence.Stage = "turn_submitted"
@@ -160,7 +160,7 @@ func (probe *historyProbe) observe(prompt string) error {
 	}
 	for {
 		if reply.authoritative && !reply.recall {
-			return errors.New("live: final reply did not recall tool result")
+			return failedObservation("history_reply_not_recalled", "live: final reply did not recall tool result")
 		}
 		firstProof := probe.evidence.ReasoningItems > 0 && probe.evidence.EncryptedItems > 0 && probe.evidence.CompletedTools > 0
 		// Drain already queued notifications even if the inline reply completed.
@@ -187,7 +187,7 @@ func (probe *historyProbe) observe(prompt string) error {
 			Item     historyItem `json:"item"`
 		}
 		if json.Unmarshal(message.Params, &completed) != nil {
-			return errors.New("live: invalid history evidence")
+			return failedObservation("invalid_history_evidence", "live: invalid history evidence")
 		}
 		if completed.ThreadID != probe.threadID {
 			continue
@@ -215,7 +215,7 @@ func (probe *historyProbe) observe(prompt string) error {
 
 func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) error {
 	if turn.Status != "completed" || len(turn.Error) != 0 && string(turn.Error) != "null" {
-		return errors.New("live: turn did not complete successfully")
+		return failedTurn(turn.Status, turn.Error, "live: turn did not complete successfully")
 	}
 	reply.completed = true
 	// A terminal summary's last assistant message is authoritative, even if an
@@ -223,7 +223,7 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 	for _, item := range turn.Items {
 		if item.Type == "agentMessage" {
 			if item.ID == "" {
-				return errors.New("live: assistant item identity not established")
+				return failedObservation("assistant_identity_missing", "live: assistant item identity not established")
 			}
 			// Summary order overrides deduplication without spending its budget.
 			reply.bytes = len(item.Text)
@@ -240,7 +240,7 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) error {
 	if item.Type == "agentMessage" {
 		if item.ID == "" {
-			return errors.New("live: assistant item identity not established")
+			return failedObservation("assistant_identity_missing", "live: assistant item identity not established")
 		}
 		if reply.authoritative {
 			return nil
@@ -257,7 +257,7 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 			return nil
 		}
 		if len(reply.identities) == historyAssistantLimit {
-			return errors.New("live: assistant identity evidence budget exceeded")
+			return failedObservation("assistant_identity_budget_exceeded", "live: assistant identity evidence budget exceeded")
 		}
 		reply.identities[identity] = outcome
 		// Unknown phase remains provisional. Only an unseen item can supersede

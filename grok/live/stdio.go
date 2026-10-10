@@ -91,19 +91,19 @@ func (server *appServer) send(message frame) error {
 
 func (server *appServer) refuse(id json.RawMessage) error {
 	_ = server.send(frame{ID: id, Error: json.RawMessage(`{"code":-32601,"message":"Unsupported Live request"}`)})
-	return errors.New("live: unsupported server request")
+	return failedObservation("unsupported_server_request", "live: unsupported server request")
 }
 
 func (server *appServer) read() (frame, error) {
 	var message frame
 	if !server.output.Scan() {
 		if errors.Is(server.output.Err(), bufio.ErrTooLong) {
-			return message, errors.New("live: protocol frame budget exceeded")
+			return message, failedObservation("protocol_frame_budget_exceeded", "live: protocol frame budget exceeded")
 		}
-		return message, errors.New("live: protocol ended before proof completion")
+		return message, failedObservation("protocol_ended", "live: protocol ended before proof completion")
 	}
 	if json.Unmarshal(server.output.Bytes(), &message) != nil {
-		return message, errors.New("live: invalid protocol frame")
+		return message, failedObservation("invalid_protocol_frame", "live: invalid protocol frame")
 	}
 	message.size = len(server.output.Bytes())
 	// Observe wire notifications once, including those queued during an RPC.
@@ -157,16 +157,16 @@ func (server *appServer) call(method string, params any, result any) error {
 			}
 			pendingBytes += message.size
 			if len(server.pending) == 128 || pendingBytes > 8<<20 {
-				return errors.New("live: early evidence budget exceeded")
+				return failedObservation("early_evidence_budget_exceeded", "live: early evidence budget exceeded")
 			}
 			server.pending = append(server.pending, message)
 			continue
 		}
 		if string(message.ID) != string(id) || len(message.Result) == 0 || len(message.Error) != 0 && string(message.Error) != "null" {
-			return errors.New("live: protocol request failed")
+			return failedObservation("protocol_request_failed", "live: protocol request failed")
 		}
 		if result != nil && json.Unmarshal(message.Result, result) != nil {
-			return errors.New("live: invalid protocol response")
+			return failedObservation("invalid_protocol_response", "live: invalid protocol response")
 		}
 		return nil
 	}
