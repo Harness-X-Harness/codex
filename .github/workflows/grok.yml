@@ -141,7 +141,8 @@ jobs:
   # Remove this job before merging the final fix; it is not native admission proof.
   release-fixture-diagnostic:
     name: Exact release edit diagnostic
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'grok/c8-release-fixture-20261010' }}
+    # One authorized control only: the next head after 7b794d8e, first attempt.
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.event.number == 377 && github.event.before == '7b794d8e1510df4eae1604b32df9e1d08fd1469e' && github.event.pull_request.commits == 4 && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'grok/c8-release-fixture-20261010' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     permissions:
@@ -224,6 +225,13 @@ jobs:
           set -euo pipefail
           selected="$(go test ./live -list '^TestNativeStructuredEditFixture$')"
           grep -Fx 'TestNativeStructuredEditFixture' <<< "$selected"
+          # One explicitly authorized control on this disposable hosted runner.
+          # Restore the original value even when the unchanged oracle fails.
+          original_restriction="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
+          test "$original_restriction" = "1"
+          trap 'sudo sysctl -w "kernel.apparmor_restrict_unprivileged_userns=$original_restriction"' EXIT
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = "0"
           go test -count=1 -timeout=4m -v ./live -run '^TestNativeStructuredEditFixture$' \
             | tee "$RUNNER_TEMP/release-fixture-evidence/controlled-fixture.log"
       - name: Preserve the bounded diagnostic evidence
