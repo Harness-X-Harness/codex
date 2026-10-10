@@ -10,7 +10,7 @@ task without leaving the Grok Provider boundary.
 
 ```text
 one observably Grok-bound parent Thread
-  -> one completed bounded setup Turn with a recorded public seed prefix
+  -> one completed bounded setup Turn with a fresh random setup marker
   -> one original natural user-level delegation task
   -> a runtime-created default/full-history child completes a bounded task
   -> the child result returns to the parent
@@ -28,6 +28,9 @@ one observably Grok-bound parent Thread
 - the deterministic stock inheritance contract establishes that an
   unoverridden natural spawn uses the expected default/full-history child model
   class;
+- the child correctly recalls the setup marker from inherited parent context;
+  the runner does not include the marker value in the delegation task, and no
+  later child input or alternate tool lookup may supply it;
 - a delegated child produces a fresh, safe bounded result that was not known to
   the parent when the user task was submitted;
 - that result is delivered to the parent through the stock collaboration
@@ -74,10 +77,13 @@ future Provider.
 ### Proof-run invocation budget
 
 One bounded seed setup Turn plus one original natural delegation task, each
-submitted once. The setup establishes the public history prefix needed to reject
-a partial/fresh child falsely presented as a full-history child. It is not a
-retry of the delegation task. No extra child task is submitted by the runner.
-Bound the proof run, not the product's valid internal orchestration.
+submitted once. The setup supplies a fresh 128-bit random marker only to the
+parent's setup context. The original delegation task asks the child to recall
+that marker and produce a fresh UUID; it never contains the marker value. This
+proves observable use of inherited context without requiring stock's paginated
+child UI history to repeat the parent's records. It is not a retry of the
+delegation task. No extra child task is submitted by the runner. Bound the proof
+run, not the product's valid internal orchestration.
 
 ### Secret-safe evidence
 
@@ -98,24 +104,41 @@ compatibility path to the stock child flow.
 
 `ShippedChildCollaboration` in `grok/live/shipped_child.go` consumes unchanged
 shipped assets and records one completed setup Turn before the single natural
-delegation task. A qualifying child's public seed turn/item identities, content
-and order must match that original prefix. Lineage alone is insufficient.
+delegation task. The parent's public setup prefix must remain unchanged. A
+qualifying child must report the setup marker in its completed result, with
+complete observed own-input coverage proving that the marker was not supplied
+again before that result. Pre-result child tool execution cannot supply the
+marker through another lookup path. Lineage alone is insufficient.
+
+Stock paginated subagent history intentionally omits inherited model records
+from the child's public turns. Exact public child seed item identities, content
+and order are therefore not a Live requirement. The actual App Server-to-Grok
+controlled HTTP prerequisite independently verifies the complete inherited seed
+content and order on the wire with unchanged shipped capabilities. That
+structural prerequisite does not replace real child recall and parent result
+consumption.
 
 The runner accepts a bounded fresh UUID from a correctly bound, completed child
 turn when the parent's terminal reply contains it. Parent prose, additional
 orchestration and incidental failed/running children or spawns do not supply
 credit or invalidate an otherwise qualifying result. It can recognize a causal
-result before a child's later follow-up. Missing/partial/altered/unrelated seed
-history, inherited results, mismatched Provider/model/ownership and values already
-in setup history or supplied to the child are rejected. Counts remain bounded
-observation budgets; neither setup nor delegation is resubmitted.
+result before a child's later follow-up. Missing or incorrect recalled markers,
+markers supplied through later child inputs or alternate lookups, inherited
+results, mismatched Provider/model/ownership and result values already in parent
+text before that child's Started activity or supplied to the child are rejected.
+This includes the current delegation turn: a full fork can inherit a parent's
+pre-spawn final answer even when paginated public child history hides it.
+Ordinary hexadecimal letter casing does not make a supplied value fresh. This is
+a bounded proof over the observed plaintext inputs and results; it does not
+establish noninterference for arbitrary encodings or covert channels. Counts
+remain bounded observation budgets; neither setup nor delegation is resubmitted.
 
 The observer discovers children through actual public V2 `subAgentActivity`
 started items and binds their IDs/paths to public child lineage/history. The
 parent's existing `experimentalRawEvents` opt-in is inherited by child listeners.
 Ordered `rawResponseItem/completed` evidence must contain the child's consumed
-`AgentMessage` inputs and the same nonce-bearing result as its completed public
-turn. Every own turn through that result needs complete observed input/lifecycle
+`AgentMessage` inputs and the same marker-and-nonce-bearing result as its completed
+public turn. Every own turn through that result needs complete observed input/lifecycle
 coverage. Any pre-result supplied nonce prevents credit; later mentions, later
 unrelated turns and closure after a qualified completion do not. Observed terminal
 conflicts invalidate the exact credited child/turn, not independent candidates.

@@ -42,7 +42,7 @@ func (stream *childStream) observe(message frame) error {
 	return nil
 }
 
-func (stream *childStream) proof(child, parent productThread, credited productTurn, reply, nonce string) childProof {
+func (stream *childStream) proof(child, parent productThread, credited productTurn, reply, nonce, setupMarker string) childProof {
 	type observedTurn struct {
 		terminalError                                      any
 		started, ended, invalid                            bool
@@ -50,6 +50,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		inputs                                             int
 		reply                                              productTurn
 		finalResultAt, legacyResultAt, endedAt, firstInput int
+		finalMarkerAt, legacyMarkerAt                      int
 		hasFinal                                           bool
 	}
 	turns := make(map[string]*observedTurn)
@@ -60,6 +61,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	}
 	invalidAt := len(stream.events)
 	closedAt := len(stream.events)
+	toolAt := len(stream.events)
 	path := child.Source.SubAgent.ThreadSpawn.AgentPath
 	for index, message := range stream.events {
 		var event struct {
@@ -89,7 +91,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		}
 		observed := turns[id]
 		if observed == nil {
-			observed = &observedTurn{finalResultAt: -1, legacyResultAt: -1, endedAt: -1, firstInput: -1}
+			observed = &observedTurn{finalResultAt: -1, legacyResultAt: -1, finalMarkerAt: -1, legacyMarkerAt: -1, endedAt: -1, firstInput: -1}
 			turns[id] = observed
 		}
 		switch message.Method {
@@ -142,9 +144,20 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 					observed.firstInput = index
 				}
 			case "message":
-				if item.Role == "user" {
-					// Direct input is not the V2 child path claimed by this scenario.
-					invalidAt = min(invalidAt, index)
+				if item.Role != "assistant" {
+					// Host context is also input. It cannot newly supply either
+					// proof value before the child produces that value itself.
+					var text []string
+					for _, part := range item.Content {
+						if part.Type != "input_text" {
+							invalidAt = min(invalidAt, index)
+						}
+						text = append(text, part.Text)
+					}
+					inputs = append(inputs, struct {
+						text string
+						at   int
+					}{strings.Join(text, "\n"), index})
 				}
 				if item.Role != "assistant" || (item.Phase != "" && item.Phase != "final_answer") {
 					continue
@@ -161,12 +174,25 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 				observed.reply.Items = append(observed.reply.Items, public)
 				if item.Phase == "final_answer" {
 					observed.hasFinal = true
-					if observed.finalResultAt < 0 && strings.Contains(joined, nonce) {
+					if observed.finalResultAt < 0 && containsProofValue(joined, nonce) {
 						observed.finalResultAt = index
 					}
-				} else if observed.legacyResultAt < 0 && strings.Contains(joined, nonce) {
-					observed.legacyResultAt = index
+					if observed.finalMarkerAt < 0 && containsProofValue(joined, setupMarker) {
+						observed.finalMarkerAt = index
+					}
+				} else {
+					if observed.legacyResultAt < 0 && containsProofValue(joined, nonce) {
+						observed.legacyResultAt = index
+					}
+					if observed.legacyMarkerAt < 0 && containsProofValue(joined, setupMarker) {
+						observed.legacyMarkerAt = index
+					}
 				}
+			case "reasoning":
+				// Model reasoning is not another source of inherited context.
+			default:
+				// A pre-result tool/lookup path cannot prove inherited recall.
+				toolAt = min(toolAt, index)
 			}
 		}
 	}
@@ -180,22 +206,27 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	if selected.invalid || (closedAt < len(stream.events) && (!selected.ended || closedAt < selected.endedAt)) {
 		return childNotProven
 	}
-	resultAt := selected.legacyResultAt
+	nonceAt, markerAt := selected.legacyResultAt, selected.legacyMarkerAt
 	if selected.hasFinal {
-		resultAt = selected.finalResultAt
+		nonceAt, markerAt = selected.finalResultAt, selected.finalMarkerAt
 	}
+	resultAt := max(nonceAt, markerAt)
 	if invalidAt < resultAt || (resultAt < 0 && invalidAt < len(stream.events)) {
 		return childNotProven
 	}
 	for _, input := range inputs {
-		if (resultAt < 0 || input.at < resultAt) && strings.Contains(input.text, nonce) {
+		if ((nonceAt < 0 || input.at < nonceAt) && containsProofValue(input.text, nonce)) ||
+			((markerAt < 0 || input.at < markerAt) && containsProofValue(input.text, setupMarker)) {
 			return childNotProven
 		}
+	}
+	if (resultAt < 0 && toolAt < len(stream.events)) || toolAt < resultAt {
+		return childNotProven
 	}
 	if !selected.ended {
 		return childPending
 	}
-	if selected.status != "completed" || selected.terminalError != nil || resultAt < 0 || selected.firstInput < 0 || selected.firstInput >= resultAt {
+	if selected.status != "completed" || selected.terminalError != nil || nonceAt < 0 || markerAt < 0 || selected.firstInput < 0 || selected.firstInput >= min(nonceAt, markerAt) {
 		return childNotProven
 	}
 	rawReply, err := finalProductReply(selected.reply)
@@ -222,12 +253,12 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 				if json.Unmarshal(raw, &item) != nil {
 					return childNotProven
 				}
-				if item.Type == "agentMessage" && item.Phase == "final_answer" && strings.Contains(item.Text, nonce) {
+				if item.Type == "agentMessage" && item.Phase == "final_answer" && containsProofValue(item.Text, nonce) {
 					return childNotProven
 				}
 				if item.Type == "userMessage" {
 					for _, part := range item.Content {
-						if part.Type != "text" || strings.Contains(part.Text, nonce) {
+						if part.Type != "text" || containsProofValue(part.Text, nonce) {
 							return childNotProven
 						}
 					}

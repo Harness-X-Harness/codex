@@ -31,15 +31,16 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		if _, err := rand.Read(marker[:]); err != nil {
 			return errors.New("live: setup marker unavailable")
 		}
+		setupMarker := hex.EncodeToString(marker[:])
 		evidence.SetupTurns = 1
-		seeded, seed, err := observeShippedTurn(server, parentID, evidence, "", "Remember this bounded setup marker: "+hex.EncodeToString(marker[:])+". Reply with a short confirmation without using tools.")
+		seeded, seed, err := observeShippedTurn(server, parentID, evidence, "", "Remember this bounded setup marker: "+setupMarker+". Reply with a short confirmation without using tools.")
 		if err != nil {
 			return err
 		}
 		evidence.SetupCompleted, evidence.Completed, evidence.ReplyBytes = true, false, 0
 		evidence.Stage, evidence.TaskTurns = "setup_turn_proven", 1
 		parent, current, err := observeShippedTurn(server, parentID, evidence, "ultra",
-			"Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Without running commands or tools, write a fresh UUID v4 yourself and reply with its canonical lowercase text. Wait for that child to complete, then include the UUID returned by the child in your final reply.")
+			"Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Without running commands or tools, recall the setup marker from your inherited history and write a fresh UUID v4 yourself. Reply with the setup marker and the canonical lowercase UUID. Do not ask the parent to supply the marker. Wait for that child to complete, then include the UUID returned by the child in your final reply.")
 		if err != nil {
 			return err
 		}
@@ -74,13 +75,28 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			return err
 		}
 		// Incidental orchestration is diagnostic. Only a completed, correctly bound
-		// child with the original public seed prefix can supply accepted evidence.
+		// child that recalls the inherited setup marker can supply accepted evidence.
 		childIDs := []string{}
 		childPaths := make(map[string]string)
+		parentKnown := make(map[string]string)
+		knownBeforeSpawn := []string{setupText}
 		for _, raw := range current.Items {
-			var activity struct{ Type, Kind, AgentThreadID, AgentPath string }
+			var activity struct {
+				Type, Kind, AgentThreadID, AgentPath, Text string
+				Content                                    []struct{ Type, Text string }
+			}
 			if json.Unmarshal(raw, &activity) != nil {
 				return errors.New("live: invalid child activity")
+			}
+			switch activity.Type {
+			case "agentMessage":
+				knownBeforeSpawn = append(knownBeforeSpawn, activity.Text)
+			case "userMessage":
+				for _, part := range activity.Content {
+					if part.Type == "text" {
+						knownBeforeSpawn = append(knownBeforeSpawn, part.Text)
+					}
+				}
 			}
 			if activity.Type != "subAgentActivity" || activity.Kind != "started" {
 				continue
@@ -97,6 +113,9 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			}
 			childIDs = append(childIDs, id)
 			childPaths[id] = path
+			// Public items are ordered by creation ordinal; Started is emitted
+			// after spawn. A pre-spawn parent result may enter hidden model context.
+			parentKnown[id] = strings.Join(knownBeforeSpawn, "\n")
 			if len(childIDs) > 16 {
 				return errors.New("live: child evidence budget exceeded")
 			}
@@ -104,7 +123,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		children := []productThread{}
 		for _, childID := range childIDs {
 			child, bindingErr := readProductThread(server, childID, evidence.Model)
-			eligible := bindingErr == nil && child.ParentThreadID == parent.ID && child.ForkedFromID == parent.ID && child.Source.SubAgent.ThreadSpawn.AgentPath == childPaths[childID] && retainsSeedPrefix(child, seeded.Turns)
+			eligible := bindingErr == nil && child.ParentThreadID == parent.ID && child.ForkedFromID == parent.ID && child.Source.SubAgent.ThreadSpawn.AgentPath == childPaths[childID]
 			if !eligible {
 				continue
 			}
@@ -133,17 +152,17 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					for _, value := range childNonce.FindAllString(reply, -1) {
 						unique[value] = true
 					}
-					if replyErr != nil || len(unique) != 1 {
+					if replyErr != nil || len(unique) != 1 || !containsProofValue(reply, setupMarker) {
 						continue
 					}
 					var nonce string
 					for value := range unique {
 						nonce = value
 					}
-					if !strings.Contains(parentReply, nonce) || strings.Contains(setupText, nonce) {
+					if !containsProofValue(parentReply, nonce) || containsProofValue(parentKnown[child.ID], nonce) {
 						continue
 					}
-					switch stream.proof(child, parent, turn, reply, nonce) {
+					switch stream.proof(child, parent, turn, reply, nonce, setupMarker) {
 					case childNotProven:
 						continue
 					case childPending:
@@ -213,6 +232,12 @@ func retainsSeedPrefix(thread productThread, seed []productTurn) bool {
 		}
 	}
 	return true
+}
+
+// The proof values are hexadecimal: ordinary letter casing does not make a
+// supplied value fresh or an accurately recalled marker different.
+func containsProofValue(text, value string) bool {
+	return strings.Contains(strings.ToLower(text), value)
 }
 
 var childNonce = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)

@@ -28,6 +28,11 @@ import (
 // Exercise the complete shipped oracle through real App Server, Grok projection,
 // tool dispatch, child inference and parent continuation. Only base_url changes.
 func TestNativeShippedChildFixture(t *testing.T) {
+	t.Run("fresh_child_result", func(t *testing.T) { testNativeShippedChildFixture(t, false) })
+	t.Run("parent_supplied_result_rejected", func(t *testing.T) { testNativeShippedChildFixture(t, true) })
+}
+
+func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
 	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
 	if binary == "" {
 		t.Skip("activated by the required native runtime job")
@@ -55,7 +60,7 @@ func TestNativeShippedChildFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &shippedChildHTTP{model: options.Model}
+	fixture := &shippedChildHTTP{model: options.Model, parentSupplied: parentSupplied}
 	backend := httptest.NewServer(fixture)
 	defer backend.Close()
 	options.BaseURL = backend.URL + "/v1"
@@ -75,6 +80,18 @@ func TestNativeShippedChildFixture(t *testing.T) {
 	t.Logf("controlled shipped-child: stage=%s requests=%d seed=%t delegated=%t child_inference=%t parent_replay=%t wire_failure=%s failure=%+v",
 		got.Stage, fixture.requests, fixture.seed != nil, fixture.delegated,
 		fixture.childID != "", fixture.continued, fixture.failure, failure)
+	requests := 4
+	if fixture.waited {
+		requests++
+	}
+	if parentSupplied {
+		if err == nil || err.Error() != "live: qualifying child result absent" ||
+			got.Stage != "product_turn_proven" || fixture.failure != "" ||
+			fixture.requests != requests || !fixture.continued {
+			t.Fatalf("native inherited-result negative did not reach the oracle: stage=%s requests=%d continued=%t error=%v", got.Stage, fixture.requests, fixture.continued, err)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("native shipped-child oracle: %v", err)
 	}
@@ -84,10 +101,6 @@ func TestNativeShippedChildFixture(t *testing.T) {
 		Stage: "child_result_delivered", Processes: 1, Initializations: 1, Threads: 1, Turns: 2,
 		SetupTurns: 1, TaskTurns: 1, SetupCompleted: true, ShippedCatalog: true, CatalogModels: 2,
 		Bound: true, Completed: true, ReplyBytes: 36, ChildBound: true, ChildCompleted: true, ChildResultDelivered: true}
-	requests := 4
-	if fixture.waited {
-		requests++
-	}
 	if got != want || fixture.failure != "" || fixture.requests != requests || !fixture.continued {
 		t.Fatalf("native shipped-child evidence mismatch: %+v", got)
 	}
@@ -133,7 +146,7 @@ func substituteShippedEndpoint(home, endpoint string) error {
 	return nil
 }
 
-const childHTTPTask = "Without running commands or tools, write a fresh UUID v4 yourself and reply with its canonical lowercase text."
+const childHTTPTask = "Without running commands or tools, recall the setup marker from your inherited history and write a fresh UUID v4 yourself. Reply with the setup marker and the canonical lowercase UUID. Do not ask the parent to supply the marker."
 const childHTTPSeedReply = "seed accepted"
 
 type childHTTPItem struct {
@@ -148,6 +161,8 @@ type shippedChildHTTP struct {
 	mu                           sync.Mutex
 	model, parentID, childID     string
 	spawn, wait, nonce, failure  string
+	setupMarker                  string
+	parentSupplied               bool
 	requests                     int
 	seed                         map[string]any
 	delegated, waited, continued bool
@@ -231,6 +246,13 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 						return
 					}
 					fixture.seed, seedAt = seed, index
+					marker := strings.TrimPrefix(strings.SplitN(part.Text, ". ", 2)[0], "Remember this bounded setup marker: ")
+					decoded, decodeErr := hex.DecodeString(marker)
+					if decodeErr != nil || len(decoded) != 16 {
+						fail("setup_marker_invalid")
+						return
+					}
+					fixture.setupMarker = marker
 				}
 				if item.Role == "assistant" && part.Text == childHTTPSeedReply {
 					if replyAt >= 0 {
@@ -285,18 +307,20 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 			return
 		}
 		fixture.childID = threadID
-		var nonce [16]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
-			fail("nonce_unavailable")
+		if !fixture.parentSupplied {
+			fixture.nonce, err = childHTTPNonce()
+			if err != nil {
+				fail("nonce_unavailable")
+				return
+			}
+		}
+		// The negative deliberately supplies the nonce through inherited parent
+		// final text, never through NEW_TASK. Require that actual wire witness.
+		if fixture.nonce == "" || bytes.Contains(data, []byte(fixture.nonce)) != fixture.parentSupplied {
+			fail("nonce_provenance_changed")
 			return
 		}
-		nonce[6], nonce[8] = nonce[6]&0x0f|0x40, nonce[8]&0x3f|0x80
-		fixture.nonce = fmt.Sprintf("%x-%x-%x-%x-%x", nonce[:4], nonce[4:6], nonce[6:8], nonce[8:10], nonce[10:])
-		if bytes.Contains(data, []byte(fixture.nonce)) {
-			fail("nonce_not_fresh")
-			return
-		}
-		childHTTPReply(writer, "child", fixture.nonce)
+		childHTTPReply(writer, "child", fixture.setupMarker+" "+fixture.nonce)
 		return
 	}
 	if !fixture.delegated {
@@ -305,7 +329,16 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 			return
 		}
 		fixture.delegated = true
-		childHTTPCall(writer, "child_spawn", fixture.spawn, map[string]any{"task_name": "live_child", "message": childHTTPTask})
+		if fixture.parentSupplied {
+			fixture.nonce, err = childHTTPNonce()
+			if err != nil {
+				fail("nonce_unavailable")
+				return
+			}
+			childHTTPCall(writer, "child_spawn", fixture.spawn, map[string]any{"task_name": "live_child", "message": childHTTPTask}, fixture.nonce)
+		} else {
+			childHTTPCall(writer, "child_spawn", fixture.spawn, map[string]any{"task_name": "live_child", "message": childHTTPTask})
+		}
 		return
 	}
 	// Separate responses ensure spawn has completed before wait can acquire the
@@ -344,7 +377,7 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 			return
 		}
 	}
-	final := "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/live_child\nPayload:\n" + fixture.nonce
+	final := "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/live_child\nPayload:\n" + fixture.setupMarker + " " + fixture.nonce
 	if fixture.childID == "" || fixture.nonce == "" || !strings.Contains(joined, final) {
 		if fixture.waited {
 			fail("parent_completion_missing")
@@ -421,23 +454,32 @@ func childHTTPEvent(writer http.ResponseWriter, event any) {
 func childHTTPReply(writer http.ResponseWriter, id, text string) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	childHTTPEvent(writer, map[string]any{"type": "response.created", "response": map[string]any{"id": id}})
-	item := map[string]any{"type": "message", "id": id + "_message", "role": "assistant", "phase": "final_answer", "content": []any{}}
-	childHTTPEvent(writer, map[string]any{"type": "response.output_item.added", "output_index": 0, "item": item})
-	childHTTPEvent(writer, map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": text})
-	item["status"], item["content"] = "completed", []any{map[string]any{"type": "output_text", "text": text}}
-	childHTTPEvent(writer, map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item})
+	childHTTPMessage(writer, id, text, 0)
 	childHTTPEvent(writer, map[string]any{"type": "response.completed", "response": map[string]any{"id": id}})
 }
 
-func childHTTPCall(writer http.ResponseWriter, id, name string, arguments any) {
+func childHTTPMessage(writer http.ResponseWriter, id, text string, index int) {
+	item := map[string]any{"type": "message", "id": id + "_message", "role": "assistant", "phase": "final_answer", "content": []any{}}
+	childHTTPEvent(writer, map[string]any{"type": "response.output_item.added", "output_index": index, "item": item})
+	childHTTPEvent(writer, map[string]any{"type": "response.output_text.delta", "output_index": index, "delta": text})
+	item["status"], item["content"] = "completed", []any{map[string]any{"type": "output_text", "text": text}}
+	childHTTPEvent(writer, map[string]any{"type": "response.output_item.done", "output_index": index, "item": item})
+}
+
+func childHTTPCall(writer http.ResponseWriter, id, name string, arguments any, knownParentText ...string) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	childHTTPEvent(writer, map[string]any{"type": "response.created", "response": map[string]any{"id": id}})
+	index := 0
+	for _, text := range knownParentText {
+		childHTTPMessage(writer, id+"_known", text, index)
+		index++
+	}
 	args, _ := json.Marshal(arguments)
 	item := map[string]any{"type": "function_call", "id": id + "_item", "call_id": id, "name": name, "arguments": ""}
-	childHTTPEvent(writer, map[string]any{"type": "response.output_item.added", "output_index": 0, "item": item})
-	childHTTPEvent(writer, map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "delta": string(args)})
+	childHTTPEvent(writer, map[string]any{"type": "response.output_item.added", "output_index": index, "item": item})
+	childHTTPEvent(writer, map[string]any{"type": "response.function_call_arguments.delta", "output_index": index, "delta": string(args)})
 	item["arguments"], item["status"] = string(args), "completed"
-	childHTTPEvent(writer, map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item})
+	childHTTPEvent(writer, map[string]any{"type": "response.output_item.done", "output_index": index, "item": item})
 	childHTTPEvent(writer, map[string]any{"type": "response.completed", "response": map[string]any{"id": id}})
 }
 
@@ -460,4 +502,13 @@ func TestShippedChildDeclarationSchemaBoundary(t *testing.T) {
 			}
 		})
 	}
+}
+
+func childHTTPNonce() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	value[6], value[8] = value[6]&0x0f|0x40, value[8]&0x3f|0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:]), nil
 }
