@@ -865,9 +865,14 @@ jobs:
         run: |
           python3 grok/package/test_stage.py -v
           python3 grok/package/test_diagnose_linux_binary.py -v
+      - name: Test exact artifact selection and extraction without downloads
+        run: |
+          python3 grok/package/test_select_artifact.py -v
+          python3 grok/package/test_extract_artifact.py -v
+          python3 grok/package/test_fetch_artifact.py -v
       - name: Test Facts HTTP and Live stdio boundaries without backend calls
         working-directory: grok
-        run: go test -race -count=1 -timeout=6m -v ./facts ./live ./cmd/grok-facts
+        run: go test -race -count=1 -timeout=6m -v ./facts ./live ./cmd/grok-facts ./cmd/grok-live
       - name: Vet the consumed Go foundation
         working-directory: grok
         run: go vet ./...

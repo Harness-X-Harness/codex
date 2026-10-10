@@ -80,9 +80,10 @@ expired target artifact remains unavailable. Each target is a distinct job, so
 one target cannot hide the other's failure. Native `Cargo` continues to depend
 only on `grok-proof.yml`, independently of package or backend availability.
 
-This build/smoke slice remains partial #339 capability. Artifact-backed Live
-orchestration, diagnostic invocation, actual manual workflow registration and
-real-backend execution remain separate unimplemented or unverified obligations.
+For exact same-run and diagnostic artifact selection and owned Live invocation,
+see `ARTIFACTS.md`. These capabilities remain subject to actual Actions proof.
+Manual workflow availability and real-backend execution must be verified
+separately; their declarations are not execution evidence.
 No stock `main` change or registered manual entrypoint is implied. Local checks
 are development diagnostics; package/build acceptance requires the exact Actions
 subject and actual target results.
