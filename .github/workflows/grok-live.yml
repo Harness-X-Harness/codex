@@ -1,0 +1,87 @@
+name: grok-live
+
+# Explicit diagnostic invocation has no Cargo job and cannot stand in for native proof.
+on:
+  workflow_dispatch:
+    inputs:
+      binary_run_id:
+        description: Exact settled version-line push run containing the Linux package.
+        type: string
+        required: true
+      scenario:
+        description: One existing runtime scenario to execute once.
+        type: choice
+        required: true
+        default: basic-primary
+        options: [basic-primary, basic-pinned, reasoning-primary, reasoning-pinned,
+          structured-edit, structured-edit-declined, structured-edit-pinned,
+          structured-edit-all, image-primary, image-pinned, shipped-catalog,
+          shipped-startup, shipped-pinned, shipped-child, web, web-allowed,
+          web-excluded, x, x-window]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: grok-live-diagnostic-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Diagnostic Live
+    if: ${{ github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Bind the diagnostic harness subject
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok-live.yml
+      - name: Fetch and verify the explicit diagnostic package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BINARY_RUN_ID: ${{ inputs.binary_run_id }}
+        run: |
+          set -euo pipefail
+          python3 grok/package/fetch_artifact.py --run-id "$BINARY_RUN_ID" \
+            --harness-sha "$GITHUB_SHA" --output "$RUNNER_TEMP/live-package"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Build the exact harness command
+        working-directory: grok
+        run: go build -o "$RUNNER_TEMP/grok-live" ./cmd/grok-live
+      - name: Execute the explicitly selected scenario once
+        env:
+          GROK_LIVE: "1"
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/live-evidence"
+          cp "$RUNNER_TEMP/live-package/selection.json" "$RUNNER_TEMP/live-evidence/"
+          cp "$RUNNER_TEMP/live-package/verified.json" "$RUNNER_TEMP/live-evidence/"
+          source="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["source_sha"])')"
+          digest="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["runtime_sha256"])')"
+          "$RUNNER_TEMP/grok-live" --scenario "$SCENARIO" \
+            --binary "$RUNNER_TEMP/live-package/package/bin/grok-bin" --binary-sha256 "$digest" \
+            --source-sha "$source" --harness-sha "$GITHUB_SHA" \
+            --target x86_64-unknown-linux-musl --environment github-actions-diagnostic --timeout 5m \
+            > "$RUNNER_TEMP/live-evidence/result.json"
+      - name: Retain the bounded diagnostic result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-live-diagnostic-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-evidence
+          if-no-files-found: warn
+          retention-days: 30
