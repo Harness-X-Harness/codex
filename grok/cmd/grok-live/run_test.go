@@ -64,13 +64,14 @@ func arguments(scenario string) []string {
 }
 
 type wireReport struct {
-	SchemaVersion  int             `json:"schema_version"`
-	Outcome        string          `json:"outcome"`
-	Reason         string          `json:"reason,omitempty"`
-	Scenario       string          `json:"scenario,omitempty"`
-	EndpointSHA256 string          `json:"endpoint_sha256,omitempty"`
-	RecordedAt     string          `json:"recorded_at"`
-	Evidence       json.RawMessage `json:"evidence,omitempty"`
+	SchemaVersion  int               `json:"schema_version"`
+	Outcome        string            `json:"outcome"`
+	Reason         string            `json:"reason,omitempty"`
+	Scenario       string            `json:"scenario,omitempty"`
+	EndpointSHA256 string            `json:"endpoint_sha256,omitempty"`
+	RecordedAt     string            `json:"recorded_at"`
+	Evidence       json.RawMessage   `json:"evidence,omitempty"`
+	Failure        *live.FailureInfo `json:"failure,omitempty"`
 }
 
 func invoke(t *testing.T, args []string, optIn, key string) (wireReport, int) {
@@ -145,7 +146,7 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 			trace := filepath.Join(t.TempDir(), "trace")
 			key, _ := json.Marshal(map[string]string{"Mode": tc.mode, "Trace": trace})
 			got, code := invoke(t, arguments(tc.scenario), "1", string(key))
-			if code != 0 || got.SchemaVersion != 1 || got.Outcome != "observed" || got.Reason != "" || got.Scenario != tc.scenario || len(got.EndpointSHA256) != 64 {
+			if code != 0 || got.SchemaVersion != 1 || got.Outcome != "observed" || got.Reason != "" || got.Failure != nil || got.Scenario != tc.scenario || len(got.EndpointSHA256) != 64 {
 				t.Fatalf("scenario result: %+v exit=%d", got, code)
 			}
 			var evidence live.Evidence
@@ -292,5 +293,36 @@ func TestCommandHelpAndEvidenceWriteFailure(t *testing.T) {
 	}
 	if code := run(context.Background(), arguments("basic-primary"), noEnvironment, failedWriter{}); code != 1 {
 		t.Fatal("unwritten evidence was reported as a structured outcome")
+	}
+}
+
+func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
+	cases := []struct {
+		name, scenario, mode string
+		want                 live.FailureInfo
+	}{
+		{"provider", "basic-primary", "failed_typed", live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed", ErrorKind: "responseStreamDisconnected", HTTPStatus: 429}},
+		{"history", "reasoning-primary", "history:failed", live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed"}},
+		{"unsupported", "basic-primary", "request", live.FailureInfo{Code: "unsupported_server_request"}},
+		{"malformed", "basic-primary", "malformed", live.FailureInfo{Code: "invalid_protocol_frame"}},
+		{"closure", "basic-primary", "only_reply", live.FailureInfo{Code: "protocol_ended"}},
+		{"unrelated_terminal", "basic-primary", "unrelated_failed", live.FailureInfo{Code: "protocol_ended"}},
+		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_evidence_incomplete"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trace := filepath.Join(t.TempDir(), "trace")
+			key, _ := json.Marshal(map[string]string{"Mode": tc.mode, "Trace": trace})
+			got, code := invoke(t, arguments(tc.scenario), "1", string(key))
+			var evidence live.Evidence
+			if json.Unmarshal(got.Evidence, &evidence) != nil || code != 1 || got.Outcome != "not_observed" || got.Reason != "scenario_not_completed" || got.Failure == nil || *got.Failure != tc.want || evidence.Completed {
+				t.Fatalf("failed observation = %+v, exit=%d", got, code)
+			}
+			transcript, err := os.ReadFile(trace)
+			if err != nil || strings.Count(string(transcript), "initialize\n") != 1 || strings.Count(string(transcript), "turn/start\n") != 1 {
+				t.Fatal("failure diagnosis repeated the process or semantic turn")
+			}
+		})
 	}
 }

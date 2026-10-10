@@ -18,13 +18,14 @@ import (
 )
 
 type report struct {
-	SchemaVersion  int    `json:"schema_version"`
-	Outcome        string `json:"outcome"`
-	Reason         string `json:"reason,omitempty"`
-	Scenario       string `json:"scenario,omitempty"`
-	EndpointSHA256 string `json:"endpoint_sha256,omitempty"`
-	RecordedAt     string `json:"recorded_at"`
-	Evidence       any    `json:"evidence,omitempty"`
+	SchemaVersion  int               `json:"schema_version"`
+	Outcome        string            `json:"outcome"`
+	Reason         string            `json:"reason,omitempty"`
+	Scenario       string            `json:"scenario,omitempty"`
+	EndpointSHA256 string            `json:"endpoint_sha256,omitempty"`
+	RecordedAt     string            `json:"recorded_at"`
+	Evidence       any               `json:"evidence,omitempty"`
+	Failure        *live.FailureInfo `json:"failure,omitempty"`
 }
 
 const usage = `Usage: grok-live --scenario NAME --binary PATH --binary-sha256 SHA256
@@ -171,6 +172,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 		case evidence.Stage == "preflight":
 			return finish("configuration_error", "subject_or_fixture_not_verified", 2)
 		}
+		detail := live.DescribeFailure(err)
+		r.Failure = &detail
 		return finish("not_observed", reason, 1)
 	}
 	return finish("observed", "", 0)

@@ -41,3 +41,13 @@ whole-deadline, actual interrupt, help and output-write behavior. These are
 deterministic mechanism tests, not actual Grok package or backend results. Formal evidence remains the identified GitHub Actions run.
 Independent invocation does not close #339's build-to-Live or actual manual
 registration requirements, nor #331's retained product Stories.
+
+On a rejected observation, optional `failure` records a fixed observer code.
+An already matched unsuccessful terminal can additionally retain its known
+status, a source-defined `CodexErrorInfo` category and HTTP status (100–599).
+Unknown errors remain `unclassified_failure`; unknown, malformed or oversized
+terminal details remain unknown. No error message, additional details, raw
+traffic, identifiers or private content is retained. These fields locate the
+observer rejection and do not establish product or backend attribution.
+The existing `reason` still gives cancellation/deadline precedence. The proof
+outcome, last proven stage, success conditions and invocation budget are unchanged.

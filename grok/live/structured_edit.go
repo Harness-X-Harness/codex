@@ -243,12 +243,12 @@ func (probe *editProbe) observe(prompt string) error {
 		if observation.callID == "" || observation.outputID != observation.callID ||
 			observation.changeID != observation.callID || observation.changeStatus != status ||
 			(probe.fixture.decline && probe.approvalID != observation.callID) {
-			return errors.New("live: edit call, output or file-change evidence missing")
+			return failedObservation("edit_evidence_incomplete", "live: edit call, output or file-change evidence missing")
 		}
 		probe.evidence.Calls, probe.evidence.PairedOutputs, probe.evidence.FileChanges = 1, 1, 1
 	}
 	if observation.replyBytes == 0 {
-		return errors.New("live: edit final reply unavailable")
+		return failedObservation("edit_reply_missing", "live: edit final reply unavailable")
 	}
 	info, err := os.Lstat(probe.fixture.path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
@@ -270,7 +270,7 @@ func (probe *editProbe) observe(prompt string) error {
 	}
 	probe.evidence.BytesMatch, probe.evidence.AfterSHA256 = false, editDigest(data)
 	if string(data) != probe.fixture.expected {
-		return errors.New("live: edit fixture bytes did not match")
+		return failedObservation("edit_bytes_mismatch", "live: edit fixture bytes did not match")
 	}
 	probe.evidence.BytesMatch = true
 	return nil
@@ -333,17 +333,17 @@ func (probe *editProbe) rawItem(item editItem, observation *editObservation) err
 	case "function_call":
 		if probe.previousID != "" || observation.callID != "" || !structuredEditIdentity(item.Name) || item.Namespace != nil || item.CallID == "" ||
 			!editArgumentsMatch(item.Arguments, probe.fixture.path, probe.fixture.replaceAll) {
-			return errors.New("live: unexpected or invalid edit invocation")
+			return failedObservation("invalid_edit_invocation", "live: unexpected or invalid edit invocation")
 		}
 		observation.callID = item.CallID
 	case "function_call_output":
 		if probe.previousID != "" || observation.outputID != "" || item.CallID == "" ||
 			(item.Name != "" && !structuredEditIdentity(item.Name)) || item.Namespace != nil || !editOutputPresent(item.Output) {
-			return errors.New("live: unexpected or invalid edit output")
+			return failedObservation("invalid_edit_output", "live: unexpected or invalid edit output")
 		}
 		observation.outputID = item.CallID
 	case "custom_tool_call", "custom_tool_call_output", "local_shell_call", "tool_search_call":
-		return errors.New("live: alternative tool evidence observed")
+		return failedObservation("alternative_tool_observed", "live: alternative tool evidence observed")
 	}
 	return nil
 }
@@ -361,7 +361,7 @@ func (probe *editProbe) publicItem(item editItem, observation *editObservation) 
 	case "fileChange":
 		if probe.previousID != "" || item.ID == "" || len(item.Changes) != 1 ||
 			filepath.Clean(item.Changes[0].Path) != probe.fixture.path || item.Changes[0].Kind.Type != "update" || item.Changes[0].Kind.MovePath != nil {
-			return errors.New("live: unexpected edit file change")
+			return failedObservation("invalid_edit_file_change", "live: unexpected edit file change")
 		}
 		body, _ := json.Marshal(item.Changes)
 		digest := sha256.Sum256(body)
@@ -370,7 +370,7 @@ func (probe *editProbe) publicItem(item editItem, observation *editObservation) 
 		}
 		observation.changeID, observation.changeStatus, observation.changeDigest = item.ID, item.Status, digest
 	case "commandExecution", "dynamicToolCall", "mcpToolCall", "collabAgentToolCall":
-		return errors.New("live: alternative tool evidence observed")
+		return failedObservation("alternative_tool_observed", "live: alternative tool evidence observed")
 	}
 	return nil
 }

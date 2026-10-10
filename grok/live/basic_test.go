@@ -172,15 +172,18 @@ func fakeAppServer() {
 			}
 			completed := map[string]any{"id": "turn", "status": "completed", "error": nil, "items": items}
 			threadID := "thread"
-			if script.Mode == "wrong_thread" {
+			if script.Mode == "wrong_thread" || script.Mode == "unrelated_failed" {
 				threadID = "PRIVATE_CANARY"
 			}
 			if script.Mode == "wrong_turn" {
 				completed["id"] = "PRIVATE_CANARY"
 			}
-			if script.Mode == "failed" {
+			if script.Mode == "failed" || script.Mode == "failed_typed" || script.Mode == "unrelated_failed" {
 				completed["status"] = "failed"
 				completed["error"] = map[string]any{"message": "PRIVATE_CANARY"}
+				if script.Mode == "failed_typed" || script.Mode == "unrelated_failed" {
+					completed["error"] = map[string]any{"message": "PRIVATE_CANARY", "additionalDetails": "PRIVATE_CANARY", "codexErrorInfo": map[string]any{"responseStreamDisconnected": map[string]any{"httpStatusCode": 429}}}
+				}
 			}
 			if script.Mode == "partial" {
 				completed["status"] = "inProgress"
