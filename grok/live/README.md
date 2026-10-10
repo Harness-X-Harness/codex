@@ -134,12 +134,17 @@ request. Startup keeps the profile's default effort; collaboration requests Ultr
 The pinned scenario retains the two-turn named-tool/encrypted-history oracle.
 
 The shipped child observer submits one bounded seed setup turn and then one
-original delegation task. It records separate setup/task budgets, verifies the
-actual public seed prefix in a qualifying child's history, and binds a fresh
-completed child result to a parent terminal reply containing it. Parent prose,
+original delegation task. It records separate setup/task budgets and requires a
+qualifying child to recall the setup's fresh 128-bit marker without receiving it
+again in its own inputs or through a tool lookup. Stock paginated child history
+intentionally omits inherited parent records, so exact child public seed-prefix
+presentation is not required. The controlled HTTP prerequisite still checks the
+complete inherited seed content and order. The observer binds a fresh completed
+child result to a parent terminal reply containing it. Parent prose,
 incidental failed/running children and later child orchestration are permitted
-without being credited. Partial/altered/unrelated history, inherited results,
-wrong Provider/model/lineage and observed terminal conflicts are rejected. No
+without being credited. Missing, wrong or newly supplied setup markers, inherited
+results, pre-spawn parent-known nonces, wrong Provider/model/lineage and observed
+terminal conflicts are rejected. Hexadecimal value matching ignores letter case. No
 setup or task is resubmitted. Only safe counts/booleans/stages leave the runner;
 setup text, result UUIDs and thread IDs do not.
 

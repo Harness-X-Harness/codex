@@ -30,6 +30,7 @@ type Options struct {
 	Model, BaseURL, APIKey      string
 	imageFixture                bool
 	shippedProfile, catalogOnly bool
+	fixtureReady                func(home string) error
 }
 
 // Evidence contains only safe metadata and observations, never private traffic.
@@ -95,6 +96,11 @@ func runFixture(ctx context.Context, options Options, edit *editFixture, threadO
 	cwd := filepath.Join(home, "workspace")
 	if err := writeFixture(home, cwd, options, edit); err != nil {
 		return evidence, err
+	}
+	if options.fixtureReady != nil {
+		if err := options.fixtureReady(home); err != nil {
+			return evidence, err
+		}
 	}
 	evidence.Stage = "fixture_ready"
 	server, err := startServer(ctx, subject.Binary, home, cwd, options.APIKey)

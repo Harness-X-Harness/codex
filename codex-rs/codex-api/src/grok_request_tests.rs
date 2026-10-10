@@ -296,3 +296,68 @@ fn supported_web_replay_preserves_optional_action_fields() {
         );
     }
 }
+
+#[test]
+fn plaintext_collaboration_projects_only_the_wire_copy() {
+    let task = "Message Type: NEW_TASK\nTask name: /root/child\nSender: /root\nPayload:";
+    let result =
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/child\nPayload:\nchild result";
+    let input = json!([
+        {"type": "message", "id": "seed", "role": "user",
+            "content": [{"type": "input_text", "text": "seed"}]},
+        {"type": "agent_message", "id": "amsg_task", "author": "/root",
+            "recipient": "/root/child", "content": [
+                {"type": "input_text", "text": task},
+                {"type": "input_text", "text": "review"}]},
+        {"type": "message", "id": "reply", "role": "assistant",
+            "content": [{"type": "output_text", "text": "child result"}]},
+        {"type": "agent_message", "id": "amsg_result", "author": "/root/child",
+            "recipient": "/root", "content": [{"type": "input_text", "text": result}]}
+    ]);
+    let request = request(json!([]), input);
+    let canonical = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        build(&request).unwrap(),
+        json!({"model": "grok-test", "reasoning": null, "stream": true,
+        "include": [], "input": [
+            {"type": "message", "id": "seed", "role": "user",
+                "content": [{"type": "input_text", "text": "seed"}]},
+            {"type": "message", "id": "amsg_task", "role": "user",
+                "content": [{"type": "input_text", "text": format!("{task}\nreview")}]},
+            {"type": "message", "id": "reply", "role": "assistant",
+                "content": [{"type": "output_text", "text": "child result"}]},
+            {"type": "message", "id": "amsg_result", "role": "user",
+                "content": [{"type": "input_text", "text": result}]}
+        ]})
+    );
+    assert_eq!(serde_json::to_value(&request).unwrap(), canonical);
+}
+
+#[test]
+fn encrypted_or_empty_collaboration_is_rejected_without_losing_content() {
+    for content in [
+        json!([]),
+        json!([{"type": "input_text", "text": " \n\t"}]),
+        json!([{"type": "encrypted_content", "encrypted_content": "opaque"}]),
+        json!([
+            {"type": "input_text", "text": "visible prefix"},
+            {"type": "encrypted_content", "encrypted_content": "opaque"},
+            {"type": "input_text", "text": "visible suffix"}
+        ]),
+    ] {
+        let request = request(
+            json!([]),
+            json!([
+                {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "seed"}]},
+                {"type": "agent_message", "author": "/root", "recipient": "/root/child",
+                    "content": content}
+            ]),
+        );
+        let canonical = serde_json::to_value(&request).unwrap();
+        let error = build(&request).unwrap_err();
+        assert!(matches!(error, ApiError::Stream(message)
+            if message == "Grok cannot replay empty or encrypted collaboration history at input[1]"));
+        assert_eq!(serde_json::to_value(&request).unwrap(), canonical);
+    }
+}

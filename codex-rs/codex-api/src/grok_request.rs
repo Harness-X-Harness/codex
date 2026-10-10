@@ -17,6 +17,7 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use serde_json::Value;
 use serde_json::json;
 
@@ -293,8 +294,24 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
         {
             codex_protocol::grok_hosted::project_search_replay(item).map_err(ApiError::Stream)?
         }
-        ResponseItem::AgentMessage { .. }
-        | ResponseItem::CustomToolCall { .. }
+        ResponseItem::AgentMessage {
+            content,
+            id: _,
+            author: _,
+            recipient: _,
+            internal_chat_message_metadata_passthrough: _,
+        } => {
+            let text = plaintext_agent_message_content(content).ok_or_else(|| {
+                ApiError::Stream(format!(
+                    "Grok cannot replay empty or encrypted collaboration history at input[{index}]"
+                ))
+            })?;
+            // Stock already rendered the author, recipient and message kind in this
+            // plaintext envelope. Project only the wire copy; retain canonical history.
+            json!({"type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": text}]})
+        }
+        ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
