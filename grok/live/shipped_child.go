@@ -220,19 +220,47 @@ type productTurn struct {
 	Items  []json.RawMessage `json:"items"`
 }
 type productThread struct {
-	ID             string        `json:"id"`
-	Model          string        `json:"model"`
-	Provider       string        `json:"modelProvider"`
-	ParentThreadID string        `json:"parentThreadId"`
-	ForkedFromID   string        `json:"forkedFromId"`
-	Turns          []productTurn `json:"turns"`
-	Source         struct {
-		SubAgent struct {
-			ThreadSpawn struct {
-				AgentPath string `json:"agent_path"`
-			} `json:"thread_spawn"`
-		} `json:"subAgent"`
-	} `json:"source"`
+	ID             string              `json:"id"`
+	Model          string              `json:"model"`
+	Provider       string              `json:"modelProvider"`
+	ParentThreadID string              `json:"parentThreadId"`
+	ForkedFromID   string              `json:"forkedFromId"`
+	Turns          []productTurn       `json:"turns"`
+	Source         productThreadSource `json:"source"`
+}
+
+// SessionSource is a public union: root origins are strings; spawned child
+// provenance is an object. Keep child ownership fields separate from root forms.
+type productThreadSource struct {
+	SubAgent struct {
+		ThreadSpawn struct {
+			AgentPath string `json:"agent_path"`
+		} `json:"thread_spawn"`
+	} `json:"subAgent"`
+}
+
+func (source *productThreadSource) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) != 0 && data[0] == '"' {
+		var origin string
+		if err := json.Unmarshal(data, &origin); err != nil {
+			return err
+		}
+		switch origin {
+		case "cli", "vscode", "exec", "appServer", "unknown":
+			*source = productThreadSource{}
+			return nil
+		default:
+			return errors.New("live: unknown product thread source")
+		}
+	}
+	type objectSource productThreadSource
+	var decoded objectSource
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*source = productThreadSource(decoded)
+	return nil
 }
 
 func completedProductTurn(turn productTurn) error {

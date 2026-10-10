@@ -176,8 +176,15 @@ func fakeEditServer() {
 			if decline {
 				status = "declined"
 			}
-			if mode == "failed_change" {
+			switch mode {
+			case "failed_change":
 				status = "failed"
+			case "declined_change":
+				status = "declined"
+			case "running_change":
+				status = "inProgress"
+			case "unknown_change":
+				status = "PRIVATE_CANARY"
 			}
 			changePath := path
 			if mode == "wrong_change_path" {
@@ -404,7 +411,7 @@ func TestStructuredEditScenarios(t *testing.T) {
 func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "near_identity", "near_wire_identity", "namespace", "apply_patch", "command",
 		"missing_call", "missing_output", "wrong_output", "empty_output", "malformed_output", "duplicate_call", "duplicate_output", "duplicate_edit", "late_duplicate",
-		"missing_change", "wrong_change_id", "wrong_change_path", "move_change", "failed_change", "duplicate_change", "conflicting_change", "false_success", "wrong_bytes",
+		"missing_change", "wrong_change_id", "wrong_change_path", "move_change", "failed_change", "declined_change", "running_change", "unknown_change", "duplicate_change", "conflicting_change", "false_success", "wrong_bytes",
 		"malformed_args", "duplicate_arg", "wrong_old", "wrong_path", "extra_arg", "string_replace_all", "null_replace_all", "number_replace_all", "missing_replace_all",
 		"failed", "interrupted", "empty_reply", "commentary", "read_thread", "read_failed", "read_error", "continuation_read_error", "continuation_failed", "repeat_continuation", "continuation_changes", "stale_continuation",
 		"approval_thread", "approval_turn", "approval_item", "duplicate_approval", "decline_changes"}
@@ -467,7 +474,7 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				wantError = "live: alternative tool evidence observed"
 			case "empty_output", "malformed_output", "duplicate_output":
 				wantError = "live: unexpected or invalid edit output"
-			case "missing_call", "missing_output", "wrong_output", "missing_change", "wrong_change_id", "failed_change", "approval_item":
+			case "missing_call", "missing_output", "wrong_output", "missing_change", "wrong_change_id", "failed_change", "declined_change", "running_change", "unknown_change", "approval_item":
 				wantError = "live: edit call, output or file-change evidence missing"
 			case "wrong_change_path", "move_change":
 				wantError = "live: unexpected edit file change"
@@ -485,6 +492,17 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				wantError = "live: settled edit thread identity not established"
 			case "approval_thread", "approval_turn", "duplicate_approval":
 				wantError = "live: unsupported server request"
+			}
+			if code, check := map[string]string{
+				"missing_call": "edit_call_missing", "missing_output": "edit_output_missing",
+				"wrong_output": "edit_output_unpaired", "missing_change": "edit_change_missing",
+				"wrong_change_id": "edit_change_unpaired", "failed_change": "edit_change_failed",
+				"declined_change": "edit_change_declined", "running_change": "edit_change_status_mismatch",
+				"unknown_change": "edit_change_status_mismatch", "approval_item": "edit_approval_unpaired",
+			}[mode]; check {
+				if live.DescribeFailure(err) != (live.FailureInfo{Code: code}) {
+					t.Fatalf("incorrect bounded edit diagnostic: %+v", live.DescribeFailure(err))
+				}
 			}
 			if err.Error() != wantError {
 				t.Fatalf("oracle failed at the wrong boundary: %v, want %s", err, wantError)

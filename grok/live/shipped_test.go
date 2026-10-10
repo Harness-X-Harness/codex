@@ -71,9 +71,30 @@ func fakeShippedServer() {
 	var seed map[string]any
 	taskPrompt := ""
 	phase := 0
+	var rootSource any = "appServer"
+	switch mode {
+	case "root_cli":
+		rootSource = "cli"
+	case "root_vscode":
+		rootSource = "vscode"
+	case "root_exec":
+		rootSource = "exec"
+	case "root_unknown":
+		rootSource = "unknown"
+	case "root_custom":
+		rootSource = map[string]any{"custom": "fixture"}
+	case "root_invalid":
+		rootSource = "PRIVATE_INVALID_SOURCE"
+	case "root_number":
+		rootSource = 1
+	case "root_boolean":
+		rootSource = true
+	case "root_array":
+		rootSource = []any{}
+	}
 	snapshot := func(id string) any {
 		if phase == 1 && mode != "startup" {
-			return map[string]any{"thread": map[string]any{"id": "PRIVATE_PARENT", "model": "grok-4.7", "modelProvider": "grok", "turns": []any{seed}}}
+			return map[string]any{"thread": map[string]any{"id": "PRIVATE_PARENT", "source": rootSource, "model": "grok-4.7", "modelProvider": "grok", "turns": []any{seed}}}
 		}
 		spawn := map[string]any{"type": "subAgentActivity", "id": "spawn", "kind": "started", "agentThreadId": "PRIVATE_CHILD", "agentPath": "/root/live_child"}
 		reply := agent("reply", nonce)
@@ -94,7 +115,7 @@ func fakeShippedServer() {
 			parentTurns = []any{clone(seed), current}
 			childTurns = []any{clone(seed), childTurn}
 		}
-		parent := map[string]any{"id": "PRIVATE_PARENT", "model": "grok-4.7", "modelProvider": "grok", "turns": parentTurns}
+		parent := map[string]any{"id": "PRIVATE_PARENT", "source": rootSource, "model": "grok-4.7", "modelProvider": "grok", "turns": parentTurns}
 		child := map[string]any{"id": "PRIVATE_CHILD", "parentThreadId": "PRIVATE_PARENT", "forkedFromId": "PRIVATE_PARENT", "source": map[string]any{"subAgent": map[string]any{"thread_spawn": map[string]any{"agent_path": "/root/live_child"}}}, "model": "grok-4.7", "modelProvider": "grok", "turns": childTurns}
 		switch mode {
 		case "stale":
@@ -109,6 +130,8 @@ func fakeShippedServer() {
 			parent["model"] = "PRIVATE_OTHER"
 		case "parent_history_changed":
 			parentTurns[0].(map[string]any)["id"] = "PRIVATE_OTHER_SEED"
+		case "child_unit_source":
+			child["source"] = "appServer"
 		case "child_provider":
 			child["modelProvider"] = "PRIVATE_OTHER"
 		case "child_model":
@@ -491,7 +514,7 @@ func TestShippedCatalogRequiresCompleteDTOs(t *testing.T) {
 
 func shippedChildSuccess(mode string) bool {
 	switch mode {
-	case "known_metadata", "prior_failed", "inherited_diagnostic", "delayed_stream", "inherited_task_history", "closed_after_result", "split_after_result_mention", "direct_stream", "after_result_mention", "later_turn_fresh", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn":
+	case "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "known_metadata", "prior_failed", "inherited_diagnostic", "delayed_stream", "inherited_task_history", "closed_after_result", "split_after_result_mention", "direct_stream", "after_result_mention", "later_turn_fresh", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn":
 		return true
 	}
 	return false
@@ -500,7 +523,7 @@ func shippedChildSuccess(mode string) bool {
 func TestShippedStartupAndChildRejectIncompleteEvidence(t *testing.T) {
 	// Final-fragment and closure cases keep freshness tied to the actual result,
 	// while the child still needs a consistent completed terminal.
-	modes := []string{"known_commentary_result", "known_user_result", "known_metadata", "known_legacy_result", "prior_failed", "prior_conflict", "prior_error_mismatch", "inherited_diagnostic", "delayed_stream", "delayed_out_of_order", "delayed_missing_input", "delayed_missing_terminal", "inherited_task_history", "inherited_supplied", "closed_after_result", "split_after_result_mention", "split_before_result_supplied", "direct_stream", "input_after_result", "missing_prior_stream", "stream_byte_budget", "stream_count_budget", "missing_activity", "child_path", "activity_child", "missing_stream", "missing_input", "missing_child_start", "missing_child_terminal", "missing_raw_result", "encrypted_input", "input_recipient", "raw_child", "raw_turn", "raw_text", "closed_child", "followup_supplied", "later_turn_supplied", "later_turn_fresh", "after_result_mention", "child_terminal_failed", "child_terminal_interrupted", "child_terminal_error", "conflict_during_other_read", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "late_conflict", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn", "child_no_history", "child_partial_history", "child_history_id", "child_history_item_id", "child_history_content", "child_history_order", "parent_history_changed", "cross_binding", "known_result", "prompt_supplied", "ambiguous_results", "seed_failed", "wrong_start_provider", "failed", "interrupted", "wrong_thread", "wrong_turn", "missing_terminal", "conflict", "stale", "duplicate_turn", "missing_reply", "wrong_history_provider", "wrong_history_model", "child_provider", "child_model", "child_parent", "child_fresh", "child_failed", "child_interrupted", "child_missing", "child_inherited", "child_mismatch", "spawn_failed", "spawn_sender", "unrelated_recipient"}
+	modes := []string{"root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "root_invalid", "root_number", "root_boolean", "root_array", "child_unit_source", "known_commentary_result", "known_user_result", "known_metadata", "known_legacy_result", "prior_failed", "prior_conflict", "prior_error_mismatch", "inherited_diagnostic", "delayed_stream", "delayed_out_of_order", "delayed_missing_input", "delayed_missing_terminal", "inherited_task_history", "inherited_supplied", "closed_after_result", "split_after_result_mention", "split_before_result_supplied", "direct_stream", "input_after_result", "missing_prior_stream", "stream_byte_budget", "stream_count_budget", "missing_activity", "child_path", "activity_child", "missing_stream", "missing_input", "missing_child_start", "missing_child_terminal", "missing_raw_result", "encrypted_input", "input_recipient", "raw_child", "raw_turn", "raw_text", "closed_child", "followup_supplied", "later_turn_supplied", "later_turn_fresh", "after_result_mention", "child_terminal_failed", "child_terminal_interrupted", "child_terminal_error", "conflict_during_other_read", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "late_conflict", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn", "child_no_history", "child_partial_history", "child_history_id", "child_history_item_id", "child_history_content", "child_history_order", "parent_history_changed", "cross_binding", "known_result", "prompt_supplied", "ambiguous_results", "seed_failed", "wrong_start_provider", "failed", "interrupted", "wrong_thread", "wrong_turn", "missing_terminal", "conflict", "stale", "duplicate_turn", "missing_reply", "wrong_history_provider", "wrong_history_model", "child_provider", "child_model", "child_parent", "child_fresh", "child_failed", "child_interrupted", "child_missing", "child_inherited", "child_mismatch", "spawn_failed", "spawn_sender", "unrelated_recipient"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()

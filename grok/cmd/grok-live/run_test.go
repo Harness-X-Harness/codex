@@ -307,7 +307,7 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 		{"malformed", "basic-primary", "malformed", live.FailureInfo{Code: "invalid_protocol_frame"}},
 		{"closure", "basic-primary", "only_reply", live.FailureInfo{Code: "protocol_ended"}},
 		{"unrelated_terminal", "basic-primary", "unrelated_failed", live.FailureInfo{Code: "protocol_ended"}},
-		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_evidence_incomplete"}},
+		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_call_missing"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

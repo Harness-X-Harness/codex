@@ -243,7 +243,30 @@ func (probe *editProbe) observe(prompt string) error {
 		if observation.callID == "" || observation.outputID != observation.callID ||
 			observation.changeID != observation.callID || observation.changeStatus != status ||
 			(probe.fixture.decline && probe.approvalID != observation.callID) {
-			return failedObservation("edit_evidence_incomplete", "live: edit call, output or file-change evidence missing")
+			// Classify the first missing correlation without exposing IDs or tool
+			// content. The success predicate and proof latches above stay unchanged.
+			code := "edit_approval_unpaired"
+			switch {
+			case observation.callID == "":
+				code = "edit_call_missing"
+			case observation.outputID == "":
+				code = "edit_output_missing"
+			case observation.outputID != observation.callID:
+				code = "edit_output_unpaired"
+			case observation.changeID == "":
+				code = "edit_change_missing"
+			case observation.changeID != observation.callID:
+				code = "edit_change_unpaired"
+			case observation.changeStatus != status:
+				code = "edit_change_status_mismatch"
+				switch observation.changeStatus {
+				case "failed":
+					code = "edit_change_failed"
+				case "declined":
+					code = "edit_change_declined"
+				}
+			}
+			return failedObservation(code, "live: edit call, output or file-change evidence missing")
 		}
 		probe.evidence.Calls, probe.evidence.PairedOutputs, probe.evidence.FileChanges = 1, 1, 1
 	}
