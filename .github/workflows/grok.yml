@@ -112,6 +112,8 @@ jobs:
       - name: Build the identified harness command
         working-directory: grok
         run: go build -o "$RUNNER_TEMP/grok-live" ./cmd/grok-live
+      - name: Prepare the hosted Linux sandbox for Live
+        run: bash grok/package/prepare_linux_sandbox_ci.sh
       - name: Execute the selected owned scenario once
         env:
           GROK_LIVE: ${{ vars.GROK_LIVE }}
@@ -135,110 +137,4 @@ jobs:
           name: grok-live-${{ matrix.scenario }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/live-evidence
           if-no-files-found: warn
-          retention-days: 30
-
-  # Temporary, secret-free discriminator for the exact previously observed package.
-  # Remove this job before merging the final fix; it is not native admission proof.
-  release-fixture-diagnostic:
-    name: Exact release edit diagnostic
-    # One authorized control only: the next head after 7b794d8e, first attempt.
-    if: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.event.number == 377 && github.event.before == '7b794d8e1510df4eae1604b32df9e1d08fd1469e' && github.event.pull_request.commits == 4 && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'grok/c8-release-fixture-20261010' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 12
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.12"
-      - name: Fetch and bind the exact historical release package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 grok/package/fetch_artifact.py --run-id 37980688233 \
-            --harness-sha "$GITHUB_SHA" --output "$RUNNER_TEMP/release-fixture-package"
-          mkdir "$RUNNER_TEMP/release-fixture-evidence"
-          cp "$RUNNER_TEMP/release-fixture-package/selection.json" "$RUNNER_TEMP/release-fixture-evidence/"
-          cp "$RUNNER_TEMP/release-fixture-package/verified.json" "$RUNNER_TEMP/release-fixture-evidence/"
-          python3 - <<'PY'
-          import json, os, pathlib
-          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "release-fixture-package"
-          data = json.loads((root / "verified.json").read_text())
-          expected = {
-              "repository": "Harness-X-Harness/codex",
-              "run_id": 37980688233, "run_attempt": 1, "artifact_id": 11643957568,
-              "producer_job_id": 113990121553,
-              "source_sha": "1ae133a8209a035c6e907f75085776013c0342c3",
-              "target": "x86_64-unknown-linux-musl",
-              "runtime_sha256": "dc53dcc2da674e8f2108c2d9863f7d332e758c3f6720a1d0fae2fa96b44d0d2f",
-              "artifact_digest": "sha256:4f6ef460ae62fdf791e155750672c26be83733c2da967b35106bd266c1198c4f",
-          }
-          if any(data.get(key) != value for key, value in expected.items()):
-              raise SystemExit("Exact release diagnostic subject mismatch")
-          with open(os.environ["GITHUB_ENV"], "a") as env:
-              print("GROK_LIVE_NATIVE_BIN=" + str(root / "package/bin/grok-bin"), file=env)
-              print("GROK_LIVE_NATIVE_SOURCE_SHA=" + data["source_sha"], file=env)
-              print("GROK_LIVE_NATIVE_TARGET=" + data["target"], file=env)
-          PY
-      - name: Read existing namespace settings and helper capabilities
-        run: |
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib, shutil, subprocess
-          output = pathlib.Path(os.environ["RUNNER_TEMP"]) / "release-fixture-evidence"
-          result = {"settings": {}, "helpers": {}}
-          for name in ("unprivileged_userns_clone", "apparmor_restrict_unprivileged_userns"):
-              path = pathlib.Path("/proc/sys/kernel") / name
-              result["settings"][name] = path.read_text().strip() if path.is_file() else None
-          candidates = {"system": shutil.which("bwrap"), "bundled": str(pathlib.Path(os.environ["RUNNER_TEMP"]) / "release-fixture-package/package/codex-resources/bwrap")}
-          for kind, value in candidates.items():
-              if value is None or not pathlib.Path(value).is_file():
-                  result["helpers"][kind] = {"available": False}
-                  continue
-              path = pathlib.Path(value)
-              probe = subprocess.run([str(path), "--help"], capture_output=True, timeout=10)
-              help_text = probe.stdout + probe.stderr
-              result["helpers"][kind] = {
-                  "available": True, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                  "help_exit": probe.returncode, "argv0": b"--argv0" in help_text,
-                  "perms": b"--perms" in help_text, "as_pid_1": b"--as-pid-1" in help_text,
-              }
-          encoded = json.dumps(result, sort_keys=True)
-          (output / "capabilities.json").write_text(encoded)
-          print(encoded)
-          PY
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: grok/go.mod
-          cache: false
-      - name: Exercise the exact release through the existing edit oracle
-        working-directory: grok
-        env:
-          GROK_FACTS: "0"
-          GROK_LIVE: "0"
-        run: |
-          set -euo pipefail
-          selected="$(go test ./live -list '^TestNativeStructuredEditFixture$')"
-          grep -Fx 'TestNativeStructuredEditFixture' <<< "$selected"
-          # One explicitly authorized control on this disposable hosted runner.
-          # Restore the original value even when the unchanged oracle fails.
-          original_restriction="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
-          test "$original_restriction" = "1"
-          trap 'sudo sysctl -w "kernel.apparmor_restrict_unprivileged_userns=$original_restriction"' EXIT
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = "0"
-          go test -count=1 -timeout=4m -v ./live -run '^TestNativeStructuredEditFixture$' \
-            | tee "$RUNNER_TEMP/release-fixture-evidence/controlled-fixture.log"
-      - name: Preserve the bounded diagnostic evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: release-edit-diagnostic-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-fixture-evidence
-          if-no-files-found: error
           retention-days: 30

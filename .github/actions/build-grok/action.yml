@@ -255,6 +255,10 @@ runs:
       with:
         go-version-file: grok/go.mod
         cache: false
+    - name: Prepare the hosted Linux sandbox for package acceptance
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash grok/package/prepare_linux_sandbox_ci.sh
     - name: Verify the packaged launcher App Server and Provider with a controlled backend
       shell: bash
       working-directory: grok
@@ -269,10 +273,11 @@ runs:
         GROK_LIVE: "0"
       run: |
         set -euo pipefail
-        selected="$(go test ./live -list '^TestNative(BasicFixture|ShippedCatalog)$')"
+        selected="$(go test ./live -list '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture)$')"
         grep -Fx 'TestNativeBasicFixture' <<< "$selected"
         grep -Fx 'TestNativeShippedCatalog' <<< "$selected"
-        go test -count=1 -timeout=4m -v ./live -run '^TestNative(BasicFixture|ShippedCatalog)$' \
+        grep -Fx 'TestNativeStructuredEditFixture' <<< "$selected"
+        go test -count=1 -timeout=4m -v ./live -run '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture)$' \
           | tee "$RUNNER_TEMP/grok-package-evidence-$TARGET/provider-fixture.log"
     - name: Archive the complete package with executable bits
       shell: bash
