@@ -12,11 +12,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
@@ -90,6 +93,7 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 			diagnosticMu.Unlock()
 		}
 		outputs := 0
+		var pairedOutput json.RawMessage
 		for _, raw := range body.Input {
 			var item map[string]json.RawMessage
 			if json.Unmarshal(raw, &item) != nil {
@@ -105,8 +109,10 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 			outputs++
 			if call != "native_edit_call" {
 				invalid.Store(true)
+				continue
 			}
 			output := item["output"]
+			pairedOutput = output
 			sum := sha256.Sum256(output)
 			lower := strings.ToLower(string(output))
 			class := "other_output"
@@ -124,6 +130,15 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 		}
 		if (number == 1 && outputs != 0) || (number > 1 && outputs != 1) || number > 3 {
 			invalid.Store(true)
+		}
+		if outputs > 0 {
+			diagnosticMu.Lock()
+			if outputs == 1 && !invalid.Load() {
+				diagnostic["controlled_failure_detail"] = nativeEditFailureDetail(pairedOutput)
+			} else {
+				diagnostic["controlled_failure_detail"] = map[string]any{"captured": false, "format": "invalid_output_binding"}
+			}
+			diagnosticMu.Unlock()
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		emit := func(event any) {
@@ -273,5 +288,87 @@ func TestNativeStructuredEditDeclaration(t *testing.T) {
 				t.Fatalf("declaration binding = %q, %v; want admitted=%v", name, ok, tc.want)
 			}
 		})
+	}
+}
+
+// Only used for the owned synthetic edit in the loopback fixture above. Real
+// backend scenarios never retain tool-output text. Keep error operations and
+// numeric errno/status while removing paths and credential/environment lines.
+func nativeEditFailureDetail(raw json.RawMessage) map[string]any {
+	var text string
+	if !strings.HasPrefix(strings.TrimSpace(string(raw)), "\"") || json.Unmarshal(raw, &text) != nil {
+		return map[string]any{"format": "unsupported", "captured": false}
+	}
+	const limit = 4096
+	truncated := false
+	// The HTTP body is already capped at 1 MiB. Sanitize before output truncation.
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]")
+	text = ansi.ReplaceAllString(text, "")
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, text)
+	credentials := regexp.MustCompile(`\b[A-Z][A-Z0-9_]*=|(?i:\b(?:authorization|bearer|api[_-]?key|access[_-]?token|token|password|secret)\b\s*[:= ]|gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]+)`)
+	paths := regexp.MustCompile(`/[^\s"'<>\\:]+`)
+	lines := strings.Split(text, "\n")
+	filtered := 0
+	for i, line := range lines {
+		if credentials.MatchString(line) {
+			lines[i] = "[filtered credential/environment line]"
+			filtered++
+			continue
+		}
+		lines[i] = paths.ReplaceAllStringFunc(line, func(path string) string {
+			for _, suffix := range []string{"/uid_map", "/gid_map", "/setgroups", "/codex-linux-sandbox", "/structured_edit_fixture.txt"} {
+				if strings.HasSuffix(path, suffix) {
+					return "<path:" + strings.TrimPrefix(suffix, "/") + ">"
+				}
+			}
+			return "<path>"
+		})
+	}
+	text = strings.Join(lines, "\n")
+	if len(text) > limit {
+		truncated = true
+		text = text[:limit]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+	}
+	return map[string]any{"format": "json_string", "captured": true, "text": text, "truncated": truncated, "filtered_lines": filtered}
+}
+
+func TestNativeEditFailureDetail(t *testing.T) {
+	input := "Failed to write file /tmp/grok-live-owned/workspace/structured_edit_fixture.txt\n" +
+		"fs sandbox helper failed with status exit status: 1: bwrap: setting up uid map: Permission denied (os error 13)\n" +
+		"open /proc/1234/gid_map: Operation not permitted (os error 1)\n" +
+		"GROK_\x1b[31mAPI_KEY=synthetic-do-not-publish\nAuthorization: Bearer fixture-secret\n" +
+		"errno=13 exit_code=1 operation=write"
+	raw, _ := json.Marshal(input)
+	got := nativeEditFailureDetail(raw)
+	text := got["text"].(string)
+	for _, required := range []string{"<path:structured_edit_fixture.txt>", "<path:gid_map>", "setting up uid map", "exit status: 1", "os error 13", "errno=13 exit_code=1 operation=write"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("lost diagnostic field %q", required)
+		}
+	}
+	for _, forbidden := range []string{"/tmp/", "/proc/", "synthetic-do-not-publish", "fixture-secret", "GROK_API_KEY", "Authorization"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("unfiltered value %q", forbidden)
+		}
+	}
+	if got["filtered_lines"] != 2 || got["truncated"] != false || got["captured"] != true {
+		t.Fatalf("unexpected detail flags: %+v", got)
+	}
+
+	long, _ := json.Marshal("bwrap: Creating new namespace failed: Operation not permitted\n" + strings.Repeat("é", 3000))
+	bounded := nativeEditFailureDetail(long)
+	if bounded["truncated"] != true || !strings.HasPrefix(bounded["text"].(string), "bwrap: Creating new namespace failed") || len(bounded["text"].(string)) > 4096 || !utf8.ValidString(bounded["text"].(string)) {
+		t.Fatal("bounded diagnostic lost prefix, exceeded bound, or split UTF-8")
+	}
+	if nativeEditFailureDetail(json.RawMessage(`{"unexpected":"object"}`))["captured"] != false || nativeEditFailureDetail(json.RawMessage(`null`))["captured"] != false {
+		t.Fatal("accepted unsupported output structure")
 	}
 }
