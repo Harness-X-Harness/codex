@@ -273,11 +273,12 @@ runs:
         GROK_LIVE: "0"
       run: |
         set -euo pipefail
-        selected="$(go test ./live -list '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture)$')"
+        selected="$(go test ./live -list '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture)$')"
         grep -Fx 'TestNativeBasicFixture' <<< "$selected"
         grep -Fx 'TestNativeShippedCatalog' <<< "$selected"
         grep -Fx 'TestNativeStructuredEditFixture' <<< "$selected"
-        go test -count=1 -timeout=4m -v ./live -run '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture)$' \
+        grep -Fx 'TestNativeShippedChildFixture' <<< "$selected"
+        go test -count=1 -timeout=4m -v ./live -run '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture)$' \
           | tee "$RUNNER_TEMP/grok-package-evidence-$TARGET/provider-fixture.log"
     - name: Archive the complete package with executable bits
       shell: bash
