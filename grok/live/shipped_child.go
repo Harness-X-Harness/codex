@@ -20,6 +20,10 @@ func ShippedChildCollaboration(ctx context.Context, subject Subject, key string)
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
 	}
+	return runShippedChildCollaboration(ctx, options)
+}
+
+func runShippedChildCollaboration(ctx context.Context, options Options) (Evidence, error) {
 	return runFixture(ctx, options, nil, map[string]any{"experimentalRawEvents": true}, func(server *appServer, parentID string, evidence *Evidence) error {
 		stream := childStream{}
 		server.notification = stream.observe
