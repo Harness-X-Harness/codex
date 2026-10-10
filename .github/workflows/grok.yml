@@ -112,6 +112,8 @@ jobs:
       - name: Build the identified harness command
         working-directory: grok
         run: go build -o "$RUNNER_TEMP/grok-live" ./cmd/grok-live
+      - name: Prepare the hosted Linux sandbox for Live
+        run: bash grok/package/prepare_linux_sandbox_ci.sh
       - name: Execute the selected owned scenario once
         env:
           GROK_LIVE: ${{ vars.GROK_LIVE }}
