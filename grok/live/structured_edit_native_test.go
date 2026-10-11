@@ -28,6 +28,20 @@ import (
 // The exact package and the native binary use the same public Live oracle.
 // The HTTP fixture supplies the tool operation, so backend behavior is excluded.
 func TestNativeStructuredEditFixture(t *testing.T) {
+	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
+		t.Run(model, func(t *testing.T) { testNativeStructuredEditFixture(t, model) })
+	}
+}
+
+func testNativeStructuredEditFixture(t *testing.T, model string) {
+	run := live.StructuredEdit
+	wantTurns, wantRequests := 2, int32(3)
+	wantStage, wantContinuation := "edit_continuation_observed", true
+	if model == providerfixture.PinnedModel {
+		run = live.StructuredEditPinnedPreviousModel
+		wantTurns, wantRequests = 1, 2
+		wantStage, wantContinuation = "edit_observed", false
+	}
 	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
 	if binary == "" {
 		t.Skip("activated by native runtime or explicit package diagnostic")
@@ -61,7 +75,7 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 		if json.NewDecoder(io.LimitReader(request.Body, 1<<20)).Decode(&body) != nil ||
 			request.Method != "POST" || request.URL.Path != "/v1/responses" ||
 			request.Header.Get("Authorization") != "Bearer fixture-key" ||
-			body.Model != providerfixture.PrimaryModel || !body.Stream || body.Store {
+			body.Model != model || !body.Stream || body.Store {
 			invalid.Store(true)
 			http.Error(writer, "invalid fixture request", http.StatusBadRequest)
 			return
@@ -128,7 +142,7 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 			diagnostic["tool_output_sha256"] = hex.EncodeToString(sum[:])
 			diagnosticMu.Unlock()
 		}
-		if (number == 1 && outputs != 0) || (number > 1 && outputs != 1) || number > 3 {
+		if (number == 1 && outputs != 0) || (number > 1 && outputs != 1) || number > wantRequests {
 			invalid.Store(true)
 		}
 		if outputs > 0 {
@@ -165,7 +179,7 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 	defer backend.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	got, err := live.StructuredEdit(ctx, live.Options{Subject: subject, Model: providerfixture.PrimaryModel, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
+	got, err := run(ctx, live.Options{Subject: subject, Model: model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
 	diagnosticMu.Lock()
 	diagnostic["source_sha"], diagnostic["harness_sha"], diagnostic["target"] = subject.SourceSHA, subject.HarnessSHA, subject.Target
 	diagnostic["executable_sha256"], diagnostic["requests"], diagnostic["invalid_request"] = subject.SHA256, requests.Load(), invalid.Load()
@@ -180,10 +194,10 @@ func TestNativeStructuredEditFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("native structured-edit oracle: %v", err)
 	}
-	if !got.Completed || !got.TurnCompleted || !got.BytesMatch || !got.ContinuationUnchanged ||
+	if !got.Completed || !got.TurnCompleted || !got.BytesMatch || got.ContinuationUnchanged != wantContinuation ||
 		got.Calls != 1 || got.PairedOutputs != 1 || got.FileChanges != 1 || got.Approvals != 0 ||
-		got.Turns != 2 || got.Processes != 1 || got.Stage != "edit_continuation_observed" ||
-		requests.Load() != 3 || invalid.Load() {
+		got.Turns != wantTurns || got.Processes != 1 || got.Stage != wantStage ||
+		requests.Load() != wantRequests || invalid.Load() {
 		t.Fatalf("native structured-edit evidence mismatch: %+v", got)
 	}
 }
