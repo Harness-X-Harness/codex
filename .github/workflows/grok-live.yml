@@ -13,7 +13,7 @@ on:
         type: choice
         required: true
         default: basic-primary
-        options: [basic-primary, basic-pinned, reasoning-primary, reasoning-pinned,
+        options: [basic-primary, basic-pinned, reasoning-primary, reasoning-pinned, reasoning-no-effort-pinned,
           structured-edit, structured-edit-declined, structured-edit-pinned,
           structured-edit-all, image-primary, image-pinned, shipped-catalog,
           shipped-startup, shipped-pinned, shipped-child, web, web-allowed,

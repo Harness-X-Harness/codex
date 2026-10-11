@@ -167,7 +167,7 @@ deferred_executor = false
         assert_eq!(body["model"], MODEL);
         assert_eq!(request.path(), "/v1/responses");
         assert!(body.get("tools").is_none());
-        assert!(body.get("store").is_none());
+        assert_eq!(body["store"], json!(false));
         assert!(body.get("parallel_tool_calls").is_none());
         assert!(
             request

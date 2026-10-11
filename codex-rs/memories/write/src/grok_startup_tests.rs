@@ -153,7 +153,7 @@ deferred_executor = false
             (request.path(), body["model"].as_str().unwrap()),
             ("/grok/responses".to_string(), expected_model)
         );
-        assert!(body.get("store").is_none());
+        assert_eq!(body["store"], json!(false));
         assert!(body.get("tools").is_none());
         assert!(body.get("client_metadata").is_none());
     }

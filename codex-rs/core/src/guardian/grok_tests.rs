@@ -74,7 +74,7 @@ async fn configured_grok_reviewer_uses_catalog_override_or_provider_default(
     let body = request.body_json();
     assert_eq!(body["model"], model.unwrap_or("grok-4.6"));
     assert_eq!(request.path(), "/v1/responses");
-    assert!(body.get("store").is_none());
+    assert_eq!(body["store"], serde_json::json!(false));
     assert!(body.get("tools").is_none());
     assert_eq!(
         analytics.guardian_default_review_model_id.as_deref(),

@@ -30,6 +30,19 @@ fn request(tools: Value, input: Value) -> ResponsesApiRequest {
 }
 
 #[test]
+fn requests_explicitly_disable_server_storage() {
+    for store in [false, true] {
+        let mut request = request(json!([]), json!([]));
+        request.store = store;
+        assert_eq!(
+            build(&request).unwrap(),
+            json!({"model": "grok-test", "input": [], "reasoning": null,
+                "store": false, "stream": true, "include": []})
+        );
+    }
+}
+
+#[test]
 fn local_tools_use_only_the_verified_wire_fields() {
     let arguments = "{ \"n\" : 9007199254740993, \"text\": \"\\u0061\" }\n";
     let input = json!([
@@ -44,7 +57,7 @@ fn local_tools_use_only_the_verified_wire_fields() {
     assert_eq!(
         build(&request(tools, input.clone())).unwrap(),
         json!({"model": "grok-test", "input": input, "reasoning": null,
-            "stream": true, "include": [], "tool_choice": "auto",
+            "store": false, "stream": true, "include": [], "tool_choice": "auto",
             "tools": [{"type": "function", "name": "functions__shell",
                 "description": "Run a command", "parameters": {"type": "object"}},
                 {"type": "x_search"}]})
@@ -55,7 +68,7 @@ fn local_tools_use_only_the_verified_wire_fields() {
 fn absent_and_empty_tools_preserve_basic_request() {
     let mut request = request(json!([]), json!([]));
     let expected = json!({"model": "grok-test", "input": [], "reasoning": null,
-        "stream": true, "include": []});
+        "store": false, "stream": true, "include": []});
     assert_eq!(build(&request).unwrap(), expected);
     request.tools = None;
     assert_eq!(build(&request).unwrap(), expected);
@@ -91,7 +104,7 @@ fn hosted_search_preserves_order_and_appends_x_search_once() {
         assert_eq!(
             build(&request(tools, json!([]))).unwrap(),
             json!({"model": "grok-test", "input": [], "reasoning": null,
-                "stream": true, "include": [], "tool_choice": "auto", "tools": expected})
+                "store": false, "stream": true, "include": [], "tool_choice": "auto", "tools": expected})
         );
     }
     assert!(
@@ -111,7 +124,7 @@ fn configured_dates_do_not_create_a_tool_plan() {
     };
     let mut request = request(json!([]), json!([]));
     let expected = json!({"model": "grok-test", "input": [], "reasoning": null,
-        "stream": true, "include": []});
+        "store": false, "stream": true, "include": []});
     assert_eq!(
         build_with_search(&request, Some(&options)).unwrap(),
         expected
@@ -318,7 +331,7 @@ fn plaintext_collaboration_projects_only_the_wire_copy() {
     let canonical = serde_json::to_value(&request).unwrap();
     assert_eq!(
         build(&request).unwrap(),
-        json!({"model": "grok-test", "reasoning": null, "stream": true,
+        json!({"model": "grok-test", "reasoning": null, "store": false, "stream": true,
         "include": [], "input": [
             {"type": "message", "id": "seed", "role": "user",
                 "content": [{"type": "input_text", "text": "seed"}]},

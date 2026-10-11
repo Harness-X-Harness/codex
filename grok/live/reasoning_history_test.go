@@ -110,7 +110,12 @@ func fakeHistoryServer() {
 		case "turn/start":
 			mark("turn/start")
 			phase++
-			if phase > 2 || p.Params["threadId"] != "PRIVATE_THREAD" || p.Params["effort"] != "medium" || p.Params["summary"] != nil || p.Params["environments"] != nil || len(p.Params) != 3 {
+			_, effortPresent := p.Params["effort"]
+			effortValid := p.Params["effort"] == "medium" && len(p.Params) == 3
+			if mode == "no_effort" {
+				effortValid = !effortPresent && len(p.Params) == 2
+			}
+			if phase > 2 || p.Params["threadId"] != "PRIVATE_THREAD" || !effortValid || p.Params["summary"] != nil || p.Params["environments"] != nil {
 				return
 			}
 			items, _ := p.Params["input"].([]any)
@@ -487,14 +492,14 @@ func historySuccess(mode string) bool {
 		return true
 	}
 	switch mode {
-	case "shipped", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
+	case "shipped", "no_effort", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
 		return true
 	}
 	return false
 }
 
 func TestReasoningHistoryPublicProtocol(t *testing.T) {
-	modes := []string{"turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy",
+	modes := []string{"no_effort", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy",
 		"wrong_model", "wrong_provider", "wrong_thread_provider", "request_thread", "request_turn", "request_namespace", "request_empty_namespace", "request_tool", "empty_call", "unsupported", "early_unsupported", "inline_conflict", "provisional_mismatch", "wrong_thread", "wrong_turn",
 		"no_reason", "no_cipher", "missing_cipher", "cipher_wrong_thread", "cipher_wrong_turn", "no_request", "no_tool", "tool_failed", "tool_partial", "tool_namespace", "tool_empty_namespace", "tool_wrong_thread", "tool_wrong_turn", "reply_wrong_thread", "reply_wrong_turn", "wrong_tool", "wrong_output", "no_reply", "missing_reply", "wrong_reply", "commentary", "delta", "legacy_superseded", "legacy_commentary", "summary_replay", "no_terminal", "failed", "partial", "error", "eof", "malformed", "hang",
 		"next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict"}
@@ -523,7 +528,11 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), deadline)
 				defer cancel()
 				began := time.Now()
-				got, err := live.ReasoningHistory(ctx, options)
+				runner := live.ReasoningHistory
+				if mode == "no_effort" {
+					runner = live.ReasoningHistoryWithoutEffort
+				}
+				got, err := runner(ctx, options)
 				if (err == nil) != historySuccess(mode) {
 					t.Fatal("history proof result disagrees with public protocol fixture")
 				}

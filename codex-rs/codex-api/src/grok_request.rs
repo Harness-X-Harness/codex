@@ -62,7 +62,7 @@ pub(crate) fn build_with_search(
     );
     let mut body = json!({
         "model": model, "input": input, "reasoning": reasoning,
-        "stream": stream, "include": include,
+        "store": false, "stream": stream, "include": include,
     });
     if let Some(tools) = tools {
         body["tools"] = json!(tools);
