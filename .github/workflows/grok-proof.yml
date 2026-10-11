@@ -718,7 +718,13 @@ jobs:
         run: |
           export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_LIVE_NATIVE_BIN"
-          go test -race -count=1 -timeout=6m -v ./live
+          # Preserve the legacy package budget; collect both independent contracts
+          # even if one fails, and propagate any failure to this required job.
+          go test -list '^TestNativeFirstRequestShape$' ./live | grep -Fx TestNativeFirstRequestShape
+          status=0
+          go test -race -count=1 -timeout=6m -v -skip '^TestNativeFirstRequestShape$' ./live || status=1
+          go test -race -count=1 -timeout=6m -v -run '^TestNativeFirstRequestShape$' ./live || status=1
+          exit "$status"
       - name: Check scoped filesystem API lint
         env:
           # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
