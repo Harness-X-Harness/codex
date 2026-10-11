@@ -42,7 +42,7 @@ async fn explicit_grok_dialect_projects_only_supported_request_fields() -> Resul
             "model": "fixture-grok-model", "instructions": "Say hi",
             "input": [{"type": "message", "id": "msg_1", "role": "user",
                 "content": [{"type": "input_text", "text": "hi"}]}],
-            "reasoning": null, "stream": true,
+            "reasoning": null, "store": false, "stream": true,
             "include": ["reasoning.encrypted_content"], "prompt_cache_key": "cache-key"
         })
     );
@@ -84,7 +84,7 @@ async fn grok_replays_reasoning_without_plaintext_beside_any_encrypted_field() -
                 {"type":"reasoning", "id":"plain", "summary":[{"type":"summary_text", "text":"short"}], "content":[{"type":"reasoning_text", "text":"public"}]},
                 {"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"answer"}]}
             ],
-            "reasoning":{"effort":64,"summary":"detailed"}, "stream":true, "include":["reasoning.encrypted_content"],
+            "reasoning":{"effort":64,"summary":"detailed"}, "store":false, "stream":true, "include":["reasoning.encrypted_content"],
             "text":{"format":{"type":"json_schema","strict":true,"schema":{"type":"string"},"name":"codex_output_schema"}}
         })
     );
@@ -187,7 +187,7 @@ async fn grok_local_tool_history_reaches_transport_with_exact_arguments() -> Res
         json!({
             "model":"fixture-grok-model", "input":input,
             "tools":[{"type":"function","name":"functions__shell","parameters":{}},{"type":"x_search"}],
-            "tool_choice":"auto", "reasoning":null, "stream":true,
+            "tool_choice":"auto", "reasoning":null, "store":false, "stream":true,
             "include":["reasoning.encrypted_content"]
         })
     );
