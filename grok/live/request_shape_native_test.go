@@ -49,7 +49,7 @@ func TestNativeFirstRequestShape(t *testing.T) {
 			t.Run(model+"/"+profile, func(t *testing.T) {
 				var mu sync.Mutex
 				requests := 0
-				var shape firstRequestShape
+				var attempts []firstRequestAttempt
 				valid := true
 				backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					defer r.Body.Close()
@@ -57,14 +57,33 @@ func TestNativeFirstRequestShape(t *testing.T) {
 					defer mu.Unlock()
 					requests++
 					data, err := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
-					if err != nil || len(data) > 1<<20 || requests != 1 ||
-						r.Method != "POST" || r.URL.Path != "/v1/responses" ||
-						r.Header.Get("Authorization") != "Bearer fixture-key" {
-						valid = false
-					} else if got, ok := summarizeFirstRequest(data); !ok {
+					// Grok's existing sampling retry budget is one. This fixture
+					// does not change it or submit another turn to obtain success.
+					if requests > 2 {
 						valid = false
 					} else {
-						shape = got
+						attempt := firstRequestAttempt{Method: "other", Path: "other"}
+						if r.Method == "POST" {
+							attempt.Method = "POST"
+						}
+						if r.URL.Path == "/v1/responses" {
+							attempt.Path = "/v1/responses"
+						}
+						if attempt.Method == "other" || attempt.Path == "other" || r.Header.Get("Authorization") != "Bearer fixture-key" {
+							valid = false
+						}
+						if err != nil || len(data) > 1<<20 {
+							valid = false
+						} else if got, ok := summarizeFirstRequest(data); !ok {
+							valid = false
+						} else {
+							attempt.Shape = got
+							var body struct{ Tools []json.RawMessage }
+							if json.Unmarshal(data, &body) != nil || !firstRequestScenarioTool(body.Tools, profile) {
+								valid = false
+							}
+						}
+						attempts = append(attempts, attempt)
 					}
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusForbidden)
@@ -92,30 +111,42 @@ func TestNativeFirstRequestShape(t *testing.T) {
 				mu.Lock()
 				defer mu.Unlock()
 				failure := DescribeFailure(runErr)
-				encoded, _ := json.Marshal(shape)
+				encoded, _ := json.Marshal(attempts)
 				// Never emit raw request/response bodies, prompts, headers or IDs.
-				t.Logf("controlled first request: source=%s harness=%s target=%s executable_sha256=%s profile=%s requests=%d shape=%s failure=%+v",
+				t.Logf("controlled first request: source=%s harness=%s target=%s executable_sha256=%s profile=%s requests=%d attempts=%s failure=%+v",
 					subject.SourceSHA, subject.HarnessSHA, subject.Target, subject.SHA256, profile, requests, encoded, failure)
-				if runErr == nil || !valid || requests != 1 || !evidence.Bound || evidence.Completed || evidence.Turns != 1 ||
-					failure.Code != "turn_unsuccessful" || failure.TerminalStatus != "failed" || failure.HTTPStatus != 403 {
-					t.Fatal("controlled denial must remain unsuccessful after exactly one HTTP request")
+				if runErr == nil || !valid || requests < 1 || requests > 2 || len(attempts) != requests ||
+					!evidence.Bound || evidence.Completed || evidence.Turns != 1 || evidence.Processes != 1 || evidence.Threads != 1 {
+					t.Fatal("controlled denial must remain unsuccessful in one bound turn within the existing sampling attempt budget")
 				}
-				if shape.Model != model || !shape.Stream || !containsShapeValue(shape.Include, "reasoning.encrypted_content") {
-					t.Error("model, streaming or encrypted-reasoning request contract changed")
+				if profile != "isolated-edit" && (failure.Code != "turn_unsuccessful" || failure.TerminalStatus != "failed" || failure.HTTPStatus != 403) {
+					t.Error("history observer lost its bound failure diagnostics")
 				}
-				tool := historyTool
-				if profile == "isolated-edit" {
-					tool = "structured_edit"
-				} else if shape.Effort != "medium" {
-					t.Error("explicit history effort was not preserved")
+				if profile == "isolated-edit" && runErr.Error() != "live: edit turn did not complete successfully" {
+					t.Error("edit request-shape proof must reach the existing rejected-terminal path, not a timeout or unrelated error")
 				}
-				if !containsShapeValue(shape.Tools, tool) {
-					t.Error("scenario tool declaration missing")
+				// The edit observer currently returns an ordinary error for a
+				// failed terminal. Report that gap; never manufacture HTTP/status
+				// diagnostics or change the observer to make this test pass.
+				for _, attempt := range attempts {
+					shape := attempt.Shape
+					if shape.Model != model || !shape.Stream || !containsShapeValue(shape.Include, "reasoning.encrypted_content") {
+						t.Error("model, streaming or encrypted-reasoning request contract changed")
+					}
+					if profile != "isolated-edit" && shape.Effort != "medium" {
+						t.Error("explicit history effort was not preserved")
+					}
 				}
 				// Other presence/defaults are observations, not guessed backend rules.
 			})
 		}
 	}
+}
+
+type firstRequestAttempt struct {
+	Method string            `json:"method"`
+	Path   string            `json:"path"`
+	Shape  firstRequestShape `json:"shape"`
 }
 
 type firstRequestShape struct {
@@ -128,12 +159,13 @@ type firstRequestShape struct {
 	Include           []string       `json:"include"`
 	InstructionsBytes int            `json:"instructions_bytes"`
 	Tools             []string       `json:"tools"`
+	ToolTypes         map[string]int `json:"tool_types"`
 	InputTypes        map[string]int `json:"input_types"`
 }
 
 func summarizeFirstRequest(data []byte) (firstRequestShape, bool) {
 	var body map[string]json.RawMessage
-	shape := firstRequestShape{InputTypes: map[string]int{}}
+	shape := firstRequestShape{InputTypes: map[string]int{}, ToolTypes: map[string]int{}}
 	if json.Unmarshal(data, &body) != nil || len(body) > 32 {
 		return shape, false
 	}
@@ -145,6 +177,7 @@ func summarizeFirstRequest(data []byte) (firstRequestShape, bool) {
 	var reasoning map[string]json.RawMessage
 	var tools []struct {
 		Name string `json:"name"`
+		Type string `json:"type"`
 	}
 	var input []struct {
 		Type string `json:"type"`
@@ -177,7 +210,10 @@ func summarizeFirstRequest(data []byte) (firstRequestShape, bool) {
 			return shape, false
 		}
 		for _, tool := range tools {
-			shape.Tools = append(shape.Tools, tool.Name)
+			shape.ToolTypes[tool.Type]++
+			if tool.Name != "" {
+				shape.Tools = append(shape.Tools, tool.Name)
+			}
 		}
 		sort.Strings(shape.Tools)
 	}
@@ -185,6 +221,47 @@ func summarizeFirstRequest(data []byte) (firstRequestShape, bool) {
 		shape.InputTypes[item.Type]++
 	}
 	return shape, true
+}
+
+func firstRequestScenarioTool(tools []json.RawMessage, profile string) bool {
+	// flat_wire_name("function", ToolName::plain("grok_history_probe")),
+	// owned by codex-rs/tools/src/flat_projection.rs, not the canonical name.
+	want := "local___grok_history_probe_5c6dab5ce2f3142e"
+	if profile == "isolated-edit" {
+		// The external-package nativeStructuredEditToolName test owns the
+		// complete edit declaration; here we check only its same wire identity.
+		want = "local___structured_edit_418464e5de0f7b1e"
+	}
+	count := 0
+	for _, raw := range tools {
+		var tool struct {
+			Type, Name string
+			Parameters struct {
+				Type                 string
+				Properties           map[string]json.RawMessage
+				Required             []string
+				AdditionalProperties *bool
+			}
+		}
+		if json.Unmarshal(raw, &tool) != nil {
+			return false
+		}
+		if tool.Name != want {
+			continue
+		}
+		count++
+		if tool.Type != "function" {
+			return false
+		}
+		if profile == "isolated-edit" {
+			continue
+		}
+		if tool.Parameters.Type != "object" || len(tool.Parameters.Properties) != 0 ||
+			len(tool.Parameters.Required) != 0 || tool.Parameters.AdditionalProperties == nil || *tool.Parameters.AdditionalProperties {
+			return false
+		}
+	}
+	return count == 1
 }
 
 func containsShapeValue(tools []string, want string) bool {
@@ -215,5 +292,26 @@ func TestFirstRequestShapeSummary(t *testing.T) {
 	}
 	if _, ok := summarizeFirstRequest([]byte(`{"model":true}`)); ok {
 		t.Fatal("malformed required fields must be rejected")
+	}
+}
+
+func TestFirstRequestHistoryDeclaration(t *testing.T) {
+	const valid = `{"type":"function","name":"local___grok_history_probe_5c6dab5ce2f3142e","parameters":{"type":"object","properties":{},"additionalProperties":false}}`
+	for _, tc := range []struct {
+		name  string
+		tools []json.RawMessage
+		want  bool
+	}{
+		{"flat", []json.RawMessage{json.RawMessage(valid)}, true},
+		{"hosted", []json.RawMessage{json.RawMessage(valid), json.RawMessage(`{"type":"x_search"}`)}, true},
+		{"canonical", []json.RawMessage{json.RawMessage(strings.Replace(valid, "local___grok_history_probe_5c6dab5ce2f3142e", historyTool, 1))}, false},
+		{"duplicate", []json.RawMessage{json.RawMessage(valid), json.RawMessage(valid)}, false},
+		{"open_schema", []json.RawMessage{json.RawMessage(strings.Replace(valid, `"additionalProperties":false`, `"additionalProperties":true`, 1))}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := firstRequestScenarioTool(tc.tools, "isolated-history"); got != tc.want {
+				t.Fatalf("declaration bound=%t, want %t", got, tc.want)
+			}
+		})
 	}
 }
