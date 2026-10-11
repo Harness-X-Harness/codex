@@ -32,7 +32,7 @@ const usage = `Usage: grok-live --scenario NAME --binary PATH --binary-sha256 SH
   --source-sha COMMIT --harness-sha COMMIT --target TARGET --environment LABEL
   [--endpoint BASE_URL] [--timeout 5m]
 
-Scenarios: basic-primary, basic-pinned, reasoning-primary, reasoning-pinned,
+Scenarios: basic-primary, basic-pinned, reasoning-primary, reasoning-pinned, reasoning-no-effort-pinned,
 structured-edit, structured-edit-declined, structured-edit-pinned,
 structured-edit-all, image-primary, image-pinned, shipped-catalog,
 shipped-startup, shipped-pinned, shipped-child, web, web-allowed,
@@ -81,7 +81,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 		return finish("configuration_error", "invalid_arguments", 2)
 	}
 	switch *selected {
-	case "basic-primary", "basic-pinned", "reasoning-primary", "reasoning-pinned", "structured-edit", "structured-edit-declined", "structured-edit-pinned", "structured-edit-all", "image-primary", "image-pinned", "shipped-catalog", "shipped-startup", "shipped-pinned", "shipped-child", "web", "web-allowed", "web-excluded", "x", "x-window":
+	case "basic-primary", "basic-pinned", "reasoning-primary", "reasoning-pinned", "reasoning-no-effort-pinned", "structured-edit", "structured-edit-declined", "structured-edit-pinned", "structured-edit-all", "image-primary", "image-pinned", "shipped-catalog", "shipped-startup", "shipped-pinned", "shipped-child", "web", "web-allowed", "web-excluded", "x", "x-window":
 	default:
 		return finish("configuration_error", "unknown_or_missing_scenario", 2)
 	}
@@ -126,6 +126,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 	switch *selected {
 	case "basic-primary", "basic-pinned":
 		evidence, err = live.Basic(ctx, options)
+		r.Evidence = evidence
+	case "reasoning-no-effort-pinned":
+		evidence, err = live.ReasoningHistoryWithoutEffort(ctx, options)
 		r.Evidence = evidence
 	case "reasoning-primary", "reasoning-pinned":
 		evidence, err = live.ReasoningHistory(ctx, options)

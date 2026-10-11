@@ -45,7 +45,11 @@ func TestNativeFirstRequestShape(t *testing.T) {
 		subject.Target, subject.Environment = target, "package-fixture"
 	}
 	for _, model := range []string{providerfixture.PinnedModel, providerfixture.PrimaryModel} {
-		for _, profile := range []string{"isolated-history", "shipped-history", "isolated-edit"} {
+		profiles := []string{"isolated-history", "shipped-history", "isolated-edit"}
+		if model == providerfixture.PinnedModel {
+			profiles = append(profiles, "isolated-history-no-effort")
+		}
+		for _, profile := range profiles {
 			t.Run(model+"/"+profile, func(t *testing.T) {
 				var mu sync.Mutex
 				requests := 0
@@ -105,6 +109,8 @@ func TestNativeFirstRequestShape(t *testing.T) {
 					// The pinned public wrapper selects this same one-turn fixture.
 					got, err := runStructuredEdit(ctx, options, editFixture{})
 					evidence, runErr = got.Evidence, err
+				} else if profile == "isolated-history-no-effort" {
+					evidence, runErr = ReasoningHistoryWithoutEffort(ctx, options)
 				} else {
 					evidence, runErr = ReasoningHistory(ctx, options)
 				}
@@ -133,7 +139,14 @@ func TestNativeFirstRequestShape(t *testing.T) {
 					if shape.Model != model || !shape.Stream || !containsShapeValue(shape.Include, "reasoning.encrypted_content") {
 						t.Error("model, streaming or encrypted-reasoning request contract changed")
 					}
-					if profile != "isolated-edit" && shape.Effort != "medium" {
+					if shape.Store == nil || *shape.Store {
+						t.Error("server-side response storage was not explicitly disabled")
+					}
+					if profile == "isolated-history-no-effort" {
+						if containsShapeValue(shape.ReasoningFields, "effort") {
+							t.Error("omitted history effort was reintroduced on the wire")
+						}
+					} else if profile != "isolated-edit" && shape.Effort != "medium" {
 						t.Error("explicit history effort was not preserved")
 					}
 				}
@@ -292,6 +305,23 @@ func TestFirstRequestShapeSummary(t *testing.T) {
 	}
 	if _, ok := summarizeFirstRequest([]byte(`{"model":true}`)); ok {
 		t.Fatal("malformed required fields must be rejected")
+	}
+}
+
+func TestFirstRequestEffortPresence(t *testing.T) {
+	for _, tc := range []struct {
+		reasoning string
+		present   bool
+	}{
+		{``, false},
+		{`,"reasoning":null`, false},
+		{`,"reasoning":{"effort":null}`, true},
+		{`,"reasoning":{"effort":"medium"}`, true},
+	} {
+		shape, ok := summarizeFirstRequest([]byte(`{"model":"grok-4.6","stream":true,"include":[],"input":[]` + tc.reasoning + `}`))
+		if !ok || containsShapeValue(shape.ReasoningFields, "effort") != tc.present {
+			t.Fatal("explicit null effort must remain distinguishable from omission")
+		}
 	}
 }
 

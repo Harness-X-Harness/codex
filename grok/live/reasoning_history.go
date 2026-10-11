@@ -19,6 +19,16 @@ const historyAssistantLimit = 4096
 // Native encrypted replay/tool eligibility and Subject provenance are prerequisites;
 // deterministic fixtures do not establish real-provider Story success.
 func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
+	return reasoningHistory(ctx, options, "medium")
+}
+
+// ReasoningHistoryWithoutEffort preserves the history proof while omitting the
+// turn effort override. It does not assert that provider reasoning is disabled.
+func ReasoningHistoryWithoutEffort(ctx context.Context, options Options) (Evidence, error) {
+	return reasoningHistory(ctx, options, "")
+}
+
+func reasoningHistory(ctx context.Context, options Options, effort string) (Evidence, error) {
 	threadOptions := map[string]any{
 		"experimentalRawEvents": true,
 		"dynamicTools": []any{map[string]any{
@@ -28,7 +38,7 @@ func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 		}},
 	}
 	return runFixture(ctx, options, nil, threadOptions, func(server *appServer, threadID string, evidence *Evidence) error {
-		probe := historyProbe{server: server, threadID: threadID, evidence: evidence}
+		probe := historyProbe{server: server, threadID: threadID, evidence: evidence, effort: effort}
 		if err := probe.observe("Call grok_history_probe, reason about its returned token, then include the exact token in your final reply."); err != nil {
 			return err
 		}
@@ -49,6 +59,7 @@ type historyProbe struct {
 	evidence                     *Evidence
 	threadID, turnID, previousID string
 	token                        string
+	effort                       string
 }
 
 type historyItem struct {
@@ -123,10 +134,14 @@ func (probe *historyProbe) observe(prompt string) error {
 	var started struct {
 		Turn historyTurn `json:"turn"`
 	}
-	if err := probe.server.call("turn/start", map[string]any{
-		"threadId": probe.threadID, "effort": "medium",
-		"input": []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}},
-	}, &started); err != nil {
+	params := map[string]any{
+		"threadId": probe.threadID,
+		"input":    []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}},
+	}
+	if probe.effort != "" {
+		params["effort"] = probe.effort
+	}
+	if err := probe.server.call("turn/start", params, &started); err != nil {
 		return err
 	}
 	if started.Turn.ID == "" || started.Turn.ID == probe.previousID || (probe.turnID != "" && probe.turnID != started.Turn.ID) {
