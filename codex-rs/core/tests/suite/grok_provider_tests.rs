@@ -245,7 +245,7 @@ async fn configured_grok_provider_projects_production_request_and_stream() -> an
                     {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
                 ],
                 "reasoning":{"effort":"high","summary":"detailed"},
-                "stream":true,"include":["reasoning.encrypted_content"],
+                "store":false,"stream":true,"include":["reasoning.encrypted_content"],
                 "prompt_cache_key":"fixture-session"
             })
         );

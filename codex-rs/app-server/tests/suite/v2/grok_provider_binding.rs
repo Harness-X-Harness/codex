@@ -275,7 +275,7 @@ fn assert_all_requests_are_grok(mock: &responses::ResponseMock, expected: usize)
         let body = request.body_json();
         assert_eq!(body["model"], GROK_MODEL);
         assert!(body.get("tools").is_none());
-        assert!(body.get("store").is_none());
+        assert_eq!(body["store"], serde_json::json!(false));
         assert!(body.get("parallel_tool_calls").is_none());
     }
 }
@@ -742,8 +742,9 @@ async fn grok_fork_explicit_model_policy_retains_request_precedence(selector: &s
     let outbound = requests.requests();
     assert_eq!(outbound.len(), 2);
     assert_eq!(outbound[1].body_json()["model"], "grok-4.7");
+    assert_eq!(outbound[1].body_json()["store"], serde_json::json!(false));
     assert_eq!(
-        outbound[1].body_json().get("store").is_none(),
+        outbound[1].body_json().get("parallel_tool_calls").is_none(),
         expected_provider == GROK_PROVIDER
     );
     app.shutdown_gracefully().await?;
@@ -948,8 +949,9 @@ async fn fork_retention_uses_explicit_dialect_not_provider_id_or_name(
     let outbound = requests.requests();
     assert_eq!(outbound.len(), 2);
     assert_eq!(outbound[1].body_json()["model"], expected_model);
+    assert_eq!(outbound[1].body_json()["store"], serde_json::json!(false));
     assert_eq!(
-        outbound[1].body_json().get("store").is_none(),
+        outbound[1].body_json().get("parallel_tool_calls").is_none(),
         wire_api == "grok_responses"
     );
     app.shutdown_gracefully().await?;
