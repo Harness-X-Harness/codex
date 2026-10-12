@@ -500,3 +500,24 @@ Native proof must execute the new policy/replay/config cases and preserve all
 previously required proof, regenerate all owned public/config/SDK outputs, pass
 independent review, then pass the protected squash's exact canonical push proof.
 A draft candidate or failing construction run is not acceptance evidence.
+
+## Live SDK modernization boundary
+
+[#379](https://github.com/Harness-X-Harness/codex/issues/379) orders #383–#388
+before final client removal. The accepted product source is fixed at
+`e9268d5211064fb77f76a9fe7f0a99348488c9d2`; this modernization changes Live Harness
+only. The SDK is fixed at `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`, with Go 1.26.8.
+The [Live guidance](../live/README.md#fixed-input-sdk-migration) records the
+verified executable identity and temporary Basic SDK / remaining legacy split.
+Dependency defects belong to separate owner issues; silently changing pins,
+product features or the retained 20-entry CLI surface is outside this work.
+
+Treat old tests as a KEEP / REPLACE / RETIRE review inventory: retain material
+Story outcomes, identities, causal evidence, authorization, resource bounds and
+secrecy; replace mechanism-specific tests with equivalent executable coverage.
+Exact legacy errors/stages and abort-after-already-rejected malformed requests
+are not independent product obligations. #383's contract explicitly classifies
+SDK #422 as nonblocking. Record the concrete test map and settled evidence in
+each owning PR. Each increment requires reviewed current-candidate `Cargo`,
+protected squash and the actual canonical SHA's same-definition push proof
+before starting the next; source notes and local fixtures do not close it.

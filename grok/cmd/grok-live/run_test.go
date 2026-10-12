@@ -304,10 +304,10 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 	}{
 		{"provider", "basic-primary", "failed_typed", live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed", ErrorKind: "responseStreamDisconnected", HTTPStatus: 429}},
 		{"history", "reasoning-primary", "history:failed", live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed"}},
-		{"unsupported", "basic-primary", "request", live.FailureInfo{Code: "unsupported_server_request"}},
-		{"malformed", "basic-primary", "malformed", live.FailureInfo{Code: "invalid_protocol_frame"}},
-		{"closure", "basic-primary", "only_reply", live.FailureInfo{Code: "protocol_ended"}},
-		{"unrelated_terminal", "basic-primary", "unrelated_failed", live.FailureInfo{Code: "protocol_ended"}},
+		{"unsupported", "basic-primary", "unauthorized", live.FailureInfo{Code: "unsupported_server_request"}},
+		{"malformed", "basic-primary", "malformed", live.FailureInfo{Code: "sdk_observation_failed"}},
+		{"closure", "basic-primary", "only_reply", live.FailureInfo{Code: "sdk_observation_failed"}},
+		{"unrelated_terminal", "basic-primary", "unrelated_failed", live.FailureInfo{Code: "sdk_observation_failed"}},
 		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_call_missing"}},
 	}
 	for _, tc := range cases {

@@ -1,6 +1,7 @@
 # Explicit-binary Live scenarios
 
-`Basic(ctx, Options)` consumes the selected binary's App Server v2 stdio API:
+`Basic(ctx, Options)` uses the pinned `llm-go/codexsdk` client to consume the
+selected binary's App Server v2 stdio API:
 initialize, one fixture-bound thread, one text turn, matching completion and a
 nonempty final reply. Primary/pinned fixtures use `internal/providerfixture`
 controls and an isolated text-only profile/catalog, independent of `grok/dist`.
@@ -9,8 +10,12 @@ Supply an absolute binary path and expected SHA-256, caller-established source,
 harness/target/environment metadata, model, Provider base URL and key. The binary
 must remain immutable during the invocation. A deadline of at most ten minutes
 is required. The runner never restarts/resubmits; product retries retain their
-policy. Frames cap at 16 MiB, early traffic at 128 frames/8 MiB. Cleanup closes
-stdin, allows bounded shutdown and stops/reaps the child when needed.
+policy. SDK frames cap at 16 MiB; Basic's completion callback queue caps at 128
+notifications/8 MiB and SDK retention at 512 slots/8 MiB. Basic uses explicit
+`ClientOptions.Env`, `NewContext`, typed thread/turn calls and `CloseContext`
+with a separate five-second cleanup deadline. The remaining legacy scenarios
+retain their 16 MiB frame and 128-frame/8 MiB early-traffic bounds and bounded
+child cleanup.
 
 Returned evidence contains safe declared metadata, time, counts, booleans,
 reply byte count and last stage. Errors contain no private traffic; failure
@@ -22,6 +27,37 @@ CI tests the public stdio boundary deterministically and activates
 `TestNativeBasicFixture` with its freshly built CLI. Controlled HTTP proves
 config/request/stream composition, not real backend Live. Actual execution and
 invocation integration remain #331/#339.
+
+## Fixed-input SDK migration
+
+The [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
+fixes product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2` and SDK revision
+`9769ba362a5e946c17a6eb78d8e2155e19bb4f28` (`v0.2.1-0.20261012110012-9769ba362a5e`),
+with Go 1.26.8. The verified Linux musl x64 product executable from canonical
+run `38171472745`, attempt 1, artifact `11714608891` has SHA-256
+`26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
+Use [explicit verified package selection](../package/ARTIFACTS.md); verify
+expiration and exact subject on retrieval. `runtime_sha256` identifies the
+executable, separately from the artifact ZIP or package archive hash. The
+product source remains fixed while the declared harness SHA evolves.
+
+Only Basic uses the SDK in #383. Reasoning/history, structured edits, images,
+shipped catalog/profile/children and hosted search retain the legacy client
+until their respective reviewed increments; #379 owns final transport removal.
+Shared fixture setup verifies the selected binary and isolates home/credentials.
+Completion needs independently matching thread/turn identities, a successful
+terminal and a nonempty eligible final reply; SDK success alone is insufficient.
+Malformed action requests may be wire-rejected without invalidating that result;
+valid unauthorized requests are denied without effect. The reviewed test map
+keeps identity, outcome, authorization, bounds, secrecy and invocation contracts,
+replaces old request-abort controls with rejection/non-execution coverage, and
+retires exact legacy error/stage/code expectations. SDK defect
+[llm-go #422](https://github.com/ronhuafeng/llm-go/issues/422) remains separately
+tracked and nonblocking under #383's explicit contract decision. Native fixtures
+and ordinary CI builds do not establish real backend Live or frozen-byte proof.
+The typed stream attachment, independent identity checks and inline-response
+snapshot also account for separately tracked SDK [#423](https://github.com/ronhuafeng/llm-go/issues/423),
+[#424](https://github.com/ronhuafeng/llm-go/issues/424) and [#425](https://github.com/ronhuafeng/llm-go/issues/425).
 
 `ReasoningHistory(ctx, Options)` shares Basic's artifact/process/fixture binding
 and adds the [encrypted-history Story](../docs/stories/grok-encrypted-reasoning-history-continuation.md).

@@ -20,6 +20,12 @@ func nativeSubject(t *testing.T, binary string) live.Subject {
 	t.Helper()
 	subject := binarySubject(t, binary)
 	subject.SourceSHA, subject.HarnessSHA = os.Getenv("GITHUB_SHA"), os.Getenv("GITHUB_SHA")
+	if source := os.Getenv("GROK_LIVE_NATIVE_SOURCE_SHA"); source != "" {
+		subject.SourceSHA = source
+		if source == "e9268d5211064fb77f76a9fe7f0a99348488c9d2" && subject.SHA256 != "26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab" {
+			t.Fatal("frozen product executable digest does not match the accepted package")
+		}
+	}
 	subject.Target, subject.Environment = "x86_64-unknown-linux-gnu", "native-fixture"
 	if target := os.Getenv("GROK_LIVE_NATIVE_TARGET"); target != "" {
 		subject.Target, subject.Environment = target, "package-fixture"
