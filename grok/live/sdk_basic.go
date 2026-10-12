@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ronhuafeng/llm-go/codexsdk"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -16,90 +14,57 @@ import (
 // Basic submits one text turn through the pinned SDK. Business evidence remains
 // application-owned; SDK success alone does not establish a nonempty final reply.
 func Basic(ctx context.Context, options Options) (Evidence, error) {
-	return withFixture(ctx, options, nil, func(home, cwd string, evidence *Evidence) (runErr error) {
-		var mu sync.Mutex
-		retainedBytes := 0
-		notifications := make(chan protocolv2.ServerNotification, 128)
-		failures := make(chan error, 1)
-		clientContexts := make(chan context.Context, 1)
-		reject := func(err error) error {
+	var mu sync.Mutex
+	retainedBytes := 0
+	notifications := make(chan protocolv2.ServerNotification, 128)
+	failures := make(chan error, 1)
+	clientContexts := make(chan context.Context, 1)
+	reject := func(err error) error {
+		select {
+		case failures <- err:
+		default:
+		}
+		return err
+	}
+	handlers := sdkFixtureHandlers{
+		retention: codexsdk.NotificationRetentionBudget{MaxCount: 512, MaxBytes: 8 << 20},
+		failures:  failures,
+		requests: func(_ context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
+			err := reject(failedObservation("unsupported_server_request", "live: unsupported server request"))
+			if request.Kind() == protocolv2.ServerRequestKindItemToolCall {
+				return codexsdk.DynamicToolResponse(protocolv2.DynamicToolCallResponse{
+					ContentItems: []protocolv2.DynamicToolCallOutputContentItem{}, Success: false,
+				}), nil
+			}
+			return codexsdk.ServerRequestResponse{}, err
+		},
+		notifications: func(callbackCtx context.Context, notification protocolv2.ServerNotification) error {
 			select {
-			case failures <- err:
+			case clientContexts <- callbackCtx:
 			default:
 			}
-			return err
-		}
-		experimental := true
-		evidence.Stage = "sdk_starting"
-		client, err := codexsdk.NewContext(ctx, codexsdk.ClientOptions{
-			CWD: cwd, Command: []string{options.Subject.Binary, "app-server", "--strict-config", "--listen", "stdio://"},
-			Env: sdkFixtureEnv(os.Environ(), home, options.APIKey),
-			Initialize: protocolv2.InitializeParams{
-				ClientInfo:   protocolv2.ClientInfo{Name: "grok-live", Version: "1"},
-				Capabilities: protocolv2.Value(protocolv2.InitializeCapabilities{ExperimentalAPI: &experimental}),
-			},
-			NotificationRetention: codexsdk.NotificationRetentionBudget{MaxCount: 512, MaxBytes: 8 << 20},
-			ServerRequestHandler: func(_ context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
-				err := reject(failedObservation("unsupported_server_request", "live: unsupported server request"))
-				if request.Kind() == protocolv2.ServerRequestKindItemToolCall {
-					return codexsdk.DynamicToolResponse(protocolv2.DynamicToolCallResponse{
-						ContentItems: []protocolv2.DynamicToolCallOutputContentItem{}, Success: false,
-					}), nil
-				}
-				return codexsdk.ServerRequestResponse{}, err
-			},
-			ServerNotificationHandler: func(callbackCtx context.Context, notification protocolv2.ServerNotification) error {
-				select {
-				case clientContexts <- callbackCtx:
-				default:
-				}
-				if notification.Kind() != protocolv2.ServerNotificationKindItemCompleted && notification.Kind() != protocolv2.ServerNotificationKindTurnCompleted {
-					return nil
-				}
-				raw, err := json.Marshal(notification)
-				if err != nil {
-					return reject(failedObservation("invalid_completion", "live: invalid completion evidence"))
-				}
-				mu.Lock()
-				defer mu.Unlock()
-				if retainedBytes+len(raw) > 8<<20 {
-					return reject(failedObservation("early_evidence_budget_exceeded", "live: early evidence budget exceeded"))
-				}
-				select {
-				case notifications <- notification:
-					retainedBytes += len(raw)
-					return nil
-				default:
-					return reject(failedObservation("early_evidence_budget_exceeded", "live: early evidence budget exceeded"))
-				}
-			},
-		})
-		if err != nil {
-			return sdkFailure(err)
-		}
-		defer func() {
-			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			closed, closeErr := client.CloseContext(closeCtx)
-			if runErr == nil {
-				select {
-				case runErr = <-failures:
-				default:
-				}
-				if runErr == nil && closeErr != nil {
-					runErr = sdkFailure(closeErr)
-				} else if runErr == nil && (!closed.ProcessReaped || closed.CallbackWorkPending != 0) {
-					runErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
-				}
+			if notification.Kind() != protocolv2.ServerNotificationKindItemCompleted && notification.Kind() != protocolv2.ServerNotificationKindTurnCompleted {
+				return nil
 			}
-		}()
-		evidence.Processes, evidence.Initializations, evidence.Stage = 1, 1, "initialized"
-		identity := client.Provenance().RuntimeAppServer
-		actualHome, homeErr := os.Stat(identity.CodexHome)
-		fixtureHome, fixtureErr := os.Stat(home)
-		if !identity.Observed || identity.UserAgent == "" || homeErr != nil || fixtureErr != nil || !os.SameFile(actualHome, fixtureHome) {
-			return failedObservation("invalid_initialization", "live: initialization evidence unavailable")
-		}
+			raw, err := json.Marshal(notification)
+			if err != nil {
+				return reject(failedObservation("invalid_completion", "live: invalid completion evidence"))
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if retainedBytes+len(raw) > 8<<20 {
+				return reject(failedObservation("early_evidence_budget_exceeded", "live: early evidence budget exceeded"))
+			}
+			select {
+			case notifications <- notification:
+				retainedBytes += len(raw)
+				return nil
+			default:
+				return reject(failedObservation("early_evidence_budget_exceeded", "live: early evidence budget exceeded"))
+			}
+		},
+	}
+	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		evidence.Threads = 1
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
@@ -251,36 +216,4 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 		evidence.Stage = "final_reply"
 		return nil
 	})
-}
-
-// sdkFixtureEnv replaces inherited fixture identity without mutating the parent.
-func sdkFixtureEnv(parent []string, home, key string) []string {
-	env := make([]string, 0, len(parent)+2)
-	for _, entry := range parent {
-		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "CODEX_HOME") && !strings.EqualFold(name, "GROK_API_KEY") {
-			env = append(env, entry)
-		}
-	}
-	return append(env, "CODEX_HOME="+home, "GROK_API_KEY="+key)
-}
-
-// sdkFailure never formats SDK errors, which can contain private protocol data.
-func sdkFailure(err error) error {
-	var observation *observationFailure
-	if errors.As(err, &observation) {
-		return observation
-	}
-	code := "sdk_observation_failed"
-	switch {
-	case errors.Is(err, codexsdk.ErrNotificationRetention):
-		code = "notification_retention_exceeded"
-	case errors.Is(err, codexsdk.ErrNotificationBackpressure):
-		code = "notification_backpressure"
-	case errors.Is(err, context.Canceled):
-		code = "cancelled"
-	case errors.Is(err, context.DeadlineExceeded):
-		code = "deadline_exceeded"
-	}
-	return failedObservation(code, "live: SDK observation did not complete")
 }
