@@ -867,6 +867,9 @@ jobs:
         run: |
           gofmt -d .
           test -z "$(gofmt -l .)"
+      - name: Require reproducible Go dependency closure
+        working-directory: grok
+        run: go mod tidy -diff
       - name: Test Grok package staging and launcher with synthetic inputs
         run: |
           python3 grok/package/test_stage.py -v

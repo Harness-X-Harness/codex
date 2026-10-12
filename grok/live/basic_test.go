@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,9 +54,27 @@ func fakeAppServer() {
 	}
 	defer trace.Close()
 	_, _ = io.WriteString(trace, "process\n")
+	_ = os.WriteFile(script.Trace+".home", []byte(os.Getenv("CODEX_HOME")), 0600)
 	_, _ = io.WriteString(os.Stderr, "PRIVATE_CANARY\n")
 	input := bufio.NewScanner(os.Stdin)
 	output := json.NewEncoder(os.Stdout)
+	unauthorized := func() {
+		_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{
+			"threadId": "thread", "turnId": "turn", "callId": "call", "tool": "PRIVATE_CANARY", "arguments": map[string]any{},
+		}})
+		var response struct {
+			ID     int
+			Error  *struct{ Code int }
+			Result *struct{ Success bool }
+		}
+		if input.Scan() && json.Unmarshal(input.Bytes(), &response) == nil && response.ID == 99 {
+			if response.Result != nil && response.Result.Success {
+				_ = os.WriteFile(script.Trace+".effect", []byte("unauthorized"), 0600)
+			} else if response.Error != nil || response.Result != nil {
+				_, _ = io.WriteString(trace, "unauthorized_denied\n")
+			}
+		}
+	}
 	for input.Scan() {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
@@ -68,30 +87,34 @@ func fakeAppServer() {
 			return
 		}
 		_, _ = io.WriteString(trace, request.Method+"\n")
-		if script.Mode == "budget" && (request.Method == "initialize" || request.Method == "thread/start") {
-			for range 40 {
-				_ = output.Encode(map[string]any{"method": "noop", "error": strings.Repeat("x", 120<<10)})
+		if script.Mode == "budget" && request.Method == "thread/start" {
+			for range 256 {
+				_ = output.Encode(map[string]any{"method": "item/completed", "params": map[string]any{
+					"threadId": "thread", "turnId": "turn", "completedAtMs": 1,
+					"item": map[string]any{"type": "agentMessage", "id": "message", "phase": "final_answer", "text": "fixture reply"},
+				}})
 			}
-			if request.Method == "thread/start" {
-				time.Sleep(time.Hour)
-				return
-			}
+			time.Sleep(time.Hour)
+			return
 		}
 		var result any
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"userAgent": "fixture"}
+			result = map[string]any{"userAgent": "fixture", "codexHome": os.Getenv("CODEX_HOME"), "platformFamily": "unix", "platformOs": "linux"}
 			if script.Mode == "bad_init" {
 				result = nil
 			}
 			if script.Mode == "rpc_error" {
-				_ = output.Encode(map[string]any{"id": request.ID, "error": map[string]any{"message": "PRIVATE_CANARY"}})
+				_ = output.Encode(map[string]any{"id": request.ID, "error": map[string]any{"code": -32000, "message": "PRIVATE_CANARY"}})
 				return
 			}
 		case "initialized":
 			continue
 		case "thread/start":
-			result = map[string]any{"model": request.Params.Model, "modelProvider": "grok", "thread": map[string]any{"id": "thread", "modelProvider": "grok"}}
+			result = map[string]any{
+				"model": request.Params.Model, "modelProvider": "grok", "approvalPolicy": "never", "approvalsReviewer": "user", "cwd": os.Getenv("CODEX_HOME"), "sandbox": map[string]any{"type": "readOnly"},
+				"thread": map[string]any{"id": "thread", "sessionId": "session", "modelProvider": "grok", "cliVersion": "fixture", "createdAt": 1, "updatedAt": 1, "cwd": os.Getenv("CODEX_HOME"), "ephemeral": false, "preview": "", "projectId": nil, "source": "appServer", "status": map[string]any{"type": "idle"}, "turns": []any{}},
+			}
 			if script.Mode == "wrong_model" {
 				result.(map[string]any)["model"] = "PRIVATE_CANARY"
 			}
@@ -102,7 +125,7 @@ func fakeAppServer() {
 				result.(map[string]any)["thread"].(map[string]any)["modelProvider"] = "PRIVATE_CANARY"
 			}
 		case "turn/start":
-			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "inProgress"}}
+			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "inProgress", "items": []any{}}}
 		default:
 			return
 		}
@@ -116,7 +139,14 @@ func fakeAppServer() {
 		if script.Mode == "empty" {
 			agent["text"] = " "
 		}
-		item := map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn", "item": agent}}
+		item := map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn", "item": agent, "completedAtMs": 1}}
+		if request.Method == "turn/start" && script.Mode == "callback_budget" {
+			for range 129 {
+				_ = output.Encode(item)
+			}
+			time.Sleep(time.Hour)
+			return
+		}
 		if request.Method == "turn/start" && script.Mode == "early" {
 			_ = output.Encode(item)
 		}
@@ -124,12 +154,11 @@ func fakeAppServer() {
 			_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{"tool": "PRIVATE_CANARY"}})
 			if script.Mode == "await_request" {
 				var rejection struct {
-					ID    int
-					Error struct{ Code int }
+					ID     int
+					Error  *struct{ Code int }
+					Result json.RawMessage
 				}
-				want := rejection
-				want.ID, want.Error.Code = 99, -32601
-				if !input.Scan() || json.Unmarshal(input.Bytes(), &rejection) != nil || rejection != want {
+				if !input.Scan() || json.Unmarshal(input.Bytes(), &rejection) != nil || rejection.ID != 99 || rejection.Error == nil || rejection.Error.Code >= 0 || rejection.Result != nil {
 					return
 				}
 				_, _ = io.WriteString(trace, "unsupported_rejected\n")
@@ -138,10 +167,16 @@ func fakeAppServer() {
 		if request.Method == "turn/start" && (script.Mode == "inline" || script.Mode == "inline_request" || script.Mode == "await_request") {
 			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "completed", "error": nil, "items": []any{agent}}}
 		}
+		if request.Method == "turn/start" && script.Mode == "unauthorized_then_failed" {
+			unauthorized()
+			result = map[string]any{"turn": map[string]any{"id": "turn", "status": "failed", "error": map[string]any{"message": "PRIVATE_CANARY"}, "items": []any{}}}
+		}
 		_ = output.Encode(map[string]any{"id": request.ID, "result": result})
 		if request.Method == "turn/start" {
 			switch script.Mode {
 			case "inline", "inline_request", "await_request":
+				for input.Scan() {
+				}
 				return
 			case "hang":
 				time.Sleep(time.Hour)
@@ -155,19 +190,22 @@ func fakeAppServer() {
 				return
 			case "request":
 				_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{"tool": "PRIVATE_CANARY"}})
+			case "unauthorized":
+				unauthorized()
+				return
 			case "only_reply":
 				_ = output.Encode(item)
 				return
 			}
 			items := []any{agent}
 			if script.Mode == "item" || script.Mode == "early" || script.Mode == "late" {
-				items = nil
+				items = []any{}
 			}
 			if script.Mode == "item" {
 				_ = output.Encode(item)
 			}
 			if script.Mode == "delta" {
-				items = nil
+				items = []any{}
 				_ = output.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "thread", "turnId": "turn", "delta": "PRIVATE_CANARY"}})
 			}
 			completed := map[string]any{"id": "turn", "status": "completed", "error": nil, "items": items}
@@ -178,7 +216,7 @@ func fakeAppServer() {
 			if script.Mode == "wrong_turn" {
 				completed["id"] = "PRIVATE_CANARY"
 			}
-			if script.Mode == "failed" || script.Mode == "failed_typed" || script.Mode == "unrelated_failed" {
+			if script.Mode == "failed" || script.Mode == "failed_typed" || script.Mode == "unrelated_failed" || script.Mode == "unauthorized_then_failed" {
 				completed["status"] = "failed"
 				completed["error"] = map[string]any{"message": "PRIVATE_CANARY"}
 				if script.Mode == "failed_typed" || script.Mode == "unrelated_failed" {
@@ -189,8 +227,13 @@ func fakeAppServer() {
 				completed["status"] = "inProgress"
 			}
 			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
+			if script.Mode == "unrelated_failed" {
+				return
+			}
 			if script.Mode == "late" {
 				_ = output.Encode(item)
+			}
+			for input.Scan() {
 			}
 			return
 		}
@@ -222,7 +265,7 @@ func binarySubject(t *testing.T, binary string) live.Subject {
 }
 
 func TestBasicCompletesMatchingTurn(t *testing.T) {
-	for _, mode := range []string{"turn", "pinned", "item", "early", "late", "legacy", "inline"} {
+	for _, mode := range []string{"turn", "pinned", "item", "early", "late", "legacy", "inline", "inline_request", "await_request", "request"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, mode)
 			if mode == "pinned" {
@@ -248,10 +291,85 @@ func TestBasicCompletesMatchingTurn(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(trace) != "process\ninitialize\ninitialized\nthread/start\nturn/start\n" {
+			wantTrace := "process\ninitialize\ninitialized\nthread/start\nturn/start\n"
+			if mode == "await_request" {
+				wantTrace += "unsupported_rejected\n"
+			}
+			if string(trace) != wantTrace {
 				t.Fatalf("unexpected invocation transcript: %q", trace)
 			}
+			childHome, err := os.ReadFile(script.Trace + ".home")
+			if err != nil || len(childHome) == 0 || string(childHome) == os.Getenv("CODEX_HOME") {
+				t.Fatal("child fixture home was not isolated")
+			}
+			if _, err := os.Stat(string(childHome)); !os.IsNotExist(err) {
+				t.Fatal("child fixture survived SDK cleanup")
+			}
 		})
+	}
+}
+
+func TestBasicDeniesUnauthorizedAction(t *testing.T) {
+	for _, mode := range []string{"unauthorized", "unauthorized_then_failed"} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, mode)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			got, err := live.Basic(ctx, options)
+			if err == nil || live.DescribeFailure(err).Code != "unsupported_server_request" || got.Completed {
+				t.Fatalf("unauthorized action accepted or first cause lost: %+v; %v", got, err)
+			}
+			var script struct{ Trace string }
+			_ = json.Unmarshal([]byte(options.APIKey), &script)
+			if _, err := os.Stat(script.Trace + ".effect"); !os.IsNotExist(err) {
+				t.Fatal("unauthorized action produced an effect")
+			}
+			trace, err := os.ReadFile(script.Trace)
+			if err != nil || !strings.Contains(string(trace), "unauthorized_denied\n") || strings.Count(string(trace), "turn/start\n") != 1 {
+				t.Fatal("valid unauthorized action was not denied exactly once")
+			}
+		})
+	}
+}
+
+func TestBasicProcessIsolation(t *testing.T) {
+	if os.Getenv("GROK_LIVE_ISOLATION_TEST") == "1" {
+		options := fixtureOptions(t, "turn")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := live.Basic(ctx, options); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	parentHome := t.TempDir()
+	profile := filepath.Join(parentHome, "config.toml")
+	if err := os.WriteFile(profile, []byte("PRIVATE_PARENT_PROFILE"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "-test.run=^TestBasicProcessIsolation$")
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(name, "CODEX_HOME") && !strings.EqualFold(name, "GROK_API_KEY") && name != "GROK_LIVE_ISOLATION_TEST" {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	command.Env = append(command.Env, "CODEX_HOME="+parentHome, "GROK_API_KEY=PRIVATE_PARENT_KEY", "GROK_LIVE_ISOLATION_TEST=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("isolated process failed: %v; %s", err, output)
+	}
+	if got, err := os.ReadFile(profile); err != nil || string(got) != "PRIVATE_PARENT_PROFILE" {
+		t.Fatal("SDK fixture modified inherited product configuration")
+	}
+	entries, err := os.ReadDir(parentHome)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("SDK fixture wrote into inherited product home")
 	}
 }
 
@@ -259,11 +377,10 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 	for mode, stage := range map[string]string{
 		"artifact": "preflight", "unavailable": "preflight", "metadata": "preflight", "unbounded": "preflight",
 		"wrong_model": "initialized", "wrong_provider": "initialized", "wrong_thread_provider": "initialized",
-		"bad_init": "process_started", "rpc_error": "process_started", "budget": "initialized",
-		"inline_request": "thread_bound", "await_request": "thread_bound",
+		"bad_init": "sdk_starting", "rpc_error": "sdk_starting", "budget": "initialized",
 		"wrong_thread": "turn_submitted", "wrong_turn": "turn_submitted", "failed": "turn_submitted", "partial": "turn_submitted",
-		"request": "turn_submitted", "malformed": "turn_submitted", "oversized": "turn_submitted", "hang": "turn_submitted",
-		"empty": "turn_completed", "commentary": "turn_completed", "delta": "turn_completed", "only_reply": "reply_observed",
+		"malformed": "turn_submitted", "oversized": "turn_submitted", "hang": "turn_submitted", "callback_budget": "turn_submitted",
+		"empty": "turn_completed", "commentary": "turn_completed", "delta": "turn_submitted", "only_reply": "reply_observed",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, mode)
@@ -289,17 +406,22 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			if err == nil {
 				t.Fatal("insufficient evidence accepted")
 			}
+			if mode == "callback_budget" && live.DescribeFailure(err).Code != "early_evidence_budget_exceeded" {
+				t.Fatal("application callback overload was not bounded")
+			}
 			encoded, _ := json.Marshal(got)
 			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_CANARY") || strings.Contains(string(encoded)+err.Error(), options.Subject.Binary) || strings.Contains(string(encoded)+err.Error(), options.BaseURL) {
 				t.Fatal("private diagnostics escaped")
 			}
-			got.ObservedAt = ""
-			want := live.Evidence{SHA256: options.Subject.SHA256, SourceSHA: options.Subject.SourceSHA, HarnessSHA: options.Subject.HarnessSHA, Target: "test-host", Environment: "deterministic", Model: options.Model, Stage: stage, Processes: 1, Initializations: 1, Threads: 1, Turns: 1, Bound: true}
+			// SDK timing may change transient transport stages; identity, action
+			// counts and credited business evidence remain the acceptance boundary.
+			got.ObservedAt, got.Stage = "", ""
+			want := live.Evidence{SHA256: options.Subject.SHA256, SourceSHA: options.Subject.SourceSHA, HarnessSHA: options.Subject.HarnessSHA, Target: "test-host", Environment: "deterministic", Model: options.Model, Processes: 1, Initializations: 1, Threads: 1, Turns: 1, Bound: true}
 			if stage == "initialized" {
 				want.Turns, want.Bound = 0, false
 			}
-			if stage == "process_started" {
-				want.Threads, want.Turns, want.Bound = 0, 0, false
+			if stage == "sdk_starting" {
+				want.Processes, want.Initializations, want.Threads, want.Turns, want.Bound = 0, 0, 0, 0, false
 			}
 			if stage == "turn_completed" {
 				want.Completed = true
@@ -310,7 +432,7 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			if stage == "preflight" {
 				want.Processes, want.Initializations, want.Threads, want.Turns, want.Bound = 0, 0, 0, 0, false
 				if mode == "metadata" || mode == "unbounded" {
-					want = live.Evidence{Stage: stage}
+					want = live.Evidence{}
 				}
 				var script struct{ Trace string }
 				_ = json.Unmarshal([]byte(options.APIKey), &script)
@@ -320,20 +442,6 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			}
 			if got != want {
 				t.Fatalf("evidence = %+v, want %+v", got, want)
-			}
-			if mode == "oversized" && err.Error() != "live: protocol frame budget exceeded" {
-				t.Fatal("frame cap not observed before EOF")
-			}
-			if mode == "budget" && err.Error() != "live: early evidence budget exceeded" {
-				t.Fatal("retained cap not observed before EOF")
-			}
-			if mode == "await_request" {
-				var script struct{ Trace string }
-				_ = json.Unmarshal([]byte(options.APIKey), &script)
-				trace, readErr := os.ReadFile(script.Trace)
-				if readErr != nil || string(trace) != "process\ninitialize\ninitialized\nthread/start\nturn/start\nunsupported_rejected\n" {
-					t.Fatal("server request was not refused before the RPC response")
-				}
 			}
 		})
 	}

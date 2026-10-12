@@ -48,14 +48,9 @@ type Evidence struct {
 	FirstCompleted, FirstRecall, Recalled                                        bool
 }
 
-// Basic initiates one process, initialization, thread and text turn without retry.
-// A successful observation assumes the caller established Subject's prerequisites.
-func Basic(ctx context.Context, options Options) (Evidence, error) {
-	return runFixture(ctx, options, nil, nil, observeBasic)
-}
-
-// runFixture owns the shared artifact, process, initialization and thread binding.
-func runFixture(ctx context.Context, options Options, edit *editFixture, threadOptions map[string]any, observe func(*appServer, string, *Evidence) error) (Evidence, error) {
+// withFixture verifies the explicit executable and owns one isolated workspace.
+// SDK and transitional legacy clients share setup, never protocol routing.
+func withFixture(ctx context.Context, options Options, edit *editFixture, run func(home, cwd string, evidence *Evidence) error) (Evidence, error) {
 	evidence := Evidence{Stage: "preflight", ObservedAt: time.Now().UTC().Format(time.RFC3339)}
 	deadline, bounded := ctx.Deadline()
 	subject := options.Subject
@@ -103,131 +98,62 @@ func runFixture(ctx context.Context, options Options, edit *editFixture, threadO
 		}
 	}
 	evidence.Stage = "fixture_ready"
-	server, err := startServer(ctx, subject.Binary, home, cwd, options.APIKey)
-	if err != nil {
-		return evidence, err
-	}
-	defer server.close()
-	evidence.Processes, evidence.Stage = 1, "process_started"
-	evidence.Initializations = 1
-	var initialized struct {
-		UserAgent string `json:"userAgent"`
-	}
-	if err := server.call("initialize", map[string]any{"clientInfo": map[string]any{"name": "grok-live", "version": "1"}, "capabilities": map[string]any{"experimentalApi": true}}, &initialized); err != nil {
-		return evidence, err
-	}
-	if initialized.UserAgent == "" {
-		return evidence, errors.New("live: initialization evidence unavailable")
-	}
-	if err := server.send(frame{Method: "initialized"}); err != nil {
-		return evidence, err
-	}
-	if options.shippedProfile {
-		if err := requireShippedCatalog(server, &evidence); err != nil {
-			return evidence, err
-		}
-		if options.catalogOnly {
-			return evidence, nil
-		}
-	}
-	evidence.Stage, evidence.Threads = "initialized", 1
-	var thread struct {
-		Model    string `json:"model"`
-		Provider string `json:"modelProvider"`
-		Thread   struct {
-			ID       string `json:"id"`
-			Provider string `json:"modelProvider"`
-		} `json:"thread"`
-	}
-	threadParams := map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}
-	for key, value := range threadOptions {
-		threadParams[key] = value
-	}
-	if err := server.call("thread/start", threadParams, &thread); err != nil {
-		return evidence, err
-	}
-	if thread.Thread.ID == "" || thread.Model != options.Model || thread.Provider != "grok" || thread.Thread.Provider != "grok" {
-		return evidence, errors.New("live: fixture binding not established")
-	}
-	evidence.Bound, evidence.Stage = true, "thread_bound"
-	err = observe(server, thread.Thread.ID, &evidence)
+	err = run(home, cwd, &evidence)
 	return evidence, err
 }
 
-func observeBasic(server *appServer, threadID string, evidence *Evidence) error {
-	evidence.Turns = 1
-	var started struct {
-		Turn turn `json:"turn"`
-	}
-	if err := server.call("turn/start", map[string]any{"threadId": threadID, "input": []any{map[string]any{"type": "text", "text": "Reply with a short confirmation that this turn completed.", "textElements": []any{}}}}, &started); err != nil {
-		return err
-	}
-	if started.Turn.ID == "" {
-		return errors.New("live: turn identity unavailable")
-	}
-	evidence.Stage = "turn_submitted"
-	observeReply := func(item item) {
-		if item.Type == "agentMessage" && (item.Phase == "" || item.Phase == "final_answer") && strings.TrimSpace(item.Text) != "" {
-			evidence.ReplyBytes = len(item.Text)
-			if !evidence.Completed {
-				evidence.Stage = "reply_observed"
-			}
-		}
-	}
-	observeTurn := func(turn turn) error {
-		if turn.Status != "completed" || len(turn.Error) != 0 && string(turn.Error) != "null" {
-			return failedTurn(turn.Status, turn.Error, "live: turn did not complete successfully")
-		}
-		evidence.Completed, evidence.Stage = true, "turn_completed"
-		for _, item := range turn.Items {
-			observeReply(item)
-		}
-		return nil
-	}
-	if started.Turn.Status != "inProgress" {
-		if err := observeTurn(started.Turn); err != nil {
-			return err
-		}
-	}
-	for !evidence.Completed || evidence.ReplyBytes == 0 {
-		message, err := server.next()
+// runFixture keeps unmigrated families on the legacy client until their owner lands.
+func runFixture(ctx context.Context, options Options, edit *editFixture, threadOptions map[string]any, observe func(*appServer, string, *Evidence) error) (Evidence, error) {
+	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) error {
+		server, err := startServer(ctx, options.Subject.Binary, home, cwd, options.APIKey)
 		if err != nil {
 			return err
 		}
-		if len(message.ID) != 0 {
-			return server.refuse(message.ID)
+		defer server.close()
+		evidence.Processes, evidence.Stage = 1, "process_started"
+		evidence.Initializations = 1
+		var initialized struct {
+			UserAgent string `json:"userAgent"`
 		}
-		if message.Method != "turn/completed" && message.Method != "item/completed" {
-			continue
+		if err := server.call("initialize", map[string]any{"clientInfo": map[string]any{"name": "grok-live", "version": "1"}, "capabilities": map[string]any{"experimentalApi": true}}, &initialized); err != nil {
+			return err
 		}
-		var completed struct {
-			ThreadID string `json:"threadId"`
-			TurnID   string `json:"turnId"`
-			Turn     turn   `json:"turn"`
-			Item     item   `json:"item"`
+		if initialized.UserAgent == "" {
+			return errors.New("live: initialization evidence unavailable")
 		}
-		if json.Unmarshal(message.Params, &completed) != nil {
-			return errors.New("live: invalid completion evidence")
+		if err := server.send(frame{Method: "initialized"}); err != nil {
+			return err
 		}
-		if completed.ThreadID != threadID {
-			continue
-		}
-		if message.Method == "item/completed" {
-			if completed.TurnID != started.Turn.ID {
-				continue
-			}
-			observeReply(completed.Item)
-		} else {
-			if completed.Turn.ID != started.Turn.ID {
-				continue
-			}
-			if err := observeTurn(completed.Turn); err != nil {
+		if options.shippedProfile {
+			if err := requireShippedCatalog(server, evidence); err != nil {
 				return err
 			}
+			if options.catalogOnly {
+				return nil
+			}
 		}
-	}
-	evidence.Stage = "final_reply"
-	return nil
+		evidence.Stage, evidence.Threads = "initialized", 1
+		var thread struct {
+			Model    string `json:"model"`
+			Provider string `json:"modelProvider"`
+			Thread   struct {
+				ID       string `json:"id"`
+				Provider string `json:"modelProvider"`
+			} `json:"thread"`
+		}
+		threadParams := map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}
+		for key, value := range threadOptions {
+			threadParams[key] = value
+		}
+		if err := server.call("thread/start", threadParams, &thread); err != nil {
+			return err
+		}
+		if thread.Thread.ID == "" || thread.Model != options.Model || thread.Provider != "grok" || thread.Thread.Provider != "grok" {
+			return errors.New("live: fixture binding not established")
+		}
+		evidence.Bound, evidence.Stage = true, "thread_bound"
+		return observe(server, thread.Thread.ID, evidence)
+	})
 }
 
 var (
