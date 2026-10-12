@@ -236,7 +236,9 @@ func fakeAppServer() {
 				completed["status"] = "inProgress"
 			}
 			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
-			if script.Mode == "unrelated_failed" {
+			// Wrong-identity controls test attribution at EOF. Missing-final
+			// controls keep the stream open so EOF cannot mask false acceptance.
+			if script.Mode == "unrelated_failed" || script.Mode == "wrong_thread" || script.Mode == "wrong_turn" {
 				return
 			}
 			if script.Mode == "late" {
@@ -408,7 +410,7 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 				options.Subject.Environment = "PRIVATE_CANARY/?"
 			}
 			deadline := 5 * time.Second
-			if mode == "hang" {
+			if mode == "hang" || mode == "empty" || mode == "commentary" || mode == "delta" {
 				deadline = time.Second
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), deadline)
@@ -419,6 +421,9 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			got, err := live.Basic(ctx, options)
 			if err == nil {
 				t.Fatal("insufficient evidence accepted")
+			}
+			if (mode == "empty" || mode == "commentary" || mode == "delta") && live.DescribeFailure(err).Code != "deadline_exceeded" {
+				t.Fatal("missing final reply was not rejected before cleanup")
 			}
 			if mode == "callback_budget" && live.DescribeFailure(err).Code != "early_evidence_budget_exceeded" {
 				t.Fatal("application callback overload was not bounded")
