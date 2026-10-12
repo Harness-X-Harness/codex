@@ -100,7 +100,11 @@ func fakeAppServer() {
 		var result any
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"userAgent": "fixture", "codexHome": os.Getenv("CODEX_HOME"), "platformFamily": "unix", "platformOs": "linux"}
+			reportedHome, _ := filepath.EvalSymlinks(os.Getenv("CODEX_HOME"))
+			result = map[string]any{"userAgent": "fixture", "codexHome": reportedHome, "platformFamily": "unix", "platformOs": "linux"}
+			if script.Mode == "wrong_home" {
+				result.(map[string]any)["codexHome"] = filepath.Dir(reportedHome)
+			}
 			if script.Mode == "bad_init" {
 				result = nil
 			}
@@ -188,6 +192,11 @@ func fakeAppServer() {
 				_ = output.Encode(map[string]any{"method": "noop", "params": strings.Repeat("x", 17<<20)})
 				time.Sleep(time.Hour)
 				return
+			case "retention_budget":
+				agent["text"] = strings.Repeat("x", 3<<20)
+				_ = output.Encode(item)
+				time.Sleep(time.Hour)
+				return
 			case "request":
 				_ = output.Encode(map[string]any{"id": 99, "method": "item/tool/call", "params": map[string]any{"tool": "PRIVATE_CANARY"}})
 			case "unauthorized":
@@ -206,7 +215,7 @@ func fakeAppServer() {
 			}
 			if script.Mode == "delta" {
 				items = []any{}
-				_ = output.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "thread", "turnId": "turn", "delta": "PRIVATE_CANARY"}})
+				_ = output.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "thread", "turnId": "turn", "itemId": "message", "delta": "PRIVATE_CANARY"}})
 			}
 			completed := map[string]any{"id": "turn", "status": "completed", "error": nil, "items": items}
 			threadID := "thread"
@@ -343,6 +352,11 @@ func TestBasicProcessIsolation(t *testing.T) {
 		return
 	}
 	parentHome := t.TempDir()
+	tempParent, tempAlias := t.TempDir(), filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(tempParent, tempAlias); err != nil {
+		tempAlias = tempParent
+		t.Log("symlinks unavailable; exercising ordinary directory isolation")
+	}
 	profile := filepath.Join(parentHome, "config.toml")
 	if err := os.WriteFile(profile, []byte("PRIVATE_PARENT_PROFILE"), 0600); err != nil {
 		t.Fatal(err)
@@ -356,11 +370,11 @@ func TestBasicProcessIsolation(t *testing.T) {
 	command := exec.CommandContext(ctx, binary, "-test.run=^TestBasicProcessIsolation$")
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "CODEX_HOME") && !strings.EqualFold(name, "GROK_API_KEY") && name != "GROK_LIVE_ISOLATION_TEST" {
+		if !strings.EqualFold(name, "CODEX_HOME") && !strings.EqualFold(name, "GROK_API_KEY") && name != "GROK_LIVE_ISOLATION_TEST" && name != "TMPDIR" && name != "TMP" && name != "TEMP" {
 			command.Env = append(command.Env, entry)
 		}
 	}
-	command.Env = append(command.Env, "CODEX_HOME="+parentHome, "GROK_API_KEY=PRIVATE_PARENT_KEY", "GROK_LIVE_ISOLATION_TEST=1")
+	command.Env = append(command.Env, "CODEX_HOME="+parentHome, "GROK_API_KEY=PRIVATE_PARENT_KEY", "GROK_LIVE_ISOLATION_TEST=1", "TMPDIR="+tempAlias, "TMP="+tempAlias, "TEMP="+tempAlias)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("isolated process failed: %v; %s", err, output)
 	}
@@ -377,10 +391,10 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 	for mode, stage := range map[string]string{
 		"artifact": "preflight", "unavailable": "preflight", "metadata": "preflight", "unbounded": "preflight",
 		"wrong_model": "initialized", "wrong_provider": "initialized", "wrong_thread_provider": "initialized",
-		"bad_init": "sdk_starting", "rpc_error": "sdk_starting", "budget": "initialized",
+		"bad_init": "sdk_starting", "rpc_error": "sdk_starting", "budget": "initialized", "wrong_home": "initialized_home",
 		"wrong_thread": "turn_submitted", "wrong_turn": "turn_submitted", "failed": "turn_submitted", "partial": "turn_submitted",
-		"malformed": "turn_submitted", "oversized": "turn_submitted", "hang": "turn_submitted", "callback_budget": "turn_submitted",
-		"empty": "turn_completed", "commentary": "turn_completed", "delta": "turn_submitted", "only_reply": "reply_observed",
+		"malformed": "turn_submitted", "oversized": "turn_submitted", "hang": "turn_submitted", "callback_budget": "turn_submitted", "retention_budget": "turn_submitted",
+		"empty": "turn_completed", "commentary": "turn_completed", "delta": "turn_completed", "only_reply": "reply_observed",
 	} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, mode)
@@ -409,6 +423,9 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			if mode == "callback_budget" && live.DescribeFailure(err).Code != "early_evidence_budget_exceeded" {
 				t.Fatal("application callback overload was not bounded")
 			}
+			if mode == "retention_budget" && live.DescribeFailure(err).Code != "notification_retention_exceeded" {
+				t.Fatal("SDK retention overload was not bounded")
+			}
 			encoded, _ := json.Marshal(got)
 			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_CANARY") || strings.Contains(string(encoded)+err.Error(), options.Subject.Binary) || strings.Contains(string(encoded)+err.Error(), options.BaseURL) {
 				t.Fatal("private diagnostics escaped")
@@ -419,6 +436,9 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 			want := live.Evidence{SHA256: options.Subject.SHA256, SourceSHA: options.Subject.SourceSHA, HarnessSHA: options.Subject.HarnessSHA, Target: "test-host", Environment: "deterministic", Model: options.Model, Processes: 1, Initializations: 1, Threads: 1, Turns: 1, Bound: true}
 			if stage == "initialized" {
 				want.Turns, want.Bound = 0, false
+			}
+			if stage == "initialized_home" {
+				want.Threads, want.Turns, want.Bound = 0, 0, false
 			}
 			if stage == "sdk_starting" {
 				want.Processes, want.Initializations, want.Threads, want.Turns, want.Bound = 0, 0, 0, 0, false

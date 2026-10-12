@@ -95,7 +95,9 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 		}()
 		evidence.Processes, evidence.Initializations, evidence.Stage = 1, 1, "initialized"
 		identity := client.Provenance().RuntimeAppServer
-		if !identity.Observed || identity.UserAgent == "" || identity.CodexHome != home {
+		actualHome, homeErr := os.Stat(identity.CodexHome)
+		fixtureHome, fixtureErr := os.Stat(home)
+		if !identity.Observed || identity.UserAgent == "" || homeErr != nil || fixtureErr != nil || !os.SameFile(actualHome, fixtureHome) {
 			return failedObservation("invalid_initialization", "live: initialization evidence unavailable")
 		}
 		evidence.Threads = 1
