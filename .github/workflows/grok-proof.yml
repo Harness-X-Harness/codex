@@ -718,12 +718,14 @@ jobs:
         run: |
           export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_LIVE_NATIVE_BIN"
-          # Preserve the legacy package budget; collect both independent contracts
+          # Preserve the legacy package budget; collect all independent contracts
           # even if one fails, and propagate any failure to this required job.
           go test -list '^TestNativeFirstRequestShape$' ./live | grep -Fx TestNativeFirstRequestShape
           go test -list '^TestNativeReasoningHistoryFixture$' ./live | grep -Fx TestNativeReasoningHistoryFixture
+          go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
           status=0
-          go test -race -count=1 -timeout=6m -v -skip '^TestNativeFirstRequestShape$' ./live || status=1
+          go test -race -count=1 -timeout=6m -v -skip '^(TestNativeFirstRequestShape|TestReasoningHistoryPublicProtocol)$' ./live || status=1
+          go test -race -count=1 -timeout=6m -v -run '^TestReasoningHistoryPublicProtocol$' ./live || status=1
           go test -race -count=1 -timeout=6m -v -run '^TestNativeFirstRequestShape$' ./live || status=1
           exit "$status"
       - name: Check scoped filesystem API lint
@@ -851,7 +853,7 @@ jobs:
     name: Deterministic Facts and Live proof
     needs: subject
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 15
     env:
       GROK_FACTS: "0"
       GROK_LIVE: "0"
@@ -882,7 +884,12 @@ jobs:
           python3 grok/package/test_fetch_artifact.py -v
       - name: Test Facts HTTP and Live stdio boundaries without backend calls
         working-directory: grok
-        run: go test -race -count=1 -timeout=6m -v ./facts ./live ./cmd/grok-facts ./cmd/grok-live
+        run: |
+          go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
+          status=0
+          go test -race -count=1 -timeout=6m -v -skip '^TestReasoningHistoryPublicProtocol$' ./facts ./live ./cmd/grok-facts ./cmd/grok-live || status=1
+          go test -race -count=1 -timeout=6m -v -run '^TestReasoningHistoryPublicProtocol$' ./live || status=1
+          exit "$status"
       - name: Vet the consumed Go foundation
         working-directory: grok
         run: go vet ./...

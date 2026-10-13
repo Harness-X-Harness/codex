@@ -41,9 +41,11 @@ expiration and exact subject on retrieval. `runtime_sha256` identifies the
 executable, separately from the artifact ZIP or package archive hash. The
 product source remains fixed while the declared harness SHA evolves.
 
-Only Basic uses the SDK in #383. Reasoning/history, structured edits, images,
-shipped catalog/profile/children and hosted search retain the legacy client
-until their respective reviewed increments; #379 owns final transport removal.
+Basic (#383) and the formal/exploratory reasoning controls (#384) use the SDK.
+Structured edits, images, shipped catalog/profile/children and hosted search
+retain the legacy client until their respective reviewed increments; #379 owns
+final transport removal. Shipped pinned reasoning remains on its explicit
+catalog-bound legacy path until #387; SDK failures never switch clients.
 Shared fixture setup verifies the selected binary and isolates home/credentials.
 Completion needs independently matching thread/turn identities, a successful
 terminal and a nonempty eligible final reply; SDK success alone is insufficient.
@@ -62,6 +64,18 @@ snapshot also account for separately tracked SDK [#423](https://github.com/ronhu
 `ReasoningHistory(ctx, Options)` shares Basic's artifact/process/fixture binding
 and adds the [encrypted-history Story](../docs/stories/grok-encrypted-reasoning-history-continuation.md).
 It opts into raw events and one named dynamic tool, with explicit medium effort.
+The SDK owns stream attachment and same-thread resume; resume excludes returned
+turn history and retains the original model, Provider and fixture cwd. The
+application checks both thread/turn identities independently, including valid
+requests that arrive before the turn-start response. SDK retention caps at
+65536 slots/64 MiB; provisional completion evidence caps at 8192 entries/
+8 MiB. Accepted tool identities retain at most 4096 SHA-256 digests, and only
+those identities can establish completed tool-result evidence. A repeated call
+at capacity remains allowed; a new identity at capacity receives a token-free
+denial and a static failure. These bounds are independent of SDK retention.
+Typed callbacks observe item and turn completion; the validated raw extension
+observes opaque encrypted reasoning. Successful history-cursor completion fences
+the SDK callbacks before proof, independently of the application Story oracle.
 Only a valid first-turn tool request creates the in-memory 32-byte random token;
 repeated calls return the same token. Completed reasoning, opaque encrypted
 output, a successful completed named tool and final token recall must all match
@@ -79,10 +93,33 @@ product tool calls or retries. Authoritative summaries bypass and release the
 digest map; provisional evidence starts fresh for the continuation.
 
 Deterministic public-stdio tests cover ordering, correlation, terminal evidence,
-secret-safe failures and invocation budgets for both model controls. Actual
-native tool/HTTP composition and real-provider execution require #322; the
-current product rejects nonempty Grok tools. This harness increment does not
-establish backend success, unchanged native encrypted replay, or Story PROVEN.
+secret-safe failures and invocation budgets for both model controls.
+`TestNativeReasoningHistoryFixture` uses the selected product against controlled
+HTTP: N returns opaque reasoning plus a named tool call, the next product
+request carries its fresh paired result, and N+1 replays the unchanged encrypted
+history with a token-free user input on the same thread. It checks exactly three
+HTTP requests and excludes plaintext reasoning from replay. The fixture supplies
+the answers, so this proves product/SDK composition and cannot establish real
+backend recall or Story PROVEN. CI uses its freshly built product; explicit
+frozen-package runs separately verify the pinned executable bytes.
+
+#384's scripted-test review inventory retains all 118 original modes for both
+models and adds five focused identity controls. The semantic map is:
+
+| Decision | Controls | Continuing obligation / replacement |
+| --- | --- | --- |
+| KEEP | 110 original modes | Binding, fresh authorized tool result, encrypted completion, matching output, one token-free continuation, eligible recall, terminal/partial failure, replay reconciliation, assistant bounds and secrecy. |
+| REPLACE | `unsupported`, `early_unsupported` | A valid approval request receives a token-free denial without effect; an exact legacy RPC error is unnecessary. |
+| REPLACE | `no_reason` | Schema-valid non-reasoning raw traffic and a reasoning delta cannot prove completed reasoning. |
+| REPLACE | Four `identity_missing_item` / `identity_missing_summary` first/next controls | SDK decoding failure cannot fabricate terminal/recall evidence; a continuation failure preserves proven N. |
+| REPLACE | `request_turn` | Either a known-ID mismatch receives a token-free refusal, or an early provisional response fails actual-ID reconciliation before any terminal, completed-tool or recall credit. The truthful response count remains; concurrent SDK callback timing cannot define authority. |
+| ADD | `tool_wrong_call`, `tool_identity_limit`, `tool_identity_overflow` | Completed tool evidence must match an accepted call; 4096 distinct calls and a consistent retry are allowed, and overflow receives a token-free denial with a static failure. |
+| ADD | `cipher_missing_identity`, `cipher_empty_identity` | Nonempty encrypted reasoning without an item identity cannot establish encrypted evidence or authorize N+1; truthful completed-tool and final-reply partial facts remain. |
+
+No original mode is retired. Universal assertion changes replace incidental EOF
+and stage timing with bounded failure, truthful completion/recall facts and safe
+classification. Malformed transport remains a boundary/secrecy control rather
+than an independent positive Story requirement.
 
 `StructuredEdit`, `StructuredEditApprovalDeclined`,
 `StructuredEditPinnedPreviousModel` and `StructuredEditReplaceAll` use the shared

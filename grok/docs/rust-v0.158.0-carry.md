@@ -508,7 +508,7 @@ before final client removal. The accepted product source is fixed at
 `e9268d5211064fb77f76a9fe7f0a99348488c9d2`; this modernization changes Live Harness
 only. The SDK is fixed at `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`, with Go 1.26.8.
 The [Live guidance](../live/README.md#fixed-input-sdk-migration) records the
-verified executable identity and temporary Basic SDK / remaining legacy split.
+verified executable identity and temporary Basic/reasoning SDK / remaining legacy split.
 Dependency defects belong to separate owner issues; silently changing pins,
 product features or the retained 20-entry CLI surface is outside this work.
 
@@ -521,3 +521,12 @@ SDK #422 as nonblocking. Record the concrete test map and settled evidence in
 each owning PR. Each increment requires reviewed current-candidate `Cargo`,
 protected squash and the actual canonical SHA's same-definition push proof
 before starting the next; source notes and local fixtures do not close it.
+
+#384 moves the two formal reasoning controls and exploratory omitted-effort
+control to the shared SDK fixture. It preserves encrypted reasoning, accepted
+named-tool/result correlation and one token-free same-thread continuation.
+Shipped pinned reasoning deliberately retains its existing catalog-bound path
+until #387. Controlled native HTTP verifies actual product tool/history replay;
+it supplies the replies and cannot establish real-provider recall. The existing
+required runtime Live package includes this fixture with a nonempty selection
+guard; no previous native obligation is removed.
