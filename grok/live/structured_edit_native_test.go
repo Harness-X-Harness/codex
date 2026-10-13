@@ -1,6 +1,7 @@
 package live_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 // The exact package and the native binary use the same public Live oracle.
@@ -79,6 +81,7 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	}
 	var requests, compositions atomic.Int32
 	var invalid atomic.Bool
+	var resultHistory nativeEditResultHistory
 	var diagnosticMu sync.Mutex
 	_, pathAliasErr := exec.LookPath("codex-linux-sandbox")
 	diagnostic := map[string]any{"alias_state": "unobserved", "baseline_path_alias_available": pathAliasErr == nil, "tool_output_class": "unobserved"}
@@ -171,6 +174,10 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 				continue
 			}
 			output := item["output"]
+			if !resultHistory.accept(output) {
+				invalid.Store(true)
+				continue
+			}
 			pairedOutput = output
 			sum := sha256.Sum256(output)
 			lower := strings.ToLower(string(output))
@@ -271,6 +278,106 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	}
 	if got != want || requests.Load() != wantRequests || compositions.Load() != wantRequests || invalid.Load() {
 		t.Fatalf("native structured-edit evidence mismatch: %+v", got)
+	}
+}
+
+// Retain only the bounded paired result privately. Canonical SDK serialization
+// permits equivalent JSON encoding while preserving the result in continuation.
+type nativeEditResultHistory struct {
+	mu     sync.Mutex
+	output json.RawMessage
+}
+
+func (history *nativeEditResultHistory) accept(raw json.RawMessage) bool {
+	if len(raw) == 0 || len(raw) > 64<<10 {
+		return false
+	}
+	var output protocolv2.FunctionCallOutputBody
+	if json.Unmarshal(raw, &output) != nil {
+		return false
+	}
+	if text, ok := output.AsString(); ok {
+		if strings.TrimSpace(text) == "" {
+			return false
+		}
+	} else if content, ok := output.AsArray(); ok {
+		if len(content) == 0 {
+			return false
+		}
+		for _, item := range content {
+			text, ok := item.AsInputText()
+			if !ok || strings.TrimSpace(text.Text) == "" {
+				return false
+			}
+		}
+	} else {
+		return false
+	}
+	canonical, err := json.Marshal(output)
+	if err != nil {
+		return false
+	}
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.output == nil {
+		history.output = canonical
+		return true
+	}
+	return bytes.Equal(history.output, canonical)
+}
+
+func TestNativeEditResultHistoryRejectsInvalidOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"missing", nil},
+		{"null", json.RawMessage(`null`)},
+		{"empty", json.RawMessage(`""`)},
+		{"whitespace", json.RawMessage(`" \r\n"`)},
+		{"malformed", json.RawMessage(`"unterminated`)},
+		{"object", json.RawMessage(`{"success":true}`)},
+		{"number", json.RawMessage(`1`)},
+		{"empty_content", json.RawMessage(`[]`)},
+		{"empty_text", json.RawMessage(`[{"type":"input_text","text":""}]`)},
+		{"missing_text", json.RawMessage(`[{"type":"input_text"}]`)},
+		{"other_content", json.RawMessage(`[{"type":"input_image"}]`)},
+		{"unknown_field", json.RawMessage(`[{"type":"input_text","text":"saved","extra":true}]`)},
+		{"oversized", json.RawMessage(`"` + strings.Repeat("x", (64<<10)-1) + `"`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var history nativeEditResultHistory
+			valid := json.RawMessage(`"saved file"`)
+			if history.accept(tc.raw) || len(history.output) != 0 || !history.accept(valid) {
+				t.Fatal("invalid result was credited or changed first-result admission")
+			}
+			if history.accept(tc.raw) || !history.accept(valid) {
+				t.Fatal("invalid replay changed the accepted result")
+			}
+		})
+	}
+}
+
+func TestNativeEditResultHistoryPreservesReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, replay string
+		want                bool
+	}{
+		{"success", `"saved file"`, `"saved file"`, true},
+		{"declined", `"patch rejected by user"`, `"patch rejected by user"`, true},
+		{"equivalent_string", `"saved file"`, `"saved \u0066ile"`, true},
+		{"equivalent_content", `[{"type":"input_text","text":"saved file"}]`, `[ { "text": "saved file", "type": "input_text" } ]`, true},
+		{"changed_string", `"saved file"`, `"different result"`, false},
+		{"changed_content", `[{"type":"input_text","text":"saved file"}]`, `[{"type":"input_text","text":"different result"}]`, false},
+		{"changed_form", `"saved file"`, `[{"type":"input_text","text":"saved file"}]`, false},
+		{"at_capacity", `"` + strings.Repeat("x", (64<<10)-2) + `"`, `"` + strings.Repeat("x", (64<<10)-2) + `"`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var history nativeEditResultHistory
+			if !history.accept(json.RawMessage(tc.first)) || history.accept(json.RawMessage(tc.replay)) != tc.want || !history.accept(json.RawMessage(tc.first)) {
+				t.Fatal("paired result was lost, changed, or falsely replaced during replay")
+			}
+		})
 	}
 }
 
