@@ -1,6 +1,7 @@
 package live_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,25 +24,45 @@ import (
 
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 // The exact package and the native binary use the same public Live oracle.
 // The HTTP fixture supplies the tool operation, so backend behavior is excluded.
 func TestNativeStructuredEditFixture(t *testing.T) {
-	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
-		t.Run(model, func(t *testing.T) { testNativeStructuredEditFixture(t, model) })
+	for _, mode := range []string{"continuation", "pinned", "declined", "replace_all"} {
+		t.Run(mode, func(t *testing.T) { testNativeStructuredEditFixture(t, mode) })
 	}
 }
 
-func testNativeStructuredEditFixture(t *testing.T, model string) {
-	run := live.StructuredEdit
-	wantTurns, wantRequests := 2, int32(3)
-	wantStage, wantContinuation := "edit_continuation_observed", true
-	if model == providerfixture.PinnedModel {
-		run = live.StructuredEditPinnedPreviousModel
-		wantTurns, wantRequests = 1, 2
-		wantStage, wantContinuation = "edit_observed", false
+func testNativeStructuredEditFixture(t *testing.T, mode string) {
+	run, model := live.StructuredEdit, providerfixture.PrimaryModel
+	wantTurns, wantRequests, wantApprovals := 2, int32(3), 0
+	wantContinuation, replaceAll, declined := true, false, false
+	switch mode {
+	case "pinned":
+		run, model = live.StructuredEditPinnedPreviousModel, providerfixture.PinnedModel
+		wantTurns, wantRequests, wantContinuation = 1, 2, false
+	case "declined":
+		run = live.StructuredEditApprovalDeclined
+		wantTurns, wantRequests, wantApprovals, wantContinuation, declined = 1, 2, 1, false, true
+	case "replace_all":
+		run = live.StructuredEditReplaceAll
+		wantTurns, wantRequests, wantContinuation, replaceAll = 1, 2, false, true
 	}
+	seed := "prefix\r\n" + editSeedToken + "\r\nsuffix"
+	if replaceAll {
+		seed += "\r\n" + editSeedToken
+	}
+	expected := strings.ReplaceAll(seed, editSeedToken, editReplacedToken)
+	if declined {
+		expected = seed
+	}
+	digest := func(text string) string {
+		sum := sha256.Sum256([]byte(text))
+		return hex.EncodeToString(sum[:])
+	}
+	arguments, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": editSeedToken, "new_string": editReplacedToken, "replace_all": replaceAll})
 	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
 	if binary == "" {
 		t.Skip("activated by native runtime or explicit package diagnostic")
@@ -58,8 +79,9 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 	for _, home := range beforeHomes {
 		existing[home] = true
 	}
-	var requests atomic.Int32
+	var requests, compositions atomic.Int32
 	var invalid atomic.Bool
+	var resultHistory nativeEditResultHistory
 	var diagnosticMu sync.Mutex
 	_, pathAliasErr := exec.LookPath("codex-linux-sandbox")
 	diagnostic := map[string]any{"alias_state": "unobserved", "baseline_path_alias_available": pathAliasErr == nil, "tool_output_class": "unobserved"}
@@ -106,7 +128,7 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 			diagnostic["alias_state"] = state
 			diagnosticMu.Unlock()
 		}
-		outputs := 0
+		calls, outputs, userTurns, unknownItems := 0, 0, 0, 0
 		var pairedOutput json.RawMessage
 		for _, raw := range body.Input {
 			var item map[string]json.RawMessage
@@ -115,8 +137,34 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 				continue
 			}
 			var kind, call string
-			_ = json.Unmarshal(item["type"], &kind)
+			if value, present := item["type"]; present && json.Unmarshal(value, &kind) != nil {
+				invalid.Store(true)
+				continue
+			}
 			_ = json.Unmarshal(item["call_id"], &call)
+			switch kind {
+			case "", "message":
+				var role string
+				_ = json.Unmarshal(item["role"], &role)
+				if role == "user" {
+					userTurns++
+				} else if role != "developer" && role != "system" && role != "assistant" {
+					invalid.Store(true)
+				}
+			case "function_call":
+				calls++
+				var name, args string
+				if json.Unmarshal(item["name"], &name) != nil || json.Unmarshal(item["arguments"], &args) != nil ||
+					call != "native_edit_call" || name != wireName || args != string(arguments) {
+					invalid.Store(true)
+				}
+			case "function_call_output":
+			case "reasoning":
+			default:
+				// No alternative tool history can explain this controlled edit.
+				unknownItems++
+				invalid.Store(true)
+			}
 			if kind != "function_call_output" {
 				continue
 			}
@@ -126,6 +174,10 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 				continue
 			}
 			output := item["output"]
+			if !resultHistory.accept(output) {
+				invalid.Store(true)
+				continue
+			}
 			pairedOutput = output
 			sum := sha256.Sum256(output)
 			lower := strings.ToLower(string(output))
@@ -142,7 +194,14 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 			diagnostic["tool_output_sha256"] = hex.EncodeToString(sum[:])
 			diagnosticMu.Unlock()
 		}
-		if (number == 1 && outputs != 0) || (number > 1 && outputs != 1) || number > wantRequests {
+		diagnosticMu.Lock()
+		diagnostic["history_calls"], diagnostic["history_outputs"], diagnostic["history_user_messages"], diagnostic["history_unknown_items"] = calls, outputs, userTurns, unknownItems
+		diagnosticMu.Unlock()
+		wantCalls := 1
+		if number == 1 {
+			wantCalls = 0
+		}
+		if calls != wantCalls || outputs != wantCalls || number > wantRequests {
 			invalid.Store(true)
 		}
 		if outputs > 0 {
@@ -154,19 +213,25 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 			}
 			diagnosticMu.Unlock()
 		}
+		if invalid.Load() {
+			http.Error(writer, "invalid fixture history", http.StatusBadRequest)
+			return
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
 		emit := func(event any) {
 			encoded, _ := json.Marshal(event)
-			_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
+			if _, err := fmt.Fprintf(writer, "data: %s\n\n", encoded); err != nil {
+				invalid.Store(true)
+			}
 		}
 		responseID := fmt.Sprintf("native_edit_response_%d", number)
 		emit(map[string]any{"type": "response.created", "response": map[string]any{"id": responseID}})
 		if number == 1 {
-			args, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": "GROK_STRUCTURED_EDIT_SEED_v1", "new_string": "GROK_STRUCTURED_EDIT_REPLACED_v1", "replace_all": false})
 			added := map[string]any{"type": "function_call", "id": "native_edit_item", "call_id": "native_edit_call", "name": wireName, "arguments": ""}
 			emit(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": added})
-			emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "delta": string(args)})
-			added["arguments"], added["status"] = string(args), "completed"
+			emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "delta": string(arguments)})
+			added["arguments"], added["status"] = string(arguments), "completed"
 			emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": added})
 		} else {
 			message := map[string]any{"type": "message", "id": fmt.Sprintf("native_edit_message_%d", number), "role": "assistant", "phase": "final_answer", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": "native edit complete"}}}
@@ -175,6 +240,9 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 			emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": message})
 		}
 		emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": responseID}})
+		if !invalid.Load() {
+			compositions.Add(1)
+		}
 	}))
 	defer backend.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -194,11 +262,122 @@ func testNativeStructuredEditFixture(t *testing.T, model string) {
 	if err != nil {
 		t.Fatalf("native structured-edit oracle: %v", err)
 	}
-	if !got.Completed || !got.TurnCompleted || !got.BytesMatch || got.ContinuationUnchanged != wantContinuation ||
-		got.Calls != 1 || got.PairedOutputs != 1 || got.FileChanges != 1 || got.Approvals != 0 ||
-		got.Turns != wantTurns || got.Processes != 1 || got.Stage != wantStage ||
-		requests.Load() != wantRequests || invalid.Load() {
+	// Compare all safe facts; observation time and incidental transport stage
+	// do not establish file effects, authorization or history composition.
+	got.ObservedAt, got.Stage = "", ""
+	want := live.StructuredEditEvidence{
+		Evidence: live.Evidence{
+			SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
+			Target: subject.Target, Environment: subject.Environment, Model: model,
+			Processes: 1, Initializations: 1, Threads: 1, Turns: wantTurns,
+			ReplyBytes: len("native edit complete"), FirstReplyBytes: len("native edit complete"),
+			Bound: true, Completed: true, FirstCompleted: true,
+		},
+		TurnCompleted: true, Calls: 1, PairedOutputs: 1, FileChanges: 1, Approvals: wantApprovals,
+		BeforeSHA256: digest(seed), AfterSHA256: digest(expected), BytesMatch: true, ContinuationUnchanged: wantContinuation,
+	}
+	if got != want || requests.Load() != wantRequests || compositions.Load() != wantRequests || invalid.Load() {
 		t.Fatalf("native structured-edit evidence mismatch: %+v", got)
+	}
+}
+
+// Retain only the bounded paired result privately. Canonical SDK serialization
+// permits equivalent JSON encoding while preserving the result in continuation.
+type nativeEditResultHistory struct {
+	mu     sync.Mutex
+	output json.RawMessage
+}
+
+func (history *nativeEditResultHistory) accept(raw json.RawMessage) bool {
+	if len(raw) == 0 || len(raw) > 64<<10 {
+		return false
+	}
+	var output protocolv2.FunctionCallOutputBody
+	if json.Unmarshal(raw, &output) != nil {
+		return false
+	}
+	if text, ok := output.AsString(); ok {
+		if strings.TrimSpace(text) == "" {
+			return false
+		}
+	} else if content, ok := output.AsArray(); ok {
+		if len(content) == 0 {
+			return false
+		}
+		for _, item := range content {
+			text, ok := item.AsInputText()
+			if !ok || strings.TrimSpace(text.Text) == "" {
+				return false
+			}
+		}
+	} else {
+		return false
+	}
+	canonical, err := json.Marshal(output)
+	if err != nil {
+		return false
+	}
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.output == nil {
+		history.output = canonical
+		return true
+	}
+	return bytes.Equal(history.output, canonical)
+}
+
+func TestNativeEditResultHistoryRejectsInvalidOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"missing", nil},
+		{"null", json.RawMessage(`null`)},
+		{"empty", json.RawMessage(`""`)},
+		{"whitespace", json.RawMessage(`" \r\n"`)},
+		{"malformed", json.RawMessage(`"unterminated`)},
+		{"object", json.RawMessage(`{"success":true}`)},
+		{"number", json.RawMessage(`1`)},
+		{"empty_content", json.RawMessage(`[]`)},
+		{"empty_text", json.RawMessage(`[{"type":"input_text","text":""}]`)},
+		{"missing_text", json.RawMessage(`[{"type":"input_text"}]`)},
+		{"other_content", json.RawMessage(`[{"type":"input_image"}]`)},
+		{"unknown_field", json.RawMessage(`[{"type":"input_text","text":"saved","extra":true}]`)},
+		{"oversized", json.RawMessage(`"` + strings.Repeat("x", (64<<10)-1) + `"`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var history nativeEditResultHistory
+			valid := json.RawMessage(`"saved file"`)
+			if history.accept(tc.raw) || len(history.output) != 0 || !history.accept(valid) {
+				t.Fatal("invalid result was credited or changed first-result admission")
+			}
+			if history.accept(tc.raw) || !history.accept(valid) {
+				t.Fatal("invalid replay changed the accepted result")
+			}
+		})
+	}
+}
+
+func TestNativeEditResultHistoryPreservesReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, replay string
+		want                bool
+	}{
+		{"success", `"saved file"`, `"saved file"`, true},
+		{"declined", `"patch rejected by user"`, `"patch rejected by user"`, true},
+		{"equivalent_string", `"saved file"`, `"saved \u0066ile"`, true},
+		{"equivalent_content", `[{"type":"input_text","text":"saved file"}]`, `[ { "text": "saved file", "type": "input_text" } ]`, true},
+		{"changed_string", `"saved file"`, `"different result"`, false},
+		{"changed_content", `[{"type":"input_text","text":"saved file"}]`, `[{"type":"input_text","text":"different result"}]`, false},
+		{"changed_form", `"saved file"`, `[{"type":"input_text","text":"saved file"}]`, false},
+		{"at_capacity", `"` + strings.Repeat("x", (64<<10)-2) + `"`, `"` + strings.Repeat("x", (64<<10)-2) + `"`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var history nativeEditResultHistory
+			if !history.accept(json.RawMessage(tc.first)) || history.accept(json.RawMessage(tc.replay)) != tc.want || !history.accept(json.RawMessage(tc.first)) {
+				t.Fatal("paired result was lost, changed, or falsely replaced during replay")
+			}
+		})
 	}
 }
 

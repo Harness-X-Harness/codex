@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,7 @@ func fakeEditServer() {
 	}
 	replaceAll := strings.Count(string(seed), editSeedToken) == 2
 	var turns []any
+	var boundThread map[string]any
 	decline := false
 	for input.Scan() {
 		var request struct {
@@ -59,7 +61,11 @@ func fakeEditServer() {
 		var result any
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"userAgent": "edit-fixture"}
+			family := "unix"
+			if runtime.GOOS == "windows" {
+				family = "windows"
+			}
+			result = map[string]any{"userAgent": "edit-fixture", "codexHome": os.Getenv("CODEX_HOME"), "platformFamily": family, "platformOs": runtime.GOOS}
 		case "initialized":
 			continue
 		case "thread/start":
@@ -97,7 +103,16 @@ func fakeEditServer() {
 			if mode == "wrong_model" {
 				model = "PRIVATE_CANARY"
 			}
-			result = map[string]any{"model": model, "modelProvider": "grok", "thread": map[string]any{"id": "private-thread", "modelProvider": "grok"}}
+			boundThread = map[string]any{
+				"id": "private-thread", "sessionId": "private-session", "modelProvider": "grok", "cliVersion": "edit-fixture",
+				"createdAt": 1, "updatedAt": 1, "cwd": params.Cwd, "ephemeral": false, "preview": "", "projectId": nil,
+				"source": "appServer", "status": map[string]any{"type": "idle"}, "turns": []any{},
+			}
+			result = map[string]any{
+				"model": model, "modelProvider": "grok", "cwd": params.Cwd, "approvalPolicy": params.ApprovalPolicy, "approvalsReviewer": "user",
+				"sandbox": map[string]any{"type": "workspaceWrite", "writableRoots": []any{params.Cwd}, "networkAccess": false, "excludeTmpdirEnvVar": false, "excludeSlashTmp": false},
+				"thread":  boundThread,
+			}
 		case "turn/start":
 			var params struct {
 				ThreadID string `json:"threadId"`
@@ -210,7 +225,7 @@ func fakeEditServer() {
 			if first && mode != "missing_change" {
 				items = append([]any{change}, items...)
 			}
-			terminal := map[string]any{"id": turnID, "status": "completed", "items": items}
+			terminal := map[string]any{"id": turnID, "status": "completed", "items": items, "startedAt": 1, "completedAt": 1, "durationMs": 1, "error": nil}
 			if mode == "failed" || mode == "interrupted" || mode == "continuation_failed" && !first {
 				terminal["status"] = "failed"
 				if mode == "interrupted" {
@@ -229,10 +244,10 @@ func fakeEditServer() {
 				send("rawResponseItem/completed", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": item})
 			}
 			public := func(item any) {
-				send("item/completed", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": item})
+				send("item/completed", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": item, "completedAtMs": 1})
 			}
 			if !early {
-				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}})
+				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}, "startedAt": 1}}})
 			}
 			if first {
 				if mode == "output_first" {
@@ -245,7 +260,7 @@ func fakeEditServer() {
 					raw(call)
 				}
 				if decline {
-					approval := map[string]any{"threadId": "private-thread", "turnId": turnID, "itemId": callID}
+					approval := map[string]any{"threadId": "private-thread", "turnId": turnID, "itemId": callID, "startedAtMs": 1}
 					if mode == "approval_thread" {
 						approval["threadId"] = "PRIVATE_CANARY"
 					}
@@ -308,7 +323,10 @@ func fakeEditServer() {
 					public(change)
 				}
 				if mode == "command" {
-					public(map[string]any{"type": "commandExecution", "id": "private-command"})
+					public(map[string]any{
+						"type": "commandExecution", "id": "private-command", "command": "PRIVATE_CANARY", "cwd": filepath.Dir(path),
+						"commandActions": []any{}, "status": "completed",
+					})
 				}
 			} else {
 				if mode == "repeat_continuation" {
@@ -326,7 +344,7 @@ func fakeEditServer() {
 				}
 			}
 			if early {
-				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}})
+				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}, "startedAt": 1}}})
 			}
 			turns = append(turns, terminal)
 			send("turn/completed", map[string]any{"threadId": threadID, "turn": terminal})
@@ -337,7 +355,8 @@ func fakeEditServer() {
 				return
 			}
 			if mode == "late_duplicate" {
-				send("rawResponseItem/completed", map[string]any{"threadId": "private-thread", "turnId": "private-first", "item": map[string]any{"type": "function_call", "call_id": "private-call", "name": "structured_edit"}})
+				arguments, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": "PRIVATE_CANARY", "new_string": editReplacedToken})
+				send("rawResponseItem/completed", map[string]any{"threadId": "private-thread", "turnId": "private-first", "item": map[string]any{"type": "function_call", "call_id": "private-call", "name": "structured_edit", "arguments": string(arguments)}})
 			}
 			threadID := "private-thread"
 			if mode == "read_thread" {
@@ -346,7 +365,12 @@ func fakeEditServer() {
 			if mode == "read_failed" {
 				turns[len(turns)-1].(map[string]any)["status"] = "failed"
 			}
-			result = map[string]any{"thread": map[string]any{"id": threadID, "turns": turns}}
+			thread := make(map[string]any, len(boundThread))
+			for key, value := range boundThread {
+				thread[key] = value
+			}
+			thread["id"], thread["turns"] = threadID, turns
+			result = map[string]any{"thread": thread}
 		default:
 			return
 		}

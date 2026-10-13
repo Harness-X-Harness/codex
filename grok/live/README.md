@@ -127,6 +127,15 @@ runner with a capability-enabled seeded workspace. Their effectful stdio tests
 prove deterministic support only. The [structured-edit Story](../docs/stories/grok-structured-edit.md)
 owns acceptance, invocation budgets, downstream prerequisites and retention.
 
+#385's fixture preparation preserves all 66 scripted modes (11 positive and
+55 negative) while making their modeled responses conform to the pinned public
+SDK schema. Public edit dispatch remains on the existing runner until the SDK
+integration lands. `TestNativeStructuredEditFixture` exercises the four edit
+entries against controlled HTTP: primary continuation, pinned, declined approval
+and replace-all. It checks actual bytes/hashes and matching call/output history;
+the supplied replies and HTTP acceptance do not establish real-provider Live.
+The required native selection includes this fixture and fails if it is absent.
+
 `StructuredEditEvidence` returns counts, fixture hashes and separate first/current
 terminal facts (`FirstCompleted`, `TurnCompleted`); `Completed` requires the whole
 scenario. `BytesMatch` and `AfterSHA256` describe the current turn's comparison

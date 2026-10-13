@@ -530,3 +530,11 @@ until #387. Controlled native HTTP verifies actual product tool/history replay;
 it supplies the replies and cannot establish real-provider recall. The existing
 required runtime Live package includes this fixture with a nonempty selection
 guard; no previous native obligation is removed.
+
+#385 first closes the edit fixture's public-schema and controlled native proof
+gap: all four edit entries retain actual file-effect/approval distinctions, and
+outbound history correlates the exact function call and result. All 66 original
+scripted controls remain selected; this preparation retains legacy edit dispatch.
+The separate SDK integration must preserve early approval, exact bytes/hashes,
+bounded causal observations and a single same-thread continuation before #385
+can close. Controlled HTTP is not real-provider Live or complete Story proof.
