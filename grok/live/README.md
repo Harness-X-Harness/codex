@@ -136,6 +136,19 @@ and replace-all. It checks actual bytes/hashes and matching call/output history;
 the supplied replies and HTTP acceptance do not establish real-provider Live.
 The required native selection includes this fixture and fails if it is absent.
 
+The private SDK edit observer preparation keeps public dispatch and all 66
+outcomes unchanged. It reuses business validators and retains both turn ledgers.
+Actual start identities select early observations and matching typed declines;
+unrelated denied approvals gain no authority. Identical repeats are idempotent,
+while conflicting repeats and late first-turn contradictions fail permanently.
+Proof requires exact call/result/change pairing and matching decline approval.
+Settled reads validate both terminals without claiming to join callbacks.
+Callbacks, response snapshots and their items cap at 4096 observations/8 MiB;
+arguments and outputs retain their 4096-byte/64-KiB limits. The shared native/Go
+proof exercises handlers, early identities, safe denials, conflicts, continuation,
+missing evidence, budgets and secret-safe snapshots. Activation still must join
+callbacks before its final snapshot and independently prove actual bytes/hashes.
+
 `StructuredEditEvidence` returns counts, fixture hashes and separate first/current
 terminal facts (`FirstCompleted`, `TurnCompleted`); `Completed` requires the whole
 scenario. `BytesMatch` and `AfterSHA256` describe the current turn's comparison
