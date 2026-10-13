@@ -722,6 +722,7 @@ jobs:
           # even if one fails, and propagate any failure to this required job.
           go test -list '^TestNativeFirstRequestShape$' ./live | grep -Fx TestNativeFirstRequestShape
           go test -list '^TestNativeReasoningHistoryFixture$' ./live | grep -Fx TestNativeReasoningHistoryFixture
+          go test -list '^TestNativeStructuredEditFixture$' ./live | grep -Fx TestNativeStructuredEditFixture
           go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
           status=0
           go test -race -count=1 -timeout=6m -v -skip '^(TestNativeFirstRequestShape|TestReasoningHistoryPublicProtocol)$' ./live || status=1
