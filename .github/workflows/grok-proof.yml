@@ -723,6 +723,7 @@ jobs:
           go test -list '^TestNativeFirstRequestShape$' ./live | grep -Fx TestNativeFirstRequestShape
           go test -list '^TestNativeReasoningHistoryFixture$' ./live | grep -Fx TestNativeReasoningHistoryFixture
           go test -list '^TestNativeStructuredEditFixture$' ./live | grep -Fx TestNativeStructuredEditFixture
+          go test -list '^TestSDKEditObserverPositiveStory$' ./live | grep -Fx TestSDKEditObserverPositiveStory
           go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
           status=0
           go test -race -count=1 -timeout=6m -v -skip '^(TestNativeFirstRequestShape|TestReasoningHistoryPublicProtocol)$' ./live || status=1
@@ -887,6 +888,7 @@ jobs:
         working-directory: grok
         run: |
           go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
+          go test -list '^TestSDKEditObserverPositiveStory$' ./live | grep -Fx TestSDKEditObserverPositiveStory
           status=0
           go test -race -count=1 -timeout=6m -v -skip '^TestReasoningHistoryPublicProtocol$' ./facts ./live ./cmd/grok-facts ./cmd/grok-live || status=1
           go test -race -count=1 -timeout=6m -v -run '^TestReasoningHistoryPublicProtocol$' ./live || status=1

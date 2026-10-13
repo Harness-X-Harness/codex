@@ -538,3 +538,7 @@ scripted controls remain selected; this preparation retains legacy edit dispatch
 The separate SDK integration must preserve early approval, exact bytes/hashes,
 bounded causal observations and a single same-thread continuation before #385
 can close. Controlled HTTP is not real-provider Live or complete Story proof.
+
+The private SDK edit observer preparation reuses business validators and retains
+both turn ledgers, with bounded callback tests in the same proof. Public edit
+dispatch stays legacy; file effects, callback joining and activation remain open.
