@@ -29,6 +29,11 @@ func ReasoningHistoryWithoutEffort(ctx context.Context, options Options) (Eviden
 }
 
 func reasoningHistory(ctx context.Context, options Options, effort string) (Evidence, error) {
+	if !options.shippedProfile {
+		return sdkReasoningHistory(ctx, options, effort)
+	}
+	// #387 owns the shipped catalog and profile migration. Keep that existing
+	// composition explicit until it can move with its complete catalog oracle.
 	threadOptions := map[string]any{
 		"experimentalRawEvents": true,
 		"dynamicTools": []any{map[string]any{
