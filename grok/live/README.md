@@ -43,11 +43,12 @@ expiration and exact subject on retrieval. `runtime_sha256` identifies the
 executable, separately from the artifact ZIP or package archive hash. The
 product source remains fixed while the declared harness SHA evolves.
 
-Basic (#383), the formal/exploratory reasoning controls (#384), and the four
-structured-edit entries (#385) use the SDK. Images, shipped catalog/profile/children
-and hosted search retain the legacy client until their respective reviewed
-increments; #379 owns final transport removal. Shipped pinned reasoning remains on its explicit
-catalog-bound legacy path until #387; SDK failures never switch clients.
+Basic (#383), the formal/exploratory reasoning controls (#384), the four
+structured-edit entries (#385), and image generation/edit (#386) use the SDK.
+Shipped catalog/profile/children and hosted search retain the legacy client until
+their respective reviewed increments; #379 owns final transport removal. Shipped
+pinned reasoning remains on its explicit catalog-bound legacy path until #387;
+SDK failures never switch clients.
 Shared fixture setup verifies the selected binary and isolates home/credentials.
 Completion needs independently matching thread/turn identities, a successful
 terminal and a nonempty eligible final reply; SDK success alone is insufficient.
@@ -160,10 +161,12 @@ per turn, at most 4096 preterminal frames, 4096 argument bytes, 64 KiB per outpu
 and one in-memory call/output/change correlation. It collects no outbound HTTP
 request or raw session artifact.
 
-`ImageGenerationEdit(ctx, Options)` consumes an image-capable fixture through
-the same bounded runner: one natural generation turn, then one natural edit
-turn on that thread. `TestGrokImageGenerationEdit` executes deterministic public
-stdio scripts for primary/pinned fixtures. This is prerequisite support for the
+`ImageGenerationEdit(ctx, Options)` uses direct `Threads().Start`, `Turns().Start`
+and `Threads().Read` on one image-capable fixture: one natural generation turn,
+then one natural edit turn on that thread. Callbacks admit canonical raw items
+and public image terminals before Read; Read does not synthesize a missing
+terminal. `TestGrokImageGenerationEdit` executes deterministic fixture scripts
+for primary/pinned models. This is prerequisite support for the
 [retained image Story](../docs/stories/grok-image-generation-history-edit.md),
 not actual Grok tool/HTTP/backend or packaged execution.
 
@@ -216,11 +219,11 @@ differ. A PNG header alone and JPEG mislabeled PNG fail. Each turn caps at
 4096 frames/64 MiB; the scenario retains at most 64 call records, inspects at
 most 256 artifact entries per pre-turn inventory, and arguments to 4096 bytes.
 Image encoded bytes and decoded pixels use the extension's 32 MiB local budget
-(at least four bytes per pixel, eight for 16-bit RGBA). The inherited 16 MiB
-stdio frame and 128-frame/8 MiB early queue budgets still apply, including to
-settled multi-turn reads. A result exceeding an observation budget is not
-proven by this harness; it is not evidence that the product rejected a valid
-image. Failures preserve safe partial terminal/artifact facts; returned
+(at least four bytes per pixel, eight for 16-bit RGBA). The SDK inbound frame
+limit remains 16 MiB, and scenario observation stays at 4096 frames/64 MiB,
+independent of the SDK retention budget. A result exceeding an observation
+budget is not proven by this harness; it is not evidence that the product
+rejected a valid image. Failures preserve safe partial terminal/artifact facts; returned
 evidence omits prompts, payloads, paths, credentials and IDs.
 
 C6 adds source-backed `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and

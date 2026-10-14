@@ -542,3 +542,10 @@ can close. Controlled HTTP is not real-provider Live or complete Story proof.
 The private SDK edit observer preparation reuses business validators and retains
 both turn ledgers, with bounded callback tests in the same proof. Public edit
 dispatch stays legacy; file effects, callback joining and activation remain open.
+
+#386 moves image generation and the same-thread image edit onto those direct
+facades. Canonical raw call/output, public image items, settled history and
+artifact bytes stay the lineage proof. Observation remains capped at 4096
+frames, 64 MiB, 64 calls and the 32 MiB decode budget, with the SDK's separate
+16 MiB frame limit. Shipped catalog/profile/children and hosted search stay on
+the legacy client. Controlled fixture success is not real-provider image proof.

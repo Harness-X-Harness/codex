@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // ImageEvidence contains bounded observations of the explicit-binary scenario.
@@ -22,33 +22,7 @@ type ImageEvidence struct {
 // Neither semantic turn is retried, including when only partial evidence exists.
 func ImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence, error) {
 	options.imageFixture = true
-	evidence := ImageEvidence{}
-	base, err := runFixture(ctx, options, nil, map[string]any{"experimentalRawEvents": true}, func(server *appServer, threadID string, base *Evidence) error {
-		probe := imageProbe{ctx: ctx, server: server, threadID: threadID, root: filepath.Join(filepath.Dir(server.cmd.Dir), "generated_images"), base: base, evidence: &evidence, calls: map[string]*imageCall{}}
-		if err := probe.observe("Generate an image of a blue circle on a plain white background."); err != nil {
-			return err
-		}
-		probe.prior, probe.previousID = probe.newest, probe.turnID
-		evidence.FirstImageSHA256, evidence.FirstHistorySHA256 = probe.prior.digest, probe.prior.output
-		if err := probe.observe("Edit the image you just generated so the circle is green while keeping the plain white background."); err != nil {
-			return err
-		}
-		if !evidence.HistorySelected || probe.newest == nil || !probe.newest.fromPrior || probe.newest.digest == probe.prior.digest {
-			return errors.New("live: distinct history-derived edit unavailable")
-		}
-		// Recheck the generation artifact after the edit: both results remain accessible.
-		if _, err := inspectImage(probe.root, probe.prior.path, probe.prior.digest); err != nil {
-			return err
-		}
-		if ctx.Err() != nil {
-			return errors.New("live: image observation deadline exceeded")
-		}
-		evidence.EditedImageSHA256, evidence.EditedHistorySHA256 = probe.newest.digest, probe.newest.output
-		base.Completed, base.Stage = true, "image_edit_verified"
-		return nil
-	})
-	evidence.Evidence = base
-	return evidence, err
+	return sdkImageGenerationEdit(ctx, options)
 }
 
 type imageItem struct {
@@ -79,8 +53,8 @@ type imageCall struct {
 	fromPrior, called, started, public, settled, verified                  bool
 }
 type imageProbe struct {
+	mu                                 sync.Mutex
 	ctx                                context.Context
-	server                             *appServer
 	threadID, turnID, previousID, root string
 	base                               *Evidence
 	evidence                           *ImageEvidence
@@ -89,9 +63,16 @@ type imageProbe struct {
 	existing                           map[string]bool
 	completed                          bool
 	frames, bytes                      int
+	changed                            chan struct{}
+	clientDone                         <-chan struct{}
+	cause                              error
+	pending                            []frame
+	// closed reports why the SDK client stopped. It is nil until the fixture
+	// owns a client. The returned error is classified locally and never forwarded.
+	closed func() error
 }
 
-func (probe *imageProbe) observe(prompt string) error {
+func (probe *imageProbe) prepare() error {
 	var err error
 	probe.existing, err = imagePaths(probe.root)
 	if err != nil {
@@ -99,55 +80,54 @@ func (probe *imageProbe) observe(prompt string) error {
 	}
 	probe.base.Turns++
 	probe.evidence.TurnCompleted, probe.completed = false, false
-	probe.frames, probe.bytes = 0, 0
-	var started struct {
-		Turn imageTurn `json:"turn"`
-	}
-	if err := probe.server.call("turn/start", map[string]any{"threadId": probe.threadID, "input": []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}}}, &started); err != nil {
-		return err
-	}
-	if started.Turn.ID == "" || started.Turn.ID == probe.previousID {
+	probe.frames, probe.bytes, probe.turnID = 0, 0, ""
+	probe.pending = nil
+	return nil
+}
+
+func (probe *imageProbe) acceptStarted(turn imageTurn) error {
+	if turn.ID == "" || turn.ID == probe.previousID {
 		return errors.New("live: image turn identity unavailable")
 	}
-	probe.turnID, probe.base.Stage = started.Turn.ID, "image_turn_submitted"
-	if started.Turn.Status != "inProgress" {
-		if err := probe.terminal(started.Turn, false); err != nil {
+	probe.turnID, probe.base.Stage = turn.ID, "image_turn_submitted"
+	if turn.Status != "inProgress" {
+		if err := probe.terminal(turn, false); err != nil {
 			return err
 		}
 	}
-	for !probe.completed {
-		message, err := probe.server.next()
-		if err != nil {
-			return err
-		}
-		if err := probe.notification(message); err != nil {
-			return err
-		}
+	probe.drain()
+	return probe.cause
+}
+
+func (probe *imageProbe) drain() {
+	pending := probe.pending
+	probe.pending = nil
+	for _, message := range pending {
+		probe.ingest(message)
 	}
-	// The live ThreadStore read is the settled public history, not a home-directory
-	// search. It also fences queued notifications without resubmitting a turn.
-	var read struct {
-		Thread struct {
-			ID    string      `json:"id"`
-			Turns []imageTurn `json:"turns"`
-		} `json:"thread"`
+}
+
+func (probe *imageProbe) ingest(message frame) {
+	if probe.cause != nil {
+		return
 	}
-	if err := probe.server.call("thread/read", map[string]any{"threadId": probe.threadID, "includeTurns": true}, &read); err != nil {
-		return err
+	if err := probe.notification(message); err != nil {
+		probe.cause = err
 	}
-	for len(probe.server.pending) != 0 {
-		message, err := probe.server.next()
-		if err != nil {
-			return err
-		}
-		if err := probe.notification(message); err != nil {
-			return err
-		}
+	select {
+	case probe.changed <- struct{}{}:
+	default:
 	}
-	if read.Thread.ID != probe.threadID || len(read.Thread.Turns) != probe.base.Turns {
+}
+
+func (probe *imageProbe) settle(readThreadID string, turns []imageTurn) error {
+	if probe.cause != nil {
+		return probe.cause
+	}
+	if readThreadID != probe.threadID || len(turns) != probe.base.Turns {
 		return errors.New("live: settled image thread identity unavailable")
 	}
-	for i, turn := range read.Thread.Turns {
+	for i, turn := range turns {
 		expected := probe.turnID
 		if i == 0 && probe.previousID != "" {
 			expected = probe.previousID
@@ -232,7 +212,7 @@ func (probe *imageProbe) notification(message frame) error {
 		return errors.New("live: image evidence budget exceeded")
 	}
 	if len(message.ID) != 0 {
-		return probe.server.refuse(message.ID)
+		return errors.New("live: unsupported server request")
 	}
 	if message.Method != "rawResponseItem/completed" && message.Method != "item/completed" && message.Method != "item/started" && message.Method != "turn/completed" {
 		return nil

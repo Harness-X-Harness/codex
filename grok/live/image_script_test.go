@@ -14,12 +14,25 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // The script models public protocol and file effects. It never runs native
 // image generation, uses a backend, or establishes the circle's visual meaning.
+func imageBoundThread(id, cwd string, turns []any) map[string]any {
+	if turns == nil {
+		turns = []any{}
+	}
+	return map[string]any{
+		"id": id, "sessionId": "private-session", "modelProvider": "grok", "cliVersion": "image-fixture",
+		"createdAt": 1, "updatedAt": 1, "cwd": cwd, "ephemeral": false, "preview": "", "projectId": nil,
+		"source": "appServer", "status": map[string]any{"type": "idle"}, "turns": turns,
+	}
+}
+
 func fakeImageServer() {
 	var script struct{ Mode, Trace string }
 	if json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script) != nil {
@@ -31,6 +44,7 @@ func fakeImageServer() {
 		return
 	}
 	defer trace.Close()
+	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	log := func(value string) { _, _ = io.WriteString(trace, value+"\n") }
 	log("process")
 	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
@@ -80,7 +94,11 @@ func fakeImageServer() {
 		var result any
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"userAgent": "image-fixture"}
+			family := "unix"
+			if runtime.GOOS == "windows" {
+				family = "windows"
+			}
+			result = map[string]any{"userAgent": "image-fixture", "codexHome": home, "platformFamily": family, "platformOs": runtime.GOOS}
 		case "initialized":
 			continue
 		case "thread/start":
@@ -107,7 +125,11 @@ func fakeImageServer() {
 				return
 			}
 			log("image_fixture")
-			result = map[string]any{"model": params.Model, "modelProvider": "grok", "thread": map[string]any{"id": "private-thread", "modelProvider": "grok"}}
+			result = map[string]any{
+				"model": params.Model, "modelProvider": "grok", "cwd": params.Cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
+				"sandbox": map[string]any{"type": "readOnly"},
+				"thread":  imageBoundThread("private-thread", params.Cwd, []any{}),
+			}
 		case "turn/start":
 			var params struct {
 				ThreadID string `json:"threadId"`
@@ -247,22 +269,23 @@ func fakeImageServer() {
 				send("rawResponseItem/completed", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": item})
 			}
 			public := func(item any) {
-				send("item/completed", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": item})
+				send("item/completed", map[string]any{"threadId": threadID, "turnId": eventTurnID, "completedAtMs": 1, "item": item})
 			}
 			start := func() {
-				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}})
+				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}}}})
 			}
 			if mode != "early" {
 				start()
 			}
 			if second && mode == "unrelated_history" {
-				raw(map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "image_url": "PRIVATE_CANARY"}}})
+				raw(map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_image", "image_url": "PRIVATE_CANARY"}}})
 			}
 			if mode == "frame_budget" {
+				item := map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "x"}}}
 				for range 4097 {
-					send("noop", nil)
+					raw(item)
 				}
-				return
+				continue
 			}
 			if (mode == "recovered_failure" || mode == "conflicting_failure") && !second {
 				failedCall := map[string]any{"type": "function_call", "call_id": "private-failed-call", "name": "imagegen", "namespace": "image_gen", "arguments": arguments}
@@ -295,7 +318,7 @@ func fakeImageServer() {
 				invalidID := "private-validation-" + suffix
 				raw(map[string]any{"type": "function_call", "call_id": invalidID, "name": "imagegen", "namespace": "image_gen", "arguments": invalidArguments})
 				if mode == "validation_started" {
-					send("item/started", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": map[string]any{"type": "imageGeneration", "id": invalidID, "status": "in_progress"}})
+					send("item/started", map[string]any{"threadId": threadID, "turnId": eventTurnID, "startedAtMs": 1, "item": map[string]any{"type": "imageGeneration", "id": invalidID, "status": "in_progress", "result": ""}})
 				}
 				failedOutput := map[string]any{"type": "function_call_output", "call_id": invalidID, "output": "PRIVATE_CANARY validation failed"}
 				switch mode {
@@ -340,22 +363,25 @@ func fakeImageServer() {
 				for index := range 65 {
 					raw(map[string]any{"type": "function_call", "call_id": strings.Repeat("x", index+1), "name": "imagegen", "namespace": "image_gen", "arguments": arguments})
 				}
-				return
+				continue
 			}
 			if mode == "oversized_payload" {
 				imageItem["result"] = strings.Repeat("A", 17<<20)
 			}
 			if mode == "byte_budget" {
-				for range 65 {
-					send("noop", strings.Repeat("x", 1<<20))
+				// Five schema-valid frames stay under the 16 MiB SDK limit and
+				// together cross the 64 MiB observation budget.
+				text := strings.Repeat("x", 13<<20)
+				for range 5 {
+					raw(map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": text}}})
 				}
-				return
+				continue
 			}
 			if mode != "missing_call" {
 				raw(call)
 			}
 			if mode == "success" || mode == "recovered_validation_failure" {
-				send("item/started", map[string]any{"threadId": threadID, "turnId": eventTurnID, "item": map[string]any{"type": "imageGeneration", "id": callID, "status": "in_progress"}})
+				send("item/started", map[string]any{"threadId": threadID, "turnId": eventTurnID, "startedAtMs": 1, "item": map[string]any{"type": "imageGeneration", "id": callID, "status": "in_progress", "result": ""}})
 			}
 			if mode != "missing_image" && mode != "summary_only" {
 				public(imageItem)
@@ -371,7 +397,7 @@ func fakeImageServer() {
 				public(imageItem)
 			}
 			if mode == "conflicting_terminal" {
-				altered := map[string]any{"type": "imageGeneration", "id": callID, "status": "failed"}
+				altered := map[string]any{"type": "imageGeneration", "id": callID, "status": "failed", "result": ""}
 				public(altered)
 			}
 			if mode == "early" {
@@ -389,7 +415,7 @@ func fakeImageServer() {
 			turns = append(turns, terminal)
 			send("turn/completed", map[string]any{"threadId": threadID, "turn": terminal})
 			if mode == "conflicting_turn" {
-				send("turn/completed", map[string]any{"threadId": threadID, "turn": map[string]any{"id": turnID, "status": "failed"}})
+				send("turn/completed", map[string]any{"threadId": threadID, "turn": map[string]any{"id": turnID, "status": "failed", "items": []any{}, "error": map[string]any{"message": "PRIVATE_CANARY"}}})
 			}
 			continue
 		case "thread/read":
@@ -398,10 +424,10 @@ func fakeImageServer() {
 				return
 			}
 			if mode == "late_conflict" {
-				send("item/completed", map[string]any{"threadId": "private-thread", "turnId": "private-turn-1", "item": map[string]any{"type": "imageGeneration", "id": "private-call-1", "status": "failed"}})
+				send("item/completed", map[string]any{"threadId": "private-thread", "turnId": "private-turn-1", "completedAtMs": 1, "item": map[string]any{"type": "imageGeneration", "id": "private-call-1", "status": "failed", "result": ""}})
 			}
 			if mode == "read_wrong_thread" {
-				result = map[string]any{"thread": map[string]any{"id": "PRIVATE_CANARY", "turns": turns}}
+				result = map[string]any{"thread": imageBoundThread("PRIVATE_CANARY", home, turns)}
 			} else {
 				if mode == "read_missing_image" {
 					turns[len(turns)-1].(map[string]any)["items"] = []any{}
@@ -415,7 +441,7 @@ func fakeImageServer() {
 				if mode == "changed_prior" && len(turns) == 2 {
 					turns[0].(map[string]any)["items"] = []any{}
 				}
-				result = map[string]any{"thread": map[string]any{"id": "private-thread", "turns": turns}}
+				result = map[string]any{"thread": imageBoundThread("private-thread", home, turns)}
 			}
 		default:
 			return
