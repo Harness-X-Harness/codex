@@ -121,7 +121,7 @@ func fakeHistoryServer() {
 			reply(p, boundThread)
 		case "thread/resume":
 			mark("thread/resume")
-			if mode == "shipped" || phase != 1 || boundThread == nil || len(p.Params) != 5 || p.Params["threadId"] != "PRIVATE_THREAD" || p.Params["model"] != boundThread["model"] || p.Params["modelProvider"] != "grok" || p.Params["cwd"] != boundThread["cwd"] || p.Params["excludeTurns"] != true || token != "" && strings.Contains(p.raw, token) {
+			if phase != 1 || boundThread == nil || len(p.Params) != 5 || p.Params["threadId"] != "PRIVATE_THREAD" || p.Params["model"] != boundThread["model"] || p.Params["modelProvider"] != "grok" || p.Params["cwd"] != boundThread["cwd"] || p.Params["excludeTurns"] != true || token != "" && strings.Contains(p.raw, token) {
 				return
 			}
 			mark("resume_valid")

@@ -116,6 +116,16 @@ func (server *appServer) read() (frame, error) {
 	return message, nil
 }
 
+func (server *appServer) queued() []frame {
+	out := make([]frame, len(server.pending))
+	copy(out, server.pending)
+	return out
+}
+
+func (server *appServer) setNotification(fn func(frame) error) {
+	server.notification = fn
+}
+
 func (server *appServer) next() (frame, error) {
 	if len(server.pending) == 0 {
 		return server.read()

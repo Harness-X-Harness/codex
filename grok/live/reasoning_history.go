@@ -29,32 +29,7 @@ func ReasoningHistoryWithoutEffort(ctx context.Context, options Options) (Eviden
 }
 
 func reasoningHistory(ctx context.Context, options Options, effort string) (Evidence, error) {
-	if !options.shippedProfile {
-		return sdkReasoningHistory(ctx, options, effort)
-	}
-	// #387 owns the shipped catalog and profile migration. Keep that existing
-	// composition explicit until it can move with its complete catalog oracle.
-	threadOptions := map[string]any{
-		"experimentalRawEvents": true,
-		"dynamicTools": []any{map[string]any{
-			"type": "function", "name": historyTool,
-			"description": "Return a fresh token for this history probe.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
-		}},
-	}
-	return runFixture(ctx, options, nil, threadOptions, func(server *appServer, threadID string, evidence *Evidence) error {
-		probe := historyProbe{server: server, threadID: threadID, evidence: evidence, effort: effort}
-		if err := probe.observe("Call grok_history_probe, reason about its returned token, then include the exact token in your final reply."); err != nil {
-			return err
-		}
-		evidence.Stage = "first_turn_proven"
-		probe.previousID, probe.turnID = probe.turnID, ""
-		if err := probe.observe("Recall the exact token returned by the tool in the previous turn from this thread's history. Include it in your final reply without calling a tool."); err != nil {
-			return err
-		}
-		evidence.Stage = "history_recalled"
-		return nil
-	})
+	return sdkReasoningHistory(ctx, options, effort)
 }
 
 // Only the token, current turn identities and bounded reply evidence survive frames.

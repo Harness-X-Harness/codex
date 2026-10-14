@@ -44,11 +44,10 @@ executable, separately from the artifact ZIP or package archive hash. The
 product source remains fixed while the declared harness SHA evolves.
 
 Basic (#383), the formal/exploratory reasoning controls (#384), the four
-structured-edit entries (#385), and image generation/edit (#386) use the SDK.
-Shipped catalog/profile/children and hosted search retain the legacy client until
-their respective reviewed increments; #379 owns final transport removal. Shipped
-pinned reasoning remains on its explicit catalog-bound legacy path until #387;
-SDK failures never switch clients.
+structured-edit entries (#385), image generation/edit (#386), and the shipped
+catalog, startup, pinned-history, and child entries (#387) use the SDK. Hosted
+search retains the legacy client until its reviewed increment; #379 owns final
+transport removal. SDK failures never switch clients.
 Shared fixture setup verifies the selected binary and isolates home/credentials.
 Completion needs independently matching thread/turn identities, a successful
 terminal and a nonempty eligible final reply; SDK success alone is insufficient.

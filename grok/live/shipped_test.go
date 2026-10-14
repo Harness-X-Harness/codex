@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,56 @@ func fixtureShippedCatalog() map[string]any {
 		rows = append(rows, map[string]any{"id": slug, "model": slug, "displayName": name, "description": name + " model", "upgrade": nil, "upgradeInfo": nil, "availabilityNux": nil, "modelSpecialty": nil, "hidden": false, "supportedReasoningEfforts": efforts, "defaultReasoningEffort": "high", "inputModalities": []any{"text", "image"}, "supportsPersonality": false, "multiAgentVersion": "v2", "additionalSpeedTiers": []any{}, "serviceTiers": []any{}, "defaultServiceTier": nil, "availableAccessPrograms": nil, "isDefault": index == 0})
 	}
 	return map[string]any{"data": rows, "nextCursor": nil}
+}
+
+func shippedProtocolThread(thread map[string]any) map[string]any {
+	if thread == nil {
+		thread = map[string]any{}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = os.Getenv("CODEX_HOME")
+	}
+	defaults := map[string]any{
+		"cliVersion": "shipped-fixture", "createdAt": 1, "updatedAt": 1, "cwd": cwd,
+		"ephemeral": false, "preview": "", "projectId": nil, "sessionId": "shipped-session",
+		"status": map[string]any{"type": "idle"}, "source": "appServer", "model": "grok-4.7", "modelProvider": "grok",
+	}
+	for key, value := range defaults {
+		if _, ok := thread[key]; !ok || thread[key] == nil && key != "projectId" {
+			thread[key] = value
+		}
+	}
+	if thread["turns"] == nil {
+		thread["turns"] = []any{}
+	}
+	if turns, ok := thread["turns"].([]any); ok {
+		for _, raw := range turns {
+			turn, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if turn["items"] == nil {
+				turn["items"] = []any{}
+			}
+			if _, ok := turn["status"]; !ok {
+				turn["status"] = "completed"
+			}
+		}
+	}
+	if source, ok := thread["source"].(map[string]any); ok {
+		if sub, ok := source["subAgent"].(map[string]any); ok {
+			if spawn, ok := sub["thread_spawn"].(map[string]any); ok {
+				if _, ok := spawn["depth"]; !ok {
+					spawn["depth"] = 1
+				}
+				if _, ok := spawn["parent_thread_id"]; !ok {
+					spawn["parent_thread_id"] = "PRIVATE_PARENT"
+				}
+			}
+		}
+	}
+	return thread
 }
 
 func copiedShippedAssets() bool {
@@ -53,6 +105,7 @@ func fakeShippedServer() {
 		return
 	}
 	defer trace.Close()
+	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	mode := strings.TrimPrefix(script.Mode, "shipped:")
 	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
 	nonce, other := "12345678-1234-4234-8234-123456789abc", "87654321-1234-4234-8234-123456789abc"
@@ -60,7 +113,7 @@ func fakeShippedServer() {
 		return map[string]any{"type": "agentMessage", "id": id, "phase": "final_answer", "text": text}
 	}
 	user := func(id, text string) map[string]any {
-		return map[string]any{"type": "userMessage", "id": id, "content": []any{map[string]any{"type": "text", "text": text, "textElements": []any{}}}}
+		return map[string]any{"type": "userMessage", "id": id, "content": []any{map[string]any{"type": "text", "text": text}}}
 	}
 	clone := func(value map[string]any) map[string]any {
 		raw, _ := json.Marshal(value)
@@ -271,7 +324,10 @@ func fakeShippedServer() {
 		params := map[string]any{"threadId": id}
 		if method == "rawResponseItem/completed" {
 			params["turnId"], params["item"] = turn, item
-		} else {
+		} else if method != "thread/closed" {
+			if turnMap, ok := item.(map[string]any); ok && turnMap["items"] == nil {
+				turnMap["items"] = []any{}
+			}
 			params["turn"] = item
 		}
 		_ = output.Encode(map[string]any{"method": method, "params": params})
@@ -419,7 +475,11 @@ func fakeShippedServer() {
 		activeID := "PRIVATE_PARENT_TURN"
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"userAgent": "fixture"}
+			family := "unix"
+			if runtime.GOOS == "windows" {
+				family = "windows"
+			}
+			result = map[string]any{"userAgent": "fixture", "codexHome": os.Getenv("CODEX_HOME"), "platformFamily": family, "platformOs": runtime.GOOS}
 		case "initialized":
 			continue
 		case "model/list":
@@ -452,9 +512,15 @@ func fakeShippedServer() {
 			if request.Params["model"] != "grok-4.7" || (mode != "startup" && request.Params["experimentalRawEvents"] != true) {
 				return
 			}
-			result = map[string]any{"model": "grok-4.7", "modelProvider": "grok", "thread": map[string]any{"id": "PRIVATE_PARENT", "modelProvider": "grok"}}
+			cwd, _ := os.Getwd()
+			provider := "grok"
 			if mode == "wrong_start_provider" {
-				result.(map[string]any)["modelProvider"] = "PRIVATE_OTHER"
+				provider = "PRIVATE_OTHER"
+			}
+			result = map[string]any{
+				"model": "grok-4.7", "modelProvider": provider, "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
+				"sandbox": map[string]any{"type": "readOnly"},
+				"thread":  shippedProtocolThread(map[string]any{"id": "PRIVATE_PARENT", "model": "grok-4.7", "modelProvider": "grok", "cwd": cwd}),
 			}
 		case "turn/start":
 			phase++
@@ -507,10 +573,10 @@ func fakeShippedServer() {
 					emitChildren()
 				}
 			}
-			result = map[string]any{"turn": map[string]any{"id": activeID, "status": "inProgress"}}
+			result = map[string]any{"turn": map[string]any{"id": activeID, "status": "inProgress", "items": []any{}}}
 		case "thread/read":
 			if mode == "late_conflict" && request.Params["threadId"] == "PRIVATE_CHILD" {
-				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "PRIVATE_PARENT", "turn": map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "failed"}}})
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "PRIVATE_PARENT", "turn": map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "failed", "items": []any{}}}})
 			}
 			id := request.Params["threadId"].(string)
 			if id == "PRIVATE_CHILD" && (mode == "child_terminal_failed" || mode == "child_terminal_interrupted" || mode == "child_terminal_error" || mode == "first_conflict_second_valid") || id == "PRIVATE_CHILD_TWO" && mode == "conflict_during_other_read" {
@@ -528,6 +594,11 @@ func fakeShippedServer() {
 				notify("turn/completed", "PRIVATE_OTHER", "PRIVATE_CHILD_TURN", map[string]any{"id": "PRIVATE_CHILD_TURN", "status": "failed"})
 			}
 			result = snapshot(id)
+			if wrapped, ok := result.(map[string]any); ok {
+				if thread, ok := wrapped["thread"].(map[string]any); ok {
+					wrapped["thread"] = shippedProtocolThread(thread)
+				}
+			}
 		default:
 			return
 		}
@@ -544,7 +615,7 @@ func fakeShippedServer() {
 			}
 		}
 		if request.Method == "turn/start" {
-			terminal := map[string]any{"id": activeID, "status": "completed", "error": nil}
+			terminal := map[string]any{"id": activeID, "status": "completed", "error": nil, "items": []any{}}
 			threadID := "PRIVATE_PARENT"
 			if phase == 2 {
 				if mode == "failed" || mode == "interrupted" {

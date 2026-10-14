@@ -124,13 +124,8 @@ func runFixture(ctx context.Context, options Options, edit *editFixture, threadO
 		if err := server.send(frame{Method: "initialized"}); err != nil {
 			return err
 		}
-		if options.shippedProfile {
-			if err := requireShippedCatalog(server, evidence); err != nil {
-				return err
-			}
-			if options.catalogOnly {
-				return nil
-			}
+		if options.catalogOnly {
+			return nil
 		}
 		evidence.Stage, evidence.Threads = "initialized", 1
 		var thread struct {

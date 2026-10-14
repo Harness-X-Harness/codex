@@ -547,5 +547,11 @@ dispatch stays legacy; file effects, callback joining and activation remain open
 facades. Canonical raw call/output, public image items, settled history and
 artifact bytes stay the lineage proof. Observation remains capped at 4096
 frames, 64 MiB, 64 calls and the 32 MiB decode budget, with the SDK's separate
-16 MiB frame limit. Shipped catalog/profile/children and hosted search stay on
-the legacy client. Controlled fixture success is not real-provider image proof.
+16 MiB frame limit. Controlled fixture success is not real-provider image proof.
+
+#387 moves shipped catalog, startup, pinned history and child collaboration onto
+the SDK. Catalog proof compares ordered model identity, default, efforts,
+modalities, multi-agent version and pagination; omitted null DTO fields are not
+a mismatch. Pinned history keeps the two-turn encrypted tool oracle on the
+shipped profile. Child proof still requires inherited-marker recall and parent
+consumption. Hosted search stays on the legacy client.
