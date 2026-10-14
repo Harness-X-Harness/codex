@@ -506,7 +506,7 @@ A draft candidate or failing construction run is not acceptance evidence.
 [#379](https://github.com/Harness-X-Harness/codex/issues/379) orders #383–#388
 before final client removal. The accepted product source is fixed at
 `e9268d5211064fb77f76a9fe7f0a99348488c9d2`; this modernization changes Live Harness
-only. The SDK is fixed at `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`, with Go 1.26.8.
+only. The owner-approved SDK is `8ade447507bc3d08650b830ee6306dd27bc17f23`, with Go 1.26.8.
 The [Live guidance](../live/README.md#fixed-input-sdk-migration) records the
 verified executable identity and temporary Basic/reasoning SDK / remaining legacy split.
 Dependency defects belong to separate owner issues; silently changing pins,

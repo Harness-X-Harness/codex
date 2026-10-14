@@ -308,7 +308,7 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 		{"malformed", "basic-primary", "malformed", live.FailureInfo{Code: "sdk_observation_failed"}},
 		{"closure", "basic-primary", "only_reply", live.FailureInfo{Code: "sdk_observation_failed"}},
 		{"unrelated_terminal", "basic-primary", "unrelated_failed", live.FailureInfo{Code: "sdk_observation_failed"}},
-		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_call_missing"}},
+		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_evidence_unpaired"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
