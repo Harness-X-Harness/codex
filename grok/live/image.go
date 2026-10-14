@@ -233,6 +233,13 @@ func (probe *imageProbe) notification(message frame) error {
 		return probe.terminal(event.Turn, false)
 	}
 	if event.TurnID != probe.turnID {
+		// A late item for an already credited call can arrive after the next
+		// turn starts. It is still that call's evidence, not a new turn.
+		if message.Method == "item/completed" && event.Item.Type == "imageGeneration" {
+			if call := probe.calls[event.Item.ID]; call != nil && call.turnID == event.TurnID {
+				return probe.public(event.Item, false)
+			}
+		}
 		return errors.New("live: unrelated image turn evidence")
 	}
 	if message.Method == "rawResponseItem/completed" {
