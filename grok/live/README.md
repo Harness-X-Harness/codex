@@ -46,8 +46,8 @@ product source remains fixed while the declared harness SHA evolves.
 Basic (#383), the formal/exploratory reasoning controls (#384), the four
 structured-edit entries (#385), image generation/edit (#386), the shipped
 catalog, startup, pinned-history, and child entries (#387), and hosted Web/X
-search (#388) use the SDK. #379 owns final transport removal. SDK failures never
-switch clients.
+search (#388) use the SDK. The handwritten stdio client is gone. SDK failures
+never switch clients. Real-provider Live remains outside this fixture proof.
 Shared fixture setup verifies the selected binary and isolates home/credentials.
 Completion needs independently matching thread/turn identities, a successful
 terminal and a nonempty eligible final reply; SDK success alone is insufficient.

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"time"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
+	"github.com/ronhuafeng/llm-go/codexsdk"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 // Exercise the shipped observer's durable DTO against the actual App Server.
@@ -74,8 +77,30 @@ func TestNativeShippedThreadSource(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	options := Options{Subject: subject, Model: providerfixture.PrimaryModel, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"}
-	got, err := runFixture(ctx, options, nil, nil, func(server *appServer, id string, evidence *Evidence) error {
-		thread, turn, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation without using tools.")
+	transport := &sdkProductTransport{ctx: ctx, changed: make(chan struct{}, 1)}
+	handlers := sdkFixtureHandlers{
+		requests: transport.request, notifications: transport.typedNotification,
+		raw: &codexsdk.RawNotificationSubscription{
+			Methods:                        []string{codexsdk.RawResponseItemCompletedExtension},
+			EnableRawResponseItemExtension: true, Handler: transport.rawNotification,
+		},
+	}
+	got, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+		transport.client = client
+		experimental := true
+		evidence.Threads = 1
+		started, err := client.Threads().Start(ctx, protocolv2.ThreadStartParams{
+			Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
+			ExperimentalRawEvents: &experimental, ApprovalPolicy: protocolv2.Value(protocolv2.NewAskForApprovalNever()),
+		})
+		if err != nil {
+			return shippedTransport(ctx, err)
+		}
+		if started.Model != options.Model || started.ModelProvider != "grok" || started.Thread.ModelProvider != "grok" || started.Thread.ID == "" || started.CWD != cwd {
+			return errors.New("live: fixture binding not established")
+		}
+		evidence.Bound, evidence.Stage = true, "thread_bound"
+		thread, turn, err := observeShippedTurn(transport, started.Thread.ID, evidence, "", "Reply with a short confirmation without using tools.")
 		if err != nil {
 			return err
 		}

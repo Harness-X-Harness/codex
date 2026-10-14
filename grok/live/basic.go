@@ -48,8 +48,8 @@ type Evidence struct {
 	FirstCompleted, FirstRecall, Recalled                                        bool
 }
 
-// withFixture verifies the explicit executable and owns one isolated workspace.
-// SDK and transitional legacy clients share setup, never protocol routing.
+// withFixture verifies the explicit executable and isolates one workspace.
+// Every scenario uses the pinned SDK; this setup does not speak App Server.
 func withFixture(ctx context.Context, options Options, edit *editFixture, run func(home, cwd string, evidence *Evidence) error) (Evidence, error) {
 	evidence := Evidence{Stage: "preflight", ObservedAt: time.Now().UTC().Format(time.RFC3339)}
 	deadline, bounded := ctx.Deadline()
@@ -100,55 +100,6 @@ func withFixture(ctx context.Context, options Options, edit *editFixture, run fu
 	evidence.Stage = "fixture_ready"
 	err = run(home, cwd, &evidence)
 	return evidence, err
-}
-
-// runFixture keeps unmigrated families on the legacy client until their owner lands.
-func runFixture(ctx context.Context, options Options, edit *editFixture, threadOptions map[string]any, observe func(*appServer, string, *Evidence) error) (Evidence, error) {
-	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) error {
-		server, err := startServer(ctx, options.Subject.Binary, home, cwd, options.APIKey)
-		if err != nil {
-			return err
-		}
-		defer server.close()
-		evidence.Processes, evidence.Stage = 1, "process_started"
-		evidence.Initializations = 1
-		var initialized struct {
-			UserAgent string `json:"userAgent"`
-		}
-		if err := server.call("initialize", map[string]any{"clientInfo": map[string]any{"name": "grok-live", "version": "1"}, "capabilities": map[string]any{"experimentalApi": true}}, &initialized); err != nil {
-			return err
-		}
-		if initialized.UserAgent == "" {
-			return errors.New("live: initialization evidence unavailable")
-		}
-		if err := server.send(frame{Method: "initialized"}); err != nil {
-			return err
-		}
-		if options.catalogOnly {
-			return nil
-		}
-		evidence.Stage, evidence.Threads = "initialized", 1
-		var thread struct {
-			Model    string `json:"model"`
-			Provider string `json:"modelProvider"`
-			Thread   struct {
-				ID       string `json:"id"`
-				Provider string `json:"modelProvider"`
-			} `json:"thread"`
-		}
-		threadParams := map[string]any{"model": options.Model, "modelProvider": "grok", "cwd": cwd}
-		for key, value := range threadOptions {
-			threadParams[key] = value
-		}
-		if err := server.call("thread/start", threadParams, &thread); err != nil {
-			return err
-		}
-		if thread.Thread.ID == "" || thread.Model != options.Model || thread.Provider != "grok" || thread.Thread.Provider != "grok" {
-			return errors.New("live: fixture binding not established")
-		}
-		evidence.Bound, evidence.Stage = true, "thread_bound"
-		return observe(server, thread.Thread.ID, evidence)
-	})
 }
 
 var (

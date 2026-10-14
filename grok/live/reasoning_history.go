@@ -2,11 +2,8 @@ package live
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"strings"
 )
 
@@ -35,7 +32,6 @@ func reasoningHistory(ctx context.Context, options Options, effort string) (Evid
 // Only the token, current turn identities and bounded reply evidence survive frames.
 // Repeated internal calls are counted, never accumulated in a call-ID/event map.
 type historyProbe struct {
-	server                       *appServer
 	evidence                     *Evidence
 	threadID, turnID, previousID string
 	token                        string
@@ -70,142 +66,6 @@ type historyReply struct {
 
 type historyReplyOutcome struct {
 	finalEligible, recall bool
-}
-
-func (probe *historyProbe) toolRequest(message frame) error {
-	var call struct {
-		ThreadID  string  `json:"threadId"`
-		TurnID    string  `json:"turnId"`
-		CallID    string  `json:"callId"`
-		Namespace *string `json:"namespace"`
-		Tool      string  `json:"tool"`
-	}
-	if message.Method != "item/tool/call" || json.Unmarshal(message.Params, &call) != nil ||
-		call.ThreadID != probe.threadID || call.TurnID == "" || call.TurnID == probe.previousID ||
-		(probe.turnID != "" && call.TurnID != probe.turnID) || call.CallID == "" ||
-		call.Namespace != nil || call.Tool != historyTool {
-		return probe.server.refuse(message.ID)
-	}
-	// Requests may precede turn/start's reply. Reconcile this provisional binding
-	// with the reply before accepting any proof, rather than blocking the server.
-	probe.turnID = call.TurnID
-	text, success := "History probe is unavailable during continuation.", false
-	if probe.previousID == "" {
-		if probe.token == "" {
-			var nonce [32]byte
-			if _, err := rand.Read(nonce[:]); err != nil {
-				return errors.New("live: fresh tool result unavailable")
-			}
-			probe.token = hex.EncodeToString(nonce[:])
-		}
-		text, success = probe.token, true
-		probe.evidence.ToolCalls++
-	} else {
-		probe.evidence.DeniedToolCalls++
-	}
-	result, _ := json.Marshal(map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": text}}, "success": success})
-	return probe.server.send(frame{ID: message.ID, Result: result})
-}
-
-func (probe *historyProbe) observe(prompt string) error {
-	probe.server.request = probe.toolRequest
-	defer func() { probe.server.request = nil }()
-	probe.evidence.Turns++
-	var started struct {
-		Turn historyTurn `json:"turn"`
-	}
-	params := map[string]any{
-		"threadId": probe.threadID,
-		"input":    []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}},
-	}
-	if probe.effort != "" {
-		params["effort"] = probe.effort
-	}
-	if err := probe.server.call("turn/start", params, &started); err != nil {
-		return err
-	}
-	if started.Turn.ID == "" || started.Turn.ID == probe.previousID || (probe.turnID != "" && probe.turnID != started.Turn.ID) {
-		return failedObservation("turn_identity_missing", "live: turn identity not established")
-	}
-	probe.turnID = started.Turn.ID
-	probe.evidence.Stage = "turn_submitted"
-	if probe.previousID != "" {
-		probe.evidence.Stage = "continuation_submitted"
-	}
-	reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
-	// Include partial evidence on every exit, including an item-level failure.
-	defer func() {
-		if reply.completed {
-			probe.evidence.Stage = "first_turn_completed"
-			if probe.previousID != "" {
-				probe.evidence.Stage = "continuation_completed"
-			}
-		}
-		recall := reply.recall && !reply.ambiguous
-		if probe.previousID == "" {
-			probe.evidence.FirstCompleted, probe.evidence.FirstRecall, probe.evidence.FirstReplyBytes = reply.completed, recall, reply.bytes
-		} else {
-			probe.evidence.Completed, probe.evidence.Recalled, probe.evidence.ReplyBytes = reply.completed, recall, reply.bytes
-		}
-	}()
-	if started.Turn.Status != "inProgress" {
-		if err := probe.completedTurn(started.Turn, &reply); err != nil {
-			return err
-		}
-	}
-	for {
-		if reply.authoritative && !reply.recall {
-			return failedObservation("history_reply_not_recalled", "live: final reply did not recall tool result")
-		}
-		firstProof := probe.evidence.ReasoningItems > 0 && probe.evidence.EncryptedItems > 0 && probe.evidence.CompletedTools > 0
-		// Drain already queued notifications even if the inline reply completed.
-		if len(probe.server.pending) == 0 && reply.completed && reply.recall && !reply.ambiguous && (probe.previousID != "" || firstProof) {
-			return nil
-		}
-		message, err := probe.server.next()
-		if err != nil {
-			return err
-		}
-		if len(message.ID) != 0 {
-			if err := probe.toolRequest(message); err != nil {
-				return err
-			}
-			continue
-		}
-		if message.Method != "turn/completed" && message.Method != "item/completed" && message.Method != "rawResponseItem/completed" {
-			continue
-		}
-		var completed struct {
-			ThreadID string      `json:"threadId"`
-			TurnID   string      `json:"turnId"`
-			Turn     historyTurn `json:"turn"`
-			Item     historyItem `json:"item"`
-		}
-		if json.Unmarshal(message.Params, &completed) != nil {
-			return failedObservation("invalid_history_evidence", "live: invalid history evidence")
-		}
-		if completed.ThreadID != probe.threadID {
-			continue
-		}
-		if message.Method == "turn/completed" {
-			if completed.Turn.ID == probe.turnID {
-				if err := probe.completedTurn(completed.Turn, &reply); err != nil {
-					return err
-				}
-			}
-		} else if completed.TurnID == probe.turnID {
-			if message.Method == "rawResponseItem/completed" {
-				if probe.previousID == "" && completed.Item.Type == "reasoning" {
-					probe.evidence.ReasoningItems++
-					if completed.Item.EncryptedContent != "" {
-						probe.evidence.EncryptedItems++
-					}
-				}
-			} else if err := probe.completedItem(completed.Item, &reply); err != nil {
-				return err
-			}
-		}
-	}
 }
 
 func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) error {

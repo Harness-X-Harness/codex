@@ -559,4 +559,8 @@ consumption.
 #388 moves hosted Web/X search onto the SDK. The five scenarios keep their
 policy projection, canonical hosted call credit, and one same-thread follow-up.
 Assistant prose and local function or custom execution still cannot establish
-hosted search. The legacy client remains only for cleanup in #379.
+hosted search.
+
+#379 removes the handwritten App Server client. Every scripted family and the
+native durable-thread observer now use the pinned SDK. Real-provider Live is
+not part of this fixture proof and remains NOT_RUN.
