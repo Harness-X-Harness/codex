@@ -16,7 +16,11 @@ type sdkFixtureHandlers struct {
 	requests      codexsdk.ServerRequestHandler
 	raw           *codexsdk.RawNotificationSubscription
 	retention     codexsdk.NotificationRetentionBudget
-	failures      <-chan error
+	// queue is the SDK notification admission buffer. Zero keeps the SDK
+	// default. Image bursts must fit so the business frame budget, not the
+	// transport queue, decides overflow.
+	queue    int
+	failures <-chan error
 	// afterClose runs after CloseContext joins callbacks and reaps the child,
 	// while the isolated workspace still exists. Nil for Basic and reasoning.
 	afterClose func(cwd string, evidence *Evidence, cause error) error
@@ -36,6 +40,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 				Capabilities: protocolv2.Value(protocolv2.InitializeCapabilities{ExperimentalAPI: &experimental}),
 			},
 			NotificationRetention:     handlers.retention,
+			NotificationQueueCapacity: handlers.queue,
 			ServerRequestHandler:      handlers.requests,
 			ServerNotificationHandler: handlers.notifications,
 			RawNotifications:          handlers.raw,

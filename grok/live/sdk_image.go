@@ -20,7 +20,10 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 	}
 	handlers := sdkFixtureHandlers{
 		requests: probe.request, notifications: probe.typedNotification, failures: make(chan error, 1),
-		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 80 << 20},
+		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 256 << 20},
+		// The business counter rejects the 4097th frame. The SDK default queue
+		// of 64 closes the client before that frame is delivered.
+		queue: 8192,
 		raw: &codexsdk.RawNotificationSubscription{
 			Methods:                        []string{codexsdk.RawResponseItemCompletedExtension},
 			EnableRawResponseItemExtension: true, Handler: probe.rawNotification,
@@ -176,8 +179,11 @@ func (probe *imageProbe) wait(ctx context.Context) error {
 		case <-probe.changed:
 		case <-clientDone:
 			probe.mu.Lock()
-			closed := probe.closed
+			cause, closed := probe.cause, probe.closed
 			probe.mu.Unlock()
+			if cause != nil {
+				return cause
+			}
 			if closed != nil && frameTooLarge(closed()) {
 				return errors.New("live: protocol frame budget exceeded")
 			}
