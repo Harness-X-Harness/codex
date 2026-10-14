@@ -554,4 +554,9 @@ the SDK. Catalog proof compares ordered model identity, default, efforts,
 modalities, multi-agent version and pagination; omitted null DTO fields are not
 a mismatch. Pinned history keeps the two-turn encrypted tool oracle on the
 shipped profile. Child proof still requires inherited-marker recall and parent
-consumption. Hosted search stays on the legacy client.
+consumption.
+
+#388 moves hosted Web/X search onto the SDK. The five scenarios keep their
+policy projection, canonical hosted call credit, and one same-thread follow-up.
+Assistant prose and local function or custom execution still cannot establish
+hosted search. The legacy client remains only for cleanup in #379.

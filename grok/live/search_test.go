@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,7 @@ func fakeSearchServer() {
 		return
 	}
 	defer trace.Close()
+	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
 	var turns []any
 	for input.Scan() {
@@ -40,7 +43,11 @@ func fakeSearchServer() {
 		var result any
 		switch request.Method {
 		case "initialize":
-			result = map[string]any{"userAgent": "fixture"}
+			family := "unix"
+			if runtime.GOOS == "windows" {
+				family = "windows"
+			}
+			result = map[string]any{"userAgent": "fixture", "codexHome": os.Getenv("CODEX_HOME"), "platformFamily": family, "platformOs": runtime.GOOS}
 		case "initialized":
 			continue
 		case "thread/start":
@@ -57,7 +64,12 @@ func fakeSearchServer() {
 			if !reflect.DeepEqual(request.Params["config"], config) || request.Params["experimentalRawEvents"] != true {
 				return
 			}
-			result = map[string]any{"model": request.Params["model"], "modelProvider": "grok", "thread": map[string]any{"id": "thread", "modelProvider": "grok"}}
+			cwd, _ := request.Params["cwd"].(string)
+			result = map[string]any{
+				"model": request.Params["model"], "modelProvider": "grok", "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
+				"sandbox": map[string]any{"type": "readOnly"},
+				"thread":  shippedProtocolThread(map[string]any{"id": "thread", "model": request.Params["model"], "modelProvider": "grok", "cwd": cwd}),
+			}
 		case "turn/start":
 			index := len(turns) + 1
 			id := fmt.Sprintf("turn%d", index)
@@ -74,7 +86,7 @@ func fakeSearchServer() {
 				terminal["items"] = []any{}
 			}
 			turns = append(turns, terminal)
-			_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": id, "status": "inProgress"}}})
+			_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": id, "status": "inProgress", "items": []any{}}}})
 			notify := func(method string, raw any) {
 				thread, turnID := "thread", id
 				if mode == "wrong_thread" {
@@ -83,7 +95,17 @@ func fakeSearchServer() {
 				if mode == "wrong_turn" {
 					turnID = "other"
 				}
-				_ = output.Encode(map[string]any{"method": method, "params": map[string]any{"threadId": thread, "turnId": turnID, "item": raw}})
+				if item, ok := raw.(map[string]any); ok {
+					raw = searchProtocolItem(item)
+				}
+				params := map[string]any{"threadId": thread, "turnId": turnID, "item": raw}
+				if method == "item/started" {
+					params["startedAtMs"] = 1
+				}
+				if method == "item/completed" {
+					params["completedAtMs"] = 1
+				}
+				_ = output.Encode(map[string]any{"method": method, "params": params})
 			}
 			if mode == "started_local" {
 				notify("item/started", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
@@ -103,11 +125,11 @@ func fakeSearchServer() {
 				} else if mode == "late_prior_custom" {
 					_ = output.Encode(map[string]any{"method": "rawResponseItem/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn1", "item": map[string]any{"type": "custom_tool_call", "id": "PRIVATE_LOCAL", "call_id": "PRIVATE_CALL", "namespace": "functions", "name": "apply_patch", "input": "PRIVATE_INPUT"}}})
 				} else if mode == "late_prior_local" {
-					_ = output.Encode(map[string]any{"method": "rawResponseItem/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn1", "item": map[string]any{"type": "function_call_output", "call_id": "PRIVATE_CALL"}}})
+					_ = output.Encode(map[string]any{"method": "rawResponseItem/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn1", "item": map[string]any{"type": "function_call_output", "call_id": "PRIVATE_CALL", "output": ""}}})
 				} else {
 					previous := turns[0]
 					if mode == "late_prior_failed" {
-						previous = map[string]any{"id": "turn1", "status": "failed"}
+						previous = map[string]any{"id": "turn1", "status": "failed", "items": []any{}}
 					}
 					_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": previous}})
 				}
@@ -198,7 +220,8 @@ func fakeSearchServer() {
 					previous["items"] = append(previous["items"].([]any), map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
 				}
 			}
-			result = map[string]any{"thread": map[string]any{"id": id, "turns": turns}}
+			searchProtocolTurns(turns)
+			result = map[string]any{"thread": shippedProtocolThread(map[string]any{"id": id, "turns": turns})}
 		default:
 			return
 		}
@@ -302,6 +325,127 @@ func TestHostedSearchAcceptsConsistentDelayedPriorTerminal(t *testing.T) {
 	}
 }
 
+func searchProtocolTurns(turns []any) {
+	for _, raw := range turns {
+		turn, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		items, _ := turn["items"].([]any)
+		for index, item := range items {
+			mapped, ok := item.(map[string]any)
+			if ok {
+				items[index] = searchProtocolItem(mapped)
+			}
+		}
+	}
+}
+
+func searchProtocolItem(item map[string]any) map[string]any {
+	kind, _ := item["type"].(string)
+	if item["id"] == nil || item["id"] == "" {
+		item["id"] = "PRIVATE_CALL"
+	}
+	switch kind {
+	case "dynamicToolCall":
+		if item["arguments"] == nil {
+			item["arguments"] = map[string]any{}
+		}
+		if item["status"] == nil {
+			item["status"] = "completed"
+		}
+		if item["tool"] == nil {
+			item["tool"] = "fixture"
+		}
+	case "mcpToolCall":
+		if item["arguments"] == nil {
+			item["arguments"] = map[string]any{}
+		}
+		if item["server"] == nil {
+			item["server"] = "fixture"
+		}
+		if item["tool"] == nil {
+			item["tool"] = "fixture"
+		}
+		if item["status"] == nil {
+			item["status"] = "completed"
+		}
+	case "commandExecution":
+		if item["command"] == nil {
+			item["command"] = "true"
+		}
+		if item["commandActions"] == nil {
+			item["commandActions"] = []any{}
+		}
+		if item["cwd"] == nil {
+			item["cwd"] = "."
+		}
+		if item["status"] == nil {
+			item["status"] = "completed"
+		}
+	case "fileChange":
+		if item["changes"] == nil {
+			item["changes"] = []any{}
+		}
+		if item["status"] == nil {
+			item["status"] = "completed"
+		}
+	case "functionCallOutput":
+		if item["name"] == nil {
+			item["name"] = "fixture"
+		}
+		if item["output"] == nil {
+			item["output"] = ""
+		}
+	case "imageView":
+		if item["path"] == nil {
+			item["path"] = "fixture.png"
+		}
+	case "imageGeneration":
+		if item["result"] == nil {
+			item["result"] = ""
+		}
+		if item["status"] == nil {
+			item["status"] = "completed"
+		}
+	case "collabAgentToolCall":
+		if item["agentsStates"] == nil {
+			item["agentsStates"] = map[string]any{}
+		}
+		if item["receiverThreadIds"] == nil {
+			item["receiverThreadIds"] = []any{}
+		}
+		if item["senderThreadId"] == nil {
+			item["senderThreadId"] = "thread"
+		}
+		if item["status"] == nil {
+			item["status"] = "completed"
+		}
+		if item["tool"] == nil {
+			item["tool"] = "spawnAgent"
+		}
+	case "subAgentActivity":
+		if item["agentPath"] == nil {
+			item["agentPath"] = "/root/live_child"
+		}
+		if item["agentThreadId"] == nil {
+			item["agentThreadId"] = "PRIVATE_CHILD"
+		}
+		if item["kind"] == nil {
+			item["kind"] = "started"
+		}
+	case "sleep":
+		if item["durationMs"] == nil {
+			item["durationMs"] = 1
+		}
+	case "agentMessage":
+		if item["text"] == nil {
+			item["text"] = ""
+		}
+	}
+	return item
+}
+
 func hostedSearchFixtureCall(scenario string) map[string]any {
 	if strings.HasPrefix(scenario, "web") {
 		return map[string]any{"type": "web_search_call", "id": "PRIVATE_ID", "status": "completed", "action": map[string]any{"type": "search", "query": "PRIVATE_QUERY"}}
@@ -321,7 +465,13 @@ func TestHostedSearchRejectsCustomExecutionAtEveryObservationBoundary(t *testing
 			if mode == "local_custom_first" || mode == "settled_custom" {
 				wantTurns = 1
 			}
-			if err == nil || err.Error() != "live: local execution cannot establish hosted search" || got.Completed || got.FollowupCompleted || got.CanonicalCalls != 1 || got.Turns != wantTurns || got.SettledTurns != wantTurns-1 || got.FirstCompleted != (wantTurns == 2) {
+			wantError := "live: local execution cannot establish hosted search"
+			if mode == "settled_custom" || mode == "prior_custom" {
+				// Public ThreadItem has no custom_tool_call variant. Closed decode
+				// fails the settled read before the local-execution classifier.
+				wantError = "live: SDK observation did not complete"
+			}
+			if err == nil || err.Error() != wantError || got.Completed || got.FollowupCompleted || got.CanonicalCalls != 1 || got.Turns != wantTurns || got.SettledTurns != wantTurns-1 || got.FirstCompleted != (wantTurns == 2) {
 				t.Fatalf("custom execution accepted or safe prior evidence lost: %+v, %v", got, err)
 			}
 			assertSearchInvocationCount(t, options, wantTurns)
