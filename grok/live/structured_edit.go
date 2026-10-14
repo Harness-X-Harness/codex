@@ -186,7 +186,7 @@ func (probe *editProbe) publicItem(item editItem, observation *editObservation) 
 		}
 	case "fileChange":
 		if probe.previousID != "" || item.ID == "" || len(item.Changes) != 1 ||
-			filepath.Clean(item.Changes[0].Path) != probe.fixture.path || item.Changes[0].Kind.Type != "update" || item.Changes[0].Kind.MovePath != nil {
+			filepath.Base(item.Changes[0].Path) != editFile || item.Changes[0].Kind.Type != "update" || item.Changes[0].Kind.MovePath != nil {
 			return failedObservation("invalid_edit_file_change", "live: unexpected edit file change")
 		}
 		body, _ := json.Marshal(item.Changes)

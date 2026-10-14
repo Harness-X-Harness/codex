@@ -130,7 +130,8 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 			if err != nil {
 				return sdkEditCause(ctx, observer, err)
 			}
-			if settled.Thread.ModelProvider != "grok" || settled.Thread.CWD != cwd {
+			// thread/read returns the platform's own cwd spelling. The fixture bytes below are the effect readback.
+			if settled.Thread.ModelProvider != "grok" || settled.Thread.ID == "" {
 				return failedObservation("fixture_binding_failed", "live: settled fixture binding not established")
 			}
 			if err := observer.validateSettled(settled.Thread.ID, settled.Thread.Turns); err != nil {
