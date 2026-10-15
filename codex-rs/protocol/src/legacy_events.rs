@@ -556,7 +556,7 @@ impl TurnItem {
             TurnItem::CommandExecution(_)
             | TurnItem::DynamicToolCall(_)
             | TurnItem::CollabAgentToolCall(_) => Vec::new(),
-            TurnItem::SubAgentActivity(_) => Vec::new(),
+            TurnItem::SubAgentActivity(_) | TurnItem::XSearch(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::ImageView(item) => {
                 vec![EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
@@ -668,6 +668,8 @@ impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
 impl HasLegacyEvent for EventMsg {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
+            // A preview must not create a legacy Web lifecycle or history row.
+            EventMsg::SearchActivity(_) => Vec::new(),
             EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::AgentMessageContentDelta(event) => {

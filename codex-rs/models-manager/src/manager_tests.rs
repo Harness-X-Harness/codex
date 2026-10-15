@@ -38,6 +38,9 @@ mod cache_identity_tests;
 #[path = "model_info_overrides_tests.rs"]
 mod model_info_overrides_tests;
 
+#[path = "structured_edit_tests.rs"]
+mod structured_edit_tests;
+
 const DEFAULT_HTTP_CLIENT_FACTORY: HttpClientFactory =
     HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
 

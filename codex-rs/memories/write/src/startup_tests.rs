@@ -1509,3 +1509,6 @@ async fn memories_startup_phase2_v2_consolidates_without_a_handbook() -> anyhow:
     run_memory_phase_two_model_request_test(&server, home, memories).await?;
     Ok(())
 }
+
+#[path = "grok_startup_tests.rs"]
+mod grok;

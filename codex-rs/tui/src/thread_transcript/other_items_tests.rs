@@ -188,3 +188,32 @@ fn tool_and_notice_projection_uses_normal_transcript_presentation() {
     • Context compacted
     ");
 }
+
+#[test]
+fn hosted_x_paged_history_uses_the_live_transcript_renderer() {
+    let cwd = test_path_buf("/workspace").abs();
+    let actual = cells(
+        ThreadItem::XSearch(codex_app_server_protocol::XSearchItem {
+            id: "x-item".into(),
+            call_id: "provider-call".into(),
+            name: "x_keyword_search".into(),
+            input: "private query 日本語".repeat(2_000),
+        }),
+        &cwd,
+    );
+    let expected = history_cell::new_x_search_call("x_keyword_search");
+    assert_eq!(actual.len(), 1);
+    assert_eq!(
+        actual[0].transcript_hyperlink_lines(/*width*/ 80),
+        expected.transcript_hyperlink_lines(/*width*/ 80),
+    );
+    let rendered = actual
+        .iter()
+        .flat_map(|cell| cell.display_lines(/*width*/ 80))
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered, @"• Searched X (x_keyword_search)");
+    assert!(!rendered.contains("private query"));
+    assert!(!rendered.contains("provider-call"));
+}

@@ -6,6 +6,7 @@ use codex_exec_server_protocol::JSONRPCErrorError;
 
 use crate::CapabilityRootsDiscoverParams;
 use crate::CapabilityRootsDiscoverResponse;
+use crate::ConditionalWriteResult;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimePaths;
@@ -17,6 +18,7 @@ use crate::WriteFileOptions;
 use crate::file_read::FileReadHandleManager;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_WRITE_FILE_IF_UNCHANGED_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCanonicalizeResponse;
@@ -41,6 +43,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
+use crate::protocol::FsWriteFileIfUnchangedParams;
+use crate::protocol::FsWriteFileIfUnchangedResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::rpc::internal_error;
@@ -201,6 +205,40 @@ impl FileSystemHandler {
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
+    }
+
+    pub(crate) async fn write_file_if_unchanged(
+        &self,
+        params: FsWriteFileIfUnchangedParams,
+    ) -> Result<FsWriteFileIfUnchangedResponse, JSONRPCErrorError> {
+        let expected_bytes = STANDARD
+            .decode(params.expected_data_base64)
+            .map_err(|err| {
+                invalid_request(format!(
+                    "{FS_WRITE_FILE_IF_UNCHANGED_METHOD} requires valid base64 expectedDataBase64: {err}"
+                ))
+            })?;
+        let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
+            invalid_request(format!(
+                "{FS_WRITE_FILE_IF_UNCHANGED_METHOD} requires valid base64 dataBase64: {err}"
+            ))
+        })?;
+        let result = self
+            .file_system
+            .write_file_if_unchanged(
+                &params.path,
+                expected_bytes,
+                bytes,
+                WriteFileOptions {
+                    follow_symlinks: params.follow_symlinks.unwrap_or(true),
+                },
+                params.sandbox.as_ref(),
+            )
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsWriteFileIfUnchangedResponse {
+            written: result == ConditionalWriteResult::Written,
+        })
     }
 
     pub(crate) async fn create_directory(

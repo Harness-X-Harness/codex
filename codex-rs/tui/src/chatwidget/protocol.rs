@@ -101,6 +101,11 @@ impl ChatWidget {
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
             }
+            ServerNotification::SearchActivity(notification) => {
+                if !from_replay {
+                    self.on_search_activity(notification);
+                }
+            }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.restore_realtime_transcripts_before_turn(&notification.turn_id);
                 if !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
@@ -184,6 +189,7 @@ impl ChatWidget {
                 self.on_hook_completed(notification.run);
             }
             ServerNotification::Error(notification) => {
+                self.clear_search_activity();
                 if notification.will_retry {
                     if !from_replay {
                         self.on_stream_error(
@@ -306,6 +312,7 @@ impl ChatWidget {
             }
             ServerNotification::ThreadClosed(_) => {
                 if !from_replay {
+                    self.clear_search_activity();
                     self.on_shutdown_complete();
                 }
             }
@@ -580,7 +587,9 @@ impl ChatWidget {
             }
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
             item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
-            ThreadItem::WebSearch(item) => {
+            ThreadItem::WebSearch(item)
+                if !self.has_search_preview(&notification.turn_id, &item.id) =>
+            {
                 self.on_web_search_begin(item.id);
             }
             ThreadItem::ImageGeneration(_) => {

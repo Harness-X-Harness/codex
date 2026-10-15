@@ -33,12 +33,12 @@ use codex_utils_pty::DescriptorPolicy;
 use codex_utils_pty::SpawnFallback;
 #[cfg(any(windows, test))]
 use tokio::io::AsyncBufReadExt;
-#[cfg(any(windows, test))]
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
+use crate::file_system_mutation::EffectGuard;
 use crate::fs_helper::CODEX_FS_HELPER_ARG1;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
@@ -88,8 +88,7 @@ impl FileSystemSandboxRunner {
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
         let command = self.sandbox_command(sandbox)?;
-        let request_json = serde_json::to_vec(&request).map_err(json_error)?;
-        run_command(command, request_json).await
+        run_command(command, request).await
     }
 
     #[tracing::instrument(
@@ -391,42 +390,88 @@ fn bazel_bwrap_env_key_is_allowed(_key: &str) -> bool {
 #[tracing::instrument(name = "fs.sandbox_execute", skip_all)]
 async fn run_command(
     command: SandboxExecRequest,
-    request_json: Vec<u8>,
+    request: FsHelperRequest,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
+    let request_json = serde_json::to_vec(&request).map_err(json_error)?;
     let mut child = spawn_command(command, ChildStdin::Piped)?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| internal_error("failed to open fs sandbox helper stdin".to_string()))?;
-
-    #[cfg(windows)]
-    let mut request_json = request_json;
-    #[cfg(windows)]
-    request_json.push(b'\n');
-    stdin.write_all(&request_json).await.map_err(io_error)?;
-
-    #[cfg(windows)]
-    let response = {
-        stdin.flush().await.map_err(io_error)?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| internal_error("failed to open fs sandbox helper stdout".to_string()))?;
-        let stderr = drain_helper_stderr(&mut child);
-        let response = read_helper_response(stdout).await;
-        drop(stdin);
-        reap_helper_after_response(child, stderr).await?;
-        response?
-    };
+    let mut effect = matches!(
+        &request,
+        FsHelperRequest::WriteFile(_) | FsHelperRequest::Remove(_) | FsHelperRequest::Copy(_)
+    )
+    .then(EffectGuard::new);
 
     #[cfg(not(windows))]
     let response = {
-        stdin.shutdown().await.map_err(io_error)?;
-        drop(stdin);
-        wait_for_helper_output(child).await?.stdout
+        let sent = async {
+            let mut stdin = child.stdin.take().ok_or_else(|| {
+                internal_error("failed to open fs sandbox helper stdin".to_string())
+            })?;
+            stdin.write_all(&request_json).await.map_err(io_error)?;
+            stdin.shutdown().await.map_err(io_error)
+        }
+        .await;
+        // Even a send or pipe-read error must not cancel the wait and lose the child.
+        let (exited, output) = collect_helper_output(&mut child).await;
+        if exited && let Some(effect) = &mut effect {
+            effect.settle();
+        }
+        sent?;
+        let output = check_helper_output(output)?;
+        serde_json::from_slice(&output.stdout).map_err(json_error)?
     };
 
-    let response = serde_json::from_slice(&response).map_err(json_error)?;
+    #[cfg(windows)]
+    let response = {
+        let mut request_json = request_json;
+        request_json.push(b'\n');
+        let mut stdin = child.stdin.take();
+        let mut stdout = child.stdout.take();
+        let stderr = drain_helper_stderr(&mut child);
+        let response = async {
+            let stdin = stdin.as_mut().ok_or_else(|| {
+                internal_error("failed to open fs sandbox helper stdin".to_string())
+            })?;
+            stdin.write_all(&request_json).await.map_err(io_error)?;
+            stdin.flush().await.map_err(io_error)?;
+            let stdout = stdout.as_mut().ok_or_else(|| {
+                internal_error("failed to open fs sandbox helper stdout".to_string())
+            })?;
+            let bytes = read_helper_response(stdout).await?;
+            serde_json::from_slice::<FsHelperResponse>(&bytes).map_err(json_error)
+        }
+        .await;
+        // The one-request helper emits this only after its effect completes. Cleanup can
+        // subsequently fail without turning a validated terminal response into an unknown write.
+        if matches!(
+            (&request, &response),
+            (_, Ok(FsHelperResponse::Error(_)))
+                | (
+                    FsHelperRequest::WriteFile(_),
+                    Ok(FsHelperResponse::Ok(FsHelperPayload::WriteFile(_)))
+                )
+                | (
+                    FsHelperRequest::Remove(_),
+                    Ok(FsHelperResponse::Ok(FsHelperPayload::Remove(_)))
+                )
+                | (
+                    FsHelperRequest::Copy(_),
+                    Ok(FsHelperResponse::Ok(FsHelperPayload::Copy(_)))
+                )
+        ) && let Some(effect) = &mut effect
+        {
+            effect.settle();
+        }
+        drop(stdin);
+        drop(stdout);
+        let (exited, cleanup) = finish_helper(&mut child, stderr).await;
+        if exited && let Some(effect) = &mut effect {
+            effect.settle();
+        }
+        let response = response?;
+        cleanup?;
+        response
+    };
+
     match response {
         FsHelperResponse::Ok(payload) => Ok(payload),
         FsHelperResponse::Error(error) => Err(error),
@@ -473,39 +518,110 @@ pub(crate) async fn reap_helper_after_response(
     mut child: Child,
     stderr: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
 ) -> Result<(), JSONRPCErrorError> {
-    let (status, stderr) = match tokio::time::timeout(FS_HELPER_EXIT_TIMEOUT, async {
-        tokio::try_join!(child.wait(), async {
-            stderr.await.map_err(std::io::Error::other)?
+    finish_helper(&mut child, stderr).await.1
+}
+
+#[cfg(any(windows, test))]
+async fn finish_helper(
+    child: &mut Child,
+    stderr: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) -> (bool, Result<(), JSONRPCErrorError>) {
+    let mut exited = false;
+    let result = async {
+        let (status, stderr) = match tokio::time::timeout(FS_HELPER_EXIT_TIMEOUT, async {
+            tokio::join!(
+                async {
+                    let status = child.wait().await;
+                    exited = status.is_ok();
+                    status
+                },
+                async { stderr.await.map_err(std::io::Error::other)? },
+            )
         })
-    })
-    .await
-    {
-        Ok(result) => result.map_err(io_error)?,
-        Err(_) => {
-            tokio::time::timeout(FS_HELPER_EXIT_TIMEOUT, child.kill())
-                .await
-                .map_err(|_| {
-                    internal_error("fs sandbox helper did not stop after its response".to_string())
-                })?
-                .map_err(io_error)?;
+        .await
+        {
+            Ok((status, stderr)) => (status.map_err(io_error)?, stderr.map_err(io_error)?),
+            Err(_) => {
+                tokio::time::timeout(FS_HELPER_EXIT_TIMEOUT, child.kill())
+                    .await
+                    .map_err(|_| {
+                        internal_error(
+                            "fs sandbox helper did not stop after its response".to_string(),
+                        )
+                    })?
+                    .map_err(io_error)?;
+                // Forced direct-child termination alone does not establish a launcher tree's
+                // effect settlement. A valid terminal response may already have established it.
+                return Ok(());
+            }
+        };
+        if status.success() {
             return Ok(());
         }
-    };
-    if status.success() {
-        return Ok(());
+        Err(internal_error(format!(
+            "fs sandbox helper failed with status {status}: {stderr}",
+            stderr = String::from_utf8_lossy(&stderr).trim()
+        )))
     }
-
-    Err(internal_error(format!(
-        "fs sandbox helper failed with status {status}: {stderr}",
-        stderr = String::from_utf8_lossy(&stderr).trim()
-    )))
+    .await;
+    (exited, result)
 }
 
 #[cfg(not(windows))]
-pub(crate) async fn wait_for_helper_output(
-    child: Child,
+async fn collect_helper_output(child: &mut Child) -> (bool, std::io::Result<std::process::Output>) {
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    collect_helper_pipes(child, stdout.as_mut(), stderr.as_mut()).await
+}
+
+#[cfg(not(windows))]
+async fn collect_helper_pipes<R, E>(
+    child: &mut Child,
+    mut stdout: Option<&mut R>,
+    mut stderr: Option<&mut E>,
+) -> (bool, std::io::Result<std::process::Output>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+    E: tokio::io::AsyncRead + Unpin,
+{
+    let mut output = Vec::new();
+    let mut diagnostic = Vec::new();
+    // Non-short-circuit join retains the child wait after either pipe reports an error.
+    // Keep both pipes alive through observed exit, matching Child::wait_with_output.
+    let (status, out, err) = tokio::join!(
+        child.wait(),
+        async {
+            if let Some(stdout) = stdout.as_mut() {
+                stdout.read_to_end(&mut output).await?;
+            }
+            Ok::<_, std::io::Error>(())
+        },
+        async {
+            if let Some(stderr) = stderr.as_mut() {
+                stderr.read_to_end(&mut diagnostic).await?;
+            }
+            Ok::<_, std::io::Error>(())
+        },
+    );
+    let exited = status.is_ok();
+    let result = (|| {
+        let status = status?;
+        out?;
+        err?;
+        Ok(std::process::Output {
+            status,
+            stdout: output,
+            stderr: diagnostic,
+        })
+    })();
+    (exited, result)
+}
+
+#[cfg(not(windows))]
+fn check_helper_output(
+    output: std::io::Result<std::process::Output>,
 ) -> Result<std::process::Output, JSONRPCErrorError> {
-    let output = child.wait_with_output().await.map_err(io_error)?;
+    let output = output.map_err(io_error)?;
     if !output.status.success() {
         return Err(internal_error(format!(
             "fs sandbox helper failed with status {status}: {stderr}",
@@ -514,6 +630,13 @@ pub(crate) async fn wait_for_helper_output(
         )));
     }
     Ok(output)
+}
+
+#[cfg(not(windows))]
+pub(crate) async fn wait_for_helper_output(
+    mut child: Child,
+) -> Result<std::process::Output, JSONRPCErrorError> {
+    check_helper_output(collect_helper_output(&mut child).await.1)
 }
 
 pub(crate) fn spawn_command(
@@ -1083,3 +1206,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "fs_sandbox_effect_tests.rs"]
+mod effect_tests;

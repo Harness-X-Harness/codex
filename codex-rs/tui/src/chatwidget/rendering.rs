@@ -168,6 +168,17 @@ impl ChatWidget {
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        for cell in self.transcript.search_activity.cells() {
+            flex.push(
+                /*flex*/ 1,
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell,
+                    top: 1,
+                    right: active_cell_right_reserve,
+                    persistent_layout: None,
+                })),
+            );
+        }
         for cell in self
             .realtime_conversation
             .pending_history_cells
@@ -280,6 +291,12 @@ impl ChatWidget {
             .active_cell
             .as_deref()
             .into_iter()
+            .chain(
+                self.transcript
+                    .search_activity
+                    .cells()
+                    .map(|cell| cell as &dyn HistoryCell),
+            )
             .chain(
                 self.realtime_conversation
                     .pending_history_cells

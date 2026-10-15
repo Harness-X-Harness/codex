@@ -24,6 +24,10 @@ mod proto;
 
 const REMOTE_THREAD_CONFIG_LOAD_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
+#[path = "remote_grok_tests.rs"]
+mod grok_tests;
+
 /// gRPC-backed [`ThreadConfigLoader`] implementation.
 #[derive(Clone, Debug)]
 pub struct RemoteThreadConfigLoader {
@@ -184,6 +188,7 @@ fn model_provider_from_proto(
         gateway_oauth: None,
         aws: None,
         wire_api,
+        x_search: None,
         query_params: provider.query_params.map(redacted_string_map),
         http_headers: provider.http_headers.map(redacted_string_map),
         env_http_headers: provider.env_http_headers.map(|map| map.values),
@@ -203,6 +208,10 @@ fn model_provider_to_proto(
     id: impl Into<String>,
     provider: ModelProviderInfo,
 ) -> proto::ModelProvider {
+    assert!(
+        provider.x_search.is_none(),
+        "remote proto cannot encode x_search policy"
+    );
     let ModelProviderInfo {
         name,
         base_url,
@@ -213,6 +222,7 @@ fn model_provider_to_proto(
         auth,
         gateway_oauth: _,
         aws: _,
+        x_search: _,
         wire_api,
         query_params,
         http_headers,
@@ -310,6 +320,8 @@ fn proto_string_map(values: HashMap<String, RedactedString>) -> proto::StringMap
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
+        // This fixture encoder is not a production outbound conversion boundary.
+        WireApi::GrokResponses => panic!("remote proto fixtures cannot encode grok_responses"),
     }
 }
 
@@ -387,8 +399,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn load_thread_config_calls_remote_service() {
+    pub(super) async fn load_remote_sources(
+        sources: Vec<proto::ThreadConfigSource>,
+    ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError> {
         let cwd = workspace_dir().join("project");
         let expected_cwd = cwd.to_string_lossy().into_owned();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -399,7 +412,7 @@ mod tests {
         let server = tokio::spawn(async move {
             Server::builder()
                 .add_service(ThreadConfigLoaderServer::new(TestServer {
-                    sources: proto_sources(),
+                    sources,
                     expected_cwd,
                 }))
                 .serve_with_incoming_shutdown(
@@ -412,17 +425,29 @@ mod tests {
         });
 
         let loader = RemoteThreadConfigLoader::new(format!("http://{addr}"));
-        let loaded = loader
-            .load(ThreadConfigContext {
+        let loaded = ThreadConfigLoader::load(
+            &loader,
+            ThreadConfigContext {
                 thread_id: Some("thread-1".to_string()),
                 cwd: Some(cwd),
-            })
-            .await;
+            },
+        )
+        .await;
 
         let _ = shutdown_tx.send(());
         server.await.expect("join server").expect("server");
 
-        assert_eq!(loaded.expect("load thread config"), expected_sources());
+        loaded
+    }
+
+    #[tokio::test]
+    async fn load_thread_config_calls_remote_service() {
+        assert_eq!(
+            load_remote_sources(proto_sources())
+                .await
+                .expect("load thread config"),
+            expected_sources()
+        );
     }
 
     #[test]
@@ -465,7 +490,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    fn proto_sources() -> Vec<proto::ThreadConfigSource> {
+    pub(super) fn proto_sources() -> Vec<proto::ThreadConfigSource> {
         let workspace_cwd = workspace_dir().to_string_lossy().into_owned();
         vec![
             proto::ThreadConfigSource {
@@ -545,7 +570,7 @@ mod tests {
         ]
     }
 
-    fn expected_provider() -> ModelProviderInfo {
+    pub(super) fn expected_provider() -> ModelProviderInfo {
         ModelProviderInfo {
             name: "Local".to_string(),
             base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
@@ -576,6 +601,7 @@ mod tests {
             websocket_connect_timeout_ms: Some(10_000),
             requires_openai_auth: false,
             supports_websockets: true,
+            x_search: None,
             supports_standalone_web_search: true,
             gateway_oauth: None,
             aws: None,

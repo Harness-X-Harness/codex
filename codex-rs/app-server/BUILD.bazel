@@ -23,6 +23,10 @@ codex_rust_crate(
         "app-server-all-test": 16,
         "app-server-unit-tests": 8,
     },
+    test_data_extra = [
+        "//grok/dist:config.toml.example",
+        "//grok/dist:models.json",
+    ],
     test_tags = ["no-sandbox"],
     test_threads = select({
         "@platforms//os:macos": 1,

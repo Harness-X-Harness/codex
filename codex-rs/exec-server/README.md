@@ -437,6 +437,7 @@ callers must convert them to `file:` URIs before sending requests:
 - `fs/open`, `fs/readBlock`, and `fs/close` (internal transport for
   `ExecutorFileSystem::read_file_stream`)
 - `fs/writeFile`
+- `fs/writeFileIfUnchanged`
 - `fs/createDirectory`
 - `fs/getMetadata`
 - `fs/canonicalize`
@@ -449,6 +450,16 @@ contains a `ReadOnly` or `WorkspaceWrite` policy, the operation runs in a
 hidden helper process launched from the top-level `codex` executable and
 prepared through the shared sandbox transform path. Helper requests and
 responses are passed over stdin/stdout.
+
+`fs/writeFileIfUnchanged` accepts `expectedDataBase64` and `dataBase64`, with
+optional `followSymlinks` and the same `sandbox` selection as ordinary file access.
+It returns `{ "written": true }` after a completed write, or `{ "written": false }`
+when the current bytes differ. Missing files and invalid or unsupported requests
+remain errors. Participating local writes, removals and copies share executor-owned
+exclusion through actual effect settlement, even if an RPC waiter disconnects.
+A lost reply is an unknown outcome and is not transparently retried. If helper
+settlement cannot be established, mutation admission fails closed for that executor
+process. This is not kernel CAS against unrelated processes, rollback or crash durability.
 
 ## Errors
 

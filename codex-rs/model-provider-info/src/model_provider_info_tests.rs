@@ -6,6 +6,27 @@ use std::num::NonZeroU64;
 use tempfile::tempdir;
 
 #[test]
+fn grok_wire_identity_survives_provider_config_roundtrip() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Custom endpoint"
+base_url = "https://example.com/v1"
+wire_api = "grok_responses"
+stream_max_retries = 0
+stream_idle_timeout_ms = 1234
+"#,
+    )
+    .expect("explicit Grok provider config");
+
+    assert_eq!(provider.wire_api.to_string(), "grok_responses");
+    let encoded = toml::to_string(&provider).expect("serialize provider config");
+    assert_eq!(
+        toml::from_str::<ModelProviderInfo>(&encoded).expect("reload provider config"),
+        provider
+    );
+}
+
+#[test]
 fn test_api_provider_applies_current_managed_residency() {
     let info = ModelProviderInfo {
         http_headers: Some(maplit::hashmap! {
@@ -79,6 +100,7 @@ base_url = "http://localhost:11434/v1"
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -116,6 +138,7 @@ query_params = { api-version = "2025-04-01-preview" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
     };
 
@@ -157,6 +180,7 @@ supports_standalone_web_search = true
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: true,
     };
 
@@ -345,6 +369,7 @@ fn test_create_amazon_bedrock_provider() {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            x_search: None,
             supports_standalone_web_search: false,
         }
     );
@@ -857,4 +882,26 @@ model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
             .base_url,
         "https://gateway.example/v1"
     );
+}
+
+#[test]
+fn grok_x_search_config_preserves_absent_empty_and_validated_dates() {
+    for body in [
+        "",
+        "[x_search]",
+        "[x_search]\nfrom_date = '2024-02-29'\nto_date = '2024-03-01'",
+    ] {
+        let provider: ModelProviderInfo =
+            toml::from_str(&format!("wire_api = 'grok_responses'\n{body}")).unwrap();
+        provider.validate().unwrap();
+        let reloaded: ModelProviderInfo =
+            toml::from_str(&toml::to_string(&provider).unwrap()).unwrap();
+        assert_eq!(provider, reloaded);
+        assert_eq!(provider.x_search.is_some(), !body.is_empty());
+    }
+    let invalid = "wire_api = 'grok_responses'\n[x_search]\nfrom_date = '2023-02-29'";
+    assert!(toml::from_str::<ModelProviderInfo>(invalid).is_err());
+    let unsupported: ModelProviderInfo =
+        toml::from_str("wire_api = 'responses'\n[x_search]").unwrap();
+    assert!(unsupported.validate().unwrap_err().contains("x_search"));
 }

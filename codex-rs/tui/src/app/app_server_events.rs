@@ -67,6 +67,7 @@ impl App {
     ) {
         match event {
             AppServerEvent::Lagged { skipped } => {
+                self.chat_widget.clear_search_activity();
                 tracing::warn!(
                     skipped,
                     "app-server event consumer lagged; dropping ignored events"
@@ -104,6 +105,7 @@ impl App {
                 self.repaint_agents_overview();
             }
             AppServerEvent::Disconnected { message } => {
+                self.chat_widget.clear_search_activity();
                 if self.begin_reconnect() {
                     return;
                 }

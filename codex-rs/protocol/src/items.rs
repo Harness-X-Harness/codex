@@ -59,6 +59,8 @@ pub enum TurnItem {
     /// Standalone web search uses Self::Extension instead because its display
     /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
+    /// Completed, explicitly admitted hosted X search; never a local tool call.
+    XSearch(XSearchItem),
     ImageView(ImageViewItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
@@ -75,6 +77,19 @@ pub enum TurnItem {
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
+}
+
+/// Provider payload retained without interpreting or inventing search results.
+/// Only the Grok request/response owner may construct this canonical projection.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct XSearchItem {
+    /// Provider item identity, unique among retained items in this turn.
+    pub id: String,
+    pub call_id: String,
+    pub name: String,
+    pub input: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -756,6 +771,7 @@ impl TurnItem {
             TurnItem::CollabAgentToolCall(item) => item.id.clone(),
             TurnItem::SubAgentActivity(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
+            TurnItem::XSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),

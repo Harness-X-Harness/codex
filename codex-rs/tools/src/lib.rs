@@ -3,6 +3,8 @@
 
 mod code_mode;
 mod dynamic_tool;
+mod flat_projection;
+mod flat_projection_history;
 mod function_call_error;
 mod image_detail;
 mod indirect_namespace_prefixes;
@@ -29,6 +31,11 @@ pub use code_mode::collect_code_mode_tool_definitions;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
+pub use flat_projection::FlatToolRoutes;
+pub use flat_projection::WireToolRoute;
+pub use flat_projection::decode_custom_input;
+pub use flat_projection::flat_wire_name;
+pub use flat_projection::project_flat_function_tools;
 pub use function_call_error::FunctionCallError;
 pub use image_detail::can_request_original_image_detail;
 pub use image_detail::normalize_output_image_detail;

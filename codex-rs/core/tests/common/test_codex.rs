@@ -391,6 +391,7 @@ pub struct TestCodexBuilder {
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
     extensions: Arc<ExtensionRegistry<Config>>,
+    local_runtime_paths: Option<codex_exec_server::ExecServerRuntimePaths>,
     user_instructions_provider: Option<Arc<dyn UserInstructionsProvider>>,
     supports_openai_form_elicitation: bool,
     external_time_provider: Option<Arc<dyn TimeProvider>>,
@@ -535,6 +536,15 @@ impl TestCodexBuilder {
 
     pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
         self.exec_server_url = Some(exec_server_url.into());
+        self
+    }
+
+    /// Selects source-bound helper paths for tests observing real Local helper execution.
+    pub fn with_local_runtime_paths(
+        mut self,
+        paths: codex_exec_server::ExecServerRuntimePaths,
+    ) -> Self {
+        self.local_runtime_paths = Some(paths);
         self
     }
 
@@ -737,10 +747,13 @@ impl TestCodexBuilder {
         );
         #[cfg(not(target_os = "linux"))]
         let codex_linux_sandbox_exe = None;
-        let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-            std::env::current_exe()?,
-            codex_linux_sandbox_exe,
-        )?;
+        let local_runtime_paths = match &self.local_runtime_paths {
+            Some(paths) => paths.clone(),
+            None => codex_exec_server::ExecServerRuntimePaths::new(
+                std::env::current_exe()?,
+                codex_linux_sandbox_exe,
+            )?,
+        };
         let environment_manager = Arc::new(if include_local_environment {
             codex_exec_server::EnvironmentManager::create_for_tests_with_local(
                 exec_server_url,
@@ -1477,6 +1490,7 @@ pub fn test_codex() -> TestCodexBuilder {
         user_shell_override: None,
         exec_server_url: None,
         extensions: empty_extension_registry(),
+        local_runtime_paths: None,
         user_instructions_provider: None,
         supports_openai_form_elicitation: false,
         external_time_provider: None,

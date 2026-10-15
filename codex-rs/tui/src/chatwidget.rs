@@ -373,6 +373,7 @@ mod review;
 mod review_popups;
 use self::review::ReviewState;
 mod safety_buffering;
+mod search_activity;
 mod service_tiers;
 mod settings;
 mod settings_popups;
@@ -1947,6 +1948,7 @@ impl ChatWidget {
         let mut realtime_cells = self.realtime_conversation.live_transcript_cells();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
+            && self.transcript.search_activity.is_empty()
             && self
                 .realtime_conversation
                 .live_transcript_cells()
@@ -1979,6 +1981,12 @@ impl ChatWidget {
                 .unwrap_or(/*default*/ false),
             animation_tick: cell
                 .and_then(|cell| cell.transcript_animation_tick())
+                .or_else(|| {
+                    self.transcript
+                        .search_activity
+                        .cells()
+                        .find_map(super::history_cell::HistoryCell::transcript_animation_tick)
+                })
                 .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),
         })
     }

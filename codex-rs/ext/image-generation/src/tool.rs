@@ -17,7 +17,6 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
-use codex_extension_api::parse_tool_input_schema;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::image_generation::ImageGenerationFailure;
 use codex_extension_items::image_generation::ImageGenerationItem;
@@ -34,18 +33,11 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
-use codex_tools::ResponsesApiNamespace;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
 use codex_tools::ToolExposure;
-use codex_tools::default_namespace_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use codex_utils_path_uri::PathUri;
-use schemars::JsonSchema;
-use schemars::r#gen::SchemaSettings;
-use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -55,12 +47,10 @@ use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
 
-const IMAGE_MODEL: &str = "gpt-image-2";
-const MAX_EDIT_IMAGES: usize = 5;
-const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
-    MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
-const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
+use crate::policy::ImagePolicy;
+use crate::policy::ImagegenArgs;
+use crate::policy::MAX_GENERATED_IMAGE_BASE64_BYTES;
+use crate::policy::MAX_GENERATED_IMAGE_BYTES;
 
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
@@ -82,19 +72,6 @@ impl ImageGenerationTool {
             thread_id,
         }
     }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct ImagegenArgs {
-    prompt: String,
-    /// Whether the output should have a transparent background. Defaults to false.
-    #[serde(default)]
-    transparent_background: bool,
-    #[schemars(length(max = 5))]
-    referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
-    #[schemars(range(min = 1, max = 5))]
-    num_last_images_to_include: Option<usize>,
 }
 
 fn legacy_end_event(item: &ImageGenerationItem) -> EventMsg {
@@ -124,7 +101,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
 
     /// Advertises a rewritten prompt, background choice, and optional edit references.
     fn spec(&self) -> ToolSpec {
-        imagegen_tool_spec()
+        ImagePolicy::for_dialect(self.backend.dialect()).tool_spec()
     }
 
     /// Exposes image generation directly and through the nested code-mode tool surface.
@@ -146,10 +123,15 @@ impl ImageGenerationTool {
         &self,
         call: ToolCall<'_>,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
-        let args = parse_args(&call)?;
-        let request =
-            request_for_call_args(&args, call.conversation_history.items(), &call.environments)
-                .await?;
+        let policy = ImagePolicy::for_dialect(self.backend.dialect());
+        let args = policy.parse_args(call.function_arguments()?)?;
+        let request = request_for_call_args(
+            &args,
+            call.conversation_history.items(),
+            &call.environments,
+            policy,
+        )
+        .await?;
         call.turn_item_emitter
             .emit_started(extension_turn_item(
                 ImageGenerationItem {
@@ -186,12 +168,15 @@ impl ImageGenerationTool {
                 Some(ImageBackground::Auto) | None => None,
             };
             match response.data.into_iter().next() {
-                Some(data) => Ok((
-                    data.b64_json,
-                    transparent_background,
-                    imagegen_request_id,
-                    data.generation_id,
-                )),
+                Some(data) => match policy.normalize_result(data.b64_json) {
+                    Ok(result) => Ok((
+                        result,
+                        transparent_background,
+                        imagegen_request_id,
+                        data.generation_id,
+                    )),
+                    Err(message) => Err((message, None, imagegen_request_id)),
+                },
                 None => Err((
                     "image generation returned no image data".to_string(),
                     None,
@@ -331,7 +316,7 @@ async fn save_image_generation_result(
             let output_dir = cwd.join("generated_images");
             let save_result: io::Result<AbsolutePathBuf> = async {
                 let result = result.trim();
-                if result.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
+                if result.len() > MAX_GENERATED_IMAGE_BASE64_BYTES {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "generated image exceeds the executor file size limit",
@@ -340,7 +325,7 @@ async fn save_image_generation_result(
                 let bytes = BASE64_STANDARD
                     .decode(result.as_bytes())
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
+                if bytes.len() > MAX_GENERATED_IMAGE_BYTES {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "generated image exceeds the executor file size limit",
@@ -428,27 +413,37 @@ async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
     environments: &[ToolEnvironment<'_>],
+    policy: ImagePolicy,
 ) -> Result<ImageRequest, FunctionCallError> {
     let background = if args.transparent_background {
         ImageBackground::Transparent
     } else {
         ImageBackground::Opaque
     };
+    let max_edit_images = policy.max_edit_images;
+    let (background, quality, size) = match policy.dialect {
+        codex_api::ApiDialect::OpenAi => (
+            Some(background),
+            Some(ImageQuality::Auto),
+            Some("auto".to_string()),
+        ),
+        codex_api::ApiDialect::Grok => (None, None, None),
+    };
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
-    if paths.len() > MAX_EDIT_IMAGES {
+    if paths.len() > max_edit_images {
         return Err(FunctionCallError::RespondToModel(format!(
-            "`referenced_image_paths` must contain at most {MAX_EDIT_IMAGES} paths"
+            "`referenced_image_paths` must contain at most {max_edit_images} paths"
         )));
     }
     let images = match (paths.is_empty(), args.num_last_images_to_include) {
         (true, None) => {
             return Ok(ImageRequest::Generate(ImageGenerationRequest {
                 prompt: args.prompt.clone(),
-                background: Some(background),
-                model: IMAGE_MODEL.to_string(),
+                background,
+                model: policy.model.to_string(),
                 n: None,
-                quality: Some(ImageQuality::Auto),
-                size: Some("auto".to_string()),
+                quality,
+                size,
             }));
         }
         (false, None) => {
@@ -467,9 +462,9 @@ async fn request_for_call_args(
             images
         }
         (true, Some(count)) => {
-            if !(1..=MAX_EDIT_IMAGES).contains(&count) {
+            if !(1..=max_edit_images).contains(&count) {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
+                    "`num_last_images_to_include` must be between 1 and {max_edit_images}"
                 )));
             }
             // Pathless images have no stable reference, so this bounded window may include newer
@@ -488,11 +483,11 @@ async fn request_for_call_args(
     Ok(ImageRequest::Edit(ImageEditRequest {
         images,
         prompt: args.prompt.clone(),
-        background: Some(background),
-        model: IMAGE_MODEL.to_string(),
+        background,
+        model: policy.model.to_string(),
         n: None,
-        quality: Some(ImageQuality::Auto),
-        size: Some("auto".to_string()),
+        quality,
+        size,
     }))
 }
 
@@ -595,45 +590,6 @@ async fn image_url(
     )?;
     Ok(ImageReference::Inline {
         image_url: image.into_data_url(),
-    })
-}
-
-/// Parses the strict model-facing arguments for an image-generation call.
-fn parse_args(call: &ToolCall<'_>) -> Result<ImagegenArgs, FunctionCallError> {
-    serde_json::from_str(call.function_arguments()?)
-        .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
-}
-
-/// Builds the namespace function schema exposed to the model.
-fn imagegen_tool_spec() -> ToolSpec {
-    let mut schema_value = serde_json::to_value(
-        SchemaSettings::draft2019_09()
-            .with(|settings| settings.inline_subschemas = true)
-            .into_generator()
-            .into_root_schema_for::<ImagegenArgs>(),
-    )
-    .unwrap_or_else(|err| panic!("imagegen schema should serialize: {err}"));
-    let Value::Object(ref mut schema) = schema_value else {
-        unreachable!("imagegen root schema must be an object");
-    };
-    let mut input_schema = Map::new();
-    for key in ["properties", "required", "type", "additionalProperties"] {
-        if let Some(value) = schema.remove(key) {
-            input_schema.insert(key.to_string(), value);
-        }
-    }
-    ToolSpec::Namespace(ResponsesApiNamespace {
-        name: IMAGE_GEN_NAMESPACE.to_string(),
-        description: default_namespace_description(IMAGE_GEN_NAMESPACE),
-        tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-            name: IMAGEGEN_TOOL_NAME.to_string(),
-            description: IMAGEGEN_DESCRIPTION.to_string(),
-            strict: false,
-            parameters: parse_tool_input_schema(&Value::Object(input_schema))
-                .unwrap_or_else(|err| panic!("imagegen input schema should parse: {err}")),
-            output_schema: None,
-            defer_loading: None,
-        })],
     })
 }
 

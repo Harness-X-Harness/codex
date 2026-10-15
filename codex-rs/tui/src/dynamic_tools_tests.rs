@@ -749,3 +749,29 @@ async fn task_creation_and_followup_start_background_turns() -> color_eyre::Resu
     server.shutdown().await?;
     Ok(())
 }
+
+#[test]
+fn hosted_x_summary_keeps_typed_identity_without_opaque_input() -> color_eyre::Result<()> {
+    for input in [
+        "{ \"query\": \"exact 日本語\" }\n".to_string(),
+        "日".repeat(2_100),
+    ] {
+        let turn: Turn = serde_json::from_value(json!({
+            "id": "turn-x", "status": "completed",
+            "items": [{"type": "xSearch", "id": "x-item", "callId": "provider-call",
+                "name": "x_keyword_search", "input": input}]
+        }))?;
+        for include_outputs in [false, true] {
+            assert_eq!(
+                turn_summary(&turn, include_outputs, /*output_chars*/ 0),
+                json!({
+                    "id": "turn-x", "status": "completed", "error": null,
+                    "startedAt": null, "completedAt": null, "durationMs": null,
+                    "items": [{"type": "xSearch", "id": "x-item", "callId": "provider-call",
+                        "name": "x_keyword_search"}]
+                })
+            );
+        }
+    }
+    Ok(())
+}

@@ -115,3 +115,38 @@ fn agent_status_uses_reasoning_summaries_only() {
     assert!(!rendered.contains("hidden raw reasoning"));
     assert!(!rendered.contains("raw-only reasoning"));
 }
+
+#[test]
+fn agent_status_hosted_x_keeps_a_distinct_bounded_preview() {
+    let mut store = ThreadEventStore::new(/*capacity*/ 8);
+    store.push_notification(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::XSearch(codex_app_server_protocol::XSearchItem {
+                id: "x-item".into(),
+                call_id: "provider-call".into(),
+                name: "x_keyword_search".into(),
+                input: "private query 日本語".repeat(2_000),
+            }),
+            thread_id: "thread-child".into(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 1,
+        },
+    ));
+    let preview = AgentStatusThreadPreview::from_store("/root/reviewer".into(), &store);
+    let cell = AgentStatusHistoryCell::new(vec![preview]);
+    let rendered = cell
+        .display_lines(/*width*/ 80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered, @r###"
+    /subagents
+    Sub-agents running
+
+      • `/root/reviewer`
+        X search: x_keyword_search
+    "###);
+    assert!(!rendered.contains("private query"));
+    assert!(!rendered.contains("provider-call"));
+}

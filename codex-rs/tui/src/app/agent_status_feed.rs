@@ -189,6 +189,9 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
         ThreadItem::WebSearch(item) => {
             return bounded_summary(&format!("Web search: {}", item.query));
         }
+        ThreadItem::XSearch(item) => {
+            return bounded_summary(&format!("X search: {}", item.name));
+        }
         ThreadItem::ImageView { path, .. } => {
             let path = path.render_for_ui();
             return bounded_summary(&format!("Viewed {path}"));

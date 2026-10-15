@@ -8,6 +8,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use codex_exec_server::Environment;
+use codex_protocol::json_whole_number;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use serde::Deserialize;
@@ -33,11 +34,14 @@ pub(crate) struct ExecCommandArgs {
     login: Option<bool>,
     #[serde(default = "default_tty")]
     tty: bool,
-    #[serde(default = "default_exec_yield_time_ms")]
+    #[serde(
+        default = "default_exec_yield_time_ms",
+        deserialize_with = "json_whole_number::deserialize"
+    )]
     yield_time_ms: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     timeout_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: Option<SandboxPermissions>,
@@ -157,3 +161,7 @@ pub(crate) fn shell_mode_for_environment(
 #[cfg(test)]
 #[path = "unified_exec_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "unified_exec_numeric_tests.rs"]
+mod numeric_tests;

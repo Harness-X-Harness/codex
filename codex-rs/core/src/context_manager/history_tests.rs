@@ -3291,3 +3291,69 @@ fn text_only_items_count_decoded_content() {
 
     assert_eq!(estimated, "Hello, \"world\"!\nこんにちは".len() as i64);
 }
+
+#[test]
+fn hosted_history_exception_preserves_canonical_completion() {
+    let hosted: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"x-id", "call_id":"x-call", "name":"x_keyword_search",
+        "status":"completed", "input":"query"
+    }))
+    .unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(hosted.clone())]);
+    let actual = history.clone().for_prompt_except_hosted(
+        &[InputModality::Text],
+        codex_protocol::grok_hosted::is_completed_search,
+    );
+    assert_eq!(actual, vec![hosted.clone()]);
+    assert_eq!(
+        history.raw_items().cloned().collect::<Vec<_>>(),
+        vec![hosted]
+    );
+}
+
+#[test]
+fn hosted_history_exception_does_not_erase_local_pairing() {
+    let local: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"local-id", "call_id":"local-call", "name":"x_keyword_search", "input":"local input"
+    })).unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(local)]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        history.for_prompt_except_hosted(
+            &[InputModality::Text],
+            codex_protocol::grok_hosted::is_completed_search,
+        )
+    }));
+    if cfg!(debug_assertions) {
+        assert!(result.is_err());
+    } else {
+        let actual = result.unwrap();
+        assert_eq!(actual.len(), 2);
+        assert!(
+            matches!(&actual[1], ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "local-call")
+        );
+    }
+}
+
+#[test]
+fn oversized_saved_hosted_history_is_not_reclassified_as_local() {
+    let hosted: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"x-id", "call_id":"x-call", "name":"x_keyword_search",
+        "status":"completed", "input":"q".repeat(40_000)
+    }))
+    .unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(hosted.clone())]);
+    let actual = history.for_prompt_except_hosted(
+        &[InputModality::Text],
+        codex_protocol::grok_hosted::is_completed_search,
+    );
+    assert_eq!(actual, vec![hosted]);
+    assert!(
+        codex_tools::FlatToolRoutes::default()
+            .project_history(&actual)
+            .unwrap_err()
+            .contains("context limit")
+    );
+}

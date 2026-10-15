@@ -35,7 +35,7 @@ icu_provider = { workspace = true, features = ["sync"] }
 quick-xml = { workspace = true, features = ["serialize"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 serde_with = { workspace = true, features = ["macros", "base64"] }
 strum = { workspace = true }
 strum_macros = { workspace = true }

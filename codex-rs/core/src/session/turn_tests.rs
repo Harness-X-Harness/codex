@@ -59,7 +59,8 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
 }
 
 #[tokio::test]
-async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
+async fn plan_mode_uses_contributed_turn_item_for_last_agent_message()
+-> codex_protocol::error::Result<()> {
     let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::new();
     builder.turn_item_contributor(Arc::new(RewriteAgentMessageContributor));
@@ -70,6 +71,7 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     let item = assistant_output_text("original assistant text");
 
     let step_context = StepContext::for_test(Arc::new(turn_context));
+    let search_activity = crate::session::search_activity::SearchActivityScope::new()?;
     let handled = handle_assistant_item_done_in_plan_mode(
         &session,
         &step_context,
@@ -78,14 +80,16 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
         &mut state,
         /*previously_active_item*/ None,
         &mut last_agent_message,
+        &search_activity,
     )
-    .await;
+    .await?;
 
     assert!(handled);
     assert_eq!(
         last_agent_message.as_deref(),
         Some("plan contributed assistant text")
     );
+    Ok(())
 }
 
 #[test]

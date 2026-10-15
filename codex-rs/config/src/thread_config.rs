@@ -315,6 +315,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: true,
+            x_search: None,
             supports_standalone_web_search: true,
         }
     }

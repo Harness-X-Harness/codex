@@ -20,6 +20,9 @@ use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
+use serde::Deserializer;
+use serde::de::Error;
+use serde_json::value::RawValue;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -266,8 +269,28 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default, deserialize_with = "deserialize_fork_turns")]
     fork_turns: Option<String>,
     fork_context: Option<bool>,
+}
+
+fn deserialize_fork_turns<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Box<RawValue>>::deserialize(deserializer)?
+        .map(|raw| {
+            if raw.get().starts_with('"') {
+                serde_json::from_str::<String>(raw.get()).map_err(D::Error::custom)
+            } else {
+                codex_protocol::json_whole_number::deserialize::<_, usize>(
+                    &mut serde_json::Deserializer::from_str(raw.get()),
+                )
+                .map(|count| count.to_string())
+                .map_err(D::Error::custom)
+            }
+        })
+        .transpose()
 }
 
 impl SpawnAgentArgs {
@@ -336,3 +359,7 @@ impl ToolOutput for SpawnAgentResult {
         tool_output_code_mode_result(self, "spawn_agent")
     }
 }
+
+#[cfg(test)]
+#[path = "spawn_numeric_tests.rs"]
+mod numeric_tests;

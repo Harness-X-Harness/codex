@@ -67,7 +67,10 @@ pub(super) async fn run_remote_compact_v2_attempt(
         .is_enabled()
         .then(|| history.raw_items().cloned().collect());
     let (mut input, prompt_input_metadata): (Vec<_>, Vec<_>) = history
-        .for_prompt_annotated(&turn_context.model_info().input_modalities)
+        .for_prompt_annotated_except_hosted(&turn_context.model_info().input_modalities, |item| {
+            turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok
+                && codex_protocol::grok_hosted::is_completed_search(item)
+        })
         .into_iter()
         .map(|envelope| (envelope.item, envelope.metadata))
         .unzip();

@@ -79,12 +79,22 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
+#[path = "grok_provider_tests.rs"]
+mod grok_provider;
 mod guardian_authorization;
 mod guardian_authorization_refresh;
 #[path = "guardian_cached_score_tests.rs"]
 mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
+#[cfg(target_os = "linux")]
+mod structured_edit;
+#[cfg(target_os = "linux")]
+mod structured_edit_code_mode;
+#[cfg(target_os = "linux")]
+mod structured_edit_remote;
+#[cfg(target_os = "linux")]
+mod structured_edit_support;
 // Uses the same command-approval harness as guardian_review below.
 mod canonical_plugin_connectors;
 mod gateway_auth;
@@ -213,6 +223,8 @@ mod tool_lifecycle;
 mod tool_parallelism;
 mod tools;
 mod truncation;
+#[path = "turn_input_completion_tests.rs"]
+mod turn_input_completion;
 mod turn_input_submission;
 mod turn_state;
 mod unified_exec;

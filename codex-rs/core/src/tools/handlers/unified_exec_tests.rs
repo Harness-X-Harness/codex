@@ -9,6 +9,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use test_case::test_case;
 
 use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
@@ -280,9 +281,13 @@ async fn shell_mode_for_environment_uses_direct_mode_for_remote_environments() -
     Ok(())
 }
 
+#[test_case("10000", "apply_patch verification failed"; "integer")]
+#[test_case("300.0", "apply_patch verification failed"; "whole_decimal")]
+#[test_case("3e2", "apply_patch verification failed"; "whole_exponent")]
+#[test_case("1.0000000000000001", "whole number"; "fraction_rejected")]
 #[tokio::test]
 #[cfg(not(windows))]
-async fn exec_command_reuses_foreign_windows_grant() {
+async fn exec_command_reuses_foreign_windows_grant(yield_time_ms: &str, expected_error: &str) {
     use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
     use codex_features::Feature;
     use codex_protocol::models::AdditionalPermissionProfile;
@@ -353,13 +358,10 @@ async fn exec_command_reuses_foreign_windows_grant() {
             tool_name: codex_tools::ToolName::plain("exec_command"),
             source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
-                arguments: serde_json::json!({
-                    "cmd": "*** Begin Patch\n*** Add File: granted/file.txt\n+text\n*** End Patch",
-                    "workdir": "nested",
-                    "sandbox_permissions": "with_additional_permissions",
-                    "additional_permissions": granted_permissions,
-                })
-                .to_string(),
+                arguments: format!(
+                    r#"{{"cmd":"*** Begin Patch\n*** Add File: granted/file.txt\n+text\n*** End Patch","workdir":"nested","sandbox_permissions":"with_additional_permissions","additional_permissions":{},"yield_time_ms":{yield_time_ms}}}"#,
+                    serde_json::to_string(&granted_permissions).expect("permissions JSON"),
+                ),
             },
         })
         .await;
@@ -368,8 +370,55 @@ async fn exec_command_reuses_foreign_windows_grant() {
         panic!("raw patch should stop before remote execution");
     };
     assert!(
-        message.contains("apply_patch verification failed"),
-        "matching foreign grant should reach patch interception: {message}"
+        message.contains(expected_error),
+        "expected numeric admission or rejection before remote execution: {message}"
+    );
+}
+
+#[tokio::test]
+#[cfg(target_pointer_width = "64")]
+async fn exec_command_hook_rewrite_preserves_exact_numeric_arguments() {
+    let invocation = invocation_for_payload(
+        "exec_command",
+        "numeric-hook",
+        ToolPayload::Function {
+            arguments: r#"{"cmd":"printf original","yield_time_ms":2.5e2,"timeout_ms":3.0,"max_output_tokens":9007199254740993.0,"login":false}"#.to_string(),
+        },
+    )
+    .await;
+    let handler = ExecCommandHandler::default();
+    assert_eq!(
+        handler.pre_tool_use_payload(&invocation),
+        Some(crate::tools::registry::PreToolUsePayload {
+            tool_name: HookToolName::bash(),
+            tool_input: serde_json::json!({"command": "printf original"}),
+        })
+    );
+    let rewritten = handler
+        .with_updated_hook_input(
+            invocation,
+            serde_json::json!({"command": "printf rewritten"}),
+        )
+        .expect("command rewrite");
+    let ToolPayload::Function { arguments } = rewritten.payload else {
+        panic!("expected function payload");
+    };
+    let args: ExecCommandArgs = parse_arguments(&arguments).expect("rewritten arguments");
+    assert_eq!(
+        (
+            args.cmd,
+            args.yield_time_ms,
+            args.timeout_ms,
+            args.max_output_tokens,
+            args.login,
+        ),
+        (
+            "printf rewritten".to_string(),
+            250,
+            Some(3),
+            Some(9_007_199_254_740_993),
+            Some(false),
+        )
     );
 }
 

@@ -138,6 +138,8 @@ pub(super) async fn write_file(path: PathBuf, contents: Vec<u8>) -> io::Result<(
                 "path is not a regular file",
             ));
         }
+        #[cfg(test)]
+        crate::file_system_mutation::test_support::pause_blocking(&path);
         file.set_len(0)?;
         file.write_all(&contents)
     })
@@ -322,6 +324,8 @@ pub(super) async fn remove(path: PathBuf, recursive: bool, force: bool) -> io::R
         } else {
             AtFlags::empty()
         };
+        #[cfg(test)]
+        crate::file_system_mutation::test_support::pause_blocking(&path);
         unlinkat(&parent, leaf, flags).map_err(io::Error::from)
     })
     .await

@@ -294,3 +294,38 @@ async fn turn_profile_and_duration_share_a_completion_instant() {
         Some(i64::try_from(classified_ms).expect("profile duration should fit i64"))
     );
 }
+
+#[tokio::test]
+async fn search_activity_does_not_replace_the_first_ordered_output_timing() {
+    let state = TurnTimingState::default();
+    state.mark_turn_started(Instant::now()).await;
+    for activity_state in [
+        codex_protocol::SearchActivityState::Running,
+        codex_protocol::SearchActivityState::Completed,
+        codex_protocol::SearchActivityState::Cleared,
+    ] {
+        assert_eq!(
+            state
+                .record_ttft_for_response_event(&ResponseEvent::SearchActivity {
+                    output_index: 1,
+                    item_id: "search-1".to_string(),
+                    kind: codex_protocol::SearchActivityKind::Web,
+                    state: activity_state,
+                })
+                .await,
+            None
+        );
+    }
+    assert!(
+        state
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("A".to_string()))
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        state
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("B".to_string()))
+            .await,
+        None
+    );
+}

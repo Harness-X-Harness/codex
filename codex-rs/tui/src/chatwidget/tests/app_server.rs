@@ -70,6 +70,36 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
 }
 
 #[tokio::test]
+async fn search_activity_thread_switch_clears_preview_and_rejects_old_thread() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let first_thread = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(first_thread));
+    handle_turn_started(&mut chat, "turn-1");
+    let running =
+        ServerNotification::SearchActivity(codex_app_server_protocol::SearchActivityNotification {
+            thread_id: first_thread.to_string(),
+            turn_id: "turn-1".into(),
+            attempt_id: 1,
+            output_index: 1,
+            item_id: "web".into(),
+            kind: codex_app_server_protocol::SearchActivityKind::Web,
+            state: codex_app_server_protocol::SearchActivityState::Running,
+        });
+    chat.handle_server_notification(running.clone(), /*replay_kind*/ None);
+    assert!(!chat.transcript.search_activity.is_empty());
+    chat.handle_thread_session(configured_thread_session(ThreadId::new()));
+    handle_turn_started(&mut chat, "turn-1");
+    chat.handle_server_notification(running, /*replay_kind*/ None);
+    assert!(chat.transcript.search_activity.is_empty());
+    assert!(
+        !drain_insert_history_with(&mut events, HistoryCell::raw_lines)
+            .iter()
+            .flatten()
+            .any(|line| line.to_string().contains("Searching the web"))
+    );
+}
+
+#[tokio::test]
 async fn session_header_uses_catalog_display_name_without_changing_model() {
     let slug = "us.openai.gpt-5.6-luna";
     for (name, first_event, display_name) in [

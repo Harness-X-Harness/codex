@@ -908,6 +908,29 @@ impl ModelClient {
             // Filter only the request copy; persisted history remains unchanged.
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
+        // Project only this request copy. Canonical history and router capabilities
+        // remain provider-neutral, including when replaying a resumed session.
+        let projected_tools;
+        let tool_specs = if self.state.provider.api_dialect() == codex_api::ApiDialect::Grok {
+            let (tools, routes) = codex_tools::project_flat_function_tools(&prompt.tools)
+                .map_err(CodexErr::InvalidRequest)?;
+            input = routes
+                .project_history(&input)
+                .map_err(CodexErr::InvalidRequest)?;
+            projected_tools = tools;
+            projected_tools.as_slice()
+        } else {
+            if prompt.tools.iter().any(|spec| {
+                matches!(spec,
+                codex_tools::ToolSpec::WebSearch { filters: Some(filters), .. }
+                    if filters.excluded_domains.as_ref().is_some_and(|domains| !domains.is_empty()))
+            }) {
+                return Err(CodexErr::InvalidRequest(
+                    "excluded_domains requires the Grok Responses dialect".into(),
+                ));
+            }
+            prompt.tools.as_ref()
+        };
         let is_openai = self.state.provider.info().is_openai();
         let (instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
@@ -917,9 +940,9 @@ impl ModelClient {
                 self.state.thread_id.to_string().as_bytes(),
             );
             let tools = if self.state.provider.capabilities().namespace_tools {
-                create_tools_json_for_responses_lite(&prompt.tools)?
+                create_tools_json_for_responses_lite(tool_specs)?
             } else {
-                create_tools_json_for_responses_api(&prompt.tools)?
+                create_tools_json_for_responses_api(tool_specs)?
             };
             let mut prefix = vec![ResponseItem::AdditionalTools {
                 id: Some(ResponseItemId::with_suffix(
@@ -944,7 +967,7 @@ impl ModelClient {
         } else {
             (
                 prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
+                Some(create_tools_raw_json_for_responses_api(tool_specs)?.into()),
             )
         };
         if !is_openai {
@@ -1019,7 +1042,10 @@ impl ModelClient {
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
-            if item.id().is_some_and(|id| !id.is_prefixed()) {
+            let preserves_hosted_id = self.state.provider.api_dialect()
+                == codex_api::ApiDialect::Grok
+                && codex_protocol::grok_hosted::is_completed_search(item);
+            if !preserves_hosted_id && item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }
             if !self.state.content_item_kinds_enabled {
@@ -1032,7 +1058,8 @@ impl ModelClient {
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.info().supports_websockets
+        if self.state.provider.api_dialect() != codex_api::ApiDialect::OpenAi
+            || !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
         {
             return false;
@@ -1766,6 +1793,8 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
+            .with_dialect(self.client.state.provider.api_dialect())
+            .with_grok_x_search(self.client.state.provider.info().x_search.clone())
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 
@@ -2225,7 +2254,7 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
-            WireApi::Responses => {
+            WireApi::Responses | WireApi::GrokResponses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self

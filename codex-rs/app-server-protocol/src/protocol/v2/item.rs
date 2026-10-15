@@ -35,6 +35,7 @@ pub use codex_protocol::items::McpAppDisplayMode;
 pub use codex_protocol::items::McpAppUi;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+pub use codex_protocol::items::XSearchItem;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -401,6 +402,7 @@ pub enum ThreadItem {
         agent_path: String,
     },
     WebSearch(WebSearchItem),
+    XSearch(XSearchItem),
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageView {
@@ -467,6 +469,7 @@ impl ThreadItem {
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
             ThreadItem::WebSearch(item) => &item.id,
+            ThreadItem::XSearch(item) => &item.id,
             ThreadItem::Sleep(item) => &item.id,
             ThreadItem::ImageGeneration(item) => &item.id,
         }
@@ -983,6 +986,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 agent_thread_id: activity.agent_thread_id.to_string(),
                 agent_path: String::from(activity.agent_path),
             },
+            CoreTurnItem::XSearch(search) => ThreadItem::XSearch(search),
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch(WebSearchItem {
                 id: search.id,
                 query: search.query,

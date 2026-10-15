@@ -1,3 +1,4 @@
+use codex_api::ApiDialect;
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
@@ -21,12 +22,12 @@ use pretty_assertions::assert_eq;
 use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenArgs;
-use super::imagegen_tool_spec;
 use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
+use crate::policy::ImagePolicy;
 
 const RESULT: &str = "cG5n";
 
@@ -45,7 +46,7 @@ fn artifact_path_sanitizes_session_and_call_ids() {
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
-    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+    let ToolSpec::Namespace(spec) = ImagePolicy::for_dialect(ApiDialect::OpenAi).tool_spec() else {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
@@ -67,6 +68,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
             },
             &[],
             &[],
+            ImagePolicy::for_dialect(ApiDialect::OpenAi),
         )
         .await
         .expect("generation request should build"),
@@ -157,6 +159,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             },
             &history,
             &[],
+            ImagePolicy::for_dialect(ApiDialect::OpenAi),
         )
         .await
         .expect("history-backed edit request should build"),
@@ -192,6 +195,7 @@ async fn recent_image_fallback_passes_file_backed_image_to_edit_request() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect("a selected file-backed image should be passed through");
@@ -247,6 +251,7 @@ async fn recent_image_fallback_passes_file_backed_tool_output_to_edit_request() 
             },
         ],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect("a selected file-backed tool output should be passed through");
@@ -282,6 +287,7 @@ async fn conflicting_image_selectors_return_tool_error() {
         },
         &[],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -311,6 +317,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
         },
         &[],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -338,6 +345,7 @@ async fn recent_image_fallback_requires_requested_count() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect_err("history-backed edit should require the requested image count");

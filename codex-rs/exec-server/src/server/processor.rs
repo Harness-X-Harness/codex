@@ -82,7 +82,7 @@ impl ConnectionProcessor {
         )
     }
 
-    fn new_with_location_request(
+    pub(super) fn new_with_location_request(
         runtime_paths: ExecServerRuntimePaths,
         telemetry: ExecServerTelemetry,
         http_client_factory: HttpClientFactory,

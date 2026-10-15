@@ -527,7 +527,8 @@ impl CodexThread {
     ///
     /// This is the thread-level bridge to `Session::inject_if_running` for
     /// callers that only hold a `CodexThread`.
-    /// It returns the unchanged items when this thread has no active turn.
+    /// It returns the unchanged items when there is no active turn or its input
+    /// queue has closed for completion.
     pub async fn inject_if_running(
         &self,
         items: Vec<ResponseItem>,

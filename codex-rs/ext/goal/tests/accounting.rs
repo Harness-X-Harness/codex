@@ -73,6 +73,7 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
         ("none", 3),
         ("user", 6),
         ("tool", 6),
+        ("hosted X", 6),
         ("goal", 5),
         ("reset", 6),
         ("missing final", 6),
@@ -99,6 +100,17 @@ fn empty_continuations_require_three_turns_without_activity_or_goal_changes() {
                     &id,
                     &ToolName::plain("shell"),
                     ToolCallOutcome::Completed { success: false },
+                );
+            }
+            if turn == 3 && interruption == "hosted X" {
+                state.record_item(
+                    &id,
+                    &TurnItem::XSearch(codex_protocol::items::XSearchItem {
+                        id: "hosted-item".into(),
+                        call_id: "hosted-call".into(),
+                        name: "x_keyword_search".into(),
+                        input: "{ \"query\": \"日本語\" }\n".into(),
+                    }),
                 );
             }
             if turn == 3 && interruption == "reset" {

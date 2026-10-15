@@ -1539,6 +1539,8 @@ pub enum EventMsg {
     RawResponseItem(RawResponseItemEvent),
     RawResponseCompleted(RawResponseCompletedEvent),
 
+    /// Live search presentation only; never creates a canonical item.
+    SearchActivity(crate::SearchActivityEvent),
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
     HookStarted(HookStartedEvent),

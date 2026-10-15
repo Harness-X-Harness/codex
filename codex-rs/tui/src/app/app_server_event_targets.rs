@@ -97,6 +97,7 @@ pub(super) fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::ItemCompleted(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::SearchActivity(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::RawResponseItemCompleted(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -285,6 +286,26 @@ mod tests {
         let target = server_notification_thread_target(&notification);
 
         assert_eq!(target, ServerNotificationThreadTarget::Global);
+    }
+
+    #[test]
+    fn search_activity_routes_only_to_its_thread() {
+        let thread_id = ThreadId::new();
+        let notification = ServerNotification::SearchActivity(
+            codex_app_server_protocol::SearchActivityNotification {
+                kind: codex_app_server_protocol::SearchActivityKind::Web,
+                thread_id: thread_id.to_string(),
+                turn_id: "turn".into(),
+                attempt_id: 1,
+                output_index: 1,
+                item_id: "web".into(),
+                state: codex_app_server_protocol::SearchActivityState::Running,
+            },
+        );
+        assert_eq!(
+            server_notification_thread_target(&notification),
+            ServerNotificationThreadTarget::Thread(thread_id)
+        );
     }
 
     #[test]

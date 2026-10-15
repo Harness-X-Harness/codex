@@ -34,6 +34,7 @@ fn test_model(model_messages: Option<ModelMessages>) -> ModelInfo {
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
+        structured_edit_tool_type: None,
         web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,

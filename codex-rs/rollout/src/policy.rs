@@ -101,6 +101,8 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
                 || matches!(
                     event.item,
                     TurnItem::FunctionCallOutput(_)
+                        // Raw custom calls do not carry trusted hosted provenance.
+                        | TurnItem::XSearch(_)
                         | TurnItem::Plan(_)
                         | TurnItem::Extension(ExtensionItem::Sleep(_))
                 )
@@ -139,7 +141,8 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         }
 
         // Transient, non-durable events.
-        EventMsg::Error(_)
+        EventMsg::SearchActivity(_)
+        | EventMsg::Error(_)
         | EventMsg::ThreadQueueChanged(_)
         | EventMsg::GuardianAssessment(_)
         | EventMsg::ExecCommandEnd(_)
@@ -204,3 +207,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::CollabResumeBegin(_) => false,
     }
 }
+
+#[cfg(test)]
+#[path = "policy_search_activity_tests.rs"]
+mod search_activity_tests;

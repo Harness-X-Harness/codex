@@ -1447,6 +1447,40 @@
           "type": "object"
         },
         {
+          "description": "Provider payload retained without interpreting or inventing search results. Only the Grok request/response owner may construct this canonical projection.",
+          "properties": {
+            "callId": {
+              "type": "string"
+            },
+            "id": {
+              "description": "Provider item identity, unique among retained items in this turn.",
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "xSearch"
+              ],
+              "title": "XSearchThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "callId",
+            "id",
+            "input",
+            "name",
+            "type"
+          ],
+          "title": "XSearchThreadItem",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "type": "string"
