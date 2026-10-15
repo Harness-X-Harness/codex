@@ -128,12 +128,9 @@ func TestNativeFirstRequestShape(t *testing.T) {
 				if profile != "isolated-edit" && (failure.Code != "turn_unsuccessful" || failure.TerminalStatus != "failed" || failure.HTTPStatus != 403) {
 					t.Error("history observer lost its bound failure diagnostics")
 				}
-				if profile == "isolated-edit" && runErr.Error() != "live: edit turn did not complete successfully" {
-					t.Error("edit request-shape proof must reach the existing rejected-terminal path, not a timeout or unrelated error")
+				if profile == "isolated-edit" && (runErr.Error() != "live: edit turn did not complete successfully" || failure.Code != "turn_unsuccessful") {
+					t.Error("edit request-shape proof must reach the rejected terminal, not a timeout or unrelated error")
 				}
-				// The edit observer currently returns an ordinary error for a
-				// failed terminal. Report that gap; never manufacture HTTP/status
-				// diagnostics or change the observer to make this test pass.
 				for _, attempt := range attempts {
 					shape := attempt.Shape
 					if shape.Model != model || !shape.Stream || !containsShapeValue(shape.Include, "reasoning.encrypted_content") {

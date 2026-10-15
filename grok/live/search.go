@@ -22,36 +22,15 @@ type SearchEvidence struct {
 // Its isolated fixture has no local tool executor. Native config/wire/history
 // composition remains a prerequisite; this observer does not infer it from text.
 func HostedSearch(ctx context.Context, options Options, scenario string) (SearchEvidence, error) {
-	result := SearchEvidence{}
 	_, config, prompt, err := searchfixture.Plan(scenario)
 	if err != nil {
-		return result, errors.New("live: invalid hosted search fixture")
+		return SearchEvidence{}, errors.New("live: invalid hosted search fixture")
 	}
-	result.Scenario = scenario
-	base, err := runFixture(ctx, options, nil, map[string]any{"experimentalRawEvents": true, "config": config}, func(server *appServer, threadID string, evidence *Evidence) error {
-		probe := searchProbe{server: server, threadID: threadID, scenario: scenario, evidence: evidence, result: &result}
-		if err := probe.observe(prompt); err != nil {
-			return err
-		}
-		evidence.FirstCompleted, evidence.FirstReplyBytes = true, evidence.ReplyBytes
-		if result.CanonicalCalls == 0 {
-			return errors.New("live: completed hosted search absent")
-		}
-		evidence.Stage = "hosted_search_observed"
-		probe.previousID = probe.turnID
-		if err := probe.observe("Summarize the previous search result from this thread without searching again."); err != nil {
-			return err
-		}
-		result.FollowupCompleted, evidence.Completed = true, true
-		evidence.Stage = "hosted_continuation_completed"
-		return nil
-	})
-	result.Evidence = base
-	return result, err
+	return sdkHostedSearch(ctx, options, scenario, config, prompt)
 }
 
 type searchProbe struct {
-	server                                 *appServer
+	server                                 productClient
 	threadID, turnID, previousID, scenario string
 	evidence                               *Evidence
 	result                                 *SearchEvidence
@@ -104,7 +83,7 @@ func (p *searchProbe) observe(prompt string) error {
 	if err := p.server.call("thread/read", map[string]any{"threadId": p.threadID, "includeTurns": true}, &read); err != nil {
 		return err
 	}
-	for len(p.server.pending) > 0 {
+	for len(p.server.queued()) > 0 {
 		message, err := p.server.next()
 		if err != nil {
 			return err

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -35,6 +36,9 @@ func fakeEditServer() {
 		return
 	}
 	defer trace.Close()
+	// SDK cleanup interrupts the child before closing stdin. Keep that signal
+	// from skipping the intended phase, including a joined-shutdown mutation.
+	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	log := func(value string) { _, _ = io.WriteString(trace, value+"\n") }
 	log("process")
 	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
@@ -44,6 +48,13 @@ func fakeEditServer() {
 	if err != nil {
 		return
 	}
+	defer func() {
+		log("eof")
+		if mode == "shutdown_changes" {
+			_ = os.WriteFile(path, []byte("PRIVATE_CANARY"), 0600)
+			log("file_written")
+		}
+	}()
 	replaceAll := strings.Count(string(seed), editSeedToken) == 2
 	var turns []any
 	var boundThread map[string]any
@@ -114,6 +125,11 @@ func fakeEditServer() {
 				"thread":  boundThread,
 			}
 		case "turn/start":
+			if mode == "stalled_start" {
+				for input.Scan() {
+				}
+				return
+			}
 			var params struct {
 				ThreadID string `json:"threadId"`
 			}
@@ -259,7 +275,7 @@ func fakeEditServer() {
 				if mode == "duplicate_call" {
 					raw(call)
 				}
-				if decline {
+				if decline || mode == "denied_effect" {
 					approval := map[string]any{"threadId": "private-thread", "turnId": turnID, "itemId": callID, "startedAtMs": 1}
 					if mode == "approval_thread" {
 						approval["threadId"] = "PRIVATE_CANARY"
@@ -270,17 +286,24 @@ func fakeEditServer() {
 					if mode == "approval_item" {
 						approval["itemId"] = "PRIVATE_CANARY"
 					}
-					_ = output.Encode(map[string]any{"id": 99, "method": "item/fileChange/requestApproval", "params": approval})
-					var response struct {
-						Result struct{ Decision string }
-						Error  any
+					approve := func(id int, candidate map[string]any) bool {
+						_ = output.Encode(map[string]any{"id": id, "method": "item/fileChange/requestApproval", "params": candidate})
+						var response struct {
+							ID     int
+							Result struct{ Decision string }
+							Error  any
+						}
+						if !input.Scan() || json.Unmarshal(input.Bytes(), &response) != nil || response.ID != id || response.Result.Decision != "decline" || response.Error != nil {
+							return false
+						}
+						log("approval_declined")
+						return true
 					}
-					if !input.Scan() || json.Unmarshal(input.Bytes(), &response) != nil || response.Result.Decision != "decline" || response.Error != nil {
+					if !approve(99, approval) {
 						return
 					}
-					log("approval_declined")
-					if mode == "duplicate_approval" {
-						_ = output.Encode(map[string]any{"id": 100, "method": "item/fileChange/requestApproval", "params": approval})
+					if mode == "duplicate_approval" && !approve(100, approval) {
+						return
 					}
 				}
 				if (!decline || mode == "decline_changes") && mode != "false_success" {
@@ -347,7 +370,9 @@ func fakeEditServer() {
 				_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress", "items": []any{}, "startedAt": 1}}})
 			}
 			turns = append(turns, terminal)
-			send("turn/completed", map[string]any{"threadId": threadID, "turn": terminal})
+			if mode != "missing_terminal" {
+				send("turn/completed", map[string]any{"threadId": threadID, "turn": terminal})
+			}
 			continue
 		case "thread/read":
 			if mode == "read_error" || mode == "continuation_read_error" && len(turns) == 2 {
@@ -379,7 +404,7 @@ func fakeEditServer() {
 }
 
 func TestStructuredEditScenarios(t *testing.T) {
-	for _, mode := range []string{"success", "early", "early_decline", "wire_identity", "absolute_path", "false_replace_all", "output_first", "content_output", "decline", "pinned", "replace_all"} {
+	for _, mode := range []string{"success", "early", "early_decline", "wire_identity", "absolute_path", "false_replace_all", "output_first", "content_output", "decline", "pinned", "replace_all", "duplicate_call", "duplicate_output", "stale_continuation", "duplicate_approval"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "edit:"+mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -388,7 +413,7 @@ func TestStructuredEditScenarios(t *testing.T) {
 			wantTurns, wantApprovals, wantWrites := 2, 0, 1
 			seed := "prefix\r\n" + editSeedToken + "\r\nsuffix"
 			switch mode {
-			case "decline", "early_decline":
+			case "decline", "early_decline", "duplicate_approval":
 				runner, wantTurns, wantApprovals, wantWrites = live.StructuredEditApprovalDeclined, 1, 1, 0
 			case "pinned":
 				runner, wantTurns = live.StructuredEditPinnedPreviousModel, 1
@@ -401,7 +426,7 @@ func TestStructuredEditScenarios(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := strings.ReplaceAll(seed, editSeedToken, editReplacedToken)
-			if mode == "decline" || mode == "early_decline" {
+			if wantApprovals == 1 {
 				want = seed
 			}
 			hash := func(text string) string { sum := sha256.Sum256([]byte(text)); return hex.EncodeToString(sum[:]) }
@@ -419,8 +444,12 @@ func TestStructuredEditScenarios(t *testing.T) {
 				t.Fatal("model pin was not consumed")
 			}
 			trace := editTrace(t, options)
-			for operation, count := range map[string]int{"process": 1, "initialize": 1, "initialized": 1, "thread/start": 1, "capability_fixture": 1, "turn/start": wantTurns, "thread/read": wantTurns, "file_written": wantWrites, "approval_declined": wantApprovals} {
-				if strings.Count("\n"+trace, "\n"+operation+"\n") != count {
+			traceApprovals := wantApprovals
+			if mode == "duplicate_approval" {
+				traceApprovals = 2
+			}
+			for operation, count := range map[string]int{"process": 1, "initialize": 1, "initialized": 1, "thread/start": 1, "capability_fixture": 1, "turn/start": wantTurns, "thread/read": wantTurns, "file_written": wantWrites, "approval_declined": traceApprovals, "eof": 1} {
+				if strings.Count(trace, operation+"\n") != count {
 					t.Fatalf("unexpected %s count in %q", operation, trace)
 				}
 			}
@@ -434,18 +463,18 @@ func TestStructuredEditScenarios(t *testing.T) {
 
 func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "near_identity", "near_wire_identity", "namespace", "apply_patch", "command",
-		"missing_call", "missing_output", "wrong_output", "empty_output", "malformed_output", "duplicate_call", "duplicate_output", "duplicate_edit", "late_duplicate",
+		"missing_call", "missing_output", "wrong_output", "empty_output", "malformed_output", "duplicate_edit", "late_duplicate",
 		"missing_change", "wrong_change_id", "wrong_change_path", "move_change", "failed_change", "declined_change", "running_change", "unknown_change", "duplicate_change", "conflicting_change", "false_success", "wrong_bytes",
 		"malformed_args", "duplicate_arg", "wrong_old", "wrong_path", "extra_arg", "string_replace_all", "null_replace_all", "number_replace_all", "missing_replace_all",
-		"failed", "interrupted", "empty_reply", "commentary", "read_thread", "read_failed", "read_error", "continuation_read_error", "continuation_failed", "repeat_continuation", "continuation_changes", "stale_continuation",
-		"approval_thread", "approval_turn", "approval_item", "duplicate_approval", "decline_changes"}
+		"failed", "interrupted", "empty_reply", "commentary", "read_thread", "read_failed", "read_error", "continuation_read_error", "continuation_failed", "repeat_continuation", "continuation_changes",
+		"approval_thread", "approval_turn", "approval_item", "decline_changes", "denied_effect", "shutdown_changes", "stalled_start", "missing_terminal"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "edit:"+mode)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			runner := live.StructuredEdit
-			if strings.HasPrefix(mode, "approval_") || mode == "duplicate_approval" || mode == "decline_changes" {
+			if strings.HasPrefix(mode, "approval_") || mode == "decline_changes" {
 				runner = live.StructuredEditApprovalDeclined
 			}
 			if strings.Contains(mode, "replace_all") {
@@ -492,40 +521,63 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				wantError = "live: fixture binding not established"
 			case "wrong_thread":
 				wantError = "live: unrelated edit thread evidence"
-			case "wrong_turn", "stale_continuation":
+			case "wrong_turn":
 				wantError = "live: unrelated edit turn evidence"
 			case "command":
 				wantError = "live: alternative tool evidence observed"
-			case "empty_output", "malformed_output", "duplicate_output":
+			case "empty_output":
 				wantError = "live: unexpected or invalid edit output"
-			case "missing_call", "missing_output", "wrong_output", "missing_change", "wrong_change_id", "failed_change", "declined_change", "running_change", "unknown_change", "approval_item":
+			case "missing_call", "missing_output", "wrong_output", "missing_change", "wrong_change_id", "failed_change", "declined_change", "running_change":
 				wantError = "live: edit call, output or file-change evidence missing"
 			case "wrong_change_path", "move_change":
 				wantError = "live: unexpected edit file change"
-			case "duplicate_change", "conflicting_change":
+			case "duplicate_change":
 				wantError = "live: conflicting or repeated edit file change"
+			case "conflicting_change", "late_duplicate":
+				wantError = "live: conflicting edit item evidence"
 			case "false_success", "wrong_bytes", "continuation_changes", "decline_changes":
 				wantError = "live: edit fixture bytes did not match"
 			case "failed", "interrupted", "read_failed", "continuation_failed":
 				wantError = "live: edit turn did not complete successfully"
-			case "read_error", "continuation_read_error":
-				wantError = "live: protocol request failed"
+			case "read_error", "continuation_read_error", "malformed_output", "unknown_change":
+				wantError = "live: SDK observation did not complete"
 			case "empty_reply", "commentary":
 				wantError = "live: edit final reply unavailable"
 			case "read_thread":
 				wantError = "live: settled edit thread identity not established"
-			case "approval_thread", "approval_turn", "duplicate_approval":
-				wantError = "live: unsupported server request"
+			case "approval_thread", "approval_turn", "approval_item":
+				wantError = "live: edit call, output or file-change evidence missing"
+			case "denied_effect":
+				wantError = "live: unexpected edit approval denied"
+			case "shutdown_changes":
+				wantError = "live: edit fixture bytes did not match"
+			case "stalled_start", "missing_terminal":
+				wantError = "live: SDK observation did not complete"
 			}
-			if code, check := map[string]string{
-				"missing_call": "edit_call_missing", "missing_output": "edit_output_missing",
-				"wrong_output": "edit_output_unpaired", "missing_change": "edit_change_missing",
-				"wrong_change_id": "edit_change_unpaired", "failed_change": "edit_change_failed",
-				"declined_change": "edit_change_declined", "running_change": "edit_change_status_mismatch",
-				"unknown_change": "edit_change_status_mismatch", "approval_item": "edit_approval_unpaired",
+			// A schema failure closes the client. If a prior callback already stored
+			// its context, the waiter sees sdk_observation_failed; otherwise it
+			// reaches the deadline. Neither code is a completed edit.
+			if mode == "malformed_output" || mode == "unknown_change" {
+				code := live.DescribeFailure(err).Code
+				if code != "deadline_exceeded" && code != "sdk_observation_failed" {
+					t.Fatalf("schema failure proved an edit or lost its boundary: %+v", live.DescribeFailure(err))
+				}
+			} else if code, check := map[string]string{
+				"missing_call": "edit_evidence_unpaired", "missing_output": "edit_evidence_unpaired",
+				"wrong_output": "edit_evidence_unpaired", "missing_change": "edit_evidence_unpaired",
+				"wrong_change_id": "edit_evidence_unpaired", "failed_change": "edit_evidence_unpaired",
+				"declined_change": "edit_evidence_unpaired", "running_change": "edit_evidence_unpaired",
+				"approval_item": "edit_evidence_unpaired", "approval_thread": "edit_evidence_unpaired",
+				"approval_turn": "edit_evidence_unpaired", "denied_effect": "unexpected_edit_approval",
+				"shutdown_changes": "edit_bytes_mismatch", "stalled_start": "deadline_exceeded",
+				"missing_terminal": "deadline_exceeded", "read_error": "sdk_observation_failed",
+				"continuation_read_error": "sdk_observation_failed",
+				"failed":                  "turn_unsuccessful",
+				"interrupted":             "turn_unsuccessful", "read_failed": "turn_unsuccessful",
+				"continuation_failed": "turn_unsuccessful",
 			}[mode]; check {
-				if live.DescribeFailure(err) != (live.FailureInfo{Code: code}) {
-					t.Fatalf("incorrect bounded edit diagnostic: %+v", live.DescribeFailure(err))
+				if live.DescribeFailure(err).Code != code {
+					t.Fatalf("incorrect bounded edit diagnostic: %+v, want %s", live.DescribeFailure(err), code)
 				}
 			}
 			if err.Error() != wantError {
@@ -540,8 +592,17 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 			if mode == "wrong_model" {
 				wantTurns = 0
 			}
-			if strings.Contains(mode, "continuation") {
+			if strings.Contains(mode, "continuation") || mode == "shutdown_changes" {
 				wantTurns = 2
+			}
+			if mode == "missing_terminal" && strings.Contains(trace, "thread/read\n") {
+				t.Fatal("settled Read synthesized an absent terminal")
+			}
+			if mode == "denied_effect" && (!strings.Contains(trace, "approval_declined\n") || !strings.Contains(trace, "file_written\n") || got.Completed || got.BytesMatch) {
+				t.Fatal("matching denial was lost before the unauthorized effect")
+			}
+			if mode == "shutdown_changes" && (!got.FirstCompleted || !got.TurnCompleted || !strings.Contains(trace, "eof\n") || strings.Count(trace, "file_written\n") != 2) {
+				t.Fatalf("joined shutdown did not reach its mutation phase: %+v %q", got, trace)
 			}
 			if strings.Count(trace, "process\n") != 1 || strings.Count(trace, "thread/start\n") != 1 || strings.Count(trace, "turn/start\n") != wantTurns {
 				t.Fatal("unexpected semantic invocation count")

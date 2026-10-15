@@ -19,6 +19,11 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 		},
 	}
 	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+		if options.shippedProfile {
+			if err := requireSDKShippedCatalog(ctx, client, evidence); err != nil {
+				return err
+			}
+		}
 		observer.mu.Lock()
 		observer.observations = *evidence
 		observer.observations.Threads = 1

@@ -24,9 +24,9 @@ func ShippedChildCollaboration(ctx context.Context, subject Subject, key string)
 }
 
 func runShippedChildCollaboration(ctx context.Context, options Options) (Evidence, error) {
-	return runFixture(ctx, options, nil, map[string]any{"experimentalRawEvents": true}, func(server *appServer, parentID string, evidence *Evidence) error {
+	return sdkShippedSession(ctx, options, func(server productClient, parentID string, evidence *Evidence) error {
 		stream := childStream{}
-		server.notification = stream.observe
+		server.setNotification(stream.observe)
 		var marker [16]byte
 		if _, err := rand.Read(marker[:]); err != nil {
 			return errors.New("live: setup marker unavailable")
@@ -131,8 +131,8 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		}
 		// All child reads finish before selecting proof, so conflicts queued during
 		// any RPC can invalidate the exact credited child without poisoning others.
-		if stream.err != nil {
-			return stream.err
+		if err := stream.failure(); err != nil {
+			return err
 		}
 		for waited := 0; ; waited++ {
 			matched, pending := false, false
@@ -199,7 +199,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 				}
 			}
 		}
-		for _, message := range stream.events {
+		for _, message := range stream.snapshot() {
 			for _, id := range []string{seed.ID, current.ID} {
 				if _, err := productTerminal(message, parentID, id); err != nil {
 					return err
@@ -348,7 +348,7 @@ func finalProductReply(turn productTurn) (string, error) {
 	return strings.Join(final, "\n"), nil
 }
 
-func readProductThread(server *appServer, id, model string) (productThread, error) {
+func readProductThread(server productClient, id, model string) (productThread, error) {
 	var response struct {
 		Thread productThread `json:"thread"`
 	}
@@ -380,7 +380,7 @@ func productTerminal(message frame, threadID, turnID string) (bool, error) {
 	return true, completedProductTurn(event.Turn)
 }
 
-func observeShippedTurn(server *appServer, id string, evidence *Evidence, effort, prompt string) (productThread, productTurn, error) {
+func observeShippedTurn(server productClient, id string, evidence *Evidence, effort, prompt string) (productThread, productTurn, error) {
 	evidence.Turns++
 	var response struct {
 		Turn productTurn `json:"turn"`
@@ -422,7 +422,7 @@ func observeShippedTurn(server *appServer, id string, evidence *Evidence, effort
 	if err != nil {
 		return thread, terminal, err
 	}
-	for _, message := range server.pending {
+	for _, message := range server.queued() {
 		if _, err := productTerminal(message, id, terminal.ID); err != nil {
 			return thread, terminal, err
 		}

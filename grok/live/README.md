@@ -31,8 +31,10 @@ invocation integration remain #331/#339.
 ## Fixed-input SDK migration
 
 The [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
-fixes product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2` and SDK revision
-`9769ba362a5e946c17a6eb78d8e2155e19bb4f28` (`v0.2.1-0.20261012110012-9769ba362a5e`),
+fixes product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2` and the owner-approved SDK revision
+`8ade447507bc3d08650b830ee6306dd27bc17f23` (`v0.2.1-0.20261014071218-8ade447507bc`),
+which supersedes `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`. Direct facades no longer
+arm an unowned attachment fence.
 with Go 1.26.8. The verified Linux musl x64 product executable from canonical
 run `38171472745`, attempt 1, artifact `11714608891` has SHA-256
 `26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
@@ -41,11 +43,11 @@ expiration and exact subject on retrieval. `runtime_sha256` identifies the
 executable, separately from the artifact ZIP or package archive hash. The
 product source remains fixed while the declared harness SHA evolves.
 
-Basic (#383) and the formal/exploratory reasoning controls (#384) use the SDK.
-Structured edits, images, shipped catalog/profile/children and hosted search
-retain the legacy client until their respective reviewed increments; #379 owns
-final transport removal. Shipped pinned reasoning remains on its explicit
-catalog-bound legacy path until #387; SDK failures never switch clients.
+Basic (#383), the formal/exploratory reasoning controls (#384), the four
+structured-edit entries (#385), image generation/edit (#386), the shipped
+catalog, startup, pinned-history, and child entries (#387), and hosted Web/X
+search (#388) use the SDK. The handwritten stdio client is gone. SDK failures
+never switch clients. Real-provider Live remains outside this fixture proof.
 Shared fixture setup verifies the selected binary and isolates home/credentials.
 Completion needs independently matching thread/turn identities, a successful
 terminal and a nonempty eligible final reply; SDK success alone is insufficient.
@@ -136,18 +138,18 @@ and replace-all. It checks actual bytes/hashes and matching call/output history;
 the supplied replies and HTTP acceptance do not establish real-provider Live.
 The required native selection includes this fixture and fails if it is absent.
 
-The private SDK edit observer preparation keeps public dispatch and all 66
-outcomes unchanged. It reuses business validators and retains both turn ledgers.
-Actual start identities select early observations and matching typed declines;
-unrelated denied approvals gain no authority. Identical repeats are idempotent,
-while conflicting repeats and late first-turn contradictions fail permanently.
-Proof requires exact call/result/change pairing and matching decline approval.
-Settled reads validate both terminals without claiming to join callbacks.
-Callbacks, response snapshots and their items cap at 4096 observations/8 MiB;
-arguments and outputs retain their 4096-byte/64-KiB limits. The shared native/Go
-proof exercises handlers, early identities, safe denials, conflicts, continuation,
-missing evidence, budgets and secret-safe snapshots. Activation still must join
-callbacks before its final snapshot and independently prove actual bytes/hashes.
+The four edit entries use direct `Threads().Start`, `Turns().Start` and
+`Threads().Read` with the private observer. Callbacks must admit the terminal
+before Read; Read validates both retained turns and does not synthesize a missing
+terminal. Actual file bytes and SHA-256 are checked after each turn and again
+after `CloseContext` joins callbacks and reaps the child. A matching file-change
+request on a non-decline fixture is declined and becomes a sticky failure, so a
+later write cannot become an authorized edit. Identical call, output and approval
+replays stay one semantic event; conflicting identities still fail. The scripted
+map keeps 60 outcomes, replaces `duplicate_call`, `duplicate_output`,
+`stale_continuation`, `approval_thread`, `approval_turn` and `duplicate_approval`,
+and retires none. Transport stage strings and the old per-field correlation codes
+collapse to `edit_evidence_unpaired` where the observer has one causal proof.
 
 `StructuredEditEvidence` returns counts, fixture hashes and separate first/current
 terminal facts (`FirstCompleted`, `TurnCompleted`); `Completed` requires the whole
@@ -158,10 +160,12 @@ per turn, at most 4096 preterminal frames, 4096 argument bytes, 64 KiB per outpu
 and one in-memory call/output/change correlation. It collects no outbound HTTP
 request or raw session artifact.
 
-`ImageGenerationEdit(ctx, Options)` consumes an image-capable fixture through
-the same bounded runner: one natural generation turn, then one natural edit
-turn on that thread. `TestGrokImageGenerationEdit` executes deterministic public
-stdio scripts for primary/pinned fixtures. This is prerequisite support for the
+`ImageGenerationEdit(ctx, Options)` uses direct `Threads().Start`, `Turns().Start`
+and `Threads().Read` on one image-capable fixture: one natural generation turn,
+then one natural edit turn on that thread. Callbacks admit canonical raw items
+and public image terminals before Read; Read does not synthesize a missing
+terminal. `TestGrokImageGenerationEdit` executes deterministic fixture scripts
+for primary/pinned models. This is prerequisite support for the
 [retained image Story](../docs/stories/grok-image-generation-history-edit.md),
 not actual Grok tool/HTTP/backend or packaged execution.
 
@@ -214,11 +218,11 @@ differ. A PNG header alone and JPEG mislabeled PNG fail. Each turn caps at
 4096 frames/64 MiB; the scenario retains at most 64 call records, inspects at
 most 256 artifact entries per pre-turn inventory, and arguments to 4096 bytes.
 Image encoded bytes and decoded pixels use the extension's 32 MiB local budget
-(at least four bytes per pixel, eight for 16-bit RGBA). The inherited 16 MiB
-stdio frame and 128-frame/8 MiB early queue budgets still apply, including to
-settled multi-turn reads. A result exceeding an observation budget is not
-proven by this harness; it is not evidence that the product rejected a valid
-image. Failures preserve safe partial terminal/artifact facts; returned
+(at least four bytes per pixel, eight for 16-bit RGBA). The SDK inbound frame
+limit remains 16 MiB, and scenario observation stays at 4096 frames/64 MiB,
+independent of the SDK retention budget. A result exceeding an observation
+budget is not proven by this harness; it is not evidence that the product
+rejected a valid image. Failures preserve safe partial terminal/artifact facts; returned
 evidence omits prompts, payloads, paths, credentials and IDs.
 
 C6 adds source-backed `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and

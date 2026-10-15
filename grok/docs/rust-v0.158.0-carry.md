@@ -506,7 +506,7 @@ A draft candidate or failing construction run is not acceptance evidence.
 [#379](https://github.com/Harness-X-Harness/codex/issues/379) orders #383–#388
 before final client removal. The accepted product source is fixed at
 `e9268d5211064fb77f76a9fe7f0a99348488c9d2`; this modernization changes Live Harness
-only. The SDK is fixed at `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`, with Go 1.26.8.
+only. The owner-approved SDK is `8ade447507bc3d08650b830ee6306dd27bc17f23`, with Go 1.26.8.
 The [Live guidance](../live/README.md#fixed-input-sdk-migration) records the
 verified executable identity and temporary Basic/reasoning SDK / remaining legacy split.
 Dependency defects belong to separate owner issues; silently changing pins,
@@ -542,3 +542,25 @@ can close. Controlled HTTP is not real-provider Live or complete Story proof.
 The private SDK edit observer preparation reuses business validators and retains
 both turn ledgers, with bounded callback tests in the same proof. Public edit
 dispatch stays legacy; file effects, callback joining and activation remain open.
+
+#386 moves image generation and the same-thread image edit onto those direct
+facades. Canonical raw call/output, public image items, settled history and
+artifact bytes stay the lineage proof. Observation remains capped at 4096
+frames, 64 MiB, 64 calls and the 32 MiB decode budget, with the SDK's separate
+16 MiB frame limit. Controlled fixture success is not real-provider image proof.
+
+#387 moves shipped catalog, startup, pinned history and child collaboration onto
+the SDK. Catalog proof compares ordered model identity, default, efforts,
+modalities, multi-agent version and pagination; omitted null DTO fields are not
+a mismatch. Pinned history keeps the two-turn encrypted tool oracle on the
+shipped profile. Child proof still requires inherited-marker recall and parent
+consumption.
+
+#388 moves hosted Web/X search onto the SDK. The five scenarios keep their
+policy projection, canonical hosted call credit, and one same-thread follow-up.
+Assistant prose and local function or custom execution still cannot establish
+hosted search.
+
+#379 removes the handwritten App Server client. Every scripted family and the
+native durable-thread observer now use the pinned SDK. Real-provider Live is
+not part of this fixture proof and remains NOT_RUN.

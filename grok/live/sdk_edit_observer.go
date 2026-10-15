@@ -20,15 +20,17 @@ type sdkEditObservation struct {
 	Turn             editTurn
 	Item             editItem
 	method           string
+	callback         bool
 }
 
 type sdkEditLedger struct {
-	probe       editProbe
-	evidence    StructuredEditEvidence
-	observation editObservation
-	reconciled  bool
-	seen        map[[sha256.Size]byte][sha256.Size]byte
-	pending     []sdkEditObservation
+	probe                            editProbe
+	evidence                         StructuredEditEvidence
+	observation                      editObservation
+	reconciled                       bool
+	callbackTerminal, inlineTerminal bool
+	seen                             map[[sha256.Size]byte][sha256.Size]byte
+	pending                          []sdkEditObservation
 }
 
 // Callback-owned ledgers retain both turns until the SDK joins callback work.
@@ -42,6 +44,7 @@ type sdkEditObserver struct {
 	cause        error
 	changed      chan struct{}
 	failures     chan error
+	clientDone   <-chan struct{}
 }
 
 func newSDKEditObserver(fixture *editFixture) *sdkEditObserver {
@@ -124,6 +127,7 @@ func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
 		}
 	}
 	if decoded.Status != "inProgress" {
+		ledger.inlineTerminal = true
 		return observer.accept(ledger, sdkEditObservation{ThreadID: observer.threadID, Turn: decoded, method: "turn/completed"})
 	}
 	observer.signal()
@@ -139,16 +143,25 @@ func (observer *sdkEditObserver) budget(size int) error {
 	return observer.cause
 }
 
-func (observer *sdkEditObserver) request(_ context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
+func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
+	observer.noteCallback(ctx)
 	raw, marshalErr := json.Marshal(request)
 	if marshalErr == nil {
 		observer.budget(len(raw))
 	}
 	if approval, ok := request.AsItemFileChangeRequestApproval(); ok {
-		// Invalid requests receive the same typed denial but gain no authority.
+		// Every file-change request is declined. A positive fixture has no
+		// approval step; losing that denial would let a later write look authorized.
+		decline := codexsdk.FileChangeApprovalResponse(protocolv2.FileChangeRequestApprovalResponse{Decision: protocolv2.FileChangeApprovalDecisionDecline})
 		params := approval.Params
+		if observer.fixture != nil && !observer.fixture.decline && params.ThreadID == observer.threadID && params.TurnID != "" && params.ItemID != "" {
+			// The typed denial still goes out. Returning the error here would
+			// replace it with a transport rejection and hide the authorization fact.
+			_ = observer.reject(failedObservation("unexpected_edit_approval", "live: unexpected edit approval denied"))
+			return decline, nil
+		}
 		if len(observer.ledgers) != 0 && observer.fixture.decline && params.ThreadID == observer.threadID && params.TurnID != "" && params.ItemID != "" {
 			ledger := observer.ledgers[0]
 			if len(observer.ledgers) == 1 && observer.cause == nil && marshalErr == nil {
@@ -160,7 +173,7 @@ func (observer *sdkEditObserver) request(_ context.Context, request protocolv2.S
 				}
 			}
 		}
-		return codexsdk.FileChangeApprovalResponse(protocolv2.FileChangeRequestApprovalResponse{Decision: protocolv2.FileChangeApprovalDecisionDecline}), nil
+		return decline, nil
 	}
 	if _, ok := request.AsItemCommandExecutionRequestApproval(); ok {
 		return codexsdk.CommandExecutionApprovalResponse(protocolv2.CommandExecutionRequestApprovalResponse{Decision: protocolv2.NewCommandExecutionApprovalDecisionDecline()}), nil
@@ -168,7 +181,10 @@ func (observer *sdkEditObserver) request(_ context.Context, request protocolv2.S
 	return codexsdk.ServerRequestResponse{}, failedObservation("unsupported_server_request", "live: unsupported server request")
 }
 
-func (observer *sdkEditObserver) notification(_ context.Context, notification codexsdk.RawNotification) error {
+func (observer *sdkEditObserver) notification(ctx context.Context, notification codexsdk.RawNotification) error {
+	observer.mu.Lock()
+	observer.noteCallback(ctx)
+	observer.mu.Unlock()
 	if notification.Method != codexsdk.RawResponseItemCompletedExtension {
 		return nil
 	}
@@ -176,7 +192,10 @@ func (observer *sdkEditObserver) notification(_ context.Context, notification co
 	return observer.observeEnvelope(notification.Method, raw, err)
 }
 
-func (observer *sdkEditObserver) typedNotification(_ context.Context, notification protocolv2.ServerNotification) error {
+func (observer *sdkEditObserver) typedNotification(ctx context.Context, notification protocolv2.ServerNotification) error {
+	observer.mu.Lock()
+	observer.noteCallback(ctx)
+	observer.mu.Unlock()
 	method := "item/completed"
 	if _, ok := notification.AsItemCompleted(); !ok {
 		if _, ok := notification.AsTurnCompleted(); !ok {
@@ -201,7 +220,7 @@ func (observer *sdkEditObserver) observeEnvelope(method string, raw []byte, mars
 		return observer.reject(failedObservation("invalid_edit_evidence", "live: invalid edit evidence"))
 	}
 	observation := envelope.Params
-	observation.method = method
+	observation.method, observation.callback = method, true
 	if method == codexsdk.RawResponseItemCompletedExtension && (len(observation.Item.Arguments) > 4096 || len(observation.Item.Output) > 64<<10) {
 		return observer.reject(failedObservation("invalid_edit_evidence", "live: edit item evidence oversized"))
 	}
@@ -254,6 +273,7 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 		if err := ledger.probe.terminal(turn, &ledger.observation); err != nil {
 			return observer.reject(err)
 		}
+		ledger.callbackTerminal = ledger.callbackTerminal || observation.callback
 		for _, item := range items {
 			if err := observer.accept(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: turn.ID, Item: item, method: "item/completed"}); err != nil {
 				return err
@@ -382,6 +402,12 @@ func (observer *sdkEditObserver) snapshot() (StructuredEditEvidence, error) {
 		}
 	}
 	return evidence, observer.cause
+}
+
+func (observer *sdkEditObserver) noteCallback(ctx context.Context) {
+	if observer.clientDone == nil && ctx != nil {
+		observer.clientDone = ctx.Done()
+	}
 }
 
 func (observer *sdkEditObserver) failure(cause error) error {

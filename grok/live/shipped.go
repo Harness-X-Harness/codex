@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 
 	"github.com/Harness-X-Harness/codex/grok/dist"
 )
@@ -19,7 +18,7 @@ func ShippedCatalog(ctx context.Context, subject Subject, key string) (Evidence,
 		return Evidence{Stage: "preflight"}, err
 	}
 	options.catalogOnly = true
-	return runFixture(ctx, options, nil, nil, nil)
+	return sdkShippedCatalog(ctx, options)
 }
 
 // ShippedStartup observes one turn from the unchanged shipped profile. Native
@@ -29,7 +28,7 @@ func ShippedStartup(ctx context.Context, subject Subject, key string) (Evidence,
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
 	}
-	return runFixture(ctx, options, nil, nil, func(server *appServer, id string, evidence *Evidence) error {
+	return sdkShippedSession(ctx, options, func(server productClient, id string, evidence *Evidence) error {
 		_, _, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation that this turn completed.")
 		return err
 	})
@@ -64,20 +63,6 @@ func writeShippedProfile(home, cwd string) error {
 	if os.Mkdir(cwd, 0700) != nil || os.WriteFile(filepath.Join(home, "config.toml"), []byte(dist.Profile()), 0600) != nil || os.WriteFile(filepath.Join(home, "models.json"), dist.Catalog(), 0600) != nil {
 		return errors.New("live: shipped profile copy failed")
 	}
-	return nil
-}
-
-func requireShippedCatalog(server *appServer, evidence *Evidence) error {
-	var actual map[string]any
-	if err := server.call("model/list", map[string]any{"limit": 100}, &actual); err != nil {
-		return err
-	}
-	expected, err := shippedModelList()
-	if err != nil || !reflect.DeepEqual(actual, expected) {
-		return errors.New("live: complete shipped catalog mismatch")
-	}
-	evidence.CatalogModels, evidence.ShippedCatalog = len(expected["data"].([]any)), true
-	evidence.Stage = "shipped_catalog_verified"
 	return nil
 }
 

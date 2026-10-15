@@ -5,12 +5,14 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 // childStream is private to the shipped child scenario. The public raw opt-in
 // carries consumed AgentMessage inputs that durable Thread history omits. Keep
 // them only in bounded memory; none are returned in Evidence or error text.
 type childStream struct {
+	mu     sync.Mutex
 	events []frame
 	bytes  int
 	err    error
@@ -27,6 +29,8 @@ const (
 )
 
 func (stream *childStream) observe(message frame) error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
 	if stream.err != nil {
 		return stream.err
 	}
@@ -40,6 +44,20 @@ func (stream *childStream) observe(message frame) error {
 		stream.events = append(stream.events, message)
 	}
 	return nil
+}
+
+func (stream *childStream) failure() error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.err
+}
+
+func (stream *childStream) snapshot() []frame {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	out := make([]frame, len(stream.events))
+	copy(out, stream.events)
+	return out
 }
 
 func (stream *childStream) proof(child, parent productThread, credited productTurn, reply, nonce, setupMarker string) childProof {
@@ -59,11 +77,12 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		text string
 		at   int
 	}
-	invalidAt := len(stream.events)
-	closedAt := len(stream.events)
-	toolAt := len(stream.events)
+	events := stream.snapshot()
+	invalidAt := len(events)
+	closedAt := len(events)
+	toolAt := len(events)
 	path := child.Source.SubAgent.ThreadSpawn.AgentPath
-	for index, message := range stream.events {
+	for index, message := range events {
 		var event struct {
 			ThreadID, TurnID string
 			Turn             productTurn
@@ -198,12 +217,12 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	}
 	selected := turns[credited.ID]
 	if selected == nil {
-		if closedAt < len(stream.events) || invalidAt < len(stream.events) {
+		if closedAt < len(events) || invalidAt < len(events) {
 			return childNotProven
 		}
 		return childPending
 	}
-	if selected.invalid || (closedAt < len(stream.events) && (!selected.ended || closedAt < selected.endedAt)) {
+	if selected.invalid || (closedAt < len(events) && (!selected.ended || closedAt < selected.endedAt)) {
 		return childNotProven
 	}
 	nonceAt, markerAt := selected.legacyResultAt, selected.legacyMarkerAt
@@ -211,7 +230,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		nonceAt, markerAt = selected.finalResultAt, selected.finalMarkerAt
 	}
 	resultAt := max(nonceAt, markerAt)
-	if invalidAt < resultAt || (resultAt < 0 && invalidAt < len(stream.events)) {
+	if invalidAt < resultAt || (resultAt < 0 && invalidAt < len(events)) {
 		return childNotProven
 	}
 	for _, input := range inputs {
@@ -220,7 +239,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 			return childNotProven
 		}
 	}
-	if (resultAt < 0 && toolAt < len(stream.events)) || toolAt < resultAt {
+	if (resultAt < 0 && toolAt < len(events)) || toolAt < resultAt {
 		return childNotProven
 	}
 	if !selected.ended {

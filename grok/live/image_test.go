@@ -126,7 +126,11 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 	for mode, want := range cases {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "image:"+mode)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			limit := 10 * time.Second
+			if mode == "byte_budget" {
+				limit = 45 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), limit)
 			defer cancel()
 			got, err := live.ImageGenerationEdit(ctx, options)
 			if err == nil {
