@@ -41,6 +41,26 @@ test "$(native)" = false
 (export PUSH_BEFORE=0000000000000000000000000000000000000000; test "$(native)" = true)
 (export PUSH_BEFORE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; test "$(native)" = true)
 
+# Each native build input must trigger both feature events and applicability.
+# Independent branches avoid credit from a previous native edit in this loop.
+index=0
+for entry in 'bazel/build.bzl:bazel/**' 'third_party/source.cc:third_party/**' \
+  'patches/fix.patch:patches/**' 'tools/build-tool:tools/**' \
+  '.cargo/config.toml:.cargo/**' 'rbe.bzl:rbe.bzl' \
+  'workspace_root_test_launcher.sh.tpl:workspace_root_test_launcher.*.tpl' \
+  'workspace_root_test_launcher.bat.tpl:workspace_root_test_launcher.*.tpl'; do
+  file="${entry%%:*}"
+  pattern="${entry#*:}"
+  test "$(grep -Fc -- "- \"$pattern\"" "$scripts/../workflows/grok-ci.yml")" -eq 2
+  index=$((index + 1))
+  git checkout -qb "native-input-$index" "$base"
+  mkdir -p "$(dirname "$file")"
+  printf 'native input\n' > "$file"
+  git add . && git commit -qm native-input
+  test "$(native)" = true
+  git checkout -q feature
+done
+
 printf 'docs\n' > grok/docs/change.md
 git add . && git commit -qm docs
 test "$(native)" = false

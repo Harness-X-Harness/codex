@@ -48,7 +48,8 @@ while IFS= read -r -d '' file; do
     # These Go-only owners have their own offline/explicit paid-backend tests.
     grok/facts/*|grok/tests/facts/*|grok/tests/live/*|grok/cmd/*|\
     grok/internal/scenarios/*|grok/internal/testresults/*|grok/internal/livecommand/*) continue ;;
-    codex-rs/*|sdk/*|scripts/*|grok/*|.github/*|.bazel*|MODULE.bazel*|BUILD.bazel|defs.bzl|justfile)
+    codex-rs/*|sdk/*|scripts/*|grok/*|.github/*|bazel/*|third_party/*|patches/*|tools/*|.cargo/*|\
+    .bazel*|MODULE.bazel*|BUILD.bazel|defs.bzl|rbe.bzl|workspace_root_test_launcher.*.tpl|justfile)
       echo true
       exit 0 ;;
   esac
