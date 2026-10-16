@@ -58,11 +58,11 @@ Stock pinned V8 artifacts and their checksum validation remain in use.
 Each target executes the staged launcher and runtime, checks the reported version
 against package metadata, starts the Code Mode host's help path, exercises its
 packaged `rg`, `zsh` and Linux `bwrap`, and runs the existing nonempty
-tagged Integration selection through the packaged launcher:
-`TestIntegration/BasicFixture`, `TestIntegration/ShippedCatalog`,
-`TestIntegration/StructuredEditFixture`,
-`TestIntegrationInternal/ShippedChildFixture` and
-`TestIntegrationInternal/FirstRequestShape`. The JSON checker requires all five
+tagged `./tests/integration` selection through the packaged launcher:
+`TestBasicFixture`, `TestShippedCatalog`,
+`TestStructuredEditFixture`,
+`TestShippedChildFixture` and
+`TestFirstRequestShape`. The JSON checker requires all five
 exact owner names, rejects skipped/incomplete runs and retains failure summaries.
 The package job does not repeat the offline Go suite. The Basic fixture uses a controlled local backend for both
 retained models; the catalog check uses the package's shipped profile/catalog.

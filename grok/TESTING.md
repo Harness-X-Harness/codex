@@ -39,20 +39,17 @@ PATH search or backend call:
 ```sh
 GROK_CODEX_BIN=/absolute/path/to/codex \
   go -C grok test -race -tags=integration -count=1 -timeout=20m \
-  -run '^TestIntegration' ./live
+  ./tests/integration
 ```
 
-The wrappers live beside their existing private test helpers to avoid copying
-business assertions into another test package. `TestIntegration` selects Basic,
-structured edit, reasoning history, hosted search, image-pinned and shipped
-catalog. `TestIntegrationInternal` selects shipped source, child and first-request
-shape. A single already-built binary serves all nine owners. To select one:
-
-```sh
-GROK_CODEX_BIN=/absolute/path/to/codex \
-  go -C grok test -race -tags=integration -count=1 \
-  -run '^TestIntegration$/BasicFixture$' ./live
-```
+The actual scenario implementations live in `tests/integration`, with nine
+independently selectable owners: `TestBasicFixture`, `TestStructuredEditFixture`,
+`TestReasoningHistoryFixture`, `TestHostedSearchFixture`, `TestImagePinnedFixture`,
+`TestShippedCatalog`, `TestShippedThreadSource`, `TestShippedChildFixture` and
+`TestFirstRequestShape`. No wrapper forwards into `live/*_test.go`. Shared
+fixture mechanics live under `internal/integrationfixture`; production observers
+and credential-free white-box tests remain in `live`. One built binary serves
+all owners. Select one with `-run '^TestBasicFixture$' ./tests/integration`.
 
 `GROK_LIVE_NATIVE_BIN` remains a compatibility alias; conflicting paths fail.
 Missing, relative, non-executable, malformed or wrong-platform binaries fail the
@@ -90,16 +87,20 @@ its digest before launch and after cleanup. Synthetic snapshot and caller tests
 do not replace actual-binary Integration acceptance for
 [#404](https://github.com/Harness-X-Harness/codex/issues/404).
 
-The unmodified public X notification stream is required. Under the revised
-[#408](https://github.com/Harness-X-Harness/codex/issues/408) contract, only `x`
-and `x_window` (`x-window` in the catalog) may pass as expected rejection when
-the actual pinned SDK reports the exact unsupported `xSearch` decode cause and
-process/callback cleanup is confirmed. Generic protocol termination, timeout,
-other variants, business failures or unproved cleanup remain failures. This
-proves the strict SDK rejection, not completed search or same-thread follow-up.
-Web and other supported paths retain their positive assertions. Do not filter
-stdout, skip X cases, relax the SDK schema or credit fake-process results as
-actual-binary Integration proof.
+The original App Server stdout reaches the pinned SDK unchanged. Supported Web
+requires a canonical hosted call, completed answer, persisted typed history and
+a completed same-thread follow-up. Under [#414](https://github.com/Harness-X-Harness/codex/issues/414),
+product Hosted X is **retired**: no advertised `x_search`, public `xSearch`
+ThreadItem or fork-only `item/searchActivity` method. Explicit product X calls
+fail before transport; unexpected backend X fails without local redispatch or
+fabricated completion. Old X history has an explicit unsupported disposition,
+owned by Rust history tests, rather than silent conversion to Web or prose.
+
+Strict `unknown variant "xSearch"` controls remain credential-free diagnostics.
+They cannot pass a formal Integration/Live Hosted X Story. The SDK ignores
+unsubscribed unknown methods and refuses subscriptions to unsupported methods;
+Rust emitted-stream and generated-schema tests therefore own the absence of
+`item/searchActivity`. SDK decoding alone is not evidence of that absence.
 
 ## Live: actual Codex and actual Grok
 
@@ -145,16 +146,15 @@ go -C grok run ./cmd/grok-scenarios --family facts --suite full
 ```
 
 The discovery command is credential-free and prints a JSON name array. Live
-smoke contains primary Basic, primary reasoning, Web and X: four cases, at most
-seven submitted semantic turns. Full retains 19 cases and at most 30 submitted
-semantic turns. Catalog-only submits zero inference turns. Diagnostic discovery
-also lists `reasoning-no-effort-pinned`; its execution requires an explicit name.
-That exploratory control is excluded from smoke/full and formal release proof.
-These are invocation bounds, not observed API billing or limits on legitimate
-product-internal transport/tool activity. The X selections can satisfy the
-revised expected-rejection contract after one submitted turn; their catalog
-upper bounds remain two. A green smoke/full execution containing that outcome
-does not certify positive X Search support or close the retained #388 Story. No measured paid-cost improvement is
+smoke contains primary Basic, primary reasoning and Web: three supported cases,
+at most five submitted semantic turns. Full has 17 formal cases and at most 26
+submitted semantic turns. Catalog-only submits zero inference turns. Diagnostic
+discovery additionally lists `reasoning-no-effort-pinned`; execution requires an
+explicit name. Product `x`/`x-window` are unavailable in every Live suite and the
+CLI, including diagnostic selection. Their legacy SDK rejection controls are
+offline tests, never positive case credit. Direct backend X Facts remain
+independent. These are invocation bounds, not measured API billing or limits on
+legitimate product-internal transport/tool activity. No paid-cost improvement is
 claimed.
 
 Trusted workflows first use `package/fetch_artifact.py` to verify the archive,
@@ -172,7 +172,7 @@ request/replay assertions and JSON shape. Explicit backend Go tests use the
 `facts` build tag:
 
 ```sh
-GROK_FACTS=1 go -C grok test -tags=facts -count=1 ./facts
+GROK_FACTS=1 go -C grok test -tags=facts -count=1 ./tests/facts
 ```
 
 This is real backend use and needs an already-authorized `GROK_API_KEY`.
@@ -190,7 +190,7 @@ results="$(mktemp)"
 status=0
 GROK_CODEX_BIN=/absolute/path/to/codex \
   go -C grok test -race -tags=integration -count=1 -timeout=20m -json \
-  -run '^TestIntegration' ./live > "$results" || status=$?
+  ./tests/integration > "$results" || status=$?
 go -C grok run ./cmd/grok-test-results --input "$results" --integration || status=1
 exit "$status"
 ```
@@ -203,24 +203,24 @@ an exact partial package or Live selection. Never infer coverage from a green
 package containing no selected tests. A partial selection does not prove omitted
 cases passed. Per-case Live evidence retains safe counts, subject/digest,
 provenance and failure classifications, without prompts, model text, ciphertext,
-keys, private paths, raw traffic or opaque IDs. X expected rejection has per-case
-`outcome: expected_unsupported`, `reason: sdk_xsearch_unsupported` and
-`ExpectedUnsupported: true`; completed-turn flags stay false and observed
-canonical counts are not invented. The tagged aggregate reports `accepted`
-when it includes expected rejections and counts them separately in
-`expected_unsupported`. Its `completed` count means finished accepted test cases,
-not completed provider turns. Ordinary positive aggregates remain `observed`.
+keys, private paths, raw traffic or opaque IDs. The tagged aggregate reports
+`observed` only when every selected supported case passes its positive oracle.
+Its `completed` count counts completed cases; `shipped-catalog` remains an
+explicit zero-inference catalog case. SDK rejection diagnostics never enter the
+formal aggregate or earn completed-case credit.
 
-- `grok-ci.yml` runs credential-free checks on Grok-related development pushes
-  and PRs outside the existing formal bases. `grok-go.yml` owns format, tidy,
-  race tests, JSON checks, vet, Python contracts and clean-worktree checks.
-- Formal PR bases and canonical version-line pushes call the same Go workflow
-  through `grok-proof.yml`; their merge subject is not checked twice by
-  `grok-ci.yml`. The runtime job preserves every Rust owner and runs only tagged
-  Go Integration after its existing CLI build.
-- `build-grok` keeps its five existing package consumer owners, selected as
-  Integration subtests; it does not repeat the offline Go suite.
-- Formal Live derives the full matrix from Go, keeps at most three jobs active,
+- `grok-ci.yml` runs credential-free offline checks on development branch HEADs.
+  Relevant native/schema changes additionally reuse `grok-proof.yml` on that
+  exact push subject; irrelevant changes do not build Rust. Applicability and
+  aggregate success fail closed. `grok-go.yml` owns format, tidy, race, JSON, vet
+  and Python checks, once per selected workflow subject.
+- Version-line/PR native checks retain their existing `grok.yml` entry point.
+  A PR synthetic merge SHA is labeled separately from its feature HEAD. Native
+  jobs preserve scoped Rust owners and invoke only `tests/integration` after
+  the existing CLI build. No branch rules or post-merge certification changes.
+- `build-grok` keeps its five actual package consumer owners in
+  `tests/integration`; it does not repeat the offline suite.
+- Formal Live derives the supported full matrix from Go, keeps at most three jobs active,
   and preserves trusted repository/ref/opt-in and same-run artifact checks.
 - Manual `grok-live.yml` defaults to one `basic-primary` diagnostic. Smoke/full
   are explicit complete selections; their scenario text field is ignored.

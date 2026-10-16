@@ -6,6 +6,20 @@ Current development policy is
 review and runtime-evidence policy are its linked documents. Dynamic results and
 scheduling belong to the owning GitHub issues and PRs.
 
+## Later roadmap supersession
+
+The checkpoints and staged decisions below are historical development context.
+[#401](https://github.com/Harness-X-Harness/codex/issues/401) and
+[#233](https://github.com/Harness-X-Harness/codex/issues/233) now govern acceptance
+of the actual changed branch HEAD with applicable ordinary CI; this document
+adds no canonical/green-prefix or post-merge certification requirement.
+[#414](https://github.com/Harness-X-Harness/codex/issues/414) explicitly retires
+product Hosted X and the fork-only `xSearch` / `item/searchActivity` public ABI.
+Earlier five-scenario #388 and early public activity statements below do not
+represent current supported product scope. Positive Web remains; legacy X SDK
+rejection is diagnostic only, while direct backend X Facts are independent.
+See the [current Story scope](stories/README.md) and [physical test commands](../TESTING.md).
+
 ## Pinned inputs
 
 - Exact stock: upstream `openai/codex` annotated tag `rust-v0.158.0`, peeled commit

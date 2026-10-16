@@ -11,10 +11,10 @@ Codex are explicit Integration owners.
 | Boundary | Owner and before/after decision | Evidence it cannot supply |
 | --- | --- | --- |
 | SDK process, framing, typed protocol and callbacks | Pinned `llm-go/codexsdk`; retain a minimal Grok consumer launch/cleanup/failure/isolation contract and all safety/evidence assertions | SDK success alone is not a completed Grok Story |
-| Product routing, model policy, fork/resume/compaction, sandbox and public activity | Existing Rust suites in `grok-proof.yml` remain unchanged; no Go reimplementation | Controlled native success is not current real-provider behavior |
+| Product routing, model policy, fork/resume/compaction, sandbox and public activity | Existing scoped Rust suites plus #414 ABI/history retirement controls; no Go reimplementation | Controlled native success is not current real-provider behavior |
 | Fake App Server observer and local HTTP Facts contracts | Default `go test -race ./...`; all material scripted positive/negative cases retained | Real Codex composition, paid backend or verified package acceptance |
-| Actual Codex + controlled HTTP | Nine former `TestNative*` owners become tagged `TestIntegration*` subtests; private helpers stay in their packages | Actual backend behavior or current release certification |
-| Direct backend Facts | Existing two backend test entries become `facts`-tagged; independent CLI and workflow remain | Product behavior, artifact provenance or Live completion |
+| Actual Codex + controlled HTTP | Nine actual tagged owners in `tests/integration`; shared mechanics in `internal/integrationfixture`, observer units in `live` | Actual backend behavior or current release certification |
+| Direct backend Facts | Two actual `facts`-tagged roots in `tests/facts`; independent CLI and workflow remain | Product behavior, artifact provenance or Live completion |
 | Actual Codex + actual Grok | `TestLive/<catalog-name>`, tagged `live`; existing business functions and evidence DTOs reused | Unselected Stories, other platforms, other source/package subjects |
 
 The previous runtime job repeated offline `./live` tests already run in its Go
@@ -29,20 +29,31 @@ runner constitute a different boundary. Development pushes and PR merge refs
 are different subjects; formal PR merge refs are excluded from the fast PR
 workflow to avoid running the same default suite twice on that merge.
 
-No positive product Story is retired. The explicitly reviewed #408 change below
-adds a scoped expected-rejection result, separate from that positive acceptance.
-No identity, terminal, authorized effect,
-bytes/hash, image lineage, hosted origin, continuation, encrypted history or
-provenance assertion is removed because the SDK has a typed API. The obsolete
-stdout-filter unit test is removed with the output-mutating filter itself. Its
-replacement obligation is original-wire public-X Integration. The owner-approved
-2026-10-16 #408 contract permits `x`/`x_window` to pass only as expected rejection
-of the actual strict SDK `xSearch` decode failure with confirmed cleanup. It does
-not retire #388's positive hosted Story. The public-X-only control requires
-rejection and zero canonical/settled/completion credit;
-ordinary raw-business fixtures do not inject unrelated unsupported public-X
-traffic. That keeps two distinct boundaries visible rather than suppressing a
-real protocol incompatibility.
+## Explicit KEEP / REPLACE / RETIRE decisions
+
+- **KEEP:** Basic, reasoning/encrypted replay, structured edits/authorization/exact
+  bytes, image ancestry, shipped catalog/profile/child and positive hosted Web.
+  No identity, terminal, authorized effect, byte/hash, history, cleanup or
+  provenance oracle is removed merely because the SDK is typed.
+- **REPLACE:** selector-only `live/TestIntegration*` wrappers with nine actual
+  owners in `tests/integration`; two credentialed Facts roots with actual
+  `tests/facts` implementations. Shared setup and pure fixture assertions move
+  to `internal/integrationfixture`; no production test-only facade is added.
+- **RETIRE (explicit #414 product decision):** Hosted X advertisement, its
+  `xSearch` public DTO and fork-only `item/searchActivity` method. No truthful
+  official hosted-X representation exists at the pinned baseline. Formal Live
+  drops `x`/`x-window`; supported Web uses official item lifecycle notifications.
+  The earlier early-public-search activity promise is narrowed, not silently
+  claimed preserved. Unexpected X and old persisted X fail explicitly without
+  fake local dispatch, relabeling or dropping history.
+- **KEEP as diagnostics only:** exact original-wire legacy `xSearch` SDK decode
+  rejection, cleanup, timeout/other-error/business-precedence negative controls.
+  They earn no positive hosted or formal Smoke/Full credit. Direct backend X
+  Facts remain independent and unchanged.
+
+The stdout filter remains removed. The SDK pin/strict schema is unchanged.
+Its unknown-method ignore policy means Rust emitted-output/schema tests own
+absence of `item/searchActivity`; the Go decoder alone cannot prove that fact.
 
 ## Acceptance mapping for #410–413
 
@@ -54,8 +65,8 @@ selection registry.
 | Issue | Implemented source ownership | Execution/evidence still required |
 | --- | --- | --- |
 | [#410](https://github.com/Harness-X-Harness/codex/issues/410) | Catalog metadata/dispatch plus [selection controls](../internal/scenarios/catalog_test.go); [discovery CLI](../cmd/grok-scenarios/main.go); Go-derived matrices in [formal Live](../../.github/workflows/grok.yml), [manual Live](../../.github/workflows/grok-live.yml) and [Facts](../../.github/workflows/grok-facts.yml). Smoke/full/diagnostic eligibility and stable subtest selectors are documented in TESTING. | A source-valid matrix is not an executed workflow. Required event checking must accompany each actual selection; omitted scenarios receive no credit. |
-| [#411](https://github.com/Harness-X-Harness/codex/issues/411) | Before/after owner map, retained-oracle tables and bug-class cross-check below; offline/runtime duplication removed without replacing Rust product owners. The only changed X acceptance is the explicitly reviewed #408 rejection, not a hidden Story retirement. | Fresh default and actual-binary Integration race results at the candidate subject; timings and counts must identify their source. Historical local measurements below do not establish current race/native pass or paid-cost improvement. |
-| [#412](https://github.com/Harness-X-Harness/codex/issues/412) | Every retained Story links its automated owner and boundary in the Story index, including hosted Web/X. Fork/resume/compaction retain existing Rust ownership. Catalog-only observes no inference. | Identified real-backend runs for positive Stories; expected X rejection does not satisfy #388/#379 positive hosted acceptance. |
+| [#411](https://github.com/Harness-X-Harness/codex/issues/411) | Before/after owner map, retained-oracle tables and bug-class cross-check below; offline/runtime duplication removed without replacing Rust product owners. The explicit #414 X retirement and test-only #408 diagnostic boundary are recorded above. | Fresh default and actual-binary Integration race results at the candidate subject; timings and counts must identify their source. Historical local measurements below do not establish current race/native pass or paid-cost improvement. |
+| [#412](https://github.com/Harness-X-Harness/codex/issues/412) | Every retained Story links its automated owner and boundary in the Story index, including supported hosted Web and explicit product-X retirement. Fork/resume/compaction retain existing Rust ownership. Catalog-only observes no inference. | Identified real-backend runs for positive Stories; legacy X rejection never satisfies positive hosted acceptance. |
 | [#413](https://github.com/Harness-X-Harness/codex/issues/413) | [Tagged Live runner](../tests/live/live_test.go), shared [command execution](../internal/livecommand/run.go), [preflight controls](../cmd/grok-live/tagged_test.go), [JSON event checker](../internal/testresults) and independent [Facts](../facts/README.md). Trusted workflows verify artifacts before the same Go assertions. | Trusted smoke and separately invocable full execution at the declared subject, safe failure artifacts and measured API costs/durations. Neither docs nor mocks establish these outcomes; no paid run is claimed by this audit. |
 
 The pinned SDK baseline is `github.com/ronhuafeng/llm-go`
@@ -79,27 +90,27 @@ green. Fresh candidate evidence must be collected separately.
 
 ## Binary-dependent owners: exact before/after map
 
-Descendants under each old owner retain their positive business assertions and
-controlled request limits, except the explicitly approved X expected-rejection
-acceptance below; that outcome earns no positive Story credit. The two wrappers are build-tagged; the helper source
-can remain compiled by the default suite without launching a product binary.
+Descendants retain material business assertions and controlled request limits,
+except the explicitly approved product-X retirement. No rejection earns positive
+Story credit. Real executable-backed tests live only in `tests/integration`;
+pure fixture/observer controls remain credential-free default tests.
 
 | Previous owner | Required Integration owner | Positive/negative scope retained |
 | --- | --- | --- |
-| `TestNativeBasicFixture` | `TestIntegration/BasicFixture` | Both fixture models; provider request shape, nonempty final, correct identity and successful terminal |
-| `TestNativeStructuredEditFixture` | `TestIntegration/StructuredEditFixture` | Continuation, pinned, declined and replace-all; real file bytes/hash and paired tool/output history |
-| `TestNativeReasoningHistoryFixture` | `TestIntegration/ReasoningHistoryFixture` | Both models; named tool, fresh paired result, three HTTP requests, unchanged encrypted history and token-free continuation |
-| `TestNativeHostedSearchFixture` | `TestIntegration/HostedSearchFixture` | Web and Web-excluded retain policy, canonical hosted evidence, two turns and no local redispatch. X/X-window use original stdout and may satisfy actual SDK expected rejection with confirmed cleanup; no positive search credit |
-| `TestNativeImagePinnedFixture` | `TestIntegration/ImagePinnedFixture` | Pinned generation and edit; real codec/artifact hashes, exact history lineage and four controlled HTTP requests |
-| `TestNativeShippedCatalog` | `TestIntegration/ShippedCatalog` | Complete shipped DTO catalog, process identity; no inference |
-| `TestNativeShippedThreadSource` | `TestIntegrationInternal/ShippedThreadSource` | Shipped source/profile/model binding and controlled startup/history |
-| `TestNativeShippedChildFixture` | `TestIntegrationInternal/ShippedChildFixture` | Fresh child result succeeds; parent-supplied result rejected; source/lineage/nonce authority |
-| `TestNativeFirstRequestShape` | `TestIntegrationInternal/FirstRequestShape` | Primary/pinned isolated/shipped history and edit; pinned no-effort diagnostic; denied terminal and bounded existing sampling attempts |
+| `TestNativeBasicFixture` | `TestBasicFixture` | Both fixture models; provider request shape, nonempty final, correct identity and successful terminal |
+| `TestNativeStructuredEditFixture` | `TestStructuredEditFixture` | Continuation, pinned, declined and replace-all; real file bytes/hash and paired tool/output history |
+| `TestNativeReasoningHistoryFixture` | `TestReasoningHistoryFixture` | Both models; named tool, fresh paired result, three HTTP requests, unchanged encrypted history and token-free continuation |
+| `TestNativeHostedSearchFixture` | `TestHostedSearchFixture` | Web and Web-excluded retain policy, canonical hosted evidence, two turns and no local redispatch. Retired X has preflight/unsolicited-ingress negatives, no advertisement/local redispatch/fake credit; Rust owns public ABI/history closure |
+| `TestNativeImagePinnedFixture` | `TestImagePinnedFixture` | Pinned generation and edit; real codec/artifact hashes, exact history lineage and four controlled HTTP requests |
+| `TestNativeShippedCatalog` | `TestShippedCatalog` | Complete shipped DTO catalog, process identity; no inference |
+| `TestNativeShippedThreadSource` | `TestShippedThreadSource` | Shipped source/profile/model binding and controlled startup/history |
+| `TestNativeShippedChildFixture` | `TestShippedChildFixture` | Fresh child result succeeds; parent-supplied result rejected; source/lineage/nonce authority |
+| `TestNativeFirstRequestShape` | `TestFirstRequestShape` | Primary/pinned isolated/shipped history and edit; pinned no-effort diagnostic; denied terminal and bounded existing sampling attempts |
 
-Source: [external wrapper](../live/integration_test.go),
-[internal wrapper](../live/integration_internal_test.go). `--integration` in
+Source: actual [Integration package](../tests/integration), with reusable
+[fixture mechanics](../internal/integrationfixture). `--integration` in
 [`grok-test-results`](../cmd/grok-test-results/main.go) requires all nine exact
-owner events. Package smoke uses an exact five-owner subset: Basic,
+package-qualified owner events. Package smoke uses an exact five-owner subset: Basic,
 StructuredEdit, ShippedCatalog, ShippedChild and FirstRequestShape. A selected
 owner cannot be satisfied by a sibling, parent, skip, incomplete run or absent
 subtest. A missing binary is failure, never a green skip.
@@ -119,12 +130,12 @@ nested test events, not just leaf scenarios.
 | [`structured_edit_test.go`](../live/structured_edit_test.go): `TestStructuredEditScenarios`, `TestStructuredEditRejectsFalseEvidence` | Four entry points and scripted positive/negative modes; exact effects, approval, bytes/hash, same-thread history, stale/conflicting evidence and no resubmission. |
 | [`sdk_edit_observer_test.go`](../live/sdk_edit_observer_test.go): `TestSDKEditObserverPositiveStory`, `EarlyDeclineReconciliation`, `DuplicateAndConflict`, `RetainedFirstTurn`, `BudgetsAndSafeEvidence`, `IdentityAndContinuation`, `ConcurrentSnapshots`, `IncompleteProof` (same prefix) | Causal call/output/change proof, sticky denial, consistent replay, material identity, retained first-turn facts, cleanup-stable bytes and concurrent snapshots. Exact incidental transport stage strings are not a Story oracle. |
 | [`structured_edit_wire_test.go`](../live/structured_edit_wire_test.go): `TestStructuredEditArgumentsRejectMalformedReplaceAll` | Application-owned edit argument/schema admission; malformed replace-all cannot reach valid effects. |
-| [`structured_edit_native_test.go`](../live/structured_edit_native_test.go): `TestNativeEditResultHistoryRejectsInvalidOutput`, `TestNativeEditResultHistoryPreservesReplay`, `TestNativeStructuredEditDeclaration`, `TestNativeEditFailureDetail` | Pure fixture-oracle tests stay default despite historical “Native” names: declaration, paired output history, consistent replay, safe unsuccessful-terminal detail. |
+| [`integrationfixture/structured_edit_test.go`](../internal/integrationfixture/structured_edit_test.go): `TestNativeEditResultHistoryRejectsInvalidOutput`, `TestNativeEditResultHistoryPreservesReplay`, `TestNativeStructuredEditDeclaration`, `TestNativeEditFailureDetail` | Pure fixture-oracle tests stay default despite historical “Native” names: declaration, paired output history, consistent replay, safe unsuccessful-terminal detail. |
 | [`image_test.go`](../live/image_test.go): `TestGrokImageGenerationEdit`, `TestImageGenerationEditRejectsFalseEvidence`; shared [image scripts](../live/image_script_test.go) | Primary/pinned generation/edit; raw/public/history image pairing, genuine fully decodable PNGs, preparation-vs-artifact digest distinction, selected previous-image lineage, filesystem safety, corruption and secret-safe bounded rejection. |
-| [`search_test.go`](../live/search_test.go): `TestHostedSearchRetainsEachScenarioAndSingleContinuation`, `RejectsMissingConflictAndLocalExecution`, `RejectsContradictorySettledEvidence`, `AcceptsConsistentDelayedPriorTerminal`, `PublicXSearchExpectedRejection`, `ExpectedRejectionRejectsOtherFailures`, `RejectsCustomExecutionAtEveryObservationBoundary`, `RetainsTurnScopedCreditedIdentities`, `IdentityBudgetsRemainPerTurn` (same prefix) | Every retained policy; causal canonical calls and finals across two turns; public-X-only cannot earn canonical credit; wrong, local, stale, post-fence or conflicting evidence fails. SDK framing ownership does not replace hosted-origin authority. |
+| [`search_test.go`](../live/search_test.go): `TestHostedSearchRetainsEachScenarioAndSingleContinuation`, `RejectsMissingConflictAndLocalExecution`, `RejectsContradictorySettledEvidence`, `AcceptsConsistentDelayedPriorTerminal`, `PublicXSearchExpectedRejection`, `ExpectedRejectionRejectsOtherFailures`, `RejectsCustomExecutionAtEveryObservationBoundary`, `RetainsTurnScopedCreditedIdentities`, `IdentityBudgetsRemainPerTurn` (same prefix) | Every supported Web policy; causal canonical calls and finals across two turns; public-X-only cannot earn canonical credit; wrong, local, stale, post-fence or conflicting evidence fails. SDK framing ownership does not replace hosted-origin authority. |
 | [`shipped_test.go`](../live/shipped_test.go): `TestShippedCatalogRequiresCompleteDTOs`, `TestShippedStartupAndChildRejectIncompleteEvidence`, `TestShippedPinnedUsesRetainedHistoryScenario` | Entire DTO/profile assets; startup identity/terminal; child inherited context, freshness/lineage and parent consumption; pinned encrypted-history reuse. |
-| [`shipped_child_native_test.go`](../live/shipped_child_native_test.go): `TestShippedChildDeclarationSchemaBoundary` | Pure declaration schema control remains offline; independently rejects malformed tool declarations before composition. |
-| [`request_shape_native_test.go`](../live/request_shape_native_test.go): `TestFirstRequestShapeSummary`, `TestFirstRequestEffortPresence`, `TestFirstRequestHistoryDeclaration` | Pure bounded request summary and exact presence/declaration semantics remain offline; no network/CLI prerequisite. |
+| [`integrationfixture/child_test.go`](../internal/integrationfixture/child_test.go): `TestShippedChildDeclarationSchemaBoundary` | Pure declaration schema control remains offline; independently rejects malformed tool declarations before composition. |
+| [`integrationfixture/request_shape_test.go`](../internal/integrationfixture/request_shape_test.go): `TestFirstRequestShapeSummary`, `TestFirstRequestEffortPresence`, `TestFirstRequestHistoryDeclaration` | Pure bounded request summary and exact presence/declaration semantics remain offline; no network/CLI prerequisite. |
 | [`failure_test.go`](../live/failure_test.go): `TestFailureDiagnosticsExcludePrivateContent`, `TestFailureDiagnosticsPreserveUnknownErrors` | Safe known categories/status only, unknown errors remain unknown; never emit prompt/model text/IDs/private error details. |
 | [`facts/probe_test.go`](../facts/probe_test.go): `TestProbeTextUsesExplicitFixtureAndObservesCompletion`, `TestProbeReplayPreservesOpaqueValueAndTypedContent`, `TestProbeTextRequiresSemanticCompletion`, `TestProbeStopsReadingOversizedResponseBeforeEOF`, `TestProbeReplayFailuresDoNotResubmitOrLeak`, `TestProbeRejectsRedirectsAndCancelledTransport` | Local HTTP routing, semantic completion, opaque replay, read bounds, cancellation, redirect refusal and no retry/leak. Independent consumer boundary, retained. |
 | [`facts/search_test.go`](../facts/search_test.go): `TestSearchPolicyPreservesEachRetainedWireFixture`, `TestSearchReplayPreservesSupportedCallsWithoutLocalOutput`, `TestSearchReplayMissingOrInvalidEvidenceStopsWithoutResubmission`, `TestSearchReplayFailurePreservesSafePriorEvidence`, `TestSearchUnknownFixtureMakesNoRequest`, `TestSearchReplayWebActionRepresentations`, `TestSearchReplayRejectsContinuationLocalExecution`, `TestSearchReplayRejectsNonHostedCustomCallsWithoutResubmission`, `TestSearchReplayAllowsOtherSupportedHostedKind` | Five policy projections, Web and four supported X call names, valid optional Web action fields, replay admission/identity, no local outputs, malformed/incomplete failure and truthful partial facts. |
@@ -140,7 +151,7 @@ catalog entries, unknown/ineligible selection, implicit skips and repeat/empty
 execution without making paid calls.
 
 `TestBackendFacts` and `TestBackendSearchFacts` retain their direct-backend
-subcases under the `facts` tag, both selecting and invoking the shared catalog.
+subcases in `tests/facts` under the `facts` tag, both selecting and invoking the shared catalog.
 Their previous independent invocation tables are removed; the same four
 non-search and seven search observations remain. Exact selector changes are:
 
@@ -161,12 +172,30 @@ budget is added or retired, and none enters required offline coverage.
 | --- | --- |
 | Untrusted action or unauthorized file change | Basic denial, edit sticky approval/bytes/hash, search no local dispatch; Rust safety/sandbox/edit composition |
 | Wrong Provider/model/thread/turn or child lineage | Basic, reasoning, shipped and child negative fixtures; Rust provider binding and child public listener |
-| Missing/failed terminal or final output | Every positive scenario observer; retained truthful partial facts; JSON lifecycle checks. Scoped X rejection requires actual SDK cause/cleanup instead and never asserts terminal completion |
+| Missing/failed terminal or final output | Every positive scenario observer; retained truthful partial facts; JSON lifecycle checks. Legacy X rejection requires actual SDK cause/cleanup only in offline diagnostics; it cannot count as formal completion |
 | Stale replay, conflict or cross-turn credit | Reasoning provisional/history controls, edit identity/history, hosted per-turn fence and call identity |
-| Hosted call mistaken for local execution | Search raw/public distinction and no-local-call/output controls; Rust hosted Web/X mixed activity and replay |
+| Hosted call mistaken for local execution | Search raw/public distinction and no-local-call/output controls; Rust supported Web replay and retired-X ingress/ABI/history negatives |
 | Corrupt/misbound media or edited bytes | Image full decode/file/hash/lineage and structured-edit byte oracle; Rust image preparation and filesystem owners |
 | Resource leak or unbounded retention | SDK consumer process isolation/cleanup, per-observer bounds, capped binary/result input, cancellation/deadline tests |
 | Secret disclosure or fabricated provenance | Failure/report redaction, local-unverified subject distinction, package selection/extraction and unchanged exact verified artifact checks |
+
+## Physical package and source-HEAD closure
+
+[#415/#416](https://github.com/Harness-X-Harness/codex/issues/416) move all nine
+real owner implementations. [#417](https://github.com/Harness-X-Harness/codex/issues/417)
+moves backend Facts. [#418](https://github.com/Harness-X-Harness/codex/issues/418)
+binds package-qualified owner checks and layout controls to those physical
+packages. Shared catalog metadata drives both scenario names and tagged Go
+owner names; no separate workflow scenario list is authoritative. Default
+`./...` remains credential-free and excludes all executable/backend entry points.
+
+[#419](https://github.com/Harness-X-Harness/codex/issues/419) makes affected native
+checks reachable on actual feature-push HEADs, reusing the existing native proof
+and one offline Go invocation. Subject validation checks event/ref/workflow/checkout
+identity; PR synthetic merge and actual feature HEAD remain distinct. Generated
+schema consistency, product Rust tests and real-binary Integration still need
+executed exact-source evidence. A YAML check, old binary or Go mock cannot supply
+that acceptance. Current paid Live/Facts and CI results are not claimed here.
 
 ## Fresh measurements and limits
 

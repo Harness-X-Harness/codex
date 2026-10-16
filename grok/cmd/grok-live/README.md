@@ -4,7 +4,7 @@
 invocable. Build from `grok/` with `go build -o grok-live ./cmd/grok-live`.
 `grok-scenarios --family live --suite diagnostic` lists the primary/pinned,
 reasoning, edit, image, shipped profile/child and hosted-search catalog. Full has
-19 formal cases; the twentieth, `reasoning-no-effort-pinned`, is exploratory and
+17 formal cases; the eighteenth, `reasoning-no-effort-pinned`, is exploratory and
 requires explicit diagnostic selection. The command adds no product oracle.
 
 One invocation selects one scenario. Provide an absolute source executable,
@@ -36,14 +36,14 @@ minutes and cannot exceed the underlying ten-minute bound. The command never
 restarts a scenario or resubmits a failed semantic turn.
 
 One JSON result contains the selected scenario, UTC time, endpoint fingerprint
-and safe evidence returned by its owner. Exit 0 is a scoped `observed` result
-or, for `x`/`x-window` only, `expected_unsupported` with reason
-`sdk_xsearch_unsupported`. The latter requires the actual strict SDK decode
-failure plus confirmed cleanup and is not successful search/turn completion.
+and safe evidence returned by its owner. Exit 0 is a scoped `observed` result.
 Exit 1 is not observed or output failure, 2 is invalid configuration/subject,
 and 3 is not run without opt-in. `shipped-catalog` records catalog observation
-without inference completion. Partial facts remain separate from overall
-completion; failures contain static reasons and no raw child/backend traffic.
+without inference completion. Product `x`/`x-window` are retired under #414 and
+fail selection before process launch. Legacy `xSearch` SDK rejection is only an
+offline diagnostic, never a successful CLI or formal Live outcome. Partial facts
+remain separate from completion; failures contain static reasons and no raw
+child/backend traffic.
 
 The command tests compile the real CLI and the existing Live package's fake
 App Server executable. They run every selection through actual child processes,
@@ -61,11 +61,10 @@ terminal details remain unknown. No error message, additional details, raw
 traffic, identifiers or private content is retained. These fields locate the
 observer rejection and do not establish product or backend attribution.
 The existing `reason` still gives cancellation/deadline precedence. The
-last proven stage and invocation budget remain truthful. Expected X rejection
-retains `ExpectedUnsupported: true`, false completed-turn flags and only actual
-canonical observations; no settled turn or positive search is fabricated.
-The bounded failure code identifies the SDK compatibility rejection without
-persisting its raw error or private notification payload.
+last proven stage and invocation budget remain truthful. A Web run receiving an
+unsupported public X item fails even when the exact decoder cause is known.
+Direct backend X Facts remain independently available and do not claim product
+Hosted X support.
 
 ## Primary Go test entry point
 
