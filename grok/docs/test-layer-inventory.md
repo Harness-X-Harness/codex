@@ -138,13 +138,35 @@ is the assets-only restoration commit
 `6a782e6fc55c86f6fc5e699d589aed33b4b5aef1`, tested in a clean separate checkout.
 It is not yesterday's run or a current-head proof.
 
+The rebuilt non-race measurements below are from a fresh clean checkout of
+`f029fd50525dc98e6c9dc6e88ea30d3eca5629ac`. An earlier clean checkpoint,
+`e063b64f37557e91178537057d3eace7a40cf54f`, has a separate race result; it must
+not be relabeled as the later source's race proof.
+
 | Fresh local control | Baseline | Rebuilt result |
 | --- | --- | --- |
-| Default `go test -count=1 -timeout=15m -json -coverprofile=... ./...` | 949 named test invocations: 934 pass, 15 skip, 0 fail; `live` 62.448 s | Pending final clean-checkout measurement |
-| Aggregate statement coverage | 81.3% | Pending final clean-checkout measurement |
-| `go list ./...`, `go vet ./...`, `go mod tidy -diff`, clean worktree | Passed at assets-only baseline | Pending final controls |
-| Default `-race`; tagged Integration | Baseline command above was not `-race`; no native binary result inferred | Pending final controls; original-wire X compatibility may fail |
+| Default `go test -count=1 -timeout=15m -json -coverprofile=... ./...` | 949 named test invocations: 934 pass, 15 skip, 0 fail; `live` 62.448 s | At `f029fd5`: 1,055 run/pass, 0 skip, 0 fail; `live` 72.479 s |
+| Aggregate statement coverage | 81.3% | 82.0% at `f029fd5` |
+| JSON completion and both required offline owners | Baseline had implicit skipped external tiers | Passed at `f029fd5`; omission controls separately reject either missing required owner |
+| `go list`, format, `go vet`, `go mod tidy -diff`, clean checkout | Passed at assets-only baseline | Passed at `f029fd5`, including tagged vet/format controls |
+| Default `-race` | Baseline command above was not `-race` | At exact `f029fd5`: 1,055 run/pass, 0 skip/fail, required-owner checker passed, `live` 447.285 s. Earlier `e063b64`: 1,052 pass, `live` 437.989 s |
+| Five Python packaging test files | No result inferred from Go | 57 passed at clean `e063b64`; Python sources unchanged at `f029fd5` |
+| Actual-binary tagged Integration | No native binary result inferred | Not executed by this local audit; missing-input failure controls do not prove positive composition; original-wire X compatibility remains required |
 | Paid Live/Facts and Actions | Not executed by this local audit | Not inferred from local tests or YAML validation |
+
+The `f029fd5` checkpoint adds three deterministic Live preflight cases beyond
+`e063b64`; both the later whole-module non-race and race runs passed at the
+exact `f029fd5` source. Recorded local timings overlap other test processes, so
+they do not establish a speedup or regression. The structural change removes duplicated offline execution from the
+runtime job; actual Actions runtime and backend billing effects remain unmeasured.
+
+At the tested `f029fd5` checkpoint, executable digest verification checks the
+selected path before launch and after cleanup. It assumes the executable and containing directory remain
+trusted and unchanged; replace/execute/restore between checks can evade it.
+The stronger continuous executed-byte stability acceptance in
+[#404](https://github.com/Harness-X-Harness/codex/issues/404) is explicitly unmet.
+A positive pre/post digest control must not be reported as proof of that stronger
+property, and no native launcher/helper-preserving fix is validated here.
 
 The 15 baseline skipped events comprised two backend parents and 13 native
 parent/descendant skips. Removing implicit default skips changes counts without

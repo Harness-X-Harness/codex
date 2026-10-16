@@ -56,12 +56,21 @@ GROK_CODEX_BIN=/absolute/path/to/codex \
 
 `GROK_LIVE_NATIVE_BIN` remains a compatibility alias; conflicting paths fail.
 Missing, relative, non-executable, malformed or wrong-platform binaries fail the
-required run rather than skipping it. The runner hashes the chosen executable,
-checks the consumed bytes, and uses isolated temporary home/workspace/credentials
-and owned process cleanup. Without caller-established source/harness provenance,
+required run rather than skipping it. The runner verifies the selected
+executable digest before launch and after cleanup, and uses isolated temporary
+home/workspace/credentials and owned process cleanup. Without caller-established source/harness provenance,
 the subject is explicitly local/unverified; dirty development work is not
 represented by invented SHA values. CI continues to bind native runs to the
 exact `GITHUB_SHA`; package tests retain their exact source, target and digest.
+
+The executable path and its containing directory must remain trusted and
+unchanged throughout execution. Pre/post checks reopen that path; they cannot
+exclude a transient replacement that is executed and restored between checks.
+Continuous executed-byte stability required by
+[#404](https://github.com/Harness-X-Harness/codex/issues/404) remains unmet.
+That limitation also applies when the before/after digests match; existing
+launcher/runtime/helper executable-relative behavior must be preserved by any
+separately validated fix.
 
 The unmodified public X notification stream is required. The pinned SDK's
 unsupported `xSearch` variant is a compatibility gap tracked by
