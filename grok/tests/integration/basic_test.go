@@ -1,4 +1,6 @@
-package live_test
+//go:build integration
+
+package integration_test
 
 import (
 	"context"
@@ -15,9 +17,10 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
-func testNativeBasicFixture(t *testing.T) {
+func TestBasicFixture(t *testing.T) {
 	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
 		t.Run(model, func(t *testing.T) {
+			integrationObservation(t)
 			var requests atomic.Int32
 			var invalid atomic.Bool
 			backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -63,7 +66,8 @@ func testNativeBasicFixture(t *testing.T) {
 	}
 }
 
-func testNativeShippedCatalog(t *testing.T) {
+func TestShippedCatalog(t *testing.T) {
+	integrationObservation(t)
 	subject := nativeSubject(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

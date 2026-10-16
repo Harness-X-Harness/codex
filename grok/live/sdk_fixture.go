@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
 	"github.com/ronhuafeng/llm-go/codexsdk"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
@@ -37,7 +37,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 		evidence.CleanupPending = true
 		client, err := codexsdk.NewContext(ctx, codexsdk.ClientOptions{
 			CWD: cwd, Command: []string{options.Subject.Binary, "app-server", "--strict-config", "--listen", "stdio://"},
-			Env: sdkFixtureEnv(os.Environ(), home, options.APIKey),
+			Env: integrationfixture.Environment(os.Environ(), home, options.APIKey),
 			Initialize: protocolv2.InitializeParams{
 				ClientInfo:   protocolv2.ClientInfo{Name: "grok-live", Version: "1"},
 				Capabilities: protocolv2.Value(protocolv2.InitializeCapabilities{ExperimentalAPI: &experimental}),
@@ -90,18 +90,6 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 		}
 		return run(client, cwd, evidence)
 	})
-}
-
-// sdkFixtureEnv replaces inherited fixture identity without mutating the parent.
-func sdkFixtureEnv(parent []string, home, key string) []string {
-	env := make([]string, 0, len(parent)+2)
-	for _, entry := range parent {
-		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "CODEX_HOME") && !strings.EqualFold(name, "GROK_API_KEY") {
-			env = append(env, entry)
-		}
-	}
-	return append(env, "CODEX_HOME="+home, "GROK_API_KEY="+key)
 }
 
 // sdkFailure never formats SDK errors, which can contain private protocol data.

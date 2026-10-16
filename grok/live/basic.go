@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/internal/testkit"
 )
@@ -30,7 +31,6 @@ type Options struct {
 	Model, BaseURL, APIKey      string
 	imageFixture                bool
 	shippedProfile, catalogOnly bool
-	fixtureReady                func(home string) error
 }
 
 // Evidence contains only safe metadata and observations, never private traffic.
@@ -57,6 +57,10 @@ func withFixture(ctx context.Context, options Options, edit *editFixture, run fu
 	evidence = Evidence{Stage: "preflight", ObservedAt: time.Now().UTC().Format(time.RFC3339)}
 	deadline, bounded := ctx.Deadline()
 	subject := options.Subject
+	controlledEndpoint, controlled := integrationfixture.ShippedEndpoint(ctx)
+	if controlled {
+		options.BaseURL, options.shippedProfile = controlledEndpoint, true
+	}
 	endpoint, err := url.Parse(options.BaseURL)
 	if !bounded || time.Until(deadline) <= 0 || time.Until(deadline) > 10*time.Minute ||
 		!filepath.IsAbs(subject.Binary) || !digest.MatchString(subject.SHA256) ||
@@ -102,8 +106,8 @@ func withFixture(ctx context.Context, options Options, edit *editFixture, run fu
 	if err := writeFixture(home, cwd, options, edit); err != nil {
 		return evidence, err
 	}
-	if options.fixtureReady != nil {
-		if err := options.fixtureReady(home); err != nil {
+	if controlled {
+		if err := integrationfixture.SubstituteShippedEndpoint(home, controlledEndpoint); err != nil {
 			return evidence, err
 		}
 	}

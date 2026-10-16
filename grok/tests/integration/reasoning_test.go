@@ -1,4 +1,6 @@
-package live_test
+//go:build integration
+
+package integration_test
 
 import (
 	"bytes"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -17,71 +20,6 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
-
-// The controlled backend observes actual product replay and tool execution;
-// it supplies the answers and therefore does not establish real-provider recall.
-func testNativeReasoningHistoryFixture(t *testing.T) {
-	subject := nativeSubject(t)
-	for _, tc := range []struct {
-		name, model, effort string
-	}{
-		{"primary", providerfixture.PrimaryModel, "medium"},
-		{"pinned", providerfixture.PinnedModel, "medium"},
-		{"omitted-effort-control", providerfixture.PinnedModel, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fixture := &reasoningHTTP{model: tc.model, effort: tc.effort}
-			backend := httptest.NewServer(fixture)
-			defer backend.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cancel()
-			run := live.ReasoningHistory
-			if tc.effort == "" {
-				run = live.ReasoningHistoryWithoutEffort
-			}
-			got, err := run(ctx, live.Options{Subject: subject, Model: tc.model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
-			fixture.mu.Lock()
-			defer fixture.mu.Unlock()
-			// Evidence and structural failure markers never contain token, raw
-			// prompts, identifiers, private reasoning or encrypted content.
-			encoded, _ := json.Marshal(got)
-			failure := live.FailureInfo{}
-			if err != nil {
-				failure = live.DescribeFailure(err)
-			}
-			t.Logf("controlled reasoning: evidence=%s requests=%d paired_result=%t encrypted_replay=%t continuation=%t wire_failure=%s failure=%+v",
-				encoded, fixture.requests, fixture.token != "", fixture.replayed, fixture.continued, fixture.failure, failure)
-			if err != nil || fixture.failure != "" || fixture.requests != 3 || !fixture.replayed || !fixture.continued {
-				t.Fatal("native reasoning/tool/history composition was not proven")
-			}
-			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 64 || got.ReplyBytes != 64 {
-				t.Fatal("completed encrypted reasoning, paired tool and final recall evidence missing")
-			}
-			got.ObservedAt = ""
-			want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
-				Target: subject.Target, Environment: subject.Environment, Model: tc.model, Stage: "history_recalled",
-				Processes: 1, Initializations: 1, Threads: 1, Turns: 2, Bound: true, Completed: true,
-				FirstCompleted: true, FirstRecall: true, Recalled: true, FirstReplyBytes: 64, ReplyBytes: 64,
-				ToolCalls: 1, CompletedTools: got.CompletedTools, ReasoningItems: got.ReasoningItems, EncryptedItems: got.EncryptedItems}
-			if got != want {
-				t.Fatal("native two-turn evidence changed")
-			}
-		})
-	}
-}
-
-const reasoningHTTPCipher = "opaque-controlled-history-replay"
-const reasoningHTTPPrivate = "CONTROLLED_PRIVATE_REASONING"
-const reasoningHTTPCall = "controlled_history_call"
-
-type reasoningHTTP struct {
-	mu                                       sync.Mutex
-	model, effort, threadID, toolName, token string
-	failure                                  string
-	requests                                 int
-	replayed, continued                      bool
-	output                                   json.RawMessage
-}
 
 func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	fixture.mu.Lock()
@@ -246,10 +184,22 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 	emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": responseID}})
 }
 
+type reasoningHTTP struct {
+	mu                                       sync.Mutex
+	model, effort, threadID, toolName, token string
+	failure                                  string
+	requests                                 int
+	replayed, continued                      bool
+	output                                   json.RawMessage
+}
+
+const reasoningHTTPCall = "controlled_history_call"
+
+const reasoningHTTPCipher = "opaque-controlled-history-replay"
+
 func reasoningHTTPDeclaration(tools []json.RawMessage) (string, bool) {
 	const projected = "local___grok_history_probe_5c6dab5ce2f3142e"
 	var name string
-	hosted := false
 	for _, raw := range tools {
 		var tool struct {
 			Type, Name string
@@ -259,12 +209,6 @@ func reasoningHTTPDeclaration(tools []json.RawMessage) (string, bool) {
 			return "", false
 		}
 		switch tool.Type {
-		case "x_search":
-			var fields map[string]json.RawMessage
-			if hosted || json.Unmarshal(raw, &fields) != nil || len(fields) != 1 {
-				return "", false
-			}
-			hosted = true
 		case "function":
 			if name != "" || tool.Name != projected || !reflect.DeepEqual(tool.Parameters,
 				map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}) {
@@ -277,3 +221,60 @@ func reasoningHTTPDeclaration(tools []json.RawMessage) (string, bool) {
 	}
 	return name, name != ""
 }
+
+const reasoningHTTPPrivate = "CONTROLLED_PRIVATE_REASONING"
+
+// The controlled backend observes actual product replay and tool execution;
+// it supplies the answers and therefore does not establish real-provider recall.
+func TestReasoningHistoryFixture(t *testing.T) {
+	subject := nativeSubject(t)
+	for _, tc := range []struct {
+		name, model, effort string
+	}{
+		{"primary", providerfixture.PrimaryModel, "medium"},
+		{"pinned", providerfixture.PinnedModel, "medium"},
+		{"omitted-effort-control", providerfixture.PinnedModel, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			integrationObservation(t)
+			fixture := &reasoningHTTP{model: tc.model, effort: tc.effort}
+			backend := httptest.NewServer(fixture)
+			defer backend.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			run := live.ReasoningHistory
+			if tc.effort == "" {
+				run = live.ReasoningHistoryWithoutEffort
+			}
+			got, err := run(ctx, live.Options{Subject: subject, Model: tc.model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
+			fixture.mu.Lock()
+			defer fixture.mu.Unlock()
+			// Evidence and structural failure markers never contain token, raw
+			// prompts, identifiers, private reasoning or encrypted content.
+			encoded, _ := json.Marshal(got)
+			failure := live.FailureInfo{}
+			if err != nil {
+				failure = live.DescribeFailure(err)
+			}
+			t.Logf("controlled reasoning: evidence=%s requests=%d paired_result=%t encrypted_replay=%t continuation=%t wire_failure=%s failure=%+v",
+				encoded, fixture.requests, fixture.token != "", fixture.replayed, fixture.continued, fixture.failure, failure)
+			if err != nil || fixture.failure != "" || fixture.requests != 3 || !fixture.replayed || !fixture.continued {
+				t.Fatal("native reasoning/tool/history composition was not proven")
+			}
+			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 64 || got.ReplyBytes != 64 {
+				t.Fatal("completed encrypted reasoning, paired tool and final recall evidence missing")
+			}
+			got.ObservedAt = ""
+			want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
+				Target: subject.Target, Environment: subject.Environment, Model: tc.model, Stage: "history_recalled",
+				Processes: 1, Initializations: 1, Threads: 1, Turns: 2, Bound: true, Completed: true,
+				FirstCompleted: true, FirstRecall: true, Recalled: true, FirstReplyBytes: 64, ReplyBytes: 64,
+				ToolCalls: 1, CompletedTools: got.CompletedTools, ReasoningItems: got.ReasoningItems, EncryptedItems: got.EncryptedItems}
+			if got != want {
+				t.Fatal("native two-turn evidence changed")
+			}
+		})
+	}
+}
+
+var historyNonce = regexp.MustCompile(`^[0-9a-f]{64}$`)

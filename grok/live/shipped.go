@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 
 	"github.com/Harness-X-Harness/codex/grok/dist"
 )
@@ -67,13 +65,6 @@ func shippedOptions(subject Subject, key, selected string) (Options, error) {
 		model = selected
 	}
 	return Options{Subject: subject, Model: model, BaseURL: endpoint, APIKey: key, shippedProfile: true}, nil
-}
-
-func writeShippedProfile(home, cwd string) error {
-	if os.Mkdir(cwd, 0700) != nil || os.WriteFile(filepath.Join(home, "config.toml"), []byte(dist.Profile()), 0600) != nil || os.WriteFile(filepath.Join(home, "models.json"), dist.Catalog(), 0600) != nil {
-		return errors.New("live: shipped profile copy failed")
-	}
-	return nil
 }
 
 // This is the stock Model DTO projection, including explicit null and empty
