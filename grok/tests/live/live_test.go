@@ -25,18 +25,18 @@ import (
 )
 
 var (
-	suite                                           = flag.String("grok-live-suite", "smoke", "smoke, full or diagnostic")
-	scenario                                        = flag.String("grok-live-scenario", "", "optional exact catalog name; -run also selects subtests")
-	verified                                        = flag.Bool("grok-live-verified-subject", false, "caller established exact package provenance")
-	digest                                          = flag.String("grok-live-binary-sha256", "", "verified package runtime digest")
-	source                                          = flag.String("grok-live-source-sha", "", "verified immutable runtime source revision")
-	harness                                         = flag.String("grok-live-harness-sha", "", "verified immutable harness revision")
-	target                                          = flag.String("grok-live-target", "", "verified package target")
-	environment                                     = flag.String("grok-live-environment", "", "verified execution environment label")
-	deadline                                        = flag.Duration("grok-live-timeout", 5*time.Minute, "per-scenario timeout, at most 5m")
-	cases                                           []scenarios.Scenario
-	subject                                         live.Subject
-	selectedCount, completedCount, unsupportedCount int
+	suite                         = flag.String("grok-live-suite", "smoke", "smoke, full or diagnostic")
+	scenario                      = flag.String("grok-live-scenario", "", "optional exact catalog name; -run also selects subtests")
+	verified                      = flag.Bool("grok-live-verified-subject", false, "caller established exact package provenance")
+	digest                        = flag.String("grok-live-binary-sha256", "", "verified package runtime digest")
+	source                        = flag.String("grok-live-source-sha", "", "verified immutable runtime source revision")
+	harness                       = flag.String("grok-live-harness-sha", "", "verified immutable harness revision")
+	target                        = flag.String("grok-live-target", "", "verified package target")
+	environment                   = flag.String("grok-live-environment", "", "verified execution environment label")
+	deadline                      = flag.Duration("grok-live-timeout", 5*time.Minute, "per-scenario timeout, at most 5m")
+	cases                         []scenarios.Scenario
+	subject                       live.Subject
+	selectedCount, completedCount int
 )
 
 // TestMain refuses a green package when -run/-skip selects no scenarios, or a
@@ -60,21 +60,17 @@ func TestMain(m *testing.M) {
 	outcome := "not_proven"
 	if code == 0 && failure == "" {
 		outcome = "observed"
-		if unsupportedCount > 0 {
-			outcome = "accepted"
-		}
 	}
 	// Only validated catalog/configuration labels enter the retained summary.
 	summary := struct {
-		SchemaVersion       int    `json:"schema_version"`
-		Family              string `json:"family"`
-		Suite               string `json:"suite,omitempty"`
-		Outcome             string `json:"outcome"`
-		Reason              string `json:"reason,omitempty"`
-		Selected            int    `json:"selected"`
-		Completed           int    `json:"completed"`
-		ExpectedUnsupported int    `json:"expected_unsupported,omitempty"`
-	}{SchemaVersion: 1, Family: "live", Outcome: outcome, Reason: failure, Selected: selectedCount, Completed: completedCount, ExpectedUnsupported: unsupportedCount}
+		SchemaVersion int    `json:"schema_version"`
+		Family        string `json:"family"`
+		Suite         string `json:"suite,omitempty"`
+		Outcome       string `json:"outcome"`
+		Reason        string `json:"reason,omitempty"`
+		Selected      int    `json:"selected"`
+		Completed     int    `json:"completed"`
+	}{SchemaVersion: 1, Family: "live", Outcome: outcome, Reason: failure, Selected: selectedCount, Completed: completedCount}
 	if len(cases) != 0 {
 		summary.Suite = *suite
 	}
@@ -170,11 +166,8 @@ func TestLive(t *testing.T) {
 				t.Fatal("bounded_evidence_write_failed")
 			}
 			t.Log(strings.TrimSpace(evidence.String()))
-			if code != 0 || (report.Outcome != "observed" && report.Outcome != "expected_unsupported") {
+			if code != 0 || report.Outcome != "observed" {
 				t.Fatal("scenario_not_proven")
-			}
-			if report.Outcome == "expected_unsupported" {
-				unsupportedCount++
 			}
 			completedCount++
 		})

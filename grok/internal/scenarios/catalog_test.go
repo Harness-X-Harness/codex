@@ -27,7 +27,7 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 	for _, scenario := range smoke {
 		smokeNames = append(smokeNames, scenario.Name)
 	}
-	if !reflect.DeepEqual(smokeNames, []string{"basic-primary", "reasoning-primary", "web", "x"}) {
+	if !reflect.DeepEqual(smokeNames, []string{"basic-primary", "reasoning-primary", "web"}) {
 		t.Fatalf("unexpected smoke selection: %v", smokeNames)
 	}
 	for _, scenario := range diagnostic {
@@ -35,7 +35,7 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 			diagnosticOnly = append(diagnosticOnly, scenario.Name)
 		}
 	}
-	if len(full) != 19 || len(diagnostic) != 20 || !reflect.DeepEqual(diagnosticOnly, []string{"reasoning-no-effort-pinned"}) {
+	if len(full) != 17 || len(diagnostic) != 18 || !reflect.DeepEqual(diagnosticOnly, []string{"reasoning-no-effort-pinned"}) {
 		t.Fatal("formal proof silently changed")
 	}
 	for _, entry := range full {
@@ -120,5 +120,21 @@ func TestFactsCompletionRequiresEveryRoute(t *testing.T) {
 	result.Routes[1].Observation.Completed = true
 	if !result.Completed() {
 		t.Fatal("completed route set rejected")
+	}
+}
+
+func TestRetiredProductXDoesNotRetireBackendFacts(t *testing.T) {
+	for _, name := range []string{"x", "x-window"} {
+		for _, suite := range []string{"smoke", "full", "diagnostic"} {
+			if selected, err := Select("live", suite, name); err == nil || len(selected) != 0 {
+				t.Fatal("retired product X selected")
+			}
+		}
+		if _, err := Lookup("facts", name); err != nil {
+			t.Fatal("backend-only X Facts lost")
+		}
+	}
+	if _, err := Lookup("facts", "x-replay"); err != nil {
+		t.Fatal("backend X replay lost")
 	}
 }

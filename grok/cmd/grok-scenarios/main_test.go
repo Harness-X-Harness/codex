@@ -58,3 +58,20 @@ func TestCommandSelectionRejectsUnknownWithoutEchoingInput(t *testing.T) {
 type failedWriter struct{}
 
 func (failedWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestCommandDerivesPhysicalTestOwners(t *testing.T) {
+	for _, tc := range []struct{ family, name, owner string }{
+		{"live", "web", "live:TestLive/web"},
+		{"facts", "x-window", "facts:TestBackendSearchFacts/x-window"},
+		{"facts", "encrypted-replay", "facts:TestBackendFacts/encrypted-replay"},
+	} {
+		var output bytes.Buffer
+		if run([]string{"--family", tc.family, "--scenario", tc.name, "--test-owners"}, &output) != 0 {
+			t.Fatal("owner discovery failed")
+		}
+		var owners []string
+		if json.Unmarshal(output.Bytes(), &owners) != nil || len(owners) != 1 || owners[0] != "github.com/Harness-X-Harness/codex/grok/tests/"+tc.owner {
+			t.Fatalf("wrong owner: %s", output.String())
+		}
+	}
+}

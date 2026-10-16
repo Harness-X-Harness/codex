@@ -18,9 +18,10 @@ func run(args []string, output io.Writer) int {
 	family := flags.String("family", "live", "live or facts")
 	suite := flags.String("suite", "full", "smoke, full or diagnostic")
 	name := flags.String("scenario", "", "optional exact scenario")
+	owners := flags.Bool("test-owners", false, "emit package-qualified tagged Go test owners")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
-			if _, err := io.WriteString(output, "Usage: grok-scenarios [--family live|facts] [--suite smoke|full|diagnostic] [--scenario NAME]\n"); err != nil {
+			if _, err := io.WriteString(output, "Usage: grok-scenarios [--family live|facts] [--suite smoke|full|diagnostic] [--scenario NAME] [--test-owners]\n"); err != nil {
 				return 1
 			}
 			return 0
@@ -36,7 +37,11 @@ func run(args []string, output io.Writer) int {
 	}
 	names := make([]string, 0, len(selected))
 	for _, scenario := range selected {
-		names = append(names, scenario.Name)
+		name := scenario.Name
+		if *owners {
+			name = scenario.TestOwner()
+		}
+		names = append(names, name)
 	}
 	if json.NewEncoder(output).Encode(names) != nil {
 		return 1

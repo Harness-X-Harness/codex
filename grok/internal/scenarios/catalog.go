@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 
 	"github.com/Harness-X-Harness/codex/grok/facts"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
@@ -26,6 +27,20 @@ type Scenario struct {
 	Smoke           bool   `json:"smoke"`
 	liveRun         func(context.Context, live.Options) (LiveResult, error)
 	factsRun        func(context.Context, *facts.Probe) (FactsResult, error)
+}
+
+// TestOwner names the physical tagged Go owner for this catalog scenario.
+// The name is derived here so workflow consumers do not recreate family routing.
+func (s Scenario) TestOwner() string {
+	const root = "github.com/Harness-X-Harness/codex/grok/tests/"
+	if s.Family == "live" {
+		return root + "live:TestLive/" + s.Name
+	}
+	owner := "TestBackendFacts"
+	if strings.HasPrefix(s.Policy, "web") || strings.HasPrefix(s.Policy, "x") {
+		owner = "TestBackendSearchFacts"
+	}
+	return root + "facts:" + owner + "/" + s.Name
 }
 
 // LiveResult retains each existing scenario's full, safe evidence DTO.
@@ -240,8 +255,6 @@ var catalog = []Scenario{
 	liveCase("web", providerfixture.PrimaryModel, "web", 2, true, search("web")),
 	liveCase("web-allowed", providerfixture.PrimaryModel, "web_allowed", 2, false, search("web_allowed")),
 	liveCase("web-excluded", providerfixture.PrimaryModel, "web_excluded", 2, false, search("web_excluded")),
-	liveCase("x", providerfixture.PrimaryModel, "x", 2, true, search("x")),
-	liveCase("x-window", providerfixture.PrimaryModel, "x_window", 2, false, search("x_window")),
 	factsCase("basic-primary", providerfixture.PrimaryModel, "text", 1, true, text(providerfixture.PrimaryModel, false)),
 	factsCase("basic-pinned", providerfixture.PinnedModel, "text", 1, false, text(providerfixture.PinnedModel, false)),
 	factsCase("encrypted-replay", providerfixture.PrimaryModel, "encrypted-replay", 2, true, text(providerfixture.PrimaryModel, true)),

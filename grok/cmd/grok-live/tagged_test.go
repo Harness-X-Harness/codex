@@ -121,15 +121,26 @@ func TestTaggedLivePreservesCallerVerifiedSubject(t *testing.T) {
 	}
 }
 
-func TestTaggedLiveReportsExpectedXRejectionWithoutSearchCompletion(t *testing.T) {
-	trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
-	key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:x", "Trace": trace})
-	output, code := tagged(t, []string{"-test.count=1", "-test.v", "-grok-live-suite=full", "-grok-live-scenario=x"}, "1", string(key), fixturePath)
-	if code != 0 || !strings.Contains(output, `"outcome":"expected_unsupported"`) || !strings.Contains(output, `"outcome":"accepted"`) || !strings.Contains(output, `"selected":1,"completed":1,"expected_unsupported":1`) || !strings.Contains(output, `"Completed":false`) || strings.Contains(output, `"outcome":"observed"`) {
-		t.Fatalf("tagged rejection misreported: %s", output)
+func TestTaggedLiveCannotSelectRetiredXOrAcceptItsRejection(t *testing.T) {
+	for _, suite := range []string{"smoke", "full", "diagnostic"} {
+		for _, scenario := range []string{"x", "x-window"} {
+			t.Run(suite+"/"+scenario, func(t *testing.T) {
+				trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+				key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:x", "Trace": trace})
+				output, code := tagged(t, []string{"-test.count=1", "-test.v", "-grok-live-suite=" + suite, "-grok-live-scenario=" + scenario}, "1", string(key), fixturePath)
+				if code == 0 || !strings.Contains(output, `"reason":"invalid_scenario_selection"`) || !strings.Contains(output, `"selected":0,"completed":0`) || strings.Contains(output, `"outcome":"observed"`) || strings.Contains(output, `"outcome":"accepted"`) {
+					t.Fatalf("retired X counted: %s", output)
+				}
+				if _, err := os.Stat(trace); !os.IsNotExist(err) {
+					t.Fatal("retired X launched runtime")
+				}
+			})
+		}
 	}
-	transcript, err := os.ReadFile(trace)
-	if err != nil || strings.Count(string(transcript), "turn/start\n") != 1 {
-		t.Fatal("tagged rejection repeated work")
+	trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+	key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:web", "Trace": trace})
+	output, code := tagged(t, []string{"-test.count=1", "-test.v", "-grok-live-scenario=web"}, "1", string(key), fixturePath)
+	if code == 0 || !strings.Contains(output, `"selected":1,"completed":0`) || strings.Contains(output, `"outcome":"expected_unsupported"`) || strings.Contains(output, `"outcome":"accepted"`) {
+		t.Fatalf("legacy rejection counted: %s", output)
 	}
 }

@@ -20,10 +20,14 @@ type SearchEvidence struct {
 	ExpectedUnsupported          bool `json:",omitempty"`
 }
 
-// HostedSearch submits one fixed Web/X search and one follow-up, each once.
+// HostedSearch submits one supported Web search and one follow-up, each once.
+// Product Hosted X is retired; direct backend X probes belong to Facts.
 // Its isolated fixture has no local tool executor. Native config/wire/history
 // composition remains a prerequisite; this observer does not infer it from text.
 func HostedSearch(ctx context.Context, options Options, scenario string) (SearchEvidence, error) {
+	if scenario == "x" || scenario == "x_window" {
+		return SearchEvidence{Scenario: scenario}, failedObservation("hosted_x_retired", "live: product hosted X is retired")
+	}
 	_, config, prompt, err := searchfixture.Plan(scenario)
 	if err != nil {
 		return SearchEvidence{}, errors.New("live: invalid hosted search fixture")
@@ -193,10 +197,12 @@ func (p *searchProbe) notification(message frame) error {
 	if json.Unmarshal(event.Item, &kind) != nil {
 		return errors.New("live: invalid search item")
 	}
-	// Raw canonical hosted X is distinct from local custom execution, even
-	// when the selected scenario credits Web. Public ThreadItem notifications
-	// never use raw custom_tool_call; those remain rejected by localSearchItem.
+	// Retired hosted X cannot contribute to supported Web proof. The legacy X
+	// branch below is exercised only by credential-free strict-SDK diagnostics.
 	_, hostedX := searchfixture.ReplayCall(event.Item, "x")
+	if hostedX && strings.HasPrefix(p.scenario, "web") {
+		return failedObservation("hosted_x_retired", "live: retired hosted X appeared during Web search")
+	}
 	if localSearchItem(kind.Type) && !(message.Method == "rawResponseItem/completed" && hostedX) {
 		return errors.New("live: local execution cannot establish hosted search")
 	}

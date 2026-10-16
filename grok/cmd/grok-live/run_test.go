@@ -141,8 +141,6 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"web", "search:ok:web", "grok-4.7", 2},
 		{"web-allowed", "search:ok:web_allowed", "grok-4.7", 2},
 		{"web-excluded", "search:ok:web_excluded", "grok-4.7", 2},
-		{"x", "search:ok:x", "grok-4.7", 2},
-		{"x-window", "search:ok:x_window", "grok-4.7", 2},
 	}
 	registered, err := scenarios.Select("live", "diagnostic", "")
 	if err != nil || len(registered) != len(cases) {
@@ -401,36 +399,32 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 	}
 }
 
-func TestCommandXSearchExpectedRejectionIsSeparateFromCompletion(t *testing.T) {
-	for _, tc := range []struct {
-		scenario, policy, mode string
-		accepted               bool
-	}{
-		{"x", "x", "public_only", true}, {"x-window", "x_window", "public_completed", true},
-		{"web", "web", "public_only", false}, {"x", "x", "public_other", false}, {"x", "x", "public_local_first", false},
-	} {
-		t.Run(tc.scenario+"/"+tc.mode, func(t *testing.T) {
+func TestCommandRetiredXCannotCountAsCompletion(t *testing.T) {
+	for _, scenario := range []string{"x", "x-window"} {
+		t.Run(scenario, func(t *testing.T) {
 			trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
-			key, _ := json.Marshal(map[string]string{"Mode": "search:" + tc.mode + ":" + tc.policy, "Trace": trace})
-			report, code := invoke(t, arguments(tc.scenario), "1", string(key))
-			var evidence live.SearchEvidence
-			if json.Unmarshal(report.Evidence, &evidence) != nil {
-				t.Fatal("invalid search report")
+			key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:x", "Trace": trace})
+			report, code := invoke(t, arguments(scenario), "1", string(key))
+			if code != 2 || report.Outcome != "configuration_error" || report.Reason != "unknown_or_missing_scenario" || len(report.Evidence) != 0 {
+				t.Fatalf("retired X accepted: %+v", report)
 			}
-			if tc.accepted {
-				if code != 0 || report.Outcome != "expected_unsupported" || report.Reason != "sdk_xsearch_unsupported" || report.Failure == nil || report.Failure.Code != "sdk_xsearch_unsupported" || !evidence.ExpectedUnsupported {
-					t.Fatalf("rejection missing: %+v", report)
-				}
-			} else if code != 1 || report.Outcome != "not_observed" || evidence.ExpectedUnsupported {
-				t.Fatalf("wrong failure accepted: %+v", report)
-			}
-			if report.ExecutionSnapshotRetained || evidence.CleanupPending || evidence.Completed || evidence.FirstCompleted || evidence.FollowupCompleted || evidence.SettledTurns != 0 || evidence.CanonicalCalls != 0 {
-				t.Fatalf("false completion or cleanup: %+v", evidence)
-			}
-			transcript, err := os.ReadFile(trace)
-			if err != nil || strings.Count(string(transcript), "turn/start\n") != 1 {
-				t.Fatal("rejection resubmitted semantic work")
+			if _, err := os.Stat(trace); !os.IsNotExist(err) {
+				t.Fatal("retired X launched runtime")
 			}
 		})
+	}
+}
+
+func TestCommandWebCannotAcceptLegacyXDecodeRejection(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+	key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:web", "Trace": trace})
+	report, code := invoke(t, arguments("web"), "1", string(key))
+	var evidence live.SearchEvidence
+	if json.Unmarshal(report.Evidence, &evidence) != nil || code != 1 || report.Outcome != "not_observed" || evidence.ExpectedUnsupported || evidence.Completed || evidence.FirstCompleted || evidence.FollowupCompleted || evidence.CleanupPending || report.ExecutionSnapshotRetained {
+		t.Fatalf("SDK rejection became Web success: %+v", report)
+	}
+	transcript, err := os.ReadFile(trace)
+	if err != nil || strings.Count(string(transcript), "turn/start\n") != 1 {
+		t.Fatal("failed Web resubmitted work")
 	}
 }
