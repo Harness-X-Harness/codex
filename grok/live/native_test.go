@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,28 +15,7 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
-func nativeSubject(t *testing.T, binary string) live.Subject {
-	t.Helper()
-	subject := binarySubject(t, binary)
-	subject.SourceSHA, subject.HarnessSHA = os.Getenv("GITHUB_SHA"), os.Getenv("GITHUB_SHA")
-	if source := os.Getenv("GROK_LIVE_NATIVE_SOURCE_SHA"); source != "" {
-		subject.SourceSHA = source
-		if source == "e9268d5211064fb77f76a9fe7f0a99348488c9d2" && subject.SHA256 != "26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab" {
-			t.Fatal("frozen product executable digest does not match the accepted package")
-		}
-	}
-	subject.Target, subject.Environment = "x86_64-unknown-linux-gnu", "native-fixture"
-	if target := os.Getenv("GROK_LIVE_NATIVE_TARGET"); target != "" {
-		subject.Target, subject.Environment = target, "package-fixture"
-	}
-	return subject
-}
-
-func TestNativeBasicFixture(t *testing.T) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("native CLI fixture is activated by the required runtime job")
-	}
+func testNativeBasicFixture(t *testing.T) {
 	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
 		t.Run(model, func(t *testing.T) {
 			var requests atomic.Int32
@@ -67,7 +45,7 @@ func TestNativeBasicFixture(t *testing.T) {
 				}
 			}))
 			defer backend.Close()
-			subject := nativeSubject(t, binary)
+			subject := nativeSubject(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
 			got, err := live.Basic(ctx, live.Options{Subject: subject, Model: model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
@@ -77,10 +55,20 @@ func TestNativeBasicFixture(t *testing.T) {
 			encoded, _ := json.Marshal(got)
 			t.Logf("native fixture evidence: %s", encoded)
 			got.ObservedAt = ""
-			want := live.Evidence{SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA, Target: subject.Target, Environment: subject.Environment, Model: model, Stage: "final_reply", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 12, Bound: true, Completed: true}
+			want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA, Target: subject.Target, Environment: subject.Environment, Model: model, Stage: "final_reply", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 12, Bound: true, Completed: true}
 			if got != want || requests.Load() == 0 || invalid.Load() {
 				t.Fatal("native Provider/fixture/terminal composition was not proven")
 			}
 		})
+	}
+}
+
+func testNativeShippedCatalog(t *testing.T) {
+	subject := nativeSubject(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	got, err := live.ShippedCatalog(ctx, subject, "catalog-only-fixture")
+	if err != nil || !got.ShippedCatalog || got.CatalogModels != 2 || got.Turns != 0 {
+		t.Fatalf("native shipped catalog: %+v %v", got, err)
 	}
 }

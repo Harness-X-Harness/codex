@@ -1,0 +1,31 @@
+name: grok-ci
+
+on:
+  pull_request:
+    # These bases already get exactly this Go job through grok.yml's proof.
+    branches-ignore: ["grok/rust-v*", "grok/c7-web-activity-20261008", "grok/c8-package-build-20261009"]
+    paths:
+      - "grok/**"
+      - ".github/workflows/grok*.yml"
+      - ".github/actions/build-grok/**"
+      - ".github/actions/check-clean-worktree/**"
+  push:
+    branches-ignore: ["grok/rust-v*"]
+    paths:
+      - "grok/**"
+      - ".github/workflows/grok*.yml"
+      - ".github/actions/build-grok/**"
+      - ".github/actions/check-clean-worktree/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grok-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Fast Go
+    uses: ./.github/workflows/grok-go.yml

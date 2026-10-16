@@ -1,0 +1,69 @@
+name: grok-go
+
+# Shared, credential-free contracts. No product binary or real backend is used.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Go contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GROK_FACTS: "0"
+      GROK_LIVE: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: true
+          cache-dependency-path: grok/go.sum
+      - name: Require formatted Go source
+        working-directory: grok
+        run: |
+          gofmt -d .
+          test -z "$(gofmt -l .)"
+      - name: Require reproducible Go dependency closure
+        working-directory: grok
+        run: go mod tidy -diff
+      - name: Test the default offline Go contracts
+        working-directory: grok
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/grok-go-evidence"
+          status=0
+          go test -race -count=1 -timeout=15m -json ./... \
+            > "$RUNNER_TEMP/grok-go-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/grok-go-evidence/tests.json" \
+            > "$RUNNER_TEMP/grok-go-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/grok-go-evidence/summary.json"
+          exit "$status"
+      - name: Vet the same Go module
+        working-directory: grok
+        run: go vet ./...
+      - name: Test package staging and launcher with synthetic inputs
+        run: |
+          python3 grok/package/test_stage.py -v
+          python3 grok/package/test_diagnose_linux_binary.py -v
+      - name: Test exact artifact selection and extraction without downloads
+        run: |
+          python3 grok/package/test_select_artifact.py -v
+          python3 grok/package/test_extract_artifact.py -v
+          python3 grok/package/test_fetch_artifact.py -v
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Retain Go contract results even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-go-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-go-evidence
+          if-no-files-found: error
+          retention-days: 7

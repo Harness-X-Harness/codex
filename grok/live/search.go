@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/searchfixture"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 // SearchEvidence observes canonical hosted output and same-thread continuation.
@@ -30,36 +31,39 @@ func HostedSearch(ctx context.Context, options Options, scenario string) (Search
 }
 
 type searchProbe struct {
-	server                                 productClient
+	server                                 *sdkProductObserver
 	threadID, turnID, previousID, scenario string
 	evidence                               *Evidence
 	result                                 *SearchEvidence
 	calls                                  map[string]map[string]string
 	frames, bytes                          int
-	terminal                               bool
+	terminal, settled                      bool
 }
 
 func (p *searchProbe) observe(prompt string) error {
 	p.evidence.Turns++
-	p.frames, p.bytes, p.terminal = 0, 0, false
-	var started struct {
-		Turn turn `json:"turn"`
+	p.frames, p.bytes, p.terminal, p.settled = 0, 0, false, false
+	response, err := p.server.client.Turns().Start(p.server.ctx, protocolv2.TurnStartParams{ThreadID: p.threadID,
+		Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}})
+	if err != nil {
+		return shippedTransport(p.server.ctx, err)
 	}
-	if err := p.server.call("turn/start", map[string]any{"threadId": p.threadID, "input": []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}}}, &started); err != nil {
-		return err
+	started, err := searchTurnFromSDK(response.Turn)
+	if err != nil {
+		return errors.New("live: invalid search evidence")
 	}
-	if started.Turn.ID == "" || started.Turn.ID == p.previousID {
+	if started.ID == "" || started.ID == p.previousID {
 		return errors.New("live: search turn identity unavailable")
 	}
-	p.turnID, p.evidence.Stage = started.Turn.ID, "search_turn_submitted"
+	p.turnID, p.evidence.Stage = started.ID, "search_turn_submitted"
 	if p.calls == nil {
 		p.calls = map[string]map[string]string{}
 	}
 	// Keep the previous settled turn's credited identities through the single
 	// continuation. A reused item ID in a new turn is a separate occurrence.
 	p.calls[p.turnID] = map[string]string{}
-	if started.Turn.Status != "inProgress" {
-		if err := p.complete(started.Turn); err != nil {
+	if started.Status != "inProgress" {
+		if err := p.complete(started); err != nil {
 			return err
 		}
 	}
@@ -74,14 +78,18 @@ func (p *searchProbe) observe(prompt string) error {
 	}
 	// One settled read fences queued events and provides authoritative final text.
 	// It is not a second semantic invocation or a scan of unrelated session files.
-	var read struct {
-		Thread struct {
-			ID    string `json:"id"`
-			Turns []turn `json:"turns"`
-		} `json:"thread"`
+	include := true
+	read, err := p.server.client.Threads().Read(p.server.ctx, protocolv2.ThreadReadParams{ThreadID: p.threadID, IncludeTurns: &include})
+	if err != nil {
+		return shippedTransport(p.server.ctx, err)
 	}
-	if err := p.server.call("thread/read", map[string]any{"threadId": p.threadID, "includeTurns": true}, &read); err != nil {
-		return err
+	turns := make([]turn, 0, len(read.Thread.Turns))
+	for _, value := range read.Thread.Turns {
+		projected, err := searchTurnFromSDK(value)
+		if err != nil {
+			return errors.New("live: invalid search evidence")
+		}
+		turns = append(turns, projected)
 	}
 	for len(p.server.queued()) > 0 {
 		message, err := p.server.next()
@@ -92,11 +100,11 @@ func (p *searchProbe) observe(prompt string) error {
 			return err
 		}
 	}
-	if read.Thread.ID != p.threadID || len(read.Thread.Turns) != p.evidence.Turns {
+	if read.Thread.ID != p.threadID || len(turns) != p.evidence.Turns {
 		return errors.New("live: settled search history unavailable")
 	}
 	if p.previousID != "" {
-		previous := read.Thread.Turns[0]
+		previous := turns[0]
 		if previous.ID != p.previousID {
 			return errors.New("live: search history identity changed")
 		}
@@ -104,7 +112,7 @@ func (p *searchProbe) observe(prompt string) error {
 			return err
 		}
 	}
-	current := read.Thread.Turns[len(read.Thread.Turns)-1]
+	current := turns[len(turns)-1]
 	if err := p.complete(current); err != nil {
 		return err
 	}
@@ -120,6 +128,7 @@ func (p *searchProbe) observe(prompt string) error {
 	if p.evidence.ReplyBytes == 0 {
 		return errors.New("live: final search reply absent")
 	}
+	p.settled = true
 	p.result.SettledTurns++
 	return nil
 }
@@ -205,7 +214,7 @@ func (p *searchProbe) notification(message frame) error {
 		}
 		return nil
 	}
-	if event.TurnID != p.turnID {
+	if event.TurnID != p.turnID || p.settled {
 		return errors.New("live: new hosted search evidence after settled turn")
 	}
 	if len(credited) == 64 {

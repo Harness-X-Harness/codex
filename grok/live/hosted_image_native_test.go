@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -25,12 +24,8 @@ import (
 // Controlled local backends. A successful run shows that this frozen product
 // finishes the hosted-search and image-pinned turns when the provider admits
 // the expected items. It does not replay a real provider.
-func TestNativeHostedSearchFixture(t *testing.T) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by native runtime or explicit frozen-package verification")
-	}
-	subject := nativeSubject(t, binary)
+func testNativeHostedSearchFixture(t *testing.T) {
+	subject := nativeSubject(t)
 	for _, scenario := range []string{"web", "web_excluded", "x", "x_window"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := &hostedNativeHTTP{scenario: scenario}
@@ -54,12 +49,8 @@ func TestNativeHostedSearchFixture(t *testing.T) {
 	}
 }
 
-func TestNativeImagePinnedFixture(t *testing.T) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by native runtime or explicit frozen-package verification")
-	}
-	subject := nativeSubject(t, binary)
+func testNativeImagePinnedFixture(t *testing.T) {
+	subject := nativeSubject(t)
 	first := tinyPNG(t, color.NRGBA{R: 0, G: 0, B: 255, A: 255})
 	second := tinyPNG(t, color.NRGBA{R: 0, G: 255, B: 0, A: 255})
 	if first == second {

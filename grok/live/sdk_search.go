@@ -12,9 +12,9 @@ import (
 // sdkHostedSearch keeps the hosted Web/X oracle and replaces only its transport.
 func sdkHostedSearch(ctx context.Context, options Options, scenario string, config map[string]any, prompt string) (SearchEvidence, error) {
 	result := SearchEvidence{Scenario: scenario}
-	transport := &sdkProductTransport{ctx: ctx, changed: make(chan struct{}, 1)}
+	transport := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}
 	handlers := sdkFixtureHandlers{
-		requests: transport.request, notifications: transport.typedNotification,
+		requests: transport.request, notifications: transport.typedNotification, afterClose: transport.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 256 << 20},
 		// The business counter rejects the 4097th frame. The SDK default queue
 		// of 64 closes the client before that frame is delivered.
@@ -59,10 +59,22 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 		if err := probe.observe("Summarize the previous search result from this thread without searching again."); err != nil {
 			return err
 		}
+		transport.finalize = func() error {
+			for _, message := range transport.queued() {
+				if err := probe.notification(message); err != nil {
+					result.FollowupCompleted = false
+					return err
+				}
+			}
+			return nil
+		}
 		result.FollowupCompleted, evidence.Completed = true, true
 		evidence.Stage = "hosted_continuation_completed"
 		return nil
 	})
+	if err != nil {
+		result.FollowupCompleted = false
+	}
 	result.Evidence = base
 	return result, err
 }

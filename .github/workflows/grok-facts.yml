@@ -8,6 +8,8 @@ on:
       - "grok/facts/**"
       - "grok/cmd/grok-facts/**"
       - "grok/internal/providerfixture/**"
+      - "grok/internal/scenarios/**"
+      - "grok/cmd/grok-scenarios/**"
       - "grok/dist/**"
       - "grok/go.mod"
       - "grok/go.sum"
@@ -16,11 +18,9 @@ on:
     inputs:
       scenario:
         description: One existing observation to execute once.
-        type: choice
+        type: string
         required: true
         default: basic-primary
-        options: [basic-primary, basic-pinned, encrypted-replay, shipped-routes,
-          web, web-allowed, web-excluded, x, x-window, web-replay, x-replay]
 
 permissions:
   contents: read
@@ -31,8 +31,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  selection:
+    name: Select independent Facts observations
+    if: ${{ github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.GROK_FACTS == '1')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      scenarios: ${{ steps.catalog.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: true
+          cache-dependency-path: grok/go.sum
+      - name: Read the Go-owned Facts selection
+        id: catalog
+        working-directory: grok
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          set -euo pipefail
+          args=(--family facts --suite full)
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            args=(--family facts --suite diagnostic --scenario "$SCENARIO")
+          fi
+          scenarios="$(go run ./cmd/grok-scenarios "${args[@]}")"
+          printf 'scenarios=%s\n' "$scenarios" >> "$GITHUB_OUTPUT"
+
   facts:
     name: Facts (${{ matrix.scenario }})
+    needs: selection
     if: ${{ github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.GROK_FACTS == '1')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -40,7 +71,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        scenario: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.scenario) || '["basic-primary","basic-pinned","encrypted-replay","shipped-routes","web","web-allowed","web-excluded","x","x-window","web-replay","x-replay"]') }}
+        scenario: ${{ fromJSON(needs.selection.outputs.scenarios || '[]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

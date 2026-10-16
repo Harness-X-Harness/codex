@@ -1,7 +1,10 @@
+//go:build facts
+
 package facts_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -10,11 +13,15 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/facts"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
+	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
 )
 
+// The retained root now uses catalog names: basic_primary/basic_pinned become
+// basic-primary/basic-pinned, encrypted_typed_replay becomes encrypted-replay,
+// and shipped_routes becomes shipped-routes. No direct backend probe is added.
 func TestBackendFacts(t *testing.T) {
 	if os.Getenv("GROK_FACTS") != "1" {
-		t.Skip("backend not run: set GROK_FACTS=1 and GROK_API_KEY")
+		t.Fatal("backend not run: set GROK_FACTS=1 and GROK_API_KEY")
 	}
 	key := strings.TrimSpace(os.Getenv("GROK_API_KEY"))
 	if key == "" {
@@ -24,41 +31,41 @@ func TestBackendFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := []struct {
-		name, model string
-		observe     func(context.Context, string) (facts.Observation, error)
-	}{
-		{"basic_primary", providerfixture.PrimaryModel, probe.Text},
-		{"basic_pinned", providerfixture.PinnedModel, probe.Text},
-		{"encrypted_typed_replay", providerfixture.PrimaryModel, probe.EncryptedReplay},
+	selected, err := scenarios.Select("facts", "full", "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, scenario := range selected {
+		if searchFact(scenario) {
+			continue
+		}
+		t.Run(scenario.Name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			observation, err := tc.observe(ctx, tc.model)
-			t.Logf("FACT observed_at=%s metadata=%+v", time.Now().UTC().Format(time.RFC3339), observation)
+			scenarioProbe := probe
+			if scenario.Policy == "shipped-routes" {
+				_, baseURL, err := dist.Defaults()
+				if err != nil {
+					t.Fatal(err)
+				}
+				scenarioProbe, err = facts.NewProbe(baseURL+"/responses", key)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			observation, err := scenario.RunFacts(ctx, scenarioProbe)
+			encoded, _ := json.Marshal(observation)
+			t.Logf("FACT observed_at=%s metadata=%s", time.Now().UTC().Format(time.RFC3339), encoded)
 			if err != nil {
 				t.Fatalf("NOT_OBSERVED reason=%s", err)
 			}
+			if !observation.Completed() {
+				t.Fatal("NOT_OBSERVED reason=incomplete_backend_fact")
+			}
 		})
 	}
-	t.Run("shipped_routes", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		_, baseURL, err := dist.Defaults()
-		if err != nil {
-			t.Fatal(err)
-		}
-		shippedProbe, err := facts.NewProbe(baseURL+"/responses", key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		observations, err := shippedProbe.ShippedRoutes(ctx)
-		t.Logf("SHIPPED_ROUTES observed_at=%s metadata=%+v", time.Now().UTC().Format(time.RFC3339), observations)
-		if err != nil {
-			t.Fatalf("NOT_OBSERVED reason=%s", err)
-		}
-	})
+}
 
+func searchFact(scenario scenarios.Scenario) bool {
+	return strings.HasPrefix(scenario.Policy, "web") || strings.HasPrefix(scenario.Policy, "x")
 }

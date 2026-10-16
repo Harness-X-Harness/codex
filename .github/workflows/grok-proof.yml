@@ -49,7 +49,7 @@ jobs:
           esac
           # The checked-out proof definition must match the caller's workflow revision.
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
-            .github/workflows/grok.yml .github/workflows/grok-proof.yml \
+            .github/workflows/grok.yml .github/workflows/grok-proof.yml .github/workflows/grok-go.yml \
             .github/actions/setup-ci/action.yml .github/actions/setup-bazel-ci/action.yml
 
   locks:
@@ -710,26 +710,33 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
-      - name: Test real App Server and controlled Grok HTTP composition
+      - name: Test only real App Server and controlled Grok HTTP composition
         working-directory: grok
         env:
           GROK_FACTS: "0"
           GROK_LIVE: "0"
         run: |
-          export GROK_LIVE_NATIVE_BIN="$CARGO_TARGET_DIR/ci-test/codex"
-          test -x "$GROK_LIVE_NATIVE_BIN"
-          # Preserve the legacy package budget; collect all independent contracts
-          # even if one fails, and propagate any failure to this required job.
-          go test -list '^TestNativeFirstRequestShape$' ./live | grep -Fx TestNativeFirstRequestShape
-          go test -list '^TestNativeReasoningHistoryFixture$' ./live | grep -Fx TestNativeReasoningHistoryFixture
-          go test -list '^TestNativeStructuredEditFixture$' ./live | grep -Fx TestNativeStructuredEditFixture
-          go test -list '^TestSDKEditObserverPositiveStory$' ./live | grep -Fx TestSDKEditObserverPositiveStory
-          go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
+          set -euo pipefail
+          export GROK_CODEX_BIN="$CARGO_TARGET_DIR/ci-test/codex"
+          test -x "$GROK_CODEX_BIN"
+          mkdir "$RUNNER_TEMP/grok-integration-evidence"
           status=0
-          go test -race -count=1 -timeout=6m -v -skip '^(TestNativeFirstRequestShape|TestReasoningHistoryPublicProtocol)$' ./live || status=1
-          go test -race -count=1 -timeout=6m -v -run '^TestReasoningHistoryPublicProtocol$' ./live || status=1
-          go test -race -count=1 -timeout=6m -v -run '^TestNativeFirstRequestShape$' ./live || status=1
+          go test -race -tags=integration -count=1 -timeout=20m -json \
+            -run '^TestIntegration' ./live \
+            > "$RUNNER_TEMP/grok-integration-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --integration \
+            --input "$RUNNER_TEMP/grok-integration-evidence/tests.json" \
+            > "$RUNNER_TEMP/grok-integration-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/grok-integration-evidence/summary.json"
           exit "$status"
+      - name: Retain Go integration results even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-integration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-integration-evidence
+          if-no-files-found: error
+          retention-days: 7
       - name: Check scoped filesystem API lint
         env:
           # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
@@ -852,53 +859,9 @@ jobs:
           if-no-files-found: error
 
   go:
-    name: Deterministic Facts and Live proof
+    name: Deterministic Go contracts
     needs: subject
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      GROK_FACTS: "0"
-      GROK_LIVE: "0"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: grok/go.mod
-          cache: false
-      - name: Require formatted Go scenario source
-        working-directory: grok
-        run: |
-          gofmt -d .
-          test -z "$(gofmt -l .)"
-      - name: Require reproducible Go dependency closure
-        working-directory: grok
-        run: go mod tidy -diff
-      - name: Test Grok package staging and launcher with synthetic inputs
-        run: |
-          python3 grok/package/test_stage.py -v
-          python3 grok/package/test_diagnose_linux_binary.py -v
-      - name: Test exact artifact selection and extraction without downloads
-        run: |
-          python3 grok/package/test_select_artifact.py -v
-          python3 grok/package/test_extract_artifact.py -v
-          python3 grok/package/test_fetch_artifact.py -v
-      - name: Test Facts HTTP and Live stdio boundaries without backend calls
-        working-directory: grok
-        run: |
-          go test -list '^TestReasoningHistoryPublicProtocol$' ./live | grep -Fx TestReasoningHistoryPublicProtocol
-          go test -list '^TestSDKEditObserverPositiveStory$' ./live | grep -Fx TestSDKEditObserverPositiveStory
-          status=0
-          go test -race -count=1 -timeout=6m -v -skip '^TestReasoningHistoryPublicProtocol$' ./facts ./live ./cmd/grok-facts ./cmd/grok-live || status=1
-          go test -race -count=1 -timeout=6m -v -run '^TestReasoningHistoryPublicProtocol$' ./live || status=1
-          exit "$status"
-      - name: Vet the consumed Go foundation
-        working-directory: grok
-        run: go vet ./...
-      - name: Verify clean worktree
-        if: ${{ always() }}
-        uses: ./.github/actions/check-clean-worktree
+    uses: ./.github/workflows/grok-go.yml
 
   complete:
     name: Native proof result

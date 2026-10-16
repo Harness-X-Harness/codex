@@ -1,7 +1,10 @@
+//go:build facts
+
 package facts_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -9,11 +12,14 @@ import (
 
 	"github.com/Harness-X-Harness/codex/grok/facts"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
+	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
 )
 
+// Existing Web/X subtest names change underscores to the catalog's hyphens,
+// including web_replay/x_replay. Policy metadata owns search grouping.
 func TestBackendSearchFacts(t *testing.T) {
 	if os.Getenv("GROK_FACTS") != "1" {
-		t.Skip("backend not run: explicit Facts opt-in required")
+		t.Fatal("backend not run: explicit Facts opt-in required")
 	}
 	key := strings.TrimSpace(os.Getenv("GROK_API_KEY"))
 	if key == "" {
@@ -23,25 +29,29 @@ func TestBackendSearchFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "x", "x_window"} {
-		t.Run(scenario, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	selected, err := scenarios.Select("facts", "full", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range selected {
+		if !searchFact(scenario) {
+			continue
+		}
+		t.Run(scenario.Name, func(t *testing.T) {
+			deadline := 2 * time.Minute
+			if scenario.SemanticTurns > 1 {
+				deadline = 3 * time.Minute
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), deadline)
 			defer cancel()
-			observed, err := probe.SearchPolicy(ctx, providerfixture.PrimaryModel, scenario)
-			t.Logf("SEARCH_POLICY observed_at=%s metadata=%+v", time.Now().UTC().Format(time.RFC3339), observed)
+			observation, err := scenario.RunFacts(ctx, probe)
+			encoded, _ := json.Marshal(observation)
+			t.Logf("SEARCH_FACT observed_at=%s metadata=%s", time.Now().UTC().Format(time.RFC3339), encoded)
 			if err != nil {
 				t.Fatalf("NOT_OBSERVED reason=%s", err)
 			}
-		})
-	}
-	for _, scenario := range []string{"web", "x"} {
-		t.Run(scenario+"_replay", func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			defer cancel()
-			observed, err := probe.SearchReplay(ctx, providerfixture.PrimaryModel, scenario)
-			t.Logf("SEARCH_REPLAY observed_at=%s metadata=%+v", time.Now().UTC().Format(time.RFC3339), observed)
-			if err != nil {
-				t.Fatalf("NOT_OBSERVED reason=%s", err)
+			if !observation.Completed() {
+				t.Fatal("NOT_OBSERVED reason=incomplete_backend_fact")
 			}
 		})
 	}

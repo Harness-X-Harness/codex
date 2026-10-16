@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -21,12 +20,8 @@ import (
 
 // The controlled backend observes actual product replay and tool execution;
 // it supplies the answers and therefore does not establish real-provider recall.
-func TestNativeReasoningHistoryFixture(t *testing.T) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by native runtime or explicit frozen-package verification")
-	}
-	subject := nativeSubject(t, binary)
+func testNativeReasoningHistoryFixture(t *testing.T) {
+	subject := nativeSubject(t)
 	for _, tc := range []struct {
 		name, model, effort string
 	}{
@@ -63,7 +58,7 @@ func TestNativeReasoningHistoryFixture(t *testing.T) {
 				t.Fatal("completed encrypted reasoning, paired tool and final recall evidence missing")
 			}
 			got.ObservedAt = ""
-			want := live.Evidence{SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
+			want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
 				Target: subject.Target, Environment: subject.Environment, Model: tc.model, Stage: "history_recalled",
 				Processes: 1, Initializations: 1, Threads: 1, Turns: 2, Bound: true, Completed: true,
 				FirstCompleted: true, FirstRecall: true, Recalled: true, FirstReplyBytes: 64, ReplyBytes: 64,

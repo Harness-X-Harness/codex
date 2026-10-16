@@ -145,7 +145,7 @@ func fakeSearchServer() {
 				if mode == "partial" {
 					call["status"] = "in_progress"
 				}
-				if strings.HasPrefix(scenario, "x") {
+				if strings.HasPrefix(scenario, "x") && mode == "public_only" {
 					notify("item/started", hostedXSearchItem())
 					notify("item/completed", hostedXSearchItem())
 					terminal["items"] = append(terminal["items"].([]any), hostedXSearchItem())
@@ -472,7 +472,7 @@ func TestHostedSearchPublicXSearchIsNotCanonical(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			got, err := live.HostedSearch(ctx, options, scenario)
-			if err == nil || err.Error() != "live: completed hosted search absent" || got.CanonicalCalls != 0 || got.Completed || got.FollowupCompleted || got.Turns != 1 || got.SettledTurns != 1 {
+			if err == nil || got.CanonicalCalls != 0 || got.Completed || got.FollowupCompleted || got.Turns != 1 || got.SettledTurns != 0 {
 				t.Fatalf("public xSearch credited: %+v, %v", got, err)
 			}
 			encoded, _ := json.Marshal(got)

@@ -1,5 +1,10 @@
 # Basic and reasoning backend observations
 
+[TESTING](../TESTING.md) defines the separate default, Integration, Live and Facts
+tiers. The shared [scenario catalog](../internal/scenarios/catalog.go) owns stable
+Facts names/dispatch independently of Live. `grok-facts.yml` generates its own
+matrix from that catalog; no product binary is required for these observations.
+
 This #320 foundation observes the configured Grok HTTP Responses endpoint.
 It does not exercise a product binary or complete a Live Story. The primary
 `grok-4.7` and pinned `grok-4.6` controls come from the previous accepted source;
@@ -23,9 +28,11 @@ replay. Bound response reads; malformed, oversized, partial or unreadable input
 does not become successful observation. Parse supported response representations
 by their semantic text/reasoning facts; unrelated fields are not outcome gates.
 
-Backend tests require explicit `GROK_FACTS=1` and `GROK_API_KEY`. Missing opt-in
-means not run; missing credentials after opt-in is failure. Required CI disables
-backend opt-ins and executes meaningful local-server deterministic tests.
+Backend tests are excluded from the default build with the `facts` tag. An
+explicit `go -C grok test -tags=facts -count=1 ./facts` requires both
+`GROK_FACTS=1` and `GROK_API_KEY`; missing either is failure, never a passing skip.
+The independent CLI retains its not-run result without opt-in. Required CI
+executes meaningful local-server deterministic tests without the backend tag.
 
 The HTTP observation requires nonempty assistant `output_text` and completion:
 either a completed response, or (when response status is omitted) completed
@@ -45,8 +52,7 @@ is not observed; root-cause attribution requires separate supporting evidence.
 The tested public seam is the Facts probe against an HTTP server: request
 routing, complete text observation, unchanged opaque replay, failure isolation,
 bounded reads and secret-safe errors. The invocation workflow belongs to #338.
-Live runner source is the next C1c increment, governed by the
-[Story contracts](../docs/stories/README.md).
+Product Live is governed by the separate [Story contracts](../docs/stories/README.md).
 
 `Probe.ShippedRoutes` consumes request slugs from the embedded shipped catalog,
 submits one Text observation per route and stops on failure. The existing backend
@@ -75,7 +81,7 @@ values remain valid when their present types match the supported action variant.
 60-second transport timeout, 8 MiB response cap and static errors apply. At most
 64 calls of at most 64 KiB each are retained in memory; no raw traffic is returned.
 
-`TestBackendSearchFacts` is separately selectable, requires `GROK_FACTS=1`, and
+`TestBackendSearchFacts` is separately selectable with `-tags=facts`, requires `GROK_FACTS=1`, and
 contains five one-POST policy controls plus two at-most-two-POST replay controls
 (maximum nine POSTs, no semantic resubmission). Credentials after opt-in are
 mandatory. This source change does not execute that test against a backend or

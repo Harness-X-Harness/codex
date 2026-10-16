@@ -29,7 +29,7 @@ import (
 
 // The exact package and the native binary use the same public Live oracle.
 // The HTTP fixture supplies the tool operation, so backend behavior is excluded.
-func TestNativeStructuredEditFixture(t *testing.T) {
+func runNativeStructuredEditFixture(t *testing.T) {
 	for _, mode := range []string{"continuation", "pinned", "declined", "replace_all"} {
 		t.Run(mode, func(t *testing.T) { testNativeStructuredEditFixture(t, mode) })
 	}
@@ -63,14 +63,7 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 		return hex.EncodeToString(sum[:])
 	}
 	arguments, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": editSeedToken, "new_string": editReplacedToken, "replace_all": replaceAll})
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by native runtime or explicit package diagnostic")
-	}
-	subject := nativeSubject(t, binary)
-	if source := os.Getenv("GROK_LIVE_NATIVE_SOURCE_SHA"); source != "" {
-		subject.SourceSHA = source
-	}
+	subject := nativeSubject(t)
 	beforeHomes, err := filepath.Glob(filepath.Join(os.TempDir(), "grok-live-*"))
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +260,8 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	got.ObservedAt, got.Stage = "", ""
 	want := live.StructuredEditEvidence{
 		Evidence: live.Evidence{
-			SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
+			LocalUnverified: subject.LocalUnverified,
+			SHA256:          subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
 			Target: subject.Target, Environment: subject.Environment, Model: model,
 			Processes: 1, Initializations: 1, Threads: 1, Turns: wantTurns,
 			ReplyBytes: len("native edit complete"), FirstReplyBytes: len("native edit complete"),

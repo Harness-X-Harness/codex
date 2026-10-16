@@ -19,9 +19,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if handled, code := live.ServeStdoutFilter(os.Args[1:]); handled {
-		os.Exit(code)
-	}
 	if len(os.Args) > 1 && os.Args[1] == "app-server" {
 		var script struct{ Mode string }
 		_ = json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script)

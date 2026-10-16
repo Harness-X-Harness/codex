@@ -28,8 +28,18 @@ func ShippedStartup(ctx context.Context, subject Subject, key string) (Evidence,
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
 	}
-	return sdkShippedSession(ctx, options, func(server productClient, id string, evidence *Evidence) error {
-		_, _, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation that this turn completed.")
+	return sdkShippedSession(ctx, options, func(server *sdkProductObserver, id string, evidence *Evidence) error {
+		_, turn, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation that this turn completed.")
+		if err == nil {
+			server.finalize = func() error {
+				for _, message := range server.queued() {
+					if _, err := productTerminal(message, id, turn.ID); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
 		return err
 	})
 }

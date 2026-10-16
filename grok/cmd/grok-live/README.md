@@ -2,8 +2,10 @@
 
 `grok-live` makes the existing `grok/live` scenario functions independently
 invocable. Build from `grok/` with `go build -o grok-live ./cmd/grok-live`.
-`--help` lists the 19 existing primary/pinned, reasoning, edit, image, shipped
-profile/child and hosted-search selections. The command adds no product oracle.
+`--help` derives all known primary/pinned, reasoning, edit, image, shipped
+profile/child and hosted-search selections from the Go-owned catalog. Full has
+19 formal cases; the twentieth, `reasoning-no-effort-pinned`, is exploratory and
+requires explicit diagnostic selection. The command adds no product oracle.
 
 One invocation selects one scenario. Provide an absolute immutable binary,
 its expected SHA-256, source SHA, harness SHA, supported package target and
@@ -51,3 +53,14 @@ traffic, identifiers or private content is retained. These fields locate the
 observer rejection and do not establish product or backend attribution.
 The existing `reason` still gives cancellation/deadline precedence. The proof
 outcome, last proven stage, success conditions and invocation budget are unchanged.
+
+## Primary Go test entry point
+
+New local and CI invocations use `go test -tags=live ./tests/live` with explicit
+opt-in, credentials, binary and selection; see [TESTING](../../TESTING.md) for
+complete commands, safe JSON event checks and verified subject flags. The CLI
+remains a compatibility entry point for callers that consume its existing report
+shape. Both entry points share the same catalog, execution path and business
+oracles. The default manual workflow still runs only one `basic-primary` case;
+smoke/full require an explicit suite choice. Neither selecting a smaller suite
+nor retaining this CLI is evidence that omitted Stories passed.

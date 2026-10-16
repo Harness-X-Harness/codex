@@ -32,12 +32,8 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) (runErr error) {
 		experimental := true
 		evidence.Stage = "sdk_starting"
-		filter, err := os.Executable()
-		if err != nil {
-			return failedObservation("sdk_observation_failed", "live: SDK observation did not complete")
-		}
 		client, err := codexsdk.NewContext(ctx, codexsdk.ClientOptions{
-			CWD: cwd, Command: []string{filter, stdoutFilterArg, options.Subject.Binary, "app-server", "--strict-config", "--listen", "stdio://"},
+			CWD: cwd, Command: []string{options.Subject.Binary, "app-server", "--strict-config", "--listen", "stdio://"},
 			Env: sdkFixtureEnv(os.Environ(), home, options.APIKey),
 			Initialize: protocolv2.InitializeParams{
 				ClientInfo:   protocolv2.ClientInfo{Name: "grok-live", Version: "1"},

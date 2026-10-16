@@ -1,5 +1,11 @@
 # Explicit-binary Live scenarios
 
+See [TESTING](../TESTING.md) for the default offline, tagged Integration,
+opt-in Live and independent Facts commands. This package owns business
+observations; the [Go catalog](../internal/scenarios/catalog.go) owns invocation
+selection, eligibility and budgets. The [Story index](../docs/stories/README.md)
+links every retained guarantee to its actual Go or Rust owner.
+
 `Basic(ctx, Options)` uses the pinned `llm-go/codexsdk` client to consume the
 selected binary's App Server v2 stdio API:
 initialize, one fixture-bound thread, one text turn, matching completion and a
@@ -13,9 +19,9 @@ is required. The runner never restarts/resubmits; product retries retain their
 policy. SDK frames cap at 16 MiB; Basic's completion callback queue caps at 128
 notifications/8 MiB and SDK retention at 512 slots/8 MiB. Basic uses explicit
 `ClientOptions.Env`, `NewContext`, typed thread/turn calls and `CloseContext`
-with a separate five-second cleanup deadline. The remaining legacy scenarios
-retain their 16 MiB frame and 128-frame/8 MiB early-traffic bounds and bounded
-child cleanup.
+with a separate five-second cleanup deadline. Other scenarios retain their
+application-owned evidence and retention bounds described below, with SDK-owned
+process/transport cleanup.
 
 Returned evidence contains safe declared metadata, time, counts, booleans,
 reply byte count and last stage. Errors contain no private traffic; failure
@@ -23,8 +29,8 @@ attribution remains inconclusive without independent evidence. Success observes
 only this path; source/target provenance and native eligibility are prerequisites
 for a Story claim, supplied by callers and #339's process integration.
 
-CI tests the public stdio boundary deterministically and activates
-`TestNativeBasicFixture` with its freshly built CLI. Controlled HTTP proves
+CI tests the public stdio boundary deterministically and separately activates
+`TestIntegration/BasicFixture` with `-tags=integration` and its freshly built CLI. Controlled HTTP proves
 config/request/stream composition, not real backend Live. Actual execution and
 invocation integration remain #331/#339.
 
@@ -34,8 +40,7 @@ The [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
 fixes product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2` and the owner-approved SDK revision
 `8ade447507bc3d08650b830ee6306dd27bc17f23` (`v0.2.1-0.20261014071218-8ade447507bc`),
 which supersedes `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`. Direct facades no longer
-arm an unowned attachment fence.
-with Go 1.26.8. The verified Linux musl x64 product executable from canonical
+arm an unowned attachment fence. The module uses Go 1.26.8. The verified Linux musl x64 product executable from canonical
 run `38171472745`, attempt 1, artifact `11714608891` has SHA-256
 `26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
 Use [explicit verified package selection](../package/ARTIFACTS.md); verify
@@ -96,7 +101,7 @@ digest map; provisional evidence starts fresh for the continuation.
 
 Deterministic public-stdio tests cover ordering, correlation, terminal evidence,
 secret-safe failures and invocation budgets for both model controls.
-`TestNativeReasoningHistoryFixture` uses the selected product against controlled
+`TestIntegration/ReasoningHistoryFixture` uses the selected product against controlled
 HTTP: N returns opaque reasoning plus a named tool call, the next product
 request carries its fresh paired result, and N+1 replays the unchanged encrypted
 history with a token-free user input on the same thread. It checks exactly three
@@ -131,8 +136,7 @@ owns acceptance, invocation budgets, downstream prerequisites and retention.
 
 #385's fixture preparation preserves all 66 scripted modes (11 positive and
 55 negative) while making their modeled responses conform to the pinned public
-SDK schema. Public edit dispatch remains on the existing runner until the SDK
-integration lands. `TestNativeStructuredEditFixture` exercises the four edit
+SDK schema. Public edit dispatch uses the shared typed SDK runner. `TestIntegration/StructuredEditFixture` exercises the four edit
 entries against controlled HTTP: primary continuation, pinned, declined approval
 and replace-all. It checks actual bytes/hashes and matching call/output history;
 the supplied replies and HTTP acceptance do not establish real-provider Live.
@@ -296,8 +300,9 @@ counts, booleans and last stage leave the observer.
 
 Deterministic public-stdio fake-process tests execute each retained policy,
 exercise successful and failed first/follow-up turns, validate exact config
-requests, and prohibit runner resubmission. They enter the existing required
-`go test -race -count=1 -timeout=6m -v ./facts ./live` job automatically.
+requests, and prohibit runner resubmission. They enter the shared default
+`go test -race -count=1 -timeout=15m ./...` job automatically. The runtime
+job executes only tagged `TestIntegration*` owners after its one CLI build.
 
 This is deliberately narrower than the historical packaged hosted Stories:
 HTTP wire replay and policy projection require current native composition proof;
@@ -307,3 +312,18 @@ relevance, UI streaming completeness or temporal lifecycle behavior (#362/#363).
 No old Story is reintroduced as accepted authority and no Live PROVEN result is
 claimed. The retained source and offline tests cannot close those independent
 obligations.
+
+## Original-wire SDK boundary
+
+The original App Server stdout is delivered to the SDK unchanged. No public
+`xSearch` notification is dropped to make a hosted test pass. The current pinned
+SDK rejects that unsupported public variant, so the required original-wire X
+Integration cases can fail until [#408](https://github.com/Harness-X-Harness/codex/issues/408)
+is resolved separately. Raw canonical hosted evidence and public activity are
+distinct oracles: a public-only notification must earn zero canonical, settled
+or completion credit. Ordinary fake-process business fixtures need not inject
+that unsupported public variant; their pass cannot certify original-wire X.
+
+The historical SDK/product package identifiers above describe a previous fixed
+subject. They are not evidence that this worktree, a newly compiled product or
+a different platform has passed native or real-backend acceptance.

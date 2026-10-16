@@ -266,21 +266,27 @@ runs:
         # The Go harness runs on the host; do not inherit the musl C/C++ wrappers.
         CC: cc
         CXX: c++
-        GROK_LIVE_NATIVE_BIN: ${{ runner.temp }}/grok-dist/${{ inputs.target }}/bin/grok
+        GROK_CODEX_BIN: ${{ runner.temp }}/grok-dist/${{ inputs.target }}/bin/grok
         GROK_LIVE_NATIVE_TARGET: ${{ inputs.target }}
         TARGET: ${{ inputs.target }}
         GROK_FACTS: "0"
         GROK_LIVE: "0"
       run: |
         set -euo pipefail
-        selected="$(go test ./live -list '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture|FirstRequestShape)$')"
-        grep -Fx 'TestNativeBasicFixture' <<< "$selected"
-        grep -Fx 'TestNativeShippedCatalog' <<< "$selected"
-        grep -Fx 'TestNativeStructuredEditFixture' <<< "$selected"
-        grep -Fx 'TestNativeShippedChildFixture' <<< "$selected"
-        grep -Fx 'TestNativeFirstRequestShape' <<< "$selected"
-        go test -count=1 -timeout=4m -v ./live -run '^TestNative(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture|FirstRequestShape)$' \
-          | tee "$RUNNER_TEMP/grok-package-evidence-$TARGET/provider-fixture.log"
+        evidence="$RUNNER_TEMP/grok-package-evidence-$TARGET"
+        status=0
+        go test -race -tags=integration -count=1 -timeout=8m -json ./live \
+          -run '^TestIntegration(Internal)?$/(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture|FirstRequestShape)$' \
+          > "$evidence/provider-fixture.json" || status=$?
+        go run ./cmd/grok-test-results --input "$evidence/provider-fixture.json" \
+          --require 'github.com/Harness-X-Harness/codex/grok/live:TestIntegration/BasicFixture' \
+          --require 'github.com/Harness-X-Harness/codex/grok/live:TestIntegration/ShippedCatalog' \
+          --require 'github.com/Harness-X-Harness/codex/grok/live:TestIntegration/StructuredEditFixture' \
+          --require 'github.com/Harness-X-Harness/codex/grok/live:TestIntegrationInternal/ShippedChildFixture' \
+          --require 'github.com/Harness-X-Harness/codex/grok/live:TestIntegrationInternal/FirstRequestShape' \
+          > "$evidence/provider-fixture-summary.json" || status=1
+        cat "$evidence/provider-fixture-summary.json"
+        exit "$status"
     - name: Archive the complete package with executable bits
       shell: bash
       env:

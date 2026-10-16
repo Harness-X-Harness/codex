@@ -71,7 +71,7 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 		if err != nil {
 			return observer.failure(err)
 		}
-		if err := observeSDKHistoryTurn(ctx, client, observer, stream, func(run codexsdk.StartedThreadRun) codexsdk.ThreadRunResult { return run.Run }); err != nil {
+		if err := observeSDKHistoryTurn(ctx, observer, stream, func(run codexsdk.StartedThreadRun) codexsdk.ThreadRunResult { return run.Run }); err != nil {
 			return err
 		}
 		observer.mu.Lock()
@@ -105,7 +105,7 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 		if err != nil {
 			return observer.failure(err)
 		}
-		if err := observeSDKHistoryTurn(ctx, client, observer, continued, func(run codexsdk.ResumedThreadRun) codexsdk.ThreadRunResult { return run.Run }); err != nil {
+		if err := observeSDKHistoryTurn(ctx, observer, continued, func(run codexsdk.ResumedThreadRun) codexsdk.ThreadRunResult { return run.Run }); err != nil {
 			return err
 		}
 		observer.mu.Lock()
@@ -115,7 +115,7 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 	})
 }
 
-func observeSDKHistoryTurn[R any](ctx context.Context, client *codexsdk.Client, observer *sdkHistoryObserver, stream *codexsdk.Stream[R], runResult func(R) codexsdk.ThreadRunResult) error {
+func observeSDKHistoryTurn[R any](ctx context.Context, observer *sdkHistoryObserver, stream *codexsdk.Stream[R], runResult func(R) codexsdk.ThreadRunResult) error {
 	defer observer.finishTurn()
 	// Result provides the actual turn/start identity without Wait's extra
 	// caller-cancellation snapshot of the same retained history.
@@ -131,12 +131,7 @@ func observeSDKHistoryTurn[R any](ctx context.Context, client *codexsdk.Client, 
 	if run.Turn.ID == "" && snapshotErr != nil {
 		return failure(snapshotErr)
 	}
-	// A turn/completed written ahead of this response is admitted before the
-	// response is published. Join that handler before reconcile trusts an
-	// inline terminal that the notification has not yet overwritten.
-	if err := joinSDKAdmitted(ctx, client); err != nil {
-		return failure(err)
-	}
+	// Reconcile the public retained snapshot before trusting an inline result.
 	if err := observer.reconcile(run); err != nil {
 		return err
 	}

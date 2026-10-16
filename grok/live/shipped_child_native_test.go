@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,35 +26,13 @@ import (
 
 // Exercise the complete shipped oracle through real App Server, Grok projection,
 // tool dispatch, child inference and parent continuation. Only base_url changes.
-func TestNativeShippedChildFixture(t *testing.T) {
+func runNativeShippedChildFixture(t *testing.T) {
 	t.Run("fresh_child_result", func(t *testing.T) { testNativeShippedChildFixture(t, false) })
 	t.Run("parent_supplied_result_rejected", func(t *testing.T) { testNativeShippedChildFixture(t, true) })
 }
 
 func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by the required native runtime job")
-	}
-	file, err := os.Open(binary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash := sha256.New()
-	_, err = io.Copy(hash, file)
-	closeErr := file.Close()
-	if err != nil || closeErr != nil {
-		t.Fatal("native executable digest unavailable")
-	}
-	subject := Subject{Binary: binary, SHA256: hex.EncodeToString(hash.Sum(nil)),
-		SourceSHA: os.Getenv("GITHUB_SHA"), HarnessSHA: os.Getenv("GITHUB_SHA"),
-		Target: "x86_64-unknown-linux-gnu", Environment: "native-fixture"}
-	if source := os.Getenv("GROK_LIVE_NATIVE_SOURCE_SHA"); source != "" {
-		subject.SourceSHA = source
-	}
-	if target := os.Getenv("GROK_LIVE_NATIVE_TARGET"); target != "" {
-		subject.Target, subject.Environment = target, "package-fixture"
-	}
+	subject := nativeInternalSubject(t)
 	options, err := shippedOptions(subject, "fixture-key", "")
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +73,7 @@ func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
 		t.Fatalf("native shipped-child oracle: %v", err)
 	}
 	got.ObservedAt = ""
-	want := Evidence{SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
+	want := Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
 		Target: subject.Target, Environment: subject.Environment, Model: options.Model,
 		Stage: "child_result_delivered", Processes: 1, Initializations: 1, Threads: 1, Turns: 2,
 		SetupTurns: 1, TaskTurns: 1, SetupCompleted: true, ShippedCatalog: true, CatalogModels: 2,

@@ -16,10 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
-var commandPath, fixturePath, fixtureDigest string
+var commandPath, fixturePath, fixtureDigest, taggedPath string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "grok-live-command-")
@@ -32,7 +33,8 @@ func TestMain(m *testing.M) {
 		suffix = ".exe"
 	}
 	commandPath, fixturePath = filepath.Join(dir, "grok-live"+suffix), filepath.Join(dir, "live-fixture"+suffix)
-	for _, args := range [][]string{{"build", "-race", "-o", commandPath, "."}, {"test", "-c", "-race", "-o", fixturePath, "../../live"}} {
+	taggedPath = filepath.Join(dir, "live-tagged"+suffix)
+	for _, args := range [][]string{{"build", "-race", "-o", commandPath, "."}, {"test", "-c", "-race", "-o", fixturePath, "../../live"}, {"test", "-c", "-tags=live", "-race", "-o", taggedPath, "../../tests/live"}} {
 		if output, err := exec.Command("go", args...).CombinedOutput(); err != nil {
 			fmt.Fprintf(os.Stderr, "cannot build actual command/owned fixture: %v\n%s", err, output)
 			_ = os.RemoveAll(dir)
@@ -141,7 +143,15 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"x", "search:ok:x", "grok-4.7", 2},
 		{"x-window", "search:ok:x_window", "grok-4.7", 2},
 	}
+	registered, err := scenarios.Select("live", "diagnostic", "")
+	if err != nil || len(registered) != len(cases) {
+		t.Fatal("CLI fixture coverage differs from the active catalog")
+	}
 	for _, tc := range cases {
+		entry, err := scenarios.Lookup("live", tc.scenario)
+		if err != nil || entry.SemanticTurns != tc.turns || entry.Model != tc.model {
+			t.Fatal("catalog model/turn budget differs from the executable fixture oracle")
+		}
 		t.Run(tc.scenario, func(t *testing.T) {
 			t.Parallel()
 			trace := filepath.Join(t.TempDir(), "trace")

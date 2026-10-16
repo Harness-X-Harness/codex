@@ -2,13 +2,10 @@ package live
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -20,30 +17,8 @@ import (
 
 // This is a controlled first-request diagnostic, not real-provider acceptance.
 // A synthetic denial ends every case before tool execution or history replay.
-func TestNativeFirstRequestShape(t *testing.T) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by the required native runtime job")
-	}
-	file, err := os.Open(binary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash := sha256.New()
-	_, copyErr := io.Copy(hash, file)
-	closeErr := file.Close()
-	if copyErr != nil || closeErr != nil {
-		t.Fatal("native executable digest unavailable")
-	}
-	subject := Subject{Binary: binary, SHA256: hex.EncodeToString(hash.Sum(nil)),
-		SourceSHA: os.Getenv("GITHUB_SHA"), HarnessSHA: os.Getenv("GITHUB_SHA"),
-		Target: "x86_64-unknown-linux-gnu", Environment: "native-fixture"}
-	if source := os.Getenv("GROK_LIVE_NATIVE_SOURCE_SHA"); source != "" {
-		subject.SourceSHA = source
-	}
-	if target := os.Getenv("GROK_LIVE_NATIVE_TARGET"); target != "" {
-		subject.Target, subject.Environment = target, "package-fixture"
-	}
+func testNativeFirstRequestShape(t *testing.T) {
+	subject := nativeInternalSubject(t)
 	for _, model := range []string{providerfixture.PinnedModel, providerfixture.PrimaryModel} {
 		profiles := []string{"isolated-history", "shipped-history", "isolated-edit"}
 		if model == providerfixture.PinnedModel {

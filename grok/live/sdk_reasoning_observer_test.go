@@ -154,3 +154,65 @@ func TestSDKHistoryObserverCallCapacity(t *testing.T) {
 		t.Fatal("capacity denial exported private causal evidence")
 	}
 }
+
+func TestSDKHistoryRetainedInvalidItemPrecedesInlineCredit(t *testing.T) {
+	observer, token := historyObserverFixture(t)
+	invalid := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: token}))
+	// The read loop retained this item before publishing an inline response;
+	// deliberately do not invoke its callback until after reconciliation.
+	err := observer.reconcile(codexsdk.ThreadRunResult{Notifications: []protocolv2.ServerNotification{invalid}, Turn: protocolv2.Turn{
+		ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
+			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: token}),
+		},
+	}})
+	if DescribeFailure(err).Code != "assistant_identity_missing" || observer.reply.completed {
+		t.Fatal("inline response bypassed an admitted invalid item")
+	}
+	_ = observer.typedNotification(context.Background(), invalid)
+	if DescribeFailure(observer.cause).Code != "assistant_identity_missing" {
+		t.Fatal("delayed callback cleared rejection")
+	}
+}
+
+func TestSDKHistoryFinishedTurnRetainsContradictionChecks(t *testing.T) {
+	for _, prior := range []bool{false, true} {
+		t.Run(strconv.FormatBool(prior), func(t *testing.T) {
+			observer, token := historyObserverFixture(t)
+			if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{ID: "private_turn", Status: protocolv2.TurnStatusInProgress}}); err != nil {
+				t.Fatal(err)
+			}
+			observer.finishTurn()
+			if prior {
+				observer.active = true
+				observer.probe.previousID, observer.probe.turnID = "private_turn", "private_next"
+			}
+			before := observer.observations
+			err := observer.typedNotification(context.Background(), historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: token})))
+			if DescribeFailure(err).Code != "assistant_identity_missing" || !reflect.DeepEqual(before, observer.observations) {
+				t.Fatal("late contradiction lost or positive evidence changed")
+			}
+		})
+	}
+}
+
+func TestSDKHistoryFinishedTurnIgnoresUnrelatedInvalidItem(t *testing.T) {
+	for _, field := range []string{"thread", "turn"} {
+		t.Run(field, func(t *testing.T) {
+			observer, _ := historyObserverFixture(t)
+			if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{ID: "private_turn", Status: protocolv2.TurnStatusInProgress}}); err != nil {
+				t.Fatal(err)
+			}
+			observer.finishTurn()
+			params := protocolv2.ItemCompletedNotification{ThreadID: "private_thread", TurnID: "private_turn", Item: protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: "irrelevant"})}
+			if field == "thread" {
+				params.ThreadID = "private_other"
+			} else {
+				params.TurnID = "private_other"
+			}
+			before := observer.observations
+			if err := observer.typedNotification(context.Background(), protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: params})); err != nil || !reflect.DeepEqual(before, observer.observations) {
+				t.Fatal("unrelated item changed settled proof")
+			}
+		})
+	}
+}
