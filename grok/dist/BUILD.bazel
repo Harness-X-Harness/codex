@@ -1,0 +1,11 @@
+exports_files(
+    [
+        "config.toml.example",
+        "models.json",
+    ],
+    visibility = [
+        "//codex-rs/app-server:__pkg__",
+        "//codex-rs/core:__pkg__",
+        "//codex-rs/memories/write:__pkg__",
+    ],
+)
