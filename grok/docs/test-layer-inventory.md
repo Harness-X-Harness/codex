@@ -103,7 +103,7 @@ pure fixture/observer controls remain credential-free default tests.
 | `TestNativeHostedSearchFixture` | `TestHostedSearchFixture` | Web and Web-excluded retain policy, canonical hosted evidence, two turns and no local redispatch. Retired X has preflight/unsolicited-ingress negatives, no advertisement/local redispatch/fake credit; Rust owns public ABI/history closure |
 | `TestNativeImagePinnedFixture` | `TestImagePinnedFixture` | Pinned generation and edit; real codec/artifact hashes, exact history lineage and four controlled HTTP requests |
 | `TestNativeShippedCatalog` | `TestShippedCatalog` | Complete shipped DTO catalog, process identity; no inference |
-| `TestNativeShippedThreadSource` | `TestShippedThreadSource` | Shipped source/profile/model binding and controlled startup/history |
+| `TestNativeShippedThreadSource` | `TestShippedThreadSource` | Shipped source/profile/model binding and controlled startup/history; public startup plus independent typed durable-source observation now use two explicit local invocations (previously one private fixture), never a semantic retry |
 | `TestNativeShippedChildFixture` | `TestShippedChildFixture` | Fresh child result succeeds; parent-supplied result rejected; source/lineage/nonce authority |
 | `TestNativeFirstRequestShape` | `TestFirstRequestShape` | Primary/pinned isolated/shipped history and edit; pinned no-effort diagnostic; denied terminal and bounded existing sampling attempts |
 
