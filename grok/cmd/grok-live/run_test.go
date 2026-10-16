@@ -400,3 +400,37 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandXSearchExpectedRejectionIsSeparateFromCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		scenario, policy, mode string
+		accepted               bool
+	}{
+		{"x", "x", "public_only", true}, {"x-window", "x_window", "public_completed", true},
+		{"web", "web", "public_only", false}, {"x", "x", "public_other", false}, {"x", "x", "public_local_first", false},
+	} {
+		t.Run(tc.scenario+"/"+tc.mode, func(t *testing.T) {
+			trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+			key, _ := json.Marshal(map[string]string{"Mode": "search:" + tc.mode + ":" + tc.policy, "Trace": trace})
+			report, code := invoke(t, arguments(tc.scenario), "1", string(key))
+			var evidence live.SearchEvidence
+			if json.Unmarshal(report.Evidence, &evidence) != nil {
+				t.Fatal("invalid search report")
+			}
+			if tc.accepted {
+				if code != 0 || report.Outcome != "expected_unsupported" || report.Reason != "sdk_xsearch_unsupported" || report.Failure == nil || report.Failure.Code != "sdk_xsearch_unsupported" || !evidence.ExpectedUnsupported {
+					t.Fatalf("rejection missing: %+v", report)
+				}
+			} else if code != 1 || report.Outcome != "not_observed" || evidence.ExpectedUnsupported {
+				t.Fatalf("wrong failure accepted: %+v", report)
+			}
+			if report.ExecutionSnapshotRetained || evidence.CleanupPending || evidence.Completed || evidence.FirstCompleted || evidence.FollowupCompleted || evidence.SettledTurns != 0 || evidence.CanonicalCalls != 0 {
+				t.Fatalf("false completion or cleanup: %+v", evidence)
+			}
+			transcript, err := os.ReadFile(trace)
+			if err != nil || strings.Count(string(transcript), "turn/start\n") != 1 {
+				t.Fatal("rejection resubmitted semantic work")
+			}
+		})
+	}
+}

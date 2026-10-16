@@ -283,7 +283,8 @@ scripts and native catalog checks do not establish those outcomes.
 `web_excluded`, `x`, and `x_window` using explicit Grok fixture binding and
 public `thread/start` configuration overrides. The fixed policy controls match
 `facts.SearchPolicy`; the fixture enables hosted Web/X and keeps local execution
-disabled. It starts one search turn and one same-thread follow-up, each once,
+disabled. The positive search contract starts one search turn and one
+same-thread follow-up, each once,
 with one settled `thread/read` per completed turn. Failed or incomplete first
 turns never trigger a follow-up. Product-internal transport attempts are not
 constrained by this runner's semantic invocation budget.
@@ -323,12 +324,29 @@ obligations.
 
 The original App Server stdout is delivered to the SDK unchanged. No public
 `xSearch` notification is dropped to make a hosted test pass. The current pinned
-SDK rejects that unsupported public variant, so the required original-wire X
-Integration cases can fail until [#408](https://github.com/Harness-X-Harness/codex/issues/408)
-is resolved separately. Raw canonical hosted evidence and public activity are
-distinct oracles: a public-only notification must earn zero canonical, settled
-or completion credit. Ordinary fake-process business fixtures need not inject
-that unsupported public variant; their pass cannot certify original-wire X.
+SDK rejects that unsupported public variant. The owner-approved
+[#408](https://github.com/Harness-X-Harness/codex/issues/408) contract accepts
+that exact rejection for `x`/`x_window` only, provided the public SDK shutdown
+result supplies the actual decode cause, cleanup is confirmed, and observed or
+SDK-retained business contradictions, artifact failures and timeouts still fail. A generic protocol end or other unknown
+variant cannot satisfy it. The SDK pin, stock schema and validation stay strict.
+On fatal decoding, the SDK may discard undelivered raw callbacks. Zero pending
+callbacks proves cleanup, not that every callback executed. Expected rejection
+therefore proves the exact SDK rejection, not complete raw delivery or an audit
+of all raw payloads; observed and SDK-retained contradictions remain disqualifying.
+
+`SearchEvidence.ExpectedUnsupported` distinguishes accepted rejection from
+positive search: completion flags stay false, no follow-up or settled turn is
+credited, and canonical counts reflect only observations actually received.
+The CLI reports `expected_unsupported` with safe code `sdk_xsearch_unsupported`;
+raw errors and private notification contents are not retained. Raw canonical
+hosted evidence and public activity remain distinct oracles: a public-only
+notification earns zero canonical, settled or completion credit. Web and other
+supported paths retain the complete positive contract above, including when
+mixed Web/X evidence is tested. Fake-process rejection tests establish only
+the controlled SDK boundary; fresh actual-binary Integration evidence is still
+required. This scoped acceptance change does not establish positive X SDK
+support or complete the retained #388/#379 hosted Story obligations.
 
 The historical SDK/product package identifiers above describe a previous fixed
 subject. They are not evidence that this worktree, a newly compiled product or

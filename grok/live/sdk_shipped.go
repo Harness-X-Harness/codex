@@ -136,14 +136,14 @@ func shippedModalitiesMatch(got *[]protocolv2.InputModality, want any) bool {
 
 func shippedTransport(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
-		return errors.New("live: protocol ended before proof completion")
+		return errSDKProtocolEnded
 	}
 	var protocol *codexsdk.ProtocolError
 	if errors.As(err, &protocol) {
 		return errors.New("live: protocol request failed")
 	}
-	if probeDone(err) {
-		return errors.New("live: protocol ended before proof completion")
+	if probeDone(err) || xSearchDecodeError(err) {
+		return errSDKProtocolEnded
 	}
 	return failedObservation("sdk_observation_failed", "live: SDK observation did not complete")
 }
@@ -157,6 +157,7 @@ type sdkProductObserver struct {
 	finalize     func() error
 	changed      chan struct{}
 	clientDone   <-chan struct{}
+	runFailures  <-chan error
 	cause        error
 	onNote       func(frame) error
 }
@@ -195,10 +196,12 @@ func (transport *sdkProductObserver) next() (frame, error) {
 		}
 		select {
 		case <-transport.changed:
+		case err := <-transport.runFailures:
+			return frame{}, shippedTransport(transport.ctx, err)
 		case <-clientDone:
-			return frame{}, errors.New("live: protocol ended before proof completion")
+			return frame{}, errSDKProtocolEnded
 		case <-transport.ctx.Done():
-			return frame{}, errors.New("live: protocol ended before proof completion")
+			return frame{}, errSDKProtocolEnded
 		}
 	}
 }

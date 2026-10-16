@@ -29,21 +29,59 @@ runner constitute a different boundary. Development pushes and PR merge refs
 are different subjects; formal PR merge refs are excluded from the fast PR
 workflow to avoid running the same default suite twice on that merge.
 
-No material Story is retired. No identity, terminal, authorized effect,
+No positive product Story is retired. The explicitly reviewed #408 change below
+adds a scoped expected-rejection result, separate from that positive acceptance.
+No identity, terminal, authorized effect,
 bytes/hash, image lineage, hosted origin, continuation, encrypted history or
 provenance assertion is removed because the SDK has a typed API. The obsolete
 stdout-filter unit test is removed with the output-mutating filter itself. Its
-replacement obligation is original-wire public-X Integration, which must fail
-while the pinned SDK cannot decode that variant. The public-X-only negative
-control now requires rejection and zero canonical/settled/completion credit;
+replacement obligation is original-wire public-X Integration. The owner-approved
+2026-10-16 #408 contract permits `x`/`x_window` to pass only as expected rejection
+of the actual strict SDK `xSearch` decode failure with confirmed cleanup. It does
+not retire #388's positive hosted Story. The public-X-only control requires
+rejection and zero canonical/settled/completion credit;
 ordinary raw-business fixtures do not inject unrelated unsupported public-X
 traffic. That keeps two distinct boundaries visible rather than suppressing a
 real protocol incompatibility.
 
+## Acceptance mapping for #410–413
+
+This maps obligations to source owners, not to assumed passing runs. The
+[Story index](stories/README.md) remains the semantic index; the
+[Go catalog](../internal/scenarios/catalog.go) remains the only executable
+selection registry.
+
+| Issue | Implemented source ownership | Execution/evidence still required |
+| --- | --- | --- |
+| [#410](https://github.com/Harness-X-Harness/codex/issues/410) | Catalog metadata/dispatch plus [selection controls](../internal/scenarios/catalog_test.go); [discovery CLI](../cmd/grok-scenarios/main.go); Go-derived matrices in [formal Live](../../.github/workflows/grok.yml), [manual Live](../../.github/workflows/grok-live.yml) and [Facts](../../.github/workflows/grok-facts.yml). Smoke/full/diagnostic eligibility and stable subtest selectors are documented in TESTING. | A source-valid matrix is not an executed workflow. Required event checking must accompany each actual selection; omitted scenarios receive no credit. |
+| [#411](https://github.com/Harness-X-Harness/codex/issues/411) | Before/after owner map, retained-oracle tables and bug-class cross-check below; offline/runtime duplication removed without replacing Rust product owners. The only changed X acceptance is the explicitly reviewed #408 rejection, not a hidden Story retirement. | Fresh default and actual-binary Integration race results at the candidate subject; timings and counts must identify their source. Historical local measurements below do not establish current race/native pass or paid-cost improvement. |
+| [#412](https://github.com/Harness-X-Harness/codex/issues/412) | Every retained Story links its automated owner and boundary in the Story index, including hosted Web/X. Fork/resume/compaction retain existing Rust ownership. Catalog-only observes no inference. | Identified real-backend runs for positive Stories; expected X rejection does not satisfy #388/#379 positive hosted acceptance. |
+| [#413](https://github.com/Harness-X-Harness/codex/issues/413) | [Tagged Live runner](../tests/live/live_test.go), shared [command execution](../internal/livecommand/run.go), [preflight controls](../cmd/grok-live/tagged_test.go), [JSON event checker](../internal/testresults) and independent [Facts](../facts/README.md). Trusted workflows verify artifacts before the same Go assertions. | Trusted smoke and separately invocable full execution at the declared subject, safe failure artifacts and measured API costs/durations. Neither docs nor mocks establish these outcomes; no paid run is claimed by this audit. |
+
+The pinned SDK baseline is `github.com/ronhuafeng/llm-go`
+`v0.2.1-0.20261014071218-8ade447507bc` in [go.mod](../go.mod).
+[Public-stdio rejection controls](../live/search_test.go)
+(`TestHostedSearchPublicXSearchExpectedRejection` and
+`TestHostedSearchExpectedRejectionRejectsOtherFailures`) exercise the actual
+pinned decoder against synthetic public notifications. The
+[classification controls](../live/sdk_xsearch_test.go) reject missing causes,
+other variants, RPC impersonation, decorated errors, observed or SDK-retained
+business contradictions, artifact failures, timeouts, pending callbacks and
+unproved process cleanup. Fatal decoding can discard undelivered raw callbacks;
+zero pending callbacks is cleanup evidence, not complete raw delivery/audit. These controls are
+secret-free prerequisites, not real Codex or backend evidence.
+
+Formal [run 38845628133](https://github.com/Harness-X-Harness/codex/actions/runs/38845628133)
+at `4a7823ce8e5b1ffbf0a98eb919b0932c1753051f` failed the previous X positive
+expectation. Its generic protocol-end report does not prove an actual SDK
+shutdown cause, and the revised acceptance does not retroactively turn that run
+green. Fresh candidate evidence must be collected separately.
+
 ## Binary-dependent owners: exact before/after map
 
-All descendants under each old owner retain their business assertions and
-controlled request limits. The two wrappers are build-tagged; the helper source
+Descendants under each old owner retain their positive business assertions and
+controlled request limits, except the explicitly approved X expected-rejection
+acceptance below; that outcome earns no positive Story credit. The two wrappers are build-tagged; the helper source
 can remain compiled by the default suite without launching a product binary.
 
 | Previous owner | Required Integration owner | Positive/negative scope retained |
@@ -51,7 +89,7 @@ can remain compiled by the default suite without launching a product binary.
 | `TestNativeBasicFixture` | `TestIntegration/BasicFixture` | Both fixture models; provider request shape, nonempty final, correct identity and successful terminal |
 | `TestNativeStructuredEditFixture` | `TestIntegration/StructuredEditFixture` | Continuation, pinned, declined and replace-all; real file bytes/hash and paired tool/output history |
 | `TestNativeReasoningHistoryFixture` | `TestIntegration/ReasoningHistoryFixture` | Both models; named tool, fresh paired result, three HTTP requests, unchanged encrypted history and token-free continuation |
-| `TestNativeHostedSearchFixture` | `TestIntegration/HostedSearchFixture` | Web, Web-excluded, X and X-window; request policy, canonical hosted evidence, two turns, no local redispatch, original stdout |
+| `TestNativeHostedSearchFixture` | `TestIntegration/HostedSearchFixture` | Web and Web-excluded retain policy, canonical hosted evidence, two turns and no local redispatch. X/X-window use original stdout and may satisfy actual SDK expected rejection with confirmed cleanup; no positive search credit |
 | `TestNativeImagePinnedFixture` | `TestIntegration/ImagePinnedFixture` | Pinned generation and edit; real codec/artifact hashes, exact history lineage and four controlled HTTP requests |
 | `TestNativeShippedCatalog` | `TestIntegration/ShippedCatalog` | Complete shipped DTO catalog, process identity; no inference |
 | `TestNativeShippedThreadSource` | `TestIntegrationInternal/ShippedThreadSource` | Shipped source/profile/model binding and controlled startup/history |
@@ -83,7 +121,7 @@ nested test events, not just leaf scenarios.
 | [`structured_edit_wire_test.go`](../live/structured_edit_wire_test.go): `TestStructuredEditArgumentsRejectMalformedReplaceAll` | Application-owned edit argument/schema admission; malformed replace-all cannot reach valid effects. |
 | [`structured_edit_native_test.go`](../live/structured_edit_native_test.go): `TestNativeEditResultHistoryRejectsInvalidOutput`, `TestNativeEditResultHistoryPreservesReplay`, `TestNativeStructuredEditDeclaration`, `TestNativeEditFailureDetail` | Pure fixture-oracle tests stay default despite historical “Native” names: declaration, paired output history, consistent replay, safe unsuccessful-terminal detail. |
 | [`image_test.go`](../live/image_test.go): `TestGrokImageGenerationEdit`, `TestImageGenerationEditRejectsFalseEvidence`; shared [image scripts](../live/image_script_test.go) | Primary/pinned generation/edit; raw/public/history image pairing, genuine fully decodable PNGs, preparation-vs-artifact digest distinction, selected previous-image lineage, filesystem safety, corruption and secret-safe bounded rejection. |
-| [`search_test.go`](../live/search_test.go): `TestHostedSearchRetainsEachScenarioAndSingleContinuation`, `RejectsMissingConflictAndLocalExecution`, `RejectsContradictorySettledEvidence`, `AcceptsConsistentDelayedPriorTerminal`, `PublicXSearchIsNotCanonical`, `RejectsCustomExecutionAtEveryObservationBoundary`, `RetainsTurnScopedCreditedIdentities`, `IdentityBudgetsRemainPerTurn` (same prefix) | Every retained policy; causal canonical calls and finals across two turns; public-X-only cannot earn canonical credit; wrong, local, stale, post-fence or conflicting evidence fails. SDK framing ownership does not replace hosted-origin authority. |
+| [`search_test.go`](../live/search_test.go): `TestHostedSearchRetainsEachScenarioAndSingleContinuation`, `RejectsMissingConflictAndLocalExecution`, `RejectsContradictorySettledEvidence`, `AcceptsConsistentDelayedPriorTerminal`, `PublicXSearchExpectedRejection`, `ExpectedRejectionRejectsOtherFailures`, `RejectsCustomExecutionAtEveryObservationBoundary`, `RetainsTurnScopedCreditedIdentities`, `IdentityBudgetsRemainPerTurn` (same prefix) | Every retained policy; causal canonical calls and finals across two turns; public-X-only cannot earn canonical credit; wrong, local, stale, post-fence or conflicting evidence fails. SDK framing ownership does not replace hosted-origin authority. |
 | [`shipped_test.go`](../live/shipped_test.go): `TestShippedCatalogRequiresCompleteDTOs`, `TestShippedStartupAndChildRejectIncompleteEvidence`, `TestShippedPinnedUsesRetainedHistoryScenario` | Entire DTO/profile assets; startup identity/terminal; child inherited context, freshness/lineage and parent consumption; pinned encrypted-history reuse. |
 | [`shipped_child_native_test.go`](../live/shipped_child_native_test.go): `TestShippedChildDeclarationSchemaBoundary` | Pure declaration schema control remains offline; independently rejects malformed tool declarations before composition. |
 | [`request_shape_native_test.go`](../live/request_shape_native_test.go): `TestFirstRequestShapeSummary`, `TestFirstRequestEffortPresence`, `TestFirstRequestHistoryDeclaration` | Pure bounded request summary and exact presence/declaration semantics remain offline; no network/CLI prerequisite. |
@@ -123,7 +161,7 @@ budget is added or retired, and none enters required offline coverage.
 | --- | --- |
 | Untrusted action or unauthorized file change | Basic denial, edit sticky approval/bytes/hash, search no local dispatch; Rust safety/sandbox/edit composition |
 | Wrong Provider/model/thread/turn or child lineage | Basic, reasoning, shipped and child negative fixtures; Rust provider binding and child public listener |
-| Missing/failed terminal or final output | Every scenario observer; retained truthful partial facts; JSON required-test lifecycle checks |
+| Missing/failed terminal or final output | Every positive scenario observer; retained truthful partial facts; JSON lifecycle checks. Scoped X rejection requires actual SDK cause/cleanup instead and never asserts terminal completion |
 | Stale replay, conflict or cross-turn credit | Reasoning provisional/history controls, edit identity/history, hosted per-turn fence and call identity |
 | Hosted call mistaken for local execution | Search raw/public distinction and no-local-call/output controls; Rust hosted Web/X mixed activity and replay |
 | Corrupt/misbound media or edited bytes | Image full decode/file/hash/lineage and structured-edit byte oracle; Rust image preparation and filesystem owners |

@@ -145,10 +145,30 @@ func fakeSearchServer() {
 				if mode == "partial" {
 					call["status"] = "in_progress"
 				}
-				if strings.HasPrefix(scenario, "x") && mode == "public_only" {
-					notify("item/started", hostedXSearchItem())
-					notify("item/completed", hostedXSearchItem())
-					terminal["items"] = append(terminal["items"].([]any), hostedXSearchItem())
+				if strings.HasPrefix(mode, "public_") {
+					if mode != "public_no_context" {
+						_ = output.Encode(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "thread", "turn": map[string]any{"id": id, "status": "inProgress", "items": []any{}}}})
+					}
+					if mode == "public_timeout" {
+						continue
+					}
+					public := hostedXSearchItem()
+					switch mode {
+					case "public_other":
+						public["type"] = "PRIVATE_OTHER_VARIANT"
+					case "public_local_first":
+						notify("item/started", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
+					case "public_wrong_type":
+						public["type"] = 42
+					case "public_raw_local_first":
+						notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call", "id": "PRIVATE_LOCAL", "call_id": "PRIVATE_CALL", "namespace": "functions", "name": "apply_patch", "input": "PRIVATE_INPUT"})
+					}
+					method := "item/started"
+					if mode == "public_completed" {
+						method = "item/completed"
+					}
+					notify(method, public)
+					continue
 				}
 				if mode != "public_only" {
 					if mode == "output_first" {
@@ -271,7 +291,7 @@ func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			got, err := live.HostedSearch(ctx, options, "x")
-			if err == nil || got.Completed || got.FollowupCompleted || strings.Contains(err.Error(), "PRIVATE_") {
+			if err == nil || got.ExpectedUnsupported || got.Completed || got.FollowupCompleted || strings.Contains(err.Error(), "PRIVATE_") {
 				t.Fatalf("invalid evidence accepted or exposed: %+v, %v", got, err)
 			}
 			want := 1
@@ -464,22 +484,25 @@ func hostedXSearchItem() map[string]any {
 	return map[string]any{"type": "xSearch", "id": "PRIVATE_ID", "callId": "PRIVATE_CALL", "name": "x_keyword_search", "input": "PRIVATE_INPUT"}
 }
 
-func TestHostedSearchPublicXSearchIsNotCanonical(t *testing.T) {
+func TestHostedSearchPublicXSearchExpectedRejection(t *testing.T) {
 	for _, scenario := range []string{"x", "x_window"} {
-		t.Run(scenario, func(t *testing.T) {
-			t.Parallel()
-			options := fixtureOptions(t, "search:public_only:"+scenario)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			got, err := live.HostedSearch(ctx, options, scenario)
-			if err == nil || got.CanonicalCalls != 0 || got.Completed || got.FollowupCompleted || got.Turns != 1 || got.SettledTurns != 0 {
-				t.Fatalf("public xSearch credited: %+v, %v", got, err)
-			}
-			encoded, _ := json.Marshal(got)
-			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
-				t.Fatal("private evidence leaked")
-			}
-		})
+		for _, mode := range []string{"public_only", "public_completed", "public_no_context"} {
+			t.Run(scenario+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				options := fixtureOptions(t, "search:"+mode+":"+scenario)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				got, err := live.HostedSearch(ctx, options, scenario)
+				if !live.AcceptedXSearchRejection(got, err) || got.CanonicalCalls != 0 || got.CleanupPending || got.FirstCompleted || got.Completed || got.FollowupCompleted || got.Turns != 1 || got.SettledTurns != 0 {
+					t.Fatalf("expected rejection missing or search falsely credited: %+v, %v", got, err)
+				}
+				assertSearchInvocationCount(t, options, 1)
+				encoded, _ := json.Marshal(got)
+				if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
+					t.Fatal("private evidence leaked")
+				}
+			})
+		}
 	}
 }
 
@@ -569,5 +592,49 @@ func TestHostedSearchIdentityBudgetsRemainPerTurn(t *testing.T) {
 			}
 			assertSearchInvocationCount(t, options, wantTurns)
 		})
+	}
+}
+
+func TestHostedSearchExpectedRejectionRejectsOtherFailures(t *testing.T) {
+	for _, tc := range []struct{ mode, scenario string }{
+		{"public_only", "web"}, {"public_other", "x"}, {"public_wrong_type", "x"}, {"public_local_first", "x"}, {"no_terminal", "x"},
+	} {
+		t.Run(tc.mode+"/"+tc.scenario, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			got, err := live.HostedSearch(ctx, fixtureOptions(t, "search:"+tc.mode+":"+tc.scenario), tc.scenario)
+			if err == nil || got.ExpectedUnsupported || live.AcceptedXSearchRejection(got, err) || got.Completed || got.CleanupPending {
+				t.Fatalf("unrelated failure accepted: %+v, %v", got, err)
+			}
+			encoded, _ := json.Marshal(got)
+			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
+				t.Fatal("private rejection data leaked")
+			}
+		})
+	}
+}
+
+func TestHostedSearchCallerTimeoutIsNotExpectedRejection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := live.HostedSearch(ctx, fixtureOptions(t, "search:public_timeout:x"), "x")
+	if ctx.Err() != context.DeadlineExceeded || err == nil || got.ExpectedUnsupported || got.Completed || got.CleanupPending {
+		t.Fatalf("timeout accepted: %+v, %v", got, err)
+	}
+}
+
+func TestHostedSearchDiscardableRawBeforeXDoesNotClaimFullDelivery(t *testing.T) {
+	// On fatal decode the stock SDK may discard a raw callback not yet run.
+	// Either an observed business rejection or the exact SDK rejection is
+	// truthful; neither establishes that all preceding raw traffic was audited.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := live.HostedSearch(ctx, fixtureOptions(t, "search:public_raw_local_first:x"), "x")
+	if err == nil || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || got.CleanupPending {
+		t.Fatalf("false search success: %+v, %v", got, err)
+	}
+	if !live.AcceptedXSearchRejection(got, err) && err.Error() != "live: local execution cannot establish hosted search" {
+		t.Fatalf("unexpected rejection: %v", err)
 	}
 }

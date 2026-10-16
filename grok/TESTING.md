@@ -90,12 +90,16 @@ its digest before launch and after cleanup. Synthetic snapshot and caller tests
 do not replace actual-binary Integration acceptance for
 [#404](https://github.com/Harness-X-Harness/codex/issues/404).
 
-The unmodified public X notification stream is required. The pinned SDK's
-unsupported `xSearch` variant is a compatibility gap tracked by
-[#408](https://github.com/Harness-X-Harness/codex/issues/408). It may make
-`HostedSearchFixture` fail. Do not filter stdout, skip the X cases, loosen SDK
-validation or report an offline fake-process result as a passing original-wire
-Integration result.
+The unmodified public X notification stream is required. Under the revised
+[#408](https://github.com/Harness-X-Harness/codex/issues/408) contract, only `x`
+and `x_window` (`x-window` in the catalog) may pass as expected rejection when
+the actual pinned SDK reports the exact unsupported `xSearch` decode cause and
+process/callback cleanup is confirmed. Generic protocol termination, timeout,
+other variants, business failures or unproved cleanup remain failures. This
+proves the strict SDK rejection, not completed search or same-thread follow-up.
+Web and other supported paths retain their positive assertions. Do not filter
+stdout, skip X cases, relax the SDK schema or credit fake-process results as
+actual-binary Integration proof.
 
 ## Live: actual Codex and actual Grok
 
@@ -147,7 +151,10 @@ semantic turns. Catalog-only submits zero inference turns. Diagnostic discovery
 also lists `reasoning-no-effort-pinned`; its execution requires an explicit name.
 That exploratory control is excluded from smoke/full and formal release proof.
 These are invocation bounds, not observed API billing or limits on legitimate
-product-internal transport/tool activity. No measured paid-cost improvement is
+product-internal transport/tool activity. The X selections can satisfy the
+revised expected-rejection contract after one submitted turn; their catalog
+upper bounds remain two. A green smoke/full execution containing that outcome
+does not certify positive X Search support or close the retained #388 Story. No measured paid-cost improvement is
 claimed.
 
 Trusted workflows first use `package/fetch_artifact.py` to verify the archive,
@@ -196,7 +203,13 @@ an exact partial package or Live selection. Never infer coverage from a green
 package containing no selected tests. A partial selection does not prove omitted
 cases passed. Per-case Live evidence retains safe counts, subject/digest,
 provenance and failure classifications, without prompts, model text, ciphertext,
-keys, private paths, raw traffic or opaque IDs.
+keys, private paths, raw traffic or opaque IDs. X expected rejection has per-case
+`outcome: expected_unsupported`, `reason: sdk_xsearch_unsupported` and
+`ExpectedUnsupported: true`; completed-turn flags stay false and observed
+canonical counts are not invented. The tagged aggregate reports `accepted`
+when it includes expected rejections and counts them separately in
+`expected_unsupported`. Its `completed` count means finished accepted test cases,
+not completed provider turns. Ordinary positive aggregates remain `observed`.
 
 - `grok-ci.yml` runs credential-free checks on Grok-related development pushes
   and PRs outside the existing formal bases. `grok-go.yml` owns format, tidy,

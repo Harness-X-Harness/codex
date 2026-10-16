@@ -22,8 +22,8 @@ import (
 )
 
 // Controlled local backends. A successful run shows that this frozen product
-// finishes the hosted-search and image-pinned turns when the provider admits
-// the expected items. It does not replay a real provider.
+// completes supported Web/image turns or explicitly rejects public X activity
+// through the strict SDK. It does not replay a real provider.
 func testNativeHostedSearchFixture(t *testing.T) {
 	subject := nativeSubject(t)
 	for _, scenario := range []string{"web", "web_excluded", "x", "x_window"} {
@@ -39,6 +39,13 @@ func testNativeHostedSearchFixture(t *testing.T) {
 			defer fixture.mu.Unlock()
 			encoded, _ := json.Marshal(got)
 			t.Logf("controlled %s: evidence=%s responses=%d failure=%s tools=%s", scenario, encoded, fixture.responses, fixture.failure, strings.Join(fixture.tools, " | "))
+			if scenario == "x" || scenario == "x_window" {
+				if !live.AcceptedXSearchRejection(got, err) || fixture.failure != "" || fixture.responses != 1 || strings.Contains(string(encoded), "PRIVATE_") {
+					t.Fatalf("native expected SDK rejection not proven: %+v; %v", got, err)
+				}
+				t.Log("expected_unsupported: sdk_xsearch_unsupported; no positive search completion")
+				return
+			}
 			if err != nil || fixture.failure != "" || fixture.responses != 2 || strings.Contains(string(encoded), "PRIVATE_") {
 				t.Fatalf("native hosted search: %+v; %v", got, err)
 			}

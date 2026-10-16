@@ -44,7 +44,7 @@ Source, target, harness and package eligibility are established by the caller;
 the runner verifies copied executable bytes and owns the execution snapshot.
 Shipped scenarios use their owned endpoint
 and reject an endpoint override. Each selected scenario is invoked once.
-Exit codes: 0 observed, 1 not observed/output failure, 2 configuration error,
+Exit codes: 0 observed or expected_unsupported (X SDK rejection), 1 not observed/output failure, 2 configuration error,
 3 not run without opt-in. --help exits 0 without invoking a scenario.
 Formal acceptance requires identified GitHub Actions evidence.
 `
@@ -183,6 +183,12 @@ func Execute(ctx context.Context, config Config, getenv func(string) string) (Re
 	evidence := result.Base
 	retainSnapshot = evidence.CleanupPending
 	r.ExecutionSnapshotRetained = retainSnapshot
+	if search, ok := result.Evidence.(live.SearchEvidence); ok && ctx.Err() == nil &&
+		(scenario.Name == "x" || scenario.Name == "x-window") && live.AcceptedXSearchRejection(search, err) {
+		detail := live.DescribeFailure(err)
+		r.Failure = &detail
+		return finish("expected_unsupported", detail.Code, 0)
+	}
 	complete := evidence.Completed || (scenario.Name == "shipped-catalog" && evidence.ShippedCatalog)
 	if err != nil || !complete || evidence.Turns > scenario.SemanticTurns {
 		reason := "scenario_not_completed"

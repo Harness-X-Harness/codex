@@ -56,21 +56,29 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
 			evidence.CleanupPending = !closed.ProcessReaped || closed.CallbackWorkPending != 0
+			rejectedX := sdkRejectedXSearch(ctx, closed, closeErr, runErr)
+			var callbackErr error
+			select {
+			case callbackErr = <-handlers.failures:
+			default:
+			}
 			if runErr == nil {
-				select {
-				case runErr = <-handlers.failures:
-				default:
-				}
+				runErr = callbackErr
 				if runErr == nil && closeErr != nil {
 					runErr = sdkFailure(closeErr)
 				} else if runErr == nil && evidence.CleanupPending {
 					runErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
 				}
 			}
+			var finalized error
 			if handlers.afterClose != nil && !evidence.CleanupPending {
-				if finalized := handlers.afterClose(cwd, evidence, runErr); finalized != nil {
+				finalized = handlers.afterClose(cwd, evidence, runErr)
+				if finalized != nil {
 					runErr = preferObservation(runErr, finalized)
 				}
+			}
+			if rejectedX && callbackErr == nil && finalized == nil {
+				runErr = errSDKXSearchUnsupported
 			}
 		}()
 		evidence.Processes, evidence.Initializations, evidence.Stage = 1, 1, "initialized"
@@ -119,7 +127,7 @@ func sdkFailure(err error) error {
 // preferObservation keeps an earlier business failure ahead of a later generic
 // shutdown wrapper, and lets a sticky observation replace a transport error.
 func preferObservation(current, finalized error) error {
-	if current == nil {
+	if current == nil || current == errSDKProtocolEnded {
 		return finalized
 	}
 	var currentObservation, finalObservation *observationFailure

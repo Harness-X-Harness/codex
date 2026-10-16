@@ -17,6 +17,7 @@ type SearchEvidence struct {
 	Scenario                     string
 	CanonicalCalls, SettledTurns int
 	FollowupCompleted            bool
+	ExpectedUnsupported          bool `json:",omitempty"`
 }
 
 // HostedSearch submits one fixed Web/X search and one follow-up, each once.
@@ -42,13 +43,17 @@ type searchProbe struct {
 
 func (p *searchProbe) observe(prompt string) error {
 	p.evidence.Turns++
-	p.frames, p.bytes, p.terminal, p.settled = 0, 0, false, false
 	response, err := p.server.client.Turns().Start(p.server.ctx, protocolv2.TurnStartParams{ThreadID: p.threadID,
 		Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}})
 	if err != nil {
 		return shippedTransport(p.server.ctx, err)
 	}
-	started, err := searchTurnFromSDK(response.Turn)
+	return p.observeStarted(response.Turn)
+}
+
+func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
+	p.frames, p.bytes, p.terminal, p.settled = 0, 0, false, false
+	started, err := searchTurnFromSDK(value)
 	if err != nil {
 		return errors.New("live: invalid search evidence")
 	}

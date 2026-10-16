@@ -36,8 +36,11 @@ minutes and cannot exceed the underlying ten-minute bound. The command never
 restarts a scenario or resubmits a failed semantic turn.
 
 One JSON result contains the selected scenario, UTC time, endpoint fingerprint
-and unchanged safe evidence returned by its owner. Exit 0 is a scoped observed
-result, 1 is not observed or output failure, 2 is invalid configuration/subject,
+and safe evidence returned by its owner. Exit 0 is a scoped `observed` result
+or, for `x`/`x-window` only, `expected_unsupported` with reason
+`sdk_xsearch_unsupported`. The latter requires the actual strict SDK decode
+failure plus confirmed cleanup and is not successful search/turn completion.
+Exit 1 is not observed or output failure, 2 is invalid configuration/subject,
 and 3 is not run without opt-in. `shipped-catalog` records catalog observation
 without inference completion. Partial facts remain separate from overall
 completion; failures contain static reasons and no raw child/backend traffic.
@@ -57,8 +60,12 @@ Unknown errors remain `unclassified_failure`; unknown, malformed or oversized
 terminal details remain unknown. No error message, additional details, raw
 traffic, identifiers or private content is retained. These fields locate the
 observer rejection and do not establish product or backend attribution.
-The existing `reason` still gives cancellation/deadline precedence. The proof
-outcome, last proven stage, success conditions and invocation budget are unchanged.
+The existing `reason` still gives cancellation/deadline precedence. The
+last proven stage and invocation budget remain truthful. Expected X rejection
+retains `ExpectedUnsupported: true`, false completed-turn flags and only actual
+canonical observations; no settled turn or positive search is fabricated.
+The bounded failure code identifies the SDK compatibility rejection without
+persisting its raw error or private notification payload.
 
 ## Primary Go test entry point
 

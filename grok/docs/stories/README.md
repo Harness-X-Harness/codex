@@ -25,13 +25,13 @@ come from the [Go catalog](../../internal/scenarios/catalog.go).
 | [Cold resume](grok-provider-bound-cold-restart-resume.md) | Same Rust suite: `grok_cold_restart_resume_keeps_provider_binding`, including missing-profile failure and restored-profile recovery | No duplicate Go internal-correctness suite and no inferred backend success |
 | [Local compaction](grok-provider-bound-compaction-continuation.md) | Same Rust suite: `grok_manual_compaction_keeps_provider_binding`; [core Grok compaction](../../../codex-rs/core/tests/suite/grok_compaction_tests.rs) owns dialect/replay | No duplicate Go compaction suite and no inferred backend success |
 | [Child collaboration](grok-provider-binding-lifecycle.md) | [`TestShippedStartupAndChildRejectIncompleteEvidence`](../../live/shipped_test.go); `TestIntegrationInternal/ShippedChildFixture`; [Rust public child listener](../../../codex-rs/app-server/tests/suite/v2/grok_child_public_listener.rs) and provider inheritance owners | `TestLive/shipped-child`: one setup plus one natural delegation; child lineage, fresh result and parent consumption remain material |
-| [Hosted Web/X search](#hosted-webx-search) | [`TestHostedSearch*`](../../live/search_test.go); `TestIntegration/HostedSearchFixture`; [Rust request/replay](../../../codex-rs/core/tests/suite/grok_hosted_search_tests.rs), [public Web activity](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs), [public X activity](../../../codex-rs/app-server/tests/suite/v2/grok_x_search_activity.rs) | `TestLive/web`, `web-allowed`, `web-excluded`, `x`, `x-window`; direct SearchPolicy/SearchReplay Facts remain separate |
+| [Hosted Web/X search](#hosted-webx-search) | [`TestHostedSearch*`](../../live/search_test.go); `TestIntegration/HostedSearchFixture`; [Rust request/replay](../../../codex-rs/core/tests/suite/grok_hosted_search_tests.rs), [public Web activity](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs), [public X activity](../../../codex-rs/app-server/tests/suite/v2/grok_x_search_activity.rs) | `TestLive/web`, `web-allowed`, `web-excluded` retain positive acceptance; `x`, `x-window` may instead satisfy the scoped #408 expected-rejection contract below. Direct SearchPolicy/SearchReplay Facts remain separate |
 
 ## Hosted Web/X search
 
 As a Grok user, I can request hosted Web or X search under the supported policy,
 receive a complete final answer, and continue on the same Provider-bound thread.
-An accepted execution requires:
+Positive hosted-search acceptance requires:
 
 - One configured first turn and one same-thread follow-up, each submitted once.
 - Matching Provider/model/thread/turn identities, successful terminal evidence
@@ -52,11 +52,24 @@ observer nor a 2xx Facts response proves result relevance, actual allow/exclude
 policy enforcement, date-bound inclusivity or cold-restart persistence.
 
 The original stdout stream, including public `xSearch`, must reach the pinned
-SDK unchanged. Its unsupported variant is a required Integration failure until
-[#408](https://github.com/Harness-X-Harness/codex/issues/408) is resolved under
-separate SDK review; filtered output and fake-process success cannot close that
-gap. [#388](https://github.com/Harness-X-Harness/codex/issues/388) owns the retained
-SDK search Story. Historical #228/#234 and [#331](https://github.com/Harness-X-Harness/codex/issues/331)
+SDK unchanged. Under the owner-approved 2026-10-16 revision of
+[#408](https://github.com/Harness-X-Harness/codex/issues/408), `x` and `x_window`
+(catalog `x-window`) may pass with the actual SDK's exact
+`unknown variant "xSearch"` decode rejection and confirmed process/callback cleanup. No generic
+termination, timeout, other unknown variant, unrelated failure or missing error
+evidence qualifies. The acceptance result is `expected_unsupported`, not positive
+hosted-search completion: no completed turn, settled read or follow-up is
+invented, and canonical counts remain actual. The original strict SDK schema,
+Web positive checks and mixed Web/X product tests are unchanged. Fatal SDK
+decoding may discard undelivered raw callbacks, so this outcome does not prove
+complete raw delivery or audit. Cleanup with no pending callbacks does not mean
+every callback executed; observed or SDK-retained contradictions still fail.
+
+This scoped expected rejection does not satisfy the positive Story above.
+[#388](https://github.com/Harness-X-Harness/codex/issues/388) and
+[#379](https://github.com/Harness-X-Harness/codex/issues/379) retain their separate
+positive hosted obligations; filtered output and fake-process success cannot
+establish positive SDK support. Historical #228/#234 and [#331](https://github.com/Harness-X-Harness/codex/issues/331)
 runs supply context only; none certifies the rebuilt current subject.
 
 ## Formal and diagnostic scope

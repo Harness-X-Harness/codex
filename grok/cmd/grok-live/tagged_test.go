@@ -120,3 +120,16 @@ func TestTaggedLivePreservesCallerVerifiedSubject(t *testing.T) {
 		t.Fatalf("verified subject changed: %s", output)
 	}
 }
+
+func TestTaggedLiveReportsExpectedXRejectionWithoutSearchCompletion(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+	key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:x", "Trace": trace})
+	output, code := tagged(t, []string{"-test.count=1", "-test.v", "-grok-live-suite=full", "-grok-live-scenario=x"}, "1", string(key), fixturePath)
+	if code != 0 || !strings.Contains(output, `"outcome":"expected_unsupported"`) || !strings.Contains(output, `"outcome":"accepted"`) || !strings.Contains(output, `"selected":1,"completed":1,"expected_unsupported":1`) || !strings.Contains(output, `"Completed":false`) || strings.Contains(output, `"outcome":"observed"`) {
+		t.Fatalf("tagged rejection misreported: %s", output)
+	}
+	transcript, err := os.ReadFile(trace)
+	if err != nil || strings.Count(string(transcript), "turn/start\n") != 1 {
+		t.Fatal("tagged rejection repeated work")
+	}
+}
