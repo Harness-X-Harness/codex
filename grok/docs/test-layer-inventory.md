@@ -19,7 +19,11 @@ Codex are explicit Integration owners.
 
 The previous runtime job repeated offline `./live` tests already run in its Go
 job. The runtime now selects only Integration; the reusable Go job runs the
-whole default module once per formal proof subject. Package acceptance retains
+whole default module once per formal proof subject. The shared JSON checker
+also preserves the previous explicit presence requirements for
+`live:TestReasoningHistoryPublicProtocol` and
+`live:TestSDKEditObserverPositiveStory`, using full package-qualified names.
+Other passing tests cannot hide either missing owner; neither is executed twice. Package acceptance retains
 its five actual package consumer checks, because packaged launcher/assets/native
 runner constitute a different boundary. Development pushes and PR merge refs
 are different subjects; formal PR merge refs are excluded from the fast PR
@@ -98,9 +102,20 @@ catalog entries, unknown/ineligible selection, implicit skips and repeat/empty
 execution without making paid calls.
 
 `TestBackendFacts` and `TestBackendSearchFacts` retain their direct-backend
-subcases under the `facts` tag. They no longer emit skipped-test events in the
-default suite; explicitly selecting them without setup fails. These are not
-retired observations and do not enter required offline coverage.
+subcases under the `facts` tag, both selecting and invoking the shared catalog.
+Their previous independent invocation tables are removed; the same four
+non-search and seven search observations remain. Exact selector changes are:
+
+- `TestBackendFacts/basic_primary` → `basic-primary`; `basic_pinned` →
+  `basic-pinned`; `encrypted_typed_replay` → `encrypted-replay`;
+  `shipped_routes` → `shipped-routes`.
+- `TestBackendSearchFacts/web_allowed` → `web-allowed`; `web_excluded` →
+  `web-excluded`; `x_window` → `x-window`; `web_replay` → `web-replay`;
+  `x_replay` → `x-replay`. The `web` and `x` names are unchanged.
+
+These entries no longer emit skipped-test events in the default suite;
+explicitly selecting them without setup fails. No backend probe or invocation
+budget is added or retired, and none enters required offline coverage.
 
 ## Bug-class cross-check
 

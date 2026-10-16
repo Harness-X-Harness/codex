@@ -108,6 +108,11 @@ func configure() string {
 	if flag.Lookup("test.count").Value.String() != "1" || strings.Contains(flag.Lookup("test.cpu").Value.String(), ",") {
 		return "repeated_execution_forbidden"
 	}
+	// Use -run for an explicit subset. -skip must never silently remove a
+	// required owner from a selected smoke/full suite.
+	if flag.Lookup("test.skip").Value.String() != "" {
+		return "skipped_selection_forbidden"
+	}
 	if *deadline <= 0 || *deadline > 5*time.Minute {
 		return "invalid_scenario_timeout"
 	}

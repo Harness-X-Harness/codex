@@ -41,6 +41,8 @@ jobs:
           go test -race -count=1 -timeout=15m -json ./... \
             > "$RUNNER_TEMP/grok-go-evidence/tests.json" || status=$?
           go run ./cmd/grok-test-results --input "$RUNNER_TEMP/grok-go-evidence/tests.json" \
+            --require 'github.com/Harness-X-Harness/codex/grok/live:TestReasoningHistoryPublicProtocol' \
+            --require 'github.com/Harness-X-Harness/codex/grok/live:TestSDKEditObserverPositiveStory' \
             > "$RUNNER_TEMP/grok-go-evidence/summary.json" || status=1
           cat "$RUNNER_TEMP/grok-go-evidence/summary.json"
           exit "$status"
