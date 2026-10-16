@@ -2,16 +2,22 @@
 
 `grok-live` makes the existing `grok/live` scenario functions independently
 invocable. Build from `grok/` with `go build -o grok-live ./cmd/grok-live`.
-`--help` derives all known primary/pinned, reasoning, edit, image, shipped
-profile/child and hosted-search selections from the Go-owned catalog. Full has
+`grok-scenarios --family live --suite diagnostic` lists the primary/pinned,
+reasoning, edit, image, shipped profile/child and hosted-search catalog. Full has
 19 formal cases; the twentieth, `reasoning-no-effort-pinned`, is exploratory and
 requires explicit diagnostic selection. The command adds no product oracle.
 
-One invocation selects one scenario. Provide an absolute immutable binary,
+One invocation selects one scenario. Provide an absolute source executable,
 its expected SHA-256, source SHA, harness SHA, supported package target and
 environment label. The caller establishes source/target provenance, native
-eligibility and artifact identity. The underlying runner verifies the binary
-digest and owns isolated Home/workspace creation, process cleanup and observation.
+eligibility and artifact identity. The runner verifies copied executable bytes
+and executes an owned non-writable snapshot with package-relative helpers intact.
+It owns isolated Home/workspace creation, bounded process cleanup and observation.
+An unproved join retains the snapshot and fixture and reports
+`execution_snapshot_retained` and `CleanupPending`; confirm termination before
+manual cleanup. Successful joins remove the snapshot. The
+snapshot protects against source-path replacement, not malicious same-user
+mutation, and creates no new provenance claim.
 Package callers first verify the selected archive and complete package with
 `grok/package/fetch_artifact.py`, which composes the exact selection and
 archive-extraction validators.

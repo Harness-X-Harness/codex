@@ -96,7 +96,7 @@ func testNativeFirstRequestShape(t *testing.T) {
 				// Never emit raw request/response bodies, prompts, headers or IDs.
 				t.Logf("controlled first request: source=%s harness=%s target=%s executable_sha256=%s profile=%s requests=%d attempts=%s failure=%+v",
 					subject.SourceSHA, subject.HarnessSHA, subject.Target, subject.SHA256, profile, requests, encoded, failure)
-				if runErr == nil || !valid || requests < 1 || requests > 2 || len(attempts) != requests ||
+				if evidence.CleanupPending || runErr == nil || !valid || requests < 1 || requests > 2 || len(attempts) != requests ||
 					!evidence.Bound || evidence.Completed || evidence.Turns != 1 || evidence.Processes != 1 || evidence.Threads != 1 {
 					t.Fatal("controlled denial must remain unsuccessful in one bound turn within the existing sampling attempt budget")
 				}

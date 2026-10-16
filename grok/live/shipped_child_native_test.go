@@ -62,7 +62,7 @@ func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
 		requests++
 	}
 	if parentSupplied {
-		if err == nil || err.Error() != "live: qualifying child result absent" ||
+		if got.CleanupPending || err == nil || err.Error() != "live: qualifying child result absent" ||
 			got.Stage != "product_turn_proven" || fixture.failure != "" ||
 			fixture.requests != requests || !fixture.continued {
 			t.Fatalf("native inherited-result negative did not reach the oracle: stage=%s requests=%d continued=%t error=%v", got.Stage, fixture.requests, fixture.continued, err)

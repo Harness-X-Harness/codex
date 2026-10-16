@@ -66,14 +66,15 @@ func arguments(scenario string) []string {
 }
 
 type wireReport struct {
-	SchemaVersion  int               `json:"schema_version"`
-	Outcome        string            `json:"outcome"`
-	Reason         string            `json:"reason,omitempty"`
-	Scenario       string            `json:"scenario,omitempty"`
-	EndpointSHA256 string            `json:"endpoint_sha256,omitempty"`
-	RecordedAt     string            `json:"recorded_at"`
-	Evidence       json.RawMessage   `json:"evidence,omitempty"`
-	Failure        *live.FailureInfo `json:"failure,omitempty"`
+	ExecutionSnapshotRetained bool              `json:"execution_snapshot_retained,omitempty"`
+	SchemaVersion             int               `json:"schema_version"`
+	Outcome                   string            `json:"outcome"`
+	Reason                    string            `json:"reason,omitempty"`
+	Scenario                  string            `json:"scenario,omitempty"`
+	EndpointSHA256            string            `json:"endpoint_sha256,omitempty"`
+	RecordedAt                string            `json:"recorded_at"`
+	Evidence                  json.RawMessage   `json:"evidence,omitempty"`
+	Failure                   *live.FailureInfo `json:"failure,omitempty"`
 }
 
 func invoke(t *testing.T, args []string, optIn, key string) (wireReport, int) {
@@ -210,6 +211,68 @@ func TestCommandRejectsPreflightWithoutStartingRuntime(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommandExecutesOwnedSnapshotAndRemovesItAfterJoin(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	key, _ := json.Marshal(map[string]string{"Mode": "turn", "Trace": trace})
+	report, code := invoke(t, arguments("basic-primary"), "1", string(key))
+	var evidence live.Evidence
+	if code != 0 || report.ExecutionSnapshotRetained || json.Unmarshal(report.Evidence, &evidence) != nil || evidence.CleanupPending || !evidence.Completed ||
+		evidence.SHA256 != fixtureDigest || evidence.SourceSHA != strings.Repeat("a", 40) || evidence.HarnessSHA != strings.Repeat("b", 40) {
+		t.Fatal("snapshot changed the verified subject or lost completion")
+	}
+	executed, err := os.ReadFile(trace + ".executable")
+	if err != nil || string(executed) == fixturePath || !filepath.IsAbs(string(executed)) {
+		t.Fatal("command did not execute the owned snapshot")
+	}
+	if _, err := os.Stat(string(executed)); !os.IsNotExist(err) {
+		t.Fatal("owned snapshot remained after joined execution")
+	}
+	if _, err := os.Stat(fixturePath); err != nil {
+		t.Fatal("snapshot cleanup altered the original executable")
+	}
+}
+
+func TestCommandRetainsSnapshotUntilStartupFailureCanBeJoined(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	key, _ := json.Marshal(map[string]string{"Mode": "initialize_stall", "Trace": trace})
+	args := append(arguments("basic-primary"), "--timeout", "2s")
+	report, code := invoke(t, args, "1", string(key))
+	var evidence live.Evidence
+	if code != 1 || report.Reason != "deadline_exceeded" || !report.ExecutionSnapshotRetained ||
+		json.Unmarshal(report.Evidence, &evidence) != nil || !evidence.CleanupPending || evidence.Completed {
+		t.Fatal("unknown startup cleanup was reported as joined")
+	}
+	executed, err := os.ReadFile(trace + ".executable")
+	if err != nil || string(executed) == fixturePath || !filepath.IsAbs(string(executed)) {
+		t.Fatal("startup cancellation did not reach the owned executable")
+	}
+	home, err := os.ReadFile(trace + ".home")
+	if err != nil || !filepath.IsAbs(string(home)) {
+		t.Fatal("startup cancellation did not reach the isolated fixture")
+	}
+	if err := os.WriteFile(trace+".release", nil, 0600); err != nil {
+		t.Fatal("cannot release controlled startup helper")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		value, err := os.ReadFile(trace + ".retention")
+		if err == nil {
+			if string(value) != "retained" {
+				t.Fatal("unjoined child lost snapshot or fixture after command return")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("controlled startup helper did not finish its file observation")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The controlled helper has finished all file reads. Production retains
+	// these paths because the SDK constructor exposes no public join handle.
+	_ = os.RemoveAll(filepath.Dir(string(executed)))
+	_ = os.RemoveAll(string(home))
 }
 
 func TestCommandRetainsFailedScenarioWithoutResubmission(t *testing.T) {

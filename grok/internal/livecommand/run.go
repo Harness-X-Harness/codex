@@ -16,19 +16,21 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
+	"github.com/Harness-X-Harness/codex/grok/internal/testkit"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
 // Report preserves the external grok-live JSON contract.
 type Report struct {
-	SchemaVersion  int               `json:"schema_version"`
-	Outcome        string            `json:"outcome"`
-	Reason         string            `json:"reason,omitempty"`
-	Scenario       string            `json:"scenario,omitempty"`
-	EndpointSHA256 string            `json:"endpoint_sha256,omitempty"`
-	RecordedAt     string            `json:"recorded_at"`
-	Evidence       any               `json:"evidence,omitempty"`
-	Failure        *live.FailureInfo `json:"failure,omitempty"`
+	ExecutionSnapshotRetained bool              `json:"execution_snapshot_retained,omitempty"`
+	SchemaVersion             int               `json:"schema_version"`
+	Outcome                   string            `json:"outcome"`
+	Reason                    string            `json:"reason,omitempty"`
+	Scenario                  string            `json:"scenario,omitempty"`
+	EndpointSHA256            string            `json:"endpoint_sha256,omitempty"`
+	RecordedAt                string            `json:"recorded_at"`
+	Evidence                  any               `json:"evidence,omitempty"`
+	Failure                   *live.FailureInfo `json:"failure,omitempty"`
 }
 
 const Usage = `Usage: grok-live --scenario NAME --binary PATH --binary-sha256 SHA256
@@ -39,7 +41,8 @@ List supported scenarios with grok-scenarios --family live --suite diagnostic.
 
 Execution requires GROK_LIVE=1 and GROK_API_KEY from an approved environment.
 Source, target, harness and package eligibility are established by the caller;
-the runner verifies the binary digest. Shipped scenarios use their owned endpoint
+the runner verifies copied executable bytes and owns the execution snapshot.
+Shipped scenarios use their owned endpoint
 and reject an endpoint override. Each selected scenario is invoked once.
 Exit codes: 0 observed, 1 not observed/output failure, 2 configuration error,
 3 not run without opt-in. --help exits 0 without invoking a scenario.
@@ -58,7 +61,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, output 
 	flags := flag.NewFlagSet("grok-live", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	selected := flags.String("scenario", "", "one supported scenario")
-	binary := flags.String("binary", "", "explicit immutable runtime")
+	binary := flags.String("binary", "", "explicit source executable")
 	digest := flags.String("binary-sha256", "", "verified package runtime digest")
 	source := flags.String("source-sha", "", "caller-established source")
 	harness := flags.String("harness-sha", "", "caller-established harness")
@@ -157,12 +160,29 @@ func Execute(ctx context.Context, config Config, getenv func(string) string) (Re
 	}
 	endpointDigest := sha256.Sum256([]byte(config.Endpoint))
 	r.EndpointSHA256 = hex.EncodeToString(endpointDigest[:])
-	options := live.Options{Subject: config.Subject, Model: scenario.Model, BaseURL: config.Endpoint, APIKey: key}
 	ctx, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
+	// Keep subject provenance and digest unchanged, but bind execution to a
+	// private snapshot so rebuilding/replacing the input path cannot change
+	// the runtime or its package-relative helpers during this observation.
+	binary, cleanup, err := testkit.SnapshotExecutable(config.Subject.Binary, config.Subject.SHA256)
+	if err != nil {
+		return finish("configuration_error", "subject_or_fixture_not_verified", 2)
+	}
+	// Default to retaining on panic or any path without an explicit join proof.
+	retainSnapshot := true
+	defer func() {
+		if !retainSnapshot {
+			cleanup()
+		}
+	}()
+	config.Subject.Binary = binary
+	options := live.Options{Subject: config.Subject, Model: scenario.Model, BaseURL: config.Endpoint, APIKey: key}
 	result, err := scenario.RunLive(ctx, options)
 	r.Evidence = result.Evidence
 	evidence := result.Base
+	retainSnapshot = evidence.CleanupPending
+	r.ExecutionSnapshotRetained = retainSnapshot
 	complete := evidence.Completed || (scenario.Name == "shipped-catalog" && evidence.ShippedCatalog)
 	if err != nil || !complete || evidence.Turns > scenario.SemanticTurns {
 		reason := "scenario_not_completed"

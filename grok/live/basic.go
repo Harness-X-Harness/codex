@@ -35,6 +35,8 @@ type Options struct {
 
 // Evidence contains only safe metadata and observations, never private traffic.
 type Evidence struct {
+	// CleanupPending means SDK startup/teardown did not prove all owned work joined.
+	CleanupPending                                                               bool `json:",omitempty"`
 	LocalUnverified                                                              bool `json:",omitempty"`
 	SetupTurns, TaskTurns                                                        int
 	SetupCompleted                                                               bool
@@ -76,8 +78,8 @@ func withFixture(ctx context.Context, options Options, edit *editFixture, run fu
 	if actualDigest != subject.SHA256 {
 		return evidence, errors.New("live: executable digest mismatch")
 	}
-	// The SDK's run callback joins/reaps the process before returning. Check
-	// the selected path again after that cleanup, including failed scenarios.
+	// Check the path after the bounded SDK cleanup attempt. CleanupPending
+	// separately records whether process/callback termination was proved.
 	defer func() {
 		finalDigest, err := testkit.ExecutableSHA256(subject.Binary)
 		if err != nil || finalDigest != subject.SHA256 {
@@ -91,7 +93,11 @@ func withFixture(ctx context.Context, options Options, edit *editFixture, run fu
 	if err != nil {
 		return evidence, errors.New("live: isolated fixture unavailable")
 	}
-	defer os.RemoveAll(home)
+	defer func() {
+		if !evidence.CleanupPending {
+			_ = os.RemoveAll(home)
+		}
+	}()
 	cwd := filepath.Join(home, "workspace")
 	if err := writeFixture(home, cwd, options, edit); err != nil {
 		return evidence, err

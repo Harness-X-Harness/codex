@@ -22,7 +22,7 @@ type sdkFixtureHandlers struct {
 	queue    int
 	failures <-chan error
 	// afterClose runs after CloseContext joins callbacks and reaps the child,
-	// while the isolated workspace still exists. Nil for Basic and reasoning.
+	// while the isolated workspace still exists. Only invoked when cleanup is complete.
 	afterClose func(cwd string, evidence *Evidence, cause error) error
 }
 
@@ -32,6 +32,9 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) (runErr error) {
 		experimental := true
 		evidence.Stage = "sdk_starting"
+		// NewContext may return before its asynchronous failure teardown, and
+		// provides no client on that path. Retain inputs until a public join is known.
+		evidence.CleanupPending = true
 		client, err := codexsdk.NewContext(ctx, codexsdk.ClientOptions{
 			CWD: cwd, Command: []string{options.Subject.Binary, "app-server", "--strict-config", "--listen", "stdio://"},
 			Env: sdkFixtureEnv(os.Environ(), home, options.APIKey),
@@ -52,6 +55,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
+			evidence.CleanupPending = !closed.ProcessReaped || closed.CallbackWorkPending != 0
 			if runErr == nil {
 				select {
 				case runErr = <-handlers.failures:
@@ -59,11 +63,11 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 				}
 				if runErr == nil && closeErr != nil {
 					runErr = sdkFailure(closeErr)
-				} else if runErr == nil && (!closed.ProcessReaped || closed.CallbackWorkPending != 0) {
+				} else if runErr == nil && evidence.CleanupPending {
 					runErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
 				}
 			}
-			if handlers.afterClose != nil {
+			if handlers.afterClose != nil && !evidence.CleanupPending {
 				if finalized := handlers.afterClose(cwd, evidence, runErr); finalized != nil {
 					runErr = preferObservation(runErr, finalized)
 				}

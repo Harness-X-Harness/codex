@@ -56,21 +56,39 @@ GROK_CODEX_BIN=/absolute/path/to/codex \
 
 `GROK_LIVE_NATIVE_BIN` remains a compatibility alias; conflicting paths fail.
 Missing, relative, non-executable, malformed or wrong-platform binaries fail the
-required run rather than skipping it. The runner verifies the selected
-executable digest before launch and after cleanup, and uses isolated temporary
-home/workspace/credentials and owned process cleanup. Without caller-established source/harness provenance,
+required run rather than skipping it. The Integration and Live/CLI entry points
+verify the selected executable's copied bytes and launch an owned snapshot, with
+isolated temporary home/workspace/credentials and owned process cleanup.
+Without caller-established source/harness provenance,
 the subject is explicitly local/unverified; dirty development work is not
 represented by invented SHA values. CI continues to bind native runs to the
 exact `GITHUB_SHA`; package tests retain their exact source, target and digest.
 
-The executable path and its containing directory must remain trusted and
-unchanged throughout execution. Pre/post checks reopen that path; they cannot
-exclude a transient replacement that is executed and restored between checks.
-Continuous executed-byte stability required by
-[#404](https://github.com/Harness-X-Harness/codex/issues/404) remains unmet.
-That limitation also applies when the before/after digests match; existing
-launcher/runtime/helper executable-relative behavior must be preserved by any
-separately validated fix.
+The private snapshot protects execution from replacement of the original input
+path, including replacement followed by restoration between digest checks. Its
+files are non-writable. Successful joins remove the copy; unproved startup or
+shutdown cleanup retains both snapshot and isolated fixture, reports
+`CleanupPending` and `execution_snapshot_retained`, and requires confirming
+termination before manual cleanup. Each retained copy remains subject to the
+limits below; repeated failed invocations can accumulate copies. Integration
+tests conservatively retain their snapshot on failure; expected-negative tests
+also require a proven join before passing. Canonical Grok
+packages retain their manifest-listed launcher, runtime, helpers and resources
+at the same relative paths. Raw development executables retain their basename
+and an optional adjacent `codex-code-mode-host`; arbitrary build directories are
+not copied. Admission rejects invalid manifests, path traversal, source-root
+symlinks and special files, with limits of 128 files, 1 GiB per file, 2 GiB total
+and 1 MiB metadata. Subject digests and caller-established provenance do not
+change when the launch location changes.
+
+The owned directory must remain trusted. This is protection from ordinary
+source-path replacement, not from a malicious process running as the same user.
+A raw helper copy does not establish an atomic multi-file build or release
+origin. Direct calls to the low-level `live` functions still require the caller
+to keep their supplied executable stable; those functions additionally verify
+its digest before launch and after cleanup. Synthetic snapshot and caller tests
+do not replace actual-binary Integration acceptance for
+[#404](https://github.com/Harness-X-Harness/codex/issues/404).
 
 The unmodified public X notification stream is required. The pinned SDK's
 unsupported `xSearch` variant is a compatibility gap tracked by

@@ -14,14 +14,20 @@ controls and an isolated text-only profile/catalog, independent of `grok/dist`.
 
 Supply an absolute binary path and expected SHA-256, caller-established source,
 harness/target/environment metadata, model, Provider base URL and key. The binary
-must remain immutable during the invocation. A deadline of at most ten minutes
+must remain stable during a direct invocation of these functions. The canonical
+Integration and Live/CLI entry points instead prepare a byte-verified owned
+execution snapshot, preserving package-relative helpers and original subject
+metadata; see [the snapshot boundary](../TESTING.md#integration-actual-codex-and-controlled-grok-http).
+A deadline of at most ten minutes
 is required. The runner never restarts/resubmits; product retries retain their
 policy. SDK frames cap at 16 MiB; Basic's completion callback queue caps at 128
 notifications/8 MiB and SDK retention at 512 slots/8 MiB. Basic uses explicit
 `ClientOptions.Env`, `NewContext`, typed thread/turn calls and `CloseContext`
 with a separate five-second cleanup deadline. Other scenarios retain their
 application-owned evidence and retention bounds described below, with SDK-owned
-process/transport cleanup.
+process/transport cleanup. `CleanupPending` explicitly marks an unproved join;
+fixtures remain available on that path instead of being removed under a child
+or admitted callback. Constructor failure exposes no SDK join handle.
 
 Returned evidence contains safe declared metadata, time, counts, booleans,
 reply byte count and last stage. Errors contain no private traffic; failure

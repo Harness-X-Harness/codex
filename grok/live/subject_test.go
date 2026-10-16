@@ -114,3 +114,27 @@ func TestSubjectRejectsChangedExecutable(t *testing.T) {
 		})
 	}
 }
+
+func TestFixtureRetainsInputsWhileCleanupIsPending(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		name := "joined"
+		if pending {
+			name = "unjoined"
+		}
+		t.Run(name, func(t *testing.T) {
+			options := subjectFixture(t)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			var homePath string
+			got, err := withFixture(ctx, options, nil, func(home, cwd string, evidence *Evidence) error {
+				homePath, evidence.CleanupPending = home, pending
+				return errors.New("controlled observation failure")
+			})
+			defer os.RemoveAll(homePath)
+			_, statErr := os.Stat(homePath)
+			if err == nil || got.CleanupPending != pending || (statErr == nil) != pending {
+				t.Fatal("fixture cleanup did not preserve unresolved process ownership")
+			}
+		})
+	}
+}
