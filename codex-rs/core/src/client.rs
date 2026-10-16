@@ -917,6 +917,17 @@ impl ModelClient {
             input = routes
                 .project_history(&input)
                 .map_err(CodexErr::InvalidRequest)?;
+            // Normalize legacy hosted calls without synthesizing local outputs first.
+            // Projection preserves only unpaired hosted shapes; genuine paired local
+            // custom calls have already become function calls at this boundary.
+            if input
+                .iter()
+                .any(codex_protocol::grok_hosted::is_completed_x_search)
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "unsupported history: retired Hosted X Search cannot be replayed".into(),
+                ));
+            }
             projected_tools = tools;
             projected_tools.as_slice()
         } else {
@@ -1044,7 +1055,7 @@ impl ModelClient {
         for item in input {
             let preserves_hosted_id = self.state.provider.api_dialect()
                 == codex_api::ApiDialect::Grok
-                && codex_protocol::grok_hosted::is_completed_search(item);
+                && codex_protocol::grok_hosted::is_completed_web_search(item);
             if !preserves_hosted_id && item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }

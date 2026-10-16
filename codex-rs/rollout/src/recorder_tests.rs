@@ -1838,3 +1838,37 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn retired_hosted_x_history_fails_closed_in_forward_and_reverse_readers() -> anyhow::Result<()>
+{
+    let home = TempDir::new()?;
+    let path = home.path().join("retired.jsonl");
+    for record in [
+        serde_json::json!({"type":"event_msg", "payload":{"type":"item_started", "item":{"type":"XSearch", "id":"x"}}}),
+        serde_json::json!({"type":"event_msg", "payload":{"type":"item_completed", "item":{"type":"XSearch", "id":"x"}}}),
+    ] {
+        let bytes = format!("{record}\n").into_bytes();
+        fs::write(&path, &bytes)?;
+        let error = RolloutRecorder::load_rollout_items(&path)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        let mut reverse = crate::ReverseJsonlScanner::new(std::io::Cursor::new(&bytes))?;
+        assert_eq!(
+            reverse.scan_next_rollout_line().unwrap_err().kind(),
+            std::io::ErrorKind::Unsupported
+        );
+        assert_eq!(fs::read(&path)?, bytes);
+    }
+    // Rejection of one thread does not change the reader's handling of another.
+    let valid = RolloutLine {
+        timestamp: "2026-10-16T00:00:00Z".into(),
+        ordinal: None,
+        item: agent_message_item("valid thread"),
+    };
+    fs::write(&path, format!("{}\n", serde_json::to_string(&valid)?))?;
+    let (items, _, errors) = RolloutRecorder::load_rollout_items(&path).await?;
+    assert_eq!((items.len(), errors), (1, 0));
+    Ok(())
+}

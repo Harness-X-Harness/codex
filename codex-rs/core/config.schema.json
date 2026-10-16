@@ -1791,7 +1791,7 @@
     },
     "GrokXSearchOptions": {
       "additionalProperties": false,
-      "description": "Provider defaults for the inclusive X Search date window.\n\nExplicit request dates override defaults independently. Empty options do not disable X Search: a nonempty Grok tool plan always includes it exactly once.",
+      "description": "Legacy X Search options retained solely for explicit configuration rejection. Hosted X Search is retired from the Codex product; these settings never enable it.",
       "properties": {
         "from_date": {
           "type": "string"
@@ -2728,7 +2728,7 @@
               "$ref": "#/definitions/GrokXSearchOptions"
             }
           ],
-          "description": "Grok hosted X-search date defaults; explicit request dates take precedence."
+          "description": "Retired Hosted X configuration, retained only to reject existing settings explicitly."
         }
       },
       "type": "object"

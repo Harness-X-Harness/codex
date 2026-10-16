@@ -1354,10 +1354,6 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
                 "type": "webSearch", "id": item.id,
                 "query": truncate(&item.query, DEFAULT_OUTPUT_CHARS), "action": item.action
             }),
-            ThreadItem::XSearch(item) => json!({
-                "type": "xSearch", "id": item.id, "callId": item.call_id,
-                "name": item.name
-            }),
             ThreadItem::ImageView { id, path } => json!({
                 "type": "imageView", "id": id, "path": path
             }),

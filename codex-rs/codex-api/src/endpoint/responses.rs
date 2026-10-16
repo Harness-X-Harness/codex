@@ -111,16 +111,10 @@ impl<T: HttpTransport> ResponsesClient<T> {
                     crate::grok_request::build_with_search(&request, self.grok_x_search.as_ref())?;
                 // Inspect the admitted wire request, not a provider name or an
                 // unvalidated incoming status. Projection remains the policy owner.
-                if let Some(tools) = projected["tools"].as_array() {
-                    search_activity = match (
-                        tools.iter().any(|tool| tool["type"] == "web_search"),
-                        tools.iter().any(|tool| tool["type"] == "x_search"),
-                    ) {
-                        (false, false) => SearchActivityAdmission::Disabled,
-                        (true, false) => SearchActivityAdmission::Web,
-                        (false, true) => SearchActivityAdmission::X,
-                        (true, true) => SearchActivityAdmission::WebAndX,
-                    };
+                if let Some(tools) = projected["tools"].as_array()
+                    && tools.iter().any(|tool| tool["type"] == "web_search")
+                {
+                    search_activity = SearchActivityAdmission::Web;
                 }
                 EncodedJsonBody::encode(&projected)
             }
@@ -218,12 +212,12 @@ impl<T: HttpTransport> ResponsesClient<T> {
 }
 
 fn validate_grok_x_search(
-    dialect: ApiDialect,
+    _dialect: ApiDialect,
     options: Option<&GrokXSearchOptions>,
 ) -> Result<(), ApiError> {
-    if options.is_some() && dialect != ApiDialect::Grok {
+    if options.is_some() {
         return Err(ApiError::Stream(
-            "X Search options require the Grok Responses dialect".into(),
+            "Hosted X Search is retired; remove x_search configuration".into(),
         ));
     }
     Ok(())

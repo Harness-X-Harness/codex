@@ -226,3 +226,10 @@ fn skips_legacy_ghost_snapshots() {
             .is_none()
     );
 }
+
+#[test]
+fn retired_hosted_x_history_cannot_be_silently_migrated() {
+    let bytes = br#"{"timestamp":"2026-10-16T00:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"XSearch","id":"old-x"}}}"#;
+    let error = parse_legacy_rollout_line(bytes).unwrap_err();
+    assert!(error.contains("retired Hosted X Search"));
+}
