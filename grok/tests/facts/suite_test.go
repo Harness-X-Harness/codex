@@ -117,7 +117,7 @@ func configure() string {
 }
 
 func searchFact(scenario scenarios.Scenario) bool {
-	return strings.HasPrefix(scenario.Policy, "web") || strings.HasPrefix(scenario.Policy, "x")
+	return scenario.TestOwner() == "github.com/Harness-X-Harness/codex/grok/tests/facts:TestBackendSearchFacts/"+scenario.Name
 }
 
 func observe(t *testing.T, scenario scenarios.Scenario) {
