@@ -26,7 +26,7 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 )
 
-var commandPath string
+var commandPath, taggedPath string
 
 const sourceSHA = "0123456789abcdef0123456789abcdef01234567"
 const privateMarker = "PRIVATE_CLI_CANARY"
@@ -42,11 +42,16 @@ func TestMain(m *testing.M) {
 		name += ".exe"
 	}
 	commandPath = filepath.Join(dir, name)
-	build := exec.Command("go", "build", "-race", "-o", commandPath, ".")
-	if output, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "cannot build actual command: %v\n%s", err, output)
-		_ = os.RemoveAll(dir)
-		os.Exit(1)
+	taggedPath = filepath.Join(dir, "facts-tagged")
+	if runtime.GOOS == "windows" {
+		taggedPath += ".exe"
+	}
+	for _, args := range [][]string{{"build", "-race", "-o", commandPath, "."}, {"test", "-c", "-tags=facts", "-race", "-o", taggedPath, "../../tests/facts"}} {
+		if output, err := exec.Command("go", args...).CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "cannot build actual command/owned Facts tests: %v\n%s", err, output)
+			_ = os.RemoveAll(dir)
+			os.Exit(1)
+		}
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)

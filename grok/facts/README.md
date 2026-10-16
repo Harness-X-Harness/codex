@@ -28,9 +28,17 @@ replay. Bound response reads; malformed, oversized, partial or unreadable input
 does not become successful observation. Parse supported response representations
 by their semantic text/reasoning facts; unrelated fields are not outcome gates.
 
-Backend tests are excluded from the default build with the `facts` tag. An
-explicit `go -C grok test -tags=facts -count=1 ./facts` requires both
+Real backend tests live in `grok/tests/facts` and are excluded from the default
+build with the `facts` tag. This package retains credential-free HTTP contracts. An
+explicit `go -C grok test -tags=facts -count=1 ./tests/facts` requires both
 `GROK_FACTS=1` and `GROK_API_KEY`; missing either is failure, never a passing skip.
+The selected test entry point rejects empty/unknown selections, skips, and
+repetitions; `-count=1` is mandatory. `-grok-facts-suite=smoke` or
+`-grok-facts-scenario=NAME` selects catalog cases; Go `-run` selects subtests.
+Per-scenario deadlines are bounded by `-grok-facts-timeout` (at most 3 minutes),
+the transport timeout and Go test timeout. Results contain endpoint hashes, never
+endpoint URLs. An optional `-grok-facts-endpoint` accepts HTTPS or loopback HTTP
+for controlled tests; default endpoints remain the provider/shipped profile.
 The independent CLI retains its not-run result without opt-in. Required CI
 executes meaningful local-server deterministic tests without the backend tag.
 
@@ -91,3 +99,7 @@ and malformed evidence, failures, invocation counts and secret-safe metadata.
 Native Rust tests own provider/default precedence, strict dates, the five-domain
 bound and fail-closed product restrictions. These Facts do not substitute for
 those product tests or prove a Live Story.
+
+Direct backend `x`, `x-window` and `x-replay` remain provider-only Facts even
+when Hosted X is retired from Codex. They do not restore product support, prove
+the public App Server ABI, or convert an unsupported product Story to success.
