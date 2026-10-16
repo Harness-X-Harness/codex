@@ -25,7 +25,7 @@ come from the [Go catalog](../../internal/scenarios/catalog.go).
 | [Cold resume](grok-provider-bound-cold-restart-resume.md) | Same Rust suite: `grok_cold_restart_resume_keeps_provider_binding`, including missing-profile failure and restored-profile recovery | No duplicate Go internal-correctness suite and no inferred backend success |
 | [Local compaction](grok-provider-bound-compaction-continuation.md) | Same Rust suite: `grok_manual_compaction_keeps_provider_binding`; [core Grok compaction](../../../codex-rs/core/tests/suite/grok_compaction_tests.rs) owns dialect/replay | No duplicate Go compaction suite and no inferred backend success |
 | [Child collaboration](grok-provider-binding-lifecycle.md) | [`TestShippedStartupAndChildRejectIncompleteEvidence`](../../live/shipped_test.go); `TestShippedChildFixture`; [Rust public child listener](../../../codex-rs/app-server/tests/suite/v2/grok_child_public_listener.rs) and provider inheritance owners | `TestLive/shipped-child`: one setup plus one natural delegation; child lineage, fresh result and parent consumption remain material |
-| [Hosted Web/X search](#hosted-webx-search) | [`TestHostedSearch*`](../../live/search_test.go); `TestHostedSearchFixture`; [Rust request/replay](../../../codex-rs/core/tests/suite/grok_hosted_search_tests.rs), [public Web activity](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs), [public X activity](../../../codex-rs/app-server/tests/suite/v2/grok_x_search_activity.rs) | `TestLive/web`, `web-allowed`, `web-excluded` retain positive acceptance; product `x`, `x-window` are retired under #414; legacy rejection is diagnostic only. Direct SearchPolicy/SearchReplay Facts remain separate |
+| [Hosted Web/X search](#hosted-webx-search) | [`TestHostedSearch*`](../../live/search_test.go); `TestHostedSearchFixture`; [Rust request/replay](../../../codex-rs/core/tests/suite/grok_hosted_search_tests.rs), [public Web activity](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs), [retired-X ingress and absence of public fork events](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs) | `TestLive/web`, `web-allowed`, `web-excluded` retain positive acceptance; product `x`, `x-window` are retired under #414; legacy rejection is diagnostic only. Direct SearchPolicy/SearchReplay Facts remain separate |
 
 ## Hosted Web/X search
 
@@ -44,8 +44,12 @@ X configuration and unexpected X ingress, removes `xSearch` public items and the
 fork-only `item/searchActivity` method, and rejects old X history explicitly rather
 than silently dropping it or pretending it is Web/prose/local-tool execution.
 `TestHostedSearchFixture` retains Web positives plus retired-X negative controls.
-The Rust public-stream and history tests own emitted-ABI absence and legacy record
-handling; generated schema/consumer consistency is independently required.
+The [Rust public stream tests](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs)
+own emitted-ABI absence. [Rollout forward/reverse readers](../../../codex-rs/rollout/src/recorder_tests.rs),
+[cached/paginated history](../../../codex-rs/thread-store/src/local/thread_history/read_tests.rs)
+and [request-build history](../../../codex-rs/core/src/client_retired_history_tests.rs)
+own explicit legacy-X rejection without synthetic local pairing. Generated
+schema/consumer consistency is independently required.
 
 The earlier public search-specific activity promise is explicitly narrowed: Web
 uses official item started/completed notifications; early `item/searchActivity`
