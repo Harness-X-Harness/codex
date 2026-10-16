@@ -40,19 +40,23 @@ CI tests the public stdio boundary deterministically and separately activates
 config/request/stream composition, not real backend Live. Actual execution and
 invocation integration remain #331/#339.
 
-## Fixed-input SDK migration
+## SDK migration and historical fixed input
 
-The [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
-fixes product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2` and the owner-approved SDK revision
-`8ade447507bc3d08650b830ee6306dd27bc17f23` (`v0.2.1-0.20261014071218-8ade447507bc`),
-which supersedes `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`. Direct facades no longer
-arm an unowned attachment fence. The module uses Go 1.26.8. The verified Linux musl x64 product executable from canonical
-run `38171472745`, attempt 1, artifact `11714608891` has SHA-256
-`26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
-Use [explicit verified package selection](../package/ARTIFACTS.md); verify
-expiration and exact subject on retrieval. `runtime_sha256` identifies the
-executable, separately from the artifact ZIP or package archive hash. The
-product source remains fixed while the declared harness SHA evolves.
+The original [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
+used historical product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2`.
+Its Linux musl reference was run `38171472745`, attempt 1, artifact `11714608891`,
+executable SHA-256 `26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
+Those identifiers are historical evidence, not permanent executable eligibility
+or authority for this changed product. #401/#233 now require applicable checks
+on the actual changed branch HEAD. Runtime and harness revisions remain explicit
+and distinct; `runtime_sha256` identifies executable bytes separately from ZIP
+and archive hashes. See [verified package selection](../package/ARTIFACTS.md).
+
+The SDK remains pinned to `8ade447507bc3d08650b830ee6306dd27bc17f23`
+(`v0.2.1-0.20261014071218-8ade447507bc`) on Go 1.26.8, superseding the prior
+`9769ba362a5e946c17a6eb78d8e2155e19bb4f28` dependency. Direct facades no longer
+arm an unowned attachment fence. Product ABI retirement does not change this
+SDK pin, strict stock schema or callbacks.
 
 Basic (#383), the formal/exploratory reasoning controls (#384), the four
 structured-edit entries (#385), image generation/edit (#386), the shipped
@@ -69,7 +73,7 @@ replaces old request-abort controls with rejection/non-execution coverage, and
 retires exact legacy error/stage/code expectations. SDK defect
 [llm-go #422](https://github.com/ronhuafeng/llm-go/issues/422) remains separately
 tracked and nonblocking under #383's explicit contract decision. Native fixtures
-and ordinary CI builds do not establish real backend Live or frozen-byte proof.
+and ordinary CI builds do not establish real backend Live.
 The typed stream attachment, independent identity checks and inline-response
 snapshot also account for separately tracked SDK [#423](https://github.com/ronhuafeng/llm-go/issues/423),
 [#424](https://github.com/ronhuafeng/llm-go/issues/424) and [#425](https://github.com/ronhuafeng/llm-go/issues/425).
@@ -114,7 +118,7 @@ history with a token-free user input on the same thread. It checks exactly three
 HTTP requests and excludes plaintext reasoning from replay. The fixture supplies
 the answers, so this proves product/SDK composition and cannot establish real
 backend recall or Story PROVEN. CI uses its freshly built product; explicit
-frozen-package runs separately verify the pinned executable bytes.
+package runs separately verify their selected executable bytes and provenance.
 
 #384's scripted-test review inventory retains all 118 original modes for both
 models and adds five focused identity controls. The semantic map is:
