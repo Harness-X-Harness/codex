@@ -18,7 +18,7 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 			EnableRawResponseItemExtension: true, Handler: observer.notification,
 		},
 	}
-	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+	evidence, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		if options.shippedProfile {
 			if err := requireSDKShippedCatalog(ctx, client, evidence); err != nil {
 				return err
@@ -113,6 +113,17 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 		observer.mu.Unlock()
 		return nil
 	})
+	return settleSDKHistoryEvidence(evidence, err), err
+}
+
+// Evidence is copied before the SDK cleanup attempt. A late callback or cleanup
+// failure can still reject that run; do not leave its whole-scenario success
+// stage in the returned value. Previously observed terminal/recall facts remain.
+func settleSDKHistoryEvidence(evidence Evidence, cause error) Evidence {
+	if cause != nil && evidence.Stage == "history_recalled" {
+		evidence.Stage = "continuation_completed"
+	}
+	return evidence
 }
 
 func observeSDKHistoryTurn[R any](ctx context.Context, observer *sdkHistoryObserver, stream *codexsdk.Stream[R], runResult func(R) codexsdk.ThreadRunResult) error {

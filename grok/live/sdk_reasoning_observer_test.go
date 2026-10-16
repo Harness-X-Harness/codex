@@ -216,3 +216,40 @@ func TestSDKHistoryFinishedTurnIgnoresUnrelatedInvalidItem(t *testing.T) {
 		})
 	}
 }
+
+func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) {
+	observer, token := historyObserverFixture(t)
+	observer.probe.previousID = "private_previous"
+	observer.observations = Evidence{FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 64, Turns: 2}
+	if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{
+		ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
+			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: token}),
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	observer.finishTurn()
+	observer.observations.Stage = "history_recalled"
+	copied := observer.observations
+	// Force the exact schedule: inline proof and returned evidence copy precede
+	// a semantically invalid callback admitted before SDK cleanup joins it.
+	late := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: token}))
+	if err := observer.typedNotification(context.Background(), late); DescribeFailure(err).Code != "assistant_identity_missing" {
+		t.Fatal("late invalid item was not rejected")
+	}
+	want := copied
+	want.Stage = "continuation_completed"
+	got := settleSDKHistoryEvidence(copied, observer.failure(nil))
+	if !reflect.DeepEqual(got, want) || !got.FirstCompleted || !got.FirstRecall || !got.Completed || !got.Recalled {
+		t.Fatal("late rejection retained a success stage or erased prior facts")
+	}
+	if got := settleSDKHistoryEvidence(copied, nil); !reflect.DeepEqual(got, copied) {
+		t.Fatal("successful joined observation lost its success stage")
+	}
+	pending := copied
+	pending.CleanupPending = true
+	want.CleanupPending = true
+	if got := settleSDKHistoryEvidence(pending, context.DeadlineExceeded); !reflect.DeepEqual(got, want) {
+		t.Fatal("unjoined cleanup failure retained the whole-scenario success stage")
+	}
+}
