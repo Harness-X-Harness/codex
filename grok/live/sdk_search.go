@@ -10,7 +10,8 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-// sdkHostedSearch keeps the hosted Web/X oracle and replaces only its transport.
+// sdkHostedSearch implements supported Web observation. Legacy X inputs are
+// reachable only through credential-free test helpers, never product selection.
 func sdkHostedSearch(ctx context.Context, options Options, scenario string, config map[string]any, prompt string) (SearchEvidence, error) {
 	result := SearchEvidence{Scenario: scenario}
 	transport := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}

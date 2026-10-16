@@ -46,7 +46,8 @@ func acceptedXSearchRejection(e SearchEvidence, err error) bool {
 }
 
 // AcceptedXSearchRejection recognizes only the bounded expected-rejection
-// contract of #408. It does not establish positive hosted-search completion.
+// diagnostic of #408. It cannot satisfy any product Live or Integration Story;
+// the public HostedSearch entry point rejects retired X before process launch.
 func AcceptedXSearchRejection(e SearchEvidence, err error) bool {
 	return e.ExpectedUnsupported && acceptedXSearchRejection(e, err)
 }
