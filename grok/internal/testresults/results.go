@@ -34,17 +34,17 @@ type Summary struct {
 // Descendant passes cannot replace a missing owner, and a parent cannot replace
 // its children. This is independent of the paid Live scenario registry.
 func IntegrationTests() []Test {
-	const pkg = "github.com/Harness-X-Harness/codex/grok/live"
+	const pkg = "github.com/Harness-X-Harness/codex/grok/tests/integration"
 	return []Test{
-		{pkg, "TestIntegration/BasicFixture"},
-		{pkg, "TestIntegration/StructuredEditFixture"},
-		{pkg, "TestIntegration/ReasoningHistoryFixture"},
-		{pkg, "TestIntegration/HostedSearchFixture"},
-		{pkg, "TestIntegration/ImagePinnedFixture"},
-		{pkg, "TestIntegration/ShippedCatalog"},
-		{pkg, "TestIntegrationInternal/ShippedThreadSource"},
-		{pkg, "TestIntegrationInternal/ShippedChildFixture"},
-		{pkg, "TestIntegrationInternal/FirstRequestShape"},
+		{pkg, "TestBasicFixture"},
+		{pkg, "TestStructuredEditFixture"},
+		{pkg, "TestReasoningHistoryFixture"},
+		{pkg, "TestHostedSearchFixture"},
+		{pkg, "TestImagePinnedFixture"},
+		{pkg, "TestShippedCatalog"},
+		{pkg, "TestShippedThreadSource"},
+		{pkg, "TestShippedChildFixture"},
+		{pkg, "TestFirstRequestShape"},
 	}
 }
 

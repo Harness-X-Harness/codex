@@ -76,34 +76,46 @@ func TestCheckLifecycle(t *testing.T) {
 }
 
 func integrationTrace(omit string) string {
-	const pkg = "github.com/Harness-X-Harness/codex/grok/live"
+	owners := IntegrationTests()
+	pkg := owners[0].Package
 	out := encode(event{Action: "start", Package: pkg})
-	for _, parent := range []string{"TestIntegration", "TestIntegrationInternal"} {
-		out += encode(event{Action: "run", Package: pkg, Test: parent})
-		for _, test := range IntegrationTests() {
-			if strings.HasPrefix(test.Name, parent+"/") && test.Name != omit {
-				out += encode(event{Action: "run", Package: pkg, Test: test.Name}, event{Action: "pass", Package: pkg, Test: test.Name})
-			}
+	for _, test := range owners {
+		if test.Name != omit {
+			out += encode(event{Action: "run", Package: pkg, Test: test.Name}, event{Action: "pass", Package: pkg, Test: test.Name})
 		}
-		out += encode(event{Action: "pass", Package: pkg, Test: parent})
 	}
 	return out + encode(event{Action: "pass", Package: pkg})
 }
 
 func TestIntegrationInventory(t *testing.T) {
-	if summary, err := Check(strings.NewReader(integrationTrace("")), IntegrationTests()); err != nil || summary.Tests != 11 {
+	owners := IntegrationTests()
+	complete := integrationTrace("")
+	if summary, err := Check(strings.NewReader(complete), owners); err != nil || summary.Tests != len(owners) {
 		t.Fatalf("complete integration failed: %+v; %v", summary, err)
 	}
-	for _, owner := range IntegrationTests() {
+	for _, owner := range owners {
 		t.Run("missing_"+owner.Name, func(t *testing.T) {
-			if _, err := Check(strings.NewReader(integrationTrace(owner.Name)), IntegrationTests()); err == nil || !strings.Contains(err.Error(), owner.Name) {
+			if _, err := Check(strings.NewReader(integrationTrace(owner.Name)), owners); err == nil || !strings.Contains(err.Error(), owner.Name) {
 				t.Fatalf("missing owner accepted: %v", err)
 			}
 		})
 	}
-	const pkg = "github.com/Harness-X-Harness/codex/grok/live"
-	if _, err := Check(strings.NewReader(trace(pkg, "TestIntegration")), IntegrationTests()); err == nil {
-		t.Fatal("parent-only pass accepted")
+	pkg := owners[0].Package
+	first := owners[0].Name
+	for name, input := range map[string]string{
+		"old_package":      strings.ReplaceAll(complete, pkg, "github.com/Harness-X-Harness/codex/grok/live"),
+		"parent_only":      trace(pkg, "TestIntegration"),
+		"descendant_only":  strings.ReplaceAll(complete, first, first+"/child"),
+		"skipped_owner":    strings.Replace(complete, `"Action":"pass","Package":"`+pkg+`","Test":"`+first+`"`, `"Action":"skip","Package":"`+pkg+`","Test":"`+first+`"`, 1),
+		"failed_owner":     strings.Replace(complete, `"Action":"pass","Package":"`+pkg+`","Test":"`+first+`"`, `"Action":"fail","Package":"`+pkg+`","Test":"`+first+`"`, 1),
+		"duplicate_owner":  strings.Replace(complete, encode(event{Action: "pass", Package: pkg, Test: first}), strings.Repeat(encode(event{Action: "pass", Package: pkg, Test: first}), 2), 1),
+		"incomplete_owner": strings.Replace(complete, encode(event{Action: "pass", Package: pkg, Test: first}), "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Check(strings.NewReader(input), owners); err == nil {
+				t.Fatal("invalid Integration owner evidence accepted")
+			}
+		})
 	}
 }
 

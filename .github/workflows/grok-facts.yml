@@ -6,6 +6,7 @@ on:
     branches: ["grok/rust-v*"]
     paths:
       - "grok/facts/**"
+      - "grok/tests/facts/**"
       - "grok/cmd/grok-facts/**"
       - "grok/internal/providerfixture/**"
       - "grok/internal/scenarios/**"
@@ -96,18 +97,24 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
-      - name: Build the exact Facts command
+      - name: Execute the selected Go-native backend observation once
         working-directory: grok
-        run: go build -o "$RUNNER_TEMP/grok-facts" ./cmd/grok-facts
-      - name: Execute the selected observation once
         env:
           GROK_FACTS: "1"
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
           SCENARIO: ${{ matrix.scenario }}
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/grok-facts" --scenario "$SCENARIO" --source-sha "$GITHUB_SHA" --timeout 2m \
-            > "$RUNNER_TEMP/facts-evidence/result.json"
+          owner="$(go run ./cmd/grok-scenarios --family facts --suite diagnostic \
+            --scenario "$SCENARIO" --test-owners | python3 -c 'import json,sys; owners=json.load(sys.stdin); assert len(owners)==1; print(owners[0])')"
+          status=0
+          go test -tags=facts -count=1 -timeout=8m -json ./tests/facts -args \
+            -grok-facts-suite diagnostic -grok-facts-scenario "$SCENARIO" \
+            > "$RUNNER_TEMP/facts-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/facts-evidence/tests.json" \
+            --require "$owner" > "$RUNNER_TEMP/facts-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/facts-evidence/summary.json"
+          exit "$status"
       - name: Retain bounded observation evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

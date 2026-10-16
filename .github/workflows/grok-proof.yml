@@ -2,6 +2,12 @@ name: grok-proof
 
 on:
   workflow_call:
+    inputs:
+      offline_go:
+        description: Run offline Go here; false requires the caller's same-subject Go aggregate.
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -16,41 +22,26 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Verify the PR or canonical execution subject
+      - name: Verify the event-owned execution subject
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        shell: bash
+          PUSH_AFTER: ${{ github.event.after }}
+          OFFLINE_GO_INPUT: ${{ inputs.offline_go }}
         run: |
-          checkout_sha="$(git rev-parse HEAD)"
-          printf '%s\n' \
-            "repository=$GITHUB_REPOSITORY" \
-            "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
-            "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
-            "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
-            "checkout=$checkout_sha" \
-            "workflow_ref=$GITHUB_WORKFLOW_REF" \
-            "workflow_sha=$GITHUB_WORKFLOW_SHA"
-          test "$checkout_sha" = "$GITHUB_SHA"
-          case "$GITHUB_EVENT_NAME" in
-            pull_request)
-              test "$GITHUB_REF" = "refs/pull/$PR_NUMBER/merge"
-              test "$(git rev-parse HEAD^1)" = "$PR_BASE_SHA"
-              test "$(git rev-parse HEAD^2)" = "$PR_HEAD_SHA"
-              ;;
-            push)
-              case "$GITHUB_REF" in
-                refs/heads/grok/rust-v*) ;;
-                *) echo "Unexpected canonical ref: $GITHUB_REF" >&2; exit 1 ;;
-              esac
-              ;;
-            *) echo "Unexpected proof event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
-          esac
-          # The checked-out proof definition must match the caller's workflow revision.
-          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- \
-            .github/workflows/grok.yml .github/workflows/grok-proof.yml .github/workflows/grok-go.yml \
-            .github/actions/setup-ci/action.yml .github/actions/setup-bazel-ci/action.yml
+          set -euo pipefail
+          if [[ "$OFFLINE_GO_INPUT" != true ]]; then
+            test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/grok-ci.yml@$GITHUB_REF"
+          fi
+          bash .github/scripts/check-grok-subject.sh | tee "$RUNNER_TEMP/grok-subject.json"
+      - name: Retain the source and workflow identities
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: grok-subject-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-subject.json
+          if-no-files-found: error
+          retention-days: 7
 
   locks:
     name: Native Provider/API proof
@@ -211,6 +202,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Bind every native build to the checked-out source
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$GITHUB_SHA"
+          printf 'STABLE_GIT_COMMIT=%s\n' "$source_sha" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-ci
         with:
           configure-linux-user-namespaces: "false"
@@ -371,7 +368,7 @@ jobs:
           uv run --project ../sdk/python --frozen --only-group test python ../sdk/python/scripts/update_sdk_artifacts.py generate-types --schema-dir app-server-protocol/schema/json
           export CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL=1
           just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail --run-ignored only -E 'test(schema_fixtures_tests::write_schema_fixtures_from_env)'
-          # Owned representations must already be committed, on PR and canonical push.
+          # Owned representations must already be committed on the exact execution subject.
           git diff --exit-code -- core/config.schema.json app-server-protocol/schema ../sdk/python/src/openai_codex/generated ../sdk/python/src/openai_codex/api.py
           test -z "$(git ls-files --others --exclude-standard -- app-server-protocol/schema ../sdk/python/src/openai_codex/generated ../sdk/python/src/openai_codex/api.py)"
       - name: Normalize filesystem API formatting
@@ -524,7 +521,11 @@ jobs:
           -E 'test(suite::turn_input_completion::)'
       - name: Build the exact CLI for native integrations and Basic fixture
         working-directory: codex-rs
-        run: cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
+        run: |
+          set -euo pipefail
+          export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+          test "$STABLE_GIT_COMMIT" = "$GITHUB_SHA"
+          cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
       - name: Bind exact editor composition binaries
         working-directory: codex-rs
         run: |
@@ -541,6 +542,7 @@ jobs:
           } | tee "$RUNNER_TEMP/c4b-composition-binaries.txt"
           printf '%s\n' \
             "CODEX_C4B_REQUIRED=1" \
+            "CODEX_C4B_TEST_CLI_SOURCE_SHA=$(git rev-parse HEAD)" \
             "CODEX_C4B_TEST_CLI=$CARGO_TARGET_DIR/ci-test/codex" \
             "CODEX_C4B_TEST_CLI_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex" | cut -d ' ' -f 1)" \
             "CODEX_TEST_LINUX_SANDBOX_EXE=$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" \
@@ -584,34 +586,33 @@ jobs:
           just test -p core_test_support --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(responses::grok_tests::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::hosted_search::)'
           just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(schema_fixtures_tests::)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol::v2::tests::thread_item_rejects_unknown_wire_tags)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol::v2::tests::server_notification_rejects_unregistered_methods)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol::v2::tests::web_search_item_notification_roundtrips_opaque_results)'
 
       - name: Test public hosted Web activity timing and cleanup
         working-directory: codex-rs
         run: |
-          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::grok_search_activity::)'
-          just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(notification_media::tests::search_activity_)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(grok_public_)'
+          just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(notification_media::tests::hosted_web_preserves_identity_and_result_when_media_is_omitted)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(turn_timing::tests::search_activity_)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::search_activity::tests::)'
           just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity::tests::)'
           just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(policy::search_activity_tests::)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_search_activity_)'
           just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol_event::tests::transient_search_activity_)'
-          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(search_activity)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(chatwidget::tests::web_search_tests::) | test(history_cell::search::tests::)'
           just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(chatwidget::tests::reasoning_status_tests::)'
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::web_search::)'
 
-      - name: Test hosted X activity and mixed Web/X composition
+      - name: Test retired X rejection and supported Web history composition
         working-directory: codex-rs
         run: |
-          just test -p codex-api --test sse_end_to_end --locked --cargo-profile ci-test --no-tests=fail -E 'test(grok_x_activity_)'
-          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(grok_public_x_activity_)'
-          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_x_search_activity_) | test(hosted_search_reusing_local_call_id_) | test(mixed_hosted_search_survives_)'
-          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(search_activity_mixed_web_x_) | test(search_activity_x_)'
-          just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity_x_provenance_)'
-          just test -p codex-analytics --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_x_is_not_counted_as_web_search)'
-          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity_x_canonical_)'
-          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(dynamic_tools::markers::tests::hosted_x_marker_)'
-          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(dynamic_tools::tests::hosted_x_summary_)'
+          just test -p codex-api --test sse_end_to_end --locked --cargo-profile ci-test --no-tests=fail -E 'test(retired_hosted_x_)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_web_search_survives_follow_up_local_dispatch_and_cold_resume) | test(unsupported_hosted_completion_fails_before_local_dispatch)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(client::tests::retired_history_tests::retired_hosted_x_cannot_become_a_synthetic_local_pair_during_request_building)'
+          just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(retired_hosted)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(retired_hosted)'
           just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(dynamic_tools::tests::activity_metadata_is_retained_without_including_outputs)'
           just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(dynamic_tools::tests::wait_threads_preserves_snapshots_and_rejects_self_wait)'
           INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(app::agent_status_feed::tests::)'
@@ -715,19 +716,37 @@ jobs:
         env:
           GROK_FACTS: "0"
           GROK_LIVE: "0"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           export GROK_CODEX_BIN="$CARGO_TARGET_DIR/ci-test/codex"
           test -x "$GROK_CODEX_BIN"
           mkdir "$RUNNER_TEMP/grok-integration-evidence"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$CODEX_C4B_TEST_CLI_SOURCE_SHA" = "$GITHUB_SHA"
+          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256"
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          fields = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
+                    "GITHUB_REF", "GITHUB_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
+                    "PR_HEAD_SHA", "PR_BASE_SHA", "CODEX_C4B_TEST_CLI_SOURCE_SHA", "CODEX_C4B_TEST_CLI_SHA256")
+          subject = {key: os.environ[key] for key in fields}
+          subject["subject_kind"] = "pr_test_merge" if os.environ["GITHUB_EVENT_NAME"] == "pull_request" else "branch_head"
+          subject["binary_target"] = "x86_64-unknown-linux-gnu"
+          subject["binary_profile"] = "ci-test"
+          (Path(os.environ["RUNNER_TEMP"]) / "grok-integration-evidence/subject.json").write_text(json.dumps(subject, sort_keys=True) + "\n")
+          PYCODE
           status=0
           go test -race -tags=integration -count=1 -timeout=20m -json \
-            -run '^TestIntegration' ./live \
+            ./tests/integration \
             > "$RUNNER_TEMP/grok-integration-evidence/tests.json" || status=$?
           go run ./cmd/grok-test-results --integration \
             --input "$RUNNER_TEMP/grok-integration-evidence/tests.json" \
             > "$RUNNER_TEMP/grok-integration-evidence/summary.json" || status=1
           cat "$RUNNER_TEMP/grok-integration-evidence/summary.json"
+          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256" || status=1
           exit "$status"
       - name: Retain Go integration results even on failure
         if: ${{ always() }}
@@ -861,6 +880,7 @@ jobs:
   go:
     name: Deterministic Go contracts
     needs: subject
+    if: ${{ inputs.offline_go }}
     uses: ./.github/workflows/grok-go.yml
 
   complete:
@@ -875,11 +895,18 @@ jobs:
           LOCKS_RESULT: ${{ needs.locks.result }}
           RUNTIME_RESULT: ${{ needs.runtime.result }}
           GO_RESULT: ${{ needs.go.result }}
+          OFFLINE_GO: ${{ inputs.offline_go }}
         run: |
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT" "$GO_RESULT"; do
+          set -euo pipefail
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1
             fi
           done
 
+          if [[ "$OFFLINE_GO" == true ]]; then
+            test "$GO_RESULT" = success
+          else
+            test "$GO_RESULT" = skipped
+          fi

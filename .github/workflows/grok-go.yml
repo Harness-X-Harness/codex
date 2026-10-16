@@ -49,6 +49,15 @@ jobs:
       - name: Vet the same Go module
         working-directory: grok
         run: go vet ./...
+      - name: Compile the opt-in physical test packages without executing them
+        working-directory: grok
+        run: |
+          set -euo pipefail
+          for tier in integration facts live; do
+            go test -c -tags="$tier" -o "$RUNNER_TEMP/grok-$tier.test" "./tests/$tier"
+          done
+      - name: Test execution-subject and native applicability controls offline
+        run: bash .github/scripts/test-grok-ci-subject.sh
       - name: Test package staging and launcher with synthetic inputs
         run: |
           python3 grok/package/test_stage.py -v
