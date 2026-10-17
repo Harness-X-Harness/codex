@@ -1,5 +1,6 @@
 //! Product retirement controls. These are failures, never positive Hosted X stories.
 use super::*;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn retired_hosted_x_fails_before_activity_or_canonical_delivery() -> Result<()> {
