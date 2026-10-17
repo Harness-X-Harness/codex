@@ -168,9 +168,7 @@ fn completed_hosted_history_preserves_order_ids_and_payload_without_wire_status(
     ]);
     let request = request(json!([]), input.clone());
     let mut expected = input.clone();
-    for index in [0] {
-        expected[index].as_object_mut().unwrap().remove("status");
-    }
+    expected[0].as_object_mut().unwrap().remove("status");
     assert_eq!(build(&request).unwrap()["input"], expected);
     assert_eq!(serde_json::to_value(&request.input).unwrap(), input);
 }

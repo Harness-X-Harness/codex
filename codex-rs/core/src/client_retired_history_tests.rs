@@ -1,7 +1,9 @@
 use super::*;
 use crate::context_manager::ContextManager;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::openai_models::InputModality;
+use pretty_assertions::assert_eq;
 
 #[test]
 fn retired_hosted_x_cannot_become_a_synthetic_local_pair_during_request_building()
@@ -78,8 +80,12 @@ fn retired_hosted_x_cannot_become_a_synthetic_local_pair_during_request_building
                     "genuine saved local result"
                 );
             } else {
-                assert!(matches!(result, Err(CodexErr::InvalidRequest(message))
-                    if message == "unsupported history: retired Hosted X Search cannot be replayed"));
+                let error = result.expect_err("retired Hosted X Search history must be rejected");
+                assert!(matches!(
+                    error.details(),
+                    CodexErrorDetails::InvalidRequest(message)
+                        if message == "unsupported history: retired Hosted X Search cannot be replayed"
+                ));
             }
             assert_eq!(history.raw_items().cloned().collect::<Vec<_>>(), saved);
             assert_eq!(prompt.input, saved);
