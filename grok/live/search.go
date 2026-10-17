@@ -71,17 +71,20 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 	// Keep the previous settled turn's credited identities through the single
 	// continuation. A reused item ID in a new turn is a separate occurrence.
 	p.calls[p.turnID] = map[string]string{}
-	if started.Status != "inProgress" {
-		if err := p.complete(started); err != nil {
-			return err
-		}
-	}
+	// A start response is only a snapshot. Admit completion only through a
+	// matching turn/completed notification, including for a terminal-looking start.
 	for !p.terminal {
 		message, err := p.server.next()
 		if err != nil {
 			return err
 		}
 		if err := p.notification(message); err != nil {
+			return err
+		}
+	}
+	// A snapshot can contradict the observed completion, but cannot replace it.
+	if started.Status != "inProgress" {
+		if err := validateSearchTerminal(started); err != nil {
 			return err
 		}
 	}
@@ -122,7 +125,10 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 		}
 	}
 	current := turns[len(turns)-1]
-	if err := p.complete(current); err != nil {
+	if current.ID != p.turnID {
+		return errors.New("live: search turn identity changed")
+	}
+	if err := validateSearchTerminal(current); err != nil {
 		return err
 	}
 	p.evidence.ReplyBytes = 0

@@ -77,16 +77,7 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 			return probe.revalidate(latest.Run.Notifications)
 		}
 
-		// A notification terminal must still pass the observer's thread/turn
-		// correlation; the SDK snapshot alone cannot supply that business proof.
-		firstTurn := started.Run.Turn
-		for _, notification := range started.Run.Notifications {
-			if _, terminal := notification.AsTurnCompleted(); terminal {
-				firstTurn.Status, firstTurn.Items = protocolv2.TurnStatusInProgress, nil
-				break
-			}
-		}
-		if err := probe.observeStarted(firstTurn); err != nil {
+		if err := probe.observeStarted(started.Run.Turn); err != nil {
 			return err
 		}
 		evidence.FirstCompleted, evidence.FirstReplyBytes = true, evidence.ReplyBytes

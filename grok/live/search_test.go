@@ -22,6 +22,11 @@ func fakeSearchServer() {
 	_ = json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script)
 	parts := strings.Split(script.Mode, ":")
 	mode, scenario := parts[1], parts[2]
+	var snapshotPhase, snapshotTerminal string
+	if strings.HasPrefix(mode, "snapshot_") {
+		parts := strings.SplitN(strings.TrimPrefix(mode, "snapshot_"), "_", 2)
+		snapshotPhase, snapshotTerminal = parts[0], parts[1]
+	}
 	trace, err := os.OpenFile(script.Trace, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return
@@ -82,6 +87,11 @@ func fakeSearchServer() {
 				status = "failed"
 			}
 			terminal := map[string]any{"id": id, "status": status, "items": []any{item}}
+			snapshot := snapshotPhase == "first" && index == 1 || snapshotPhase == "followup" && index == 2
+			if snapshot && (snapshotTerminal == "failed" || snapshotTerminal == "interrupted") {
+				terminal["status"] = snapshotTerminal
+				terminal["error"] = map[string]any{"message": "PRIVATE_TERMINAL_FAILURE", "codexErrorInfo": "other"}
+			}
 			if mode == "failed_initial" {
 				terminal["status"], terminal["items"] = "failed", []any{}
 				terminal["error"] = map[string]any{"message": "PRIVATE_RETIRED_CAPABILITY", "codexErrorInfo": "other"}
@@ -90,7 +100,18 @@ func fakeSearchServer() {
 				terminal["items"] = []any{}
 			}
 			turns = append(turns, terminal)
-			_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]any{"id": id, "status": "inProgress", "items": []any{}}}})
+			started := map[string]any{"id": id, "status": "inProgress", "items": []any{}}
+			if snapshot {
+				started["status"], started["items"] = "completed", []any{item}
+				switch snapshotTerminal {
+				case "failed_start", "interrupted_start", "error_start":
+					if snapshotTerminal != "error_start" {
+						started["status"] = strings.TrimSuffix(snapshotTerminal, "_start")
+					}
+					started["error"] = map[string]any{"message": "PRIVATE_START_FAILURE", "codexErrorInfo": "other"}
+				}
+			}
+			_ = output.Encode(map[string]any{"id": request.ID, "result": map[string]any{"turn": started}})
 			notify := func(method string, raw any) {
 				thread, turnID := "thread", id
 				if mode == "wrong_thread" {
@@ -228,7 +249,20 @@ func fakeSearchServer() {
 			if mode == "no_terminal" {
 				return
 			}
-			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": terminal}})
+			threadID, completed := "thread", terminal
+			if snapshot {
+				switch snapshotTerminal {
+				case "missing":
+					// Keep serving readbacks: completed history cannot replace the
+					// omitted notification, even though the snapshot looks terminal.
+					continue
+				case "wrong_thread":
+					threadID = "other"
+				case "wrong_turn":
+					completed = map[string]any{"id": "other", "status": "completed", "items": []any{item}}
+				}
+			}
+			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
 			continue
 		case "thread/read":
 			id := "thread"
@@ -290,6 +324,68 @@ func TestHostedSearchRetainsEachScenarioAndSingleContinuation(t *testing.T) {
 				encoded, _ := json.Marshal(got)
 				if strings.Contains(string(encoded), "PRIVATE_") {
 					t.Fatal("private evidence leaked")
+				}
+			})
+		}
+	}
+}
+
+func TestHostedSearchRequiresCorrelatedTerminalAfterStartSnapshot(t *testing.T) {
+	for _, phase := range []string{"first", "followup"} {
+		terminals := []string{"missing", "wrong_thread", "wrong_turn", "completed", "failed", "interrupted"}
+		if phase == "followup" {
+			terminals = append(terminals, "failed_start", "interrupted_start", "error_start")
+		}
+		for _, terminal := range terminals {
+			t.Run(phase+"/"+terminal, func(t *testing.T) {
+				t.Parallel()
+				options := fixtureOptions(t, "search:snapshot_"+phase+"_"+terminal+":web")
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				got, err := live.HostedSearch(ctx, options, "web")
+				completed := terminal == "completed"
+				wantTurns, wantSettled := 1, 0
+				wantTrace := "initialize\ninitialized\nthread/start\nturn/start\n"
+				if phase == "followup" || completed {
+					wantTurns, wantSettled = 2, 1
+					wantTrace += "thread/read\nturn/start\n"
+				}
+				if completed {
+					wantSettled = 2
+					wantTrace += "thread/read\n"
+				}
+				if (err == nil) != completed || got.Completed != completed || got.FollowupCompleted != completed || got.FirstCompleted != (wantSettled > 0) || got.SettledTurns != wantSettled || got.Turns != wantTurns || got.CanonicalCalls != 1 || got.ExpectedUnsupported || !got.Bound || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
+					t.Fatalf("snapshot replaced correlated terminal or lost evidence: %+v, %v", got, err)
+				}
+				switch terminal {
+				case "missing", "wrong_thread", "wrong_turn":
+					if ctx.Err() != context.DeadlineExceeded {
+						t.Fatalf("uncorrelated terminal ended the observation: %v", err)
+					}
+				case "failed", "interrupted":
+					want := live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: terminal, ErrorKind: "other"}
+					if live.DescribeFailure(err) != want {
+						t.Fatalf("terminal diagnostic = %+v, want %+v", live.DescribeFailure(err), want)
+					}
+				case "failed_start", "interrupted_start", "error_start":
+					status := strings.TrimSuffix(terminal, "_start")
+					if terminal == "error_start" {
+						status = "completed"
+					}
+					want := live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: status, ErrorKind: "other"}
+					if live.DescribeFailure(err) != want {
+						t.Fatalf("contradictory start snapshot accepted: %+v, %v", got, err)
+					}
+				}
+				var script struct{ Trace string }
+				_ = json.Unmarshal([]byte(options.APIKey), &script)
+				trace, readErr := os.ReadFile(script.Trace)
+				if readErr != nil || string(trace) != wantTrace {
+					t.Fatalf("unearned readback, continuation, or resubmission: %q, %v", trace, readErr)
+				}
+				encoded, _ := json.Marshal(got)
+				if strings.Contains(string(encoded), "PRIVATE_") || err != nil && strings.Contains(err.Error(), "PRIVATE_") {
+					t.Fatal("private terminal data leaked")
 				}
 			})
 		}
