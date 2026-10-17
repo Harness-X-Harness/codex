@@ -1855,10 +1855,10 @@ async fn retired_hosted_x_history_fails_closed_in_forward_and_reverse_readers() 
             .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
         let mut reverse = crate::ReverseJsonlScanner::new(std::io::Cursor::new(&bytes))?;
-        assert_eq!(
-            reverse.scan_next_rollout_line().unwrap_err().kind(),
-            std::io::ErrorKind::Unsupported
-        );
+        let Err(error) = reverse.scan_next_rollout_line() else {
+            panic!("retired Hosted X Search history must be rejected");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
         assert_eq!(fs::read(&path)?, bytes);
     }
     // Rejection of one thread does not change the reader's handling of another.
