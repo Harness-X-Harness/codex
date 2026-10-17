@@ -42,10 +42,6 @@ pub(super) fn tool_marker(item: &ThreadItem, turn_id: &str) -> Option<Value> {
             "id": item.id, "turnId": turn_id, "type": "webSearch",
             "name": "webSearch", "status": null
         })),
-        ThreadItem::XSearch(item) => Some(json!({
-            "id": item.id, "turnId": turn_id, "type": "xSearch",
-            "name": item.name, "status": null
-        })),
         ThreadItem::UserMessage { .. }
         | ThreadItem::FunctionCallOutput { .. }
         | ThreadItem::HookPrompt { .. }

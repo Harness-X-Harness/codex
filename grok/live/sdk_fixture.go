@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
 	"github.com/ronhuafeng/llm-go/codexsdk"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
@@ -22,7 +22,7 @@ type sdkFixtureHandlers struct {
 	queue    int
 	failures <-chan error
 	// afterClose runs after CloseContext joins callbacks and reaps the child,
-	// while the isolated workspace still exists. Nil for Basic and reasoning.
+	// while the isolated workspace still exists. Only invoked when cleanup is complete.
 	afterClose func(cwd string, evidence *Evidence, cause error) error
 }
 
@@ -32,9 +32,12 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) (runErr error) {
 		experimental := true
 		evidence.Stage = "sdk_starting"
+		// NewContext may return before its asynchronous failure teardown, and
+		// provides no client on that path. Retain inputs until a public join is known.
+		evidence.CleanupPending = true
 		client, err := codexsdk.NewContext(ctx, codexsdk.ClientOptions{
 			CWD: cwd, Command: []string{options.Subject.Binary, "app-server", "--strict-config", "--listen", "stdio://"},
-			Env: sdkFixtureEnv(os.Environ(), home, options.APIKey),
+			Env: integrationfixture.Environment(os.Environ(), home, options.APIKey),
 			Initialize: protocolv2.InitializeParams{
 				ClientInfo:   protocolv2.ClientInfo{Name: "grok-live", Version: "1"},
 				Capabilities: protocolv2.Value(protocolv2.InitializeCapabilities{ExperimentalAPI: &experimental}),
@@ -52,21 +55,30 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
+			evidence.CleanupPending = !closed.ProcessReaped || closed.CallbackWorkPending != 0
+			rejectedX := sdkRejectedXSearch(ctx, closed, closeErr, runErr)
+			var callbackErr error
+			select {
+			case callbackErr = <-handlers.failures:
+			default:
+			}
 			if runErr == nil {
-				select {
-				case runErr = <-handlers.failures:
-				default:
-				}
+				runErr = callbackErr
 				if runErr == nil && closeErr != nil {
 					runErr = sdkFailure(closeErr)
-				} else if runErr == nil && (!closed.ProcessReaped || closed.CallbackWorkPending != 0) {
+				} else if runErr == nil && evidence.CleanupPending {
 					runErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
 				}
 			}
-			if handlers.afterClose != nil {
-				if finalized := handlers.afterClose(cwd, evidence, runErr); finalized != nil {
+			var finalized error
+			if handlers.afterClose != nil && !evidence.CleanupPending {
+				finalized = handlers.afterClose(cwd, evidence, runErr)
+				if finalized != nil {
 					runErr = preferObservation(runErr, finalized)
 				}
+			}
+			if rejectedX && callbackErr == nil && finalized == nil {
+				runErr = errSDKXSearchUnsupported
 			}
 		}()
 		evidence.Processes, evidence.Initializations, evidence.Stage = 1, 1, "initialized"
@@ -78,18 +90,6 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 		}
 		return run(client, cwd, evidence)
 	})
-}
-
-// sdkFixtureEnv replaces inherited fixture identity without mutating the parent.
-func sdkFixtureEnv(parent []string, home, key string) []string {
-	env := make([]string, 0, len(parent)+2)
-	for _, entry := range parent {
-		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "CODEX_HOME") && !strings.EqualFold(name, "GROK_API_KEY") {
-			env = append(env, entry)
-		}
-	}
-	return append(env, "CODEX_HOME="+home, "GROK_API_KEY="+key)
 }
 
 // sdkFailure never formats SDK errors, which can contain private protocol data.
@@ -115,7 +115,7 @@ func sdkFailure(err error) error {
 // preferObservation keeps an earlier business failure ahead of a later generic
 // shutdown wrapper, and lets a sticky observation replace a transport error.
 func preferObservation(current, finalized error) error {
-	if current == nil {
+	if current == nil || current == errSDKProtocolEnded {
 		return finalized
 	}
 	var currentObservation, finalObservation *observationFailure

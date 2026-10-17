@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +49,9 @@ func fakeAppServer() {
 	if json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script) != nil {
 		return
 	}
+	if script.Mode == "initialize_stall" {
+		signal.Ignore(os.Interrupt)
+	}
 	trace, err := os.OpenFile(script.Trace, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return
@@ -55,6 +59,9 @@ func fakeAppServer() {
 	defer trace.Close()
 	_, _ = io.WriteString(trace, "process\n")
 	_ = os.WriteFile(script.Trace+".home", []byte(os.Getenv("CODEX_HOME")), 0600)
+	if executable, err := os.Executable(); err == nil {
+		_ = os.WriteFile(script.Trace+".executable", []byte(executable), 0600)
+	}
 	_, _ = io.WriteString(os.Stderr, "PRIVATE_CANARY\n")
 	input := bufio.NewScanner(os.Stdin)
 	output := json.NewEncoder(os.Stdout)
@@ -100,6 +107,26 @@ func fakeAppServer() {
 		var result any
 		switch request.Method {
 		case "initialize":
+			if script.Mode == "initialize_stall" {
+				// The command returns on its startup deadline without a join handle.
+				// The test releases this bounded helper only after that return.
+				limit := time.Now().Add(8 * time.Second)
+				for time.Now().Before(limit) {
+					if _, err := os.Stat(script.Trace + ".release"); err == nil {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				executable, executableErr := os.Executable()
+				_, binaryErr := os.Stat(executable)
+				_, homeErr := os.Stat(os.Getenv("CODEX_HOME"))
+				value := "missing"
+				if executableErr == nil && binaryErr == nil && homeErr == nil {
+					value = "retained"
+				}
+				_ = os.WriteFile(script.Trace+".retention", []byte(value), 0600)
+				return
+			}
 			reportedHome, _ := filepath.EvalSymlinks(os.Getenv("CODEX_HOME"))
 			result = map[string]any{"userAgent": "fixture", "codexHome": reportedHome, "platformFamily": "unix", "platformOs": "linux"}
 			if script.Mode == "wrong_home" {
@@ -446,6 +473,7 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 				want.Threads, want.Turns, want.Bound = 0, 0, false
 			}
 			if stage == "sdk_starting" {
+				want.CleanupPending = true
 				want.Processes, want.Initializations, want.Threads, want.Turns, want.Bound = 0, 0, 0, 0, false
 			}
 			if stage == "turn_completed" {

@@ -163,6 +163,7 @@ async fn read_projection_steps(
                 continue;
             }
         };
+        codex_rollout::validate_supported_history(&value).map_err(thread_store_io_error)?;
         let raw_ordinal = value.get("ordinal").and_then(serde_json::Value::as_u64);
         let line = match codex_rollout::decode_rollout_line(value) {
             Ok(line) => line,

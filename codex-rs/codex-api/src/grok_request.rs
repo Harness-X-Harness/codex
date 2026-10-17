@@ -7,9 +7,8 @@ use crate::common::TextControls;
 use crate::common::TextFormat;
 use crate::error::ApiError;
 use crate::grok_search::project_web_search;
-use crate::grok_search::project_x_search;
 use codex_protocol::grok::GrokXSearchOptions;
-use codex_protocol::grok_hosted::is_completed_search;
+use codex_protocol::grok_hosted::is_completed_web_search;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -94,16 +93,17 @@ fn project_tools(
     tools: Option<&ResponsesApiTools>,
     x_search: Option<&GrokXSearchOptions>,
 ) -> Result<Option<Vec<Value>>, ApiError> {
-    if let Some(defaults) = x_search {
-        defaults.validate().map_err(ApiError::Stream)?;
+    if x_search.is_some() {
+        return Err(ApiError::Stream(
+            "Hosted X Search is retired; remove x_search configuration".into(),
+        ));
     }
     let Some(tools) = tools else {
         return Ok(None);
     };
     let tools: Vec<Value> = serde_json::from_str(tools.as_raw_value().get())
         .map_err(|_| ApiError::Stream("Grok requires a tool array".into()))?;
-    let mut projected = Vec::with_capacity(tools.len() + 1);
-    let mut has_x_search = false;
+    let mut projected = Vec::with_capacity(tools.len());
     for (index, tool) in tools.into_iter().enumerate() {
         let Some(fields) = tool.as_object() else {
             return Err(ApiError::Stream(format!(
@@ -116,14 +116,9 @@ fn project_tools(
                 continue;
             }
             Some("x_search") => {
-                if has_x_search {
-                    return Err(ApiError::Stream(
-                        "Grok requires at most one x_search tool".into(),
-                    ));
-                }
-                has_x_search = true;
-                projected.push(project_x_search(fields, x_search)?);
-                continue;
+                return Err(ApiError::Stream(
+                    "Hosted X Search is retired and cannot be requested".into(),
+                ));
             }
             _ => {}
         }
@@ -157,9 +152,6 @@ fn project_tools(
             }
         }
         projected.push(function);
-    }
-    if !projected.is_empty() && !has_x_search {
-        projected.push(project_x_search(&serde_json::Map::new(), x_search)?);
     }
     Ok((!projected.is_empty()).then_some(projected))
 }
@@ -289,9 +281,7 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
             }
             item
         }
-        ResponseItem::WebSearchCall { .. } | ResponseItem::CustomToolCall { .. }
-            if is_completed_search(item) =>
-        {
+        ResponseItem::WebSearchCall { .. } if is_completed_web_search(item) => {
             codex_protocol::grok_hosted::project_search_replay(item).map_err(ApiError::Stream)?
         }
         ResponseItem::AgentMessage {
@@ -310,6 +300,15 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
             // plaintext envelope. Project only the wire copy; retain canonical history.
             json!({"type": "message", "role": "user",
                 "content": [{"type": "input_text", "text": text}]})
+        }
+        ResponseItem::CustomToolCall {
+            name,
+            namespace: None,
+            ..
+        } if codex_protocol::grok_hosted::is_x_search_name(name) => {
+            return Err(ApiError::Stream(
+                "unsupported history: retired Hosted X Search cannot be replayed".into(),
+            ));
         }
         ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }

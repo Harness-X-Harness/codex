@@ -1,10 +1,9 @@
 //! The supported Grok hosted-search policy, validated before HTTP transport.
 //!
-//! Wire restrictions: https://docs.x.ai/developers/tools/web-search and
-//! https://docs.x.ai/developers/tools/x-search. Other restrictions fail closed.
+//! Wire restrictions: https://docs.x.ai/developers/tools/web-search.
+//! Other restrictions fail closed.
 
 use crate::error::ApiError;
-use codex_protocol::grok::GrokXSearchOptions;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
@@ -67,47 +66,6 @@ pub(crate) fn project_web_search(
     }
     if !restrictions.is_empty() {
         projected["filters"] = Value::Object(restrictions);
-    }
-    Ok(projected)
-}
-
-pub(crate) fn project_x_search(
-    fields: &Map<String, Value>,
-    defaults: Option<&GrokXSearchOptions>,
-) -> Result<Value, ApiError> {
-    if fields
-        .keys()
-        .any(|key| !matches!(key.as_str(), "type" | "from_date" | "to_date"))
-    {
-        return Err(ApiError::Stream(
-            "Grok cannot project unsupported x_search restrictions".into(),
-        ));
-    }
-    let mut dates = defaults.cloned().unwrap_or_default();
-    for (key, date) in [
-        ("from_date", &mut dates.from_date),
-        ("to_date", &mut dates.to_date),
-    ] {
-        if let Some(value) = fields.get(key).filter(|value| !value.is_null()) {
-            *date = Some(
-                value
-                    .as_str()
-                    .ok_or_else(|| {
-                        ApiError::Stream(format!(
-                            "Grok x_search.{key} must be a calendar YYYY-MM-DD"
-                        ))
-                    })?
-                    .to_string(),
-            );
-        }
-    }
-    dates.validate().map_err(ApiError::Stream)?;
-    let mut projected = json!({"type": "x_search"});
-    if let Some(from) = dates.from_date {
-        projected["from_date"] = json!(from);
-    }
-    if let Some(to) = dates.to_date {
-        projected["to_date"] = json!(to);
     }
     Ok(projected)
 }

@@ -324,8 +324,16 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 
+    if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+        && matches!(&item, ResponseItem::CustomToolCall { name, status: Some(_), .. }
+            if codex_protocol::grok_hosted::is_x_search_name(name))
+    {
+        return Err(CodexErr::Stream(
+            "Hosted X Search is retired and cannot be executed".into(),
+        ));
+    }
     let call = if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
-        && codex_protocol::grok_hosted::is_completed_search(&item)
+        && codex_protocol::grok_hosted::is_completed_web_search(&item)
     {
         Ok(None)
     } else {
@@ -374,53 +382,13 @@ pub(crate) async fn handle_output_item_done(
                 .services
                 .executed_tool_calls
                 .observe_non_dispatched_call(&item);
-            // Do not classify X in the provider-neutral response parser or history
-            // reader. A successful Grok plan advertises X exactly when it has tools;
-            // local custom calls have already been restored from function wrappers.
-            let finalized_turn_item = if ctx.step_context.turn.provider.api_dialect()
-                == codex_api::ApiDialect::Grok
-                && !ctx
-                    .step_context
-                    .tool_router
-                    .model_visible_specs()
-                    .is_empty()
-                && codex_protocol::grok_hosted::is_completed_x_search(&item)
-                && let ResponseItem::CustomToolCall {
-                    id: Some(id),
-                    call_id,
-                    name,
-                    input,
-                    ..
-                } = &item
-            {
-                codex_protocol::grok_hosted::project_search_replay(&item)
-                    .map_err(CodexErr::InvalidRequest)?;
-                let mut turn_item = TurnItem::XSearch(codex_protocol::items::XSearchItem {
-                    id: id.to_string(),
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                });
-                finalize_turn_item(
-                    ctx.sess.as_ref(),
-                    TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
-                    &mut turn_item,
-                    plan_mode,
-                )
-                .await;
-                Some(FinalizedTurnItem {
-                    turn_item,
-                    facts: FinalizedTurnItemFacts::default(),
-                })
-            } else {
-                finalize_non_tool_response_item(
-                    ctx.sess.as_ref(),
-                    TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
-                    &item,
-                    plan_mode,
-                )
-                .await
-            };
+            let finalized_turn_item = finalize_non_tool_response_item(
+                ctx.sess.as_ref(),
+                TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
+                &item,
+                plan_mode,
+            )
+            .await;
             let finalized_facts = finalized_turn_item
                 .as_ref()
                 .map(|finalized| finalized.facts.clone());
@@ -429,7 +397,6 @@ pub(crate) async fn handle_output_item_done(
                     .as_ref()
                     .and_then(|finalized| match &finalized.turn_item {
                         TurnItem::WebSearch(item) => Some(item.id.clone()),
-                        TurnItem::XSearch(item) => Some(item.id.clone()),
                         TurnItem::Extension(codex_extension_items::ExtensionItem::WebSearch(
                             item,
                         )) => Some(item.id.clone()),

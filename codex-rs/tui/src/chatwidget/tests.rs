@@ -285,8 +285,6 @@ mod replay_render_tests;
 mod review_mode;
 #[path = "tests/review_picker_tests.rs"]
 mod review_picker_tests;
-#[path = "tests/search_activity_tests.rs"]
-mod search_activity_tests;
 #[path = "tests/session_model_selection_tests.rs"]
 mod session_model_selection_tests;
 mod side;
@@ -304,6 +302,8 @@ mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;
 mod usage;
+#[path = "tests/web_search_tests.rs"]
+mod web_search_tests;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;
 

@@ -2111,3 +2111,6 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
     Ok(())
 }
+
+#[path = "client_retired_history_tests.rs"]
+mod retired_history_tests;

@@ -885,7 +885,7 @@ model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
 }
 
 #[test]
-fn grok_x_search_config_preserves_absent_empty_and_validated_dates() {
+fn retired_grok_x_search_configuration_is_explicitly_rejected() {
     for body in [
         "",
         "[x_search]",
@@ -893,7 +893,16 @@ fn grok_x_search_config_preserves_absent_empty_and_validated_dates() {
     ] {
         let provider: ModelProviderInfo =
             toml::from_str(&format!("wire_api = 'grok_responses'\n{body}")).unwrap();
-        provider.validate().unwrap();
+        if body.is_empty() {
+            provider.validate().unwrap();
+        } else {
+            assert!(
+                provider
+                    .validate()
+                    .unwrap_err()
+                    .contains("Hosted X Search is retired")
+            );
+        }
         let reloaded: ModelProviderInfo =
             toml::from_str(&toml::to_string(&provider).unwrap()).unwrap();
         assert_eq!(provider, reloaded);

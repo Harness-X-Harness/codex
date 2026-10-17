@@ -1,5 +1,7 @@
-//! Supported completed Grok hosted items. Callers must additionally establish
-//! the Grok dialect and, at ingress, the request's hosted-tool capability.
+//! Raw completed Grok hosted shapes, including retired X history.
+//! Recognizing a shape is not permission to execute or replay it. Preserve legacy
+//! X calls through normalization so the Grok request boundary can reject them
+//! honestly instead of synthesizing a local tool result.
 
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;

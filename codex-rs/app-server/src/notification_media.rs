@@ -83,7 +83,6 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
         | ServerNotification::ItemGuardianApprovalReviewStarted(_)
         | ServerNotification::ItemGuardianApprovalReviewCompleted(_)
         | ServerNotification::StrictReviewRequired(_)
-        | ServerNotification::SearchActivity(_)
         | ServerNotification::RawResponseCompleted(_)
         | ServerNotification::AgentMessageDelta(_)
         | ServerNotification::PlanDelta(_)
@@ -208,7 +207,6 @@ fn without_thread_item_media(mut item: ThreadItem) -> ThreadItem {
         | ThreadItem::CollabAgentToolCall { .. }
         | ThreadItem::SubAgentActivity { .. }
         | ThreadItem::WebSearch(_)
-        | ThreadItem::XSearch(_)
         | ThreadItem::ImageView { .. }
         | ThreadItem::Sleep(_)
         | ThreadItem::EnteredReviewMode { .. }

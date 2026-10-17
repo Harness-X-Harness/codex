@@ -59,8 +59,6 @@ pub enum TurnItem {
     /// Standalone web search uses Self::Extension instead because its display
     /// schema is owned by the web-search extension.
     WebSearch(WebSearchItem),
-    /// Completed, explicitly admitted hosted X search; never a local tool call.
-    XSearch(XSearchItem),
     ImageView(ImageViewItem),
     /// Item whose schema and lifecycle details are owned by an extension.
     ///
@@ -77,19 +75,6 @@ pub enum TurnItem {
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
-}
-
-/// Provider payload retained without interpreting or inventing search results.
-/// Only the Grok request/response owner may construct this canonical projection.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, TS, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct XSearchItem {
-    /// Provider item identity, unique among retained items in this turn.
-    pub id: String,
-    pub call_id: String,
-    pub name: String,
-    pub input: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -771,7 +756,6 @@ impl TurnItem {
             TurnItem::CollabAgentToolCall(item) => item.id.clone(),
             TurnItem::SubAgentActivity(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
-            TurnItem::XSearch(item) => item.id.clone(),
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
@@ -790,6 +774,20 @@ mod tests {
     use codex_extension_items::sleep::SleepItem;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+
+    #[test]
+    fn turn_item_rejects_unknown_wire_tags() {
+        for tag in ["unknownProviderTool", "webSearch"] {
+            let error = serde_json::from_value::<TurnItem>(json!({
+                "type": tag,
+                "id": "search-1",
+                "query": "docs",
+                "action": {"type": "search", "query": "docs"},
+            }))
+            .expect_err("unrecognized turn item tags must not become canonical items");
+            assert!(error.to_string().contains("unknown variant"));
+        }
+    }
 
     #[test]
     fn sleep_extension_item_preserves_type_and_kind() {

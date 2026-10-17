@@ -168,7 +168,7 @@ func fakeHistoryServer() {
 				turn = "PRIVATE_TURN_TWO"
 			}
 			started := map[string]any{"turn": map[string]any{"id": turn, "status": "inProgress", "items": []any{}}}
-			early := scenario == "early" || scenario == "inline" || scenario == "inline_conflict" || scenario == "early_unsupported" || scenario == "provisional_mismatch"
+			early := scenario == "early" || scenario == "inline" || scenario == "inline_conflict" || scenario == "inline_missing_item" || scenario == "early_unsupported" || scenario == "provisional_mismatch"
 			if !early {
 				reply(p, started)
 			}
@@ -338,7 +338,7 @@ func fakeHistoryServer() {
 			if phase == 1 && scenario != "missing_cipher" {
 				emit("rawResponseItem/completed", cipher)
 			}
-			if early && scenario != "inline" && scenario != "inline_conflict" {
+			if early && scenario != "inline" && scenario != "inline_conflict" && scenario != "inline_missing_item" {
 				reply(p, started)
 			}
 			if scenario == "tool_failed" {
@@ -537,7 +537,10 @@ func fakeHistoryServer() {
 			if scenario == "error" {
 				completed["error"] = map[string]any{"message": historyCanary}
 			}
-			if scenario == "inline" || scenario == "inline_conflict" {
+			if scenario == "inline" || scenario == "inline_conflict" || scenario == "inline_missing_item" {
+				if scenario == "inline_missing_item" {
+					emit("item/completed", map[string]any{"type": "agentMessage", "id": "", "phase": "final_answer", "text": token})
+				}
 				if scenario == "inline_conflict" {
 					send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": map[string]any{"id": turn, "status": "failed", "error": map[string]any{"message": historyCanary}, "items": []any{}}}})
 				}
@@ -581,9 +584,9 @@ func historySuccess(mode string) bool {
 func TestReasoningHistoryPublicProtocol(t *testing.T) {
 	var capacity sync.Mutex
 	modes := []string{"no_effort", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy",
-		"wrong_model", "wrong_provider", "wrong_thread_provider", "request_thread", "request_turn", "request_namespace", "request_empty_namespace", "request_tool", "empty_call", "unsupported", "early_unsupported", "inline_conflict", "provisional_mismatch", "wrong_thread", "wrong_turn",
+		"wrong_model", "wrong_provider", "wrong_thread_provider", "request_thread", "request_turn", "request_namespace", "request_empty_namespace", "request_tool", "empty_call", "unsupported", "early_unsupported", "inline_conflict", "inline_missing_item", "provisional_mismatch", "wrong_thread", "wrong_turn",
 		"no_reason", "no_cipher", "missing_cipher", "cipher_missing_identity", "cipher_empty_identity", "cipher_wrong_thread", "cipher_wrong_turn", "no_request", "no_tool", "tool_failed", "tool_partial", "tool_namespace", "tool_empty_namespace", "tool_wrong_thread", "tool_wrong_turn", "tool_wrong_call", "tool_identity_limit", "tool_identity_overflow", "reply_wrong_thread", "reply_wrong_turn", "wrong_tool", "wrong_output", "no_reply", "missing_reply", "wrong_reply", "commentary", "delta", "legacy_superseded", "legacy_commentary", "summary_replay", "no_terminal", "failed", "partial", "error", "eof", "malformed", "hang",
-		"next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict"}
+		"next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict", "next_inline_missing_item"}
 	for _, mode := range []string{
 		"identity_replay", "identity_replay_final", "identity_delayed_final", "identity_duplicate",
 		"identity_conflict_recall", "identity_conflict_new_final", "identity_conflict_eligibility",

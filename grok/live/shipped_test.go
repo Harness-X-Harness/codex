@@ -163,7 +163,7 @@ func fakeShippedServer() {
 		rootSource = []any{}
 	}
 	snapshot := func(id string) any {
-		if phase == 1 && mode != "startup" {
+		if phase == 1 && !strings.HasPrefix(mode, "startup") {
 			return map[string]any{"thread": map[string]any{"id": "PRIVATE_PARENT", "source": rootSource, "model": "grok-4.7", "modelProvider": "grok", "turns": []any{seed}}}
 		}
 		spawn := map[string]any{"type": "subAgentActivity", "id": "spawn", "kind": "started", "agentThreadId": "PRIVATE_CHILD", "agentPath": "/root/live_child"}
@@ -509,7 +509,7 @@ func fakeShippedServer() {
 			}
 			result = catalog
 		case "thread/start":
-			if request.Params["model"] != "grok-4.7" || (mode != "startup" && request.Params["experimentalRawEvents"] != true) {
+			if request.Params["model"] != "grok-4.7" || (!strings.HasPrefix(mode, "startup") && request.Params["experimentalRawEvents"] != true) {
 				return
 			}
 			cwd, _ := os.Getwd()
@@ -532,7 +532,7 @@ func fakeShippedServer() {
 				if _, exists := request.Params["effort"]; exists {
 					return
 				}
-				if mode != "startup" {
+				if !strings.HasPrefix(mode, "startup") {
 					activeID = "PRIVATE_SEED_TURN"
 					setupMarker = strings.TrimPrefix(strings.SplitN(prompt, ". ", 2)[0], "Remember this bounded setup marker: ")
 					if len(setupMarker) != 32 {
@@ -575,6 +575,17 @@ func fakeShippedServer() {
 			}
 			result = map[string]any{"turn": map[string]any{"id": activeID, "status": "inProgress", "items": []any{}}}
 		case "thread/read":
+			if strings.HasPrefix(mode, "startup_late_") {
+				thread, status := "PRIVATE_PARENT", "failed"
+				var terminalError any
+				if mode == "startup_late_error" {
+					status, terminalError = "completed", map[string]any{"message": "PRIVATE_ERROR"}
+				}
+				if mode == "startup_late_unrelated" {
+					thread = "PRIVATE_OTHER"
+				}
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": map[string]any{"id": "PRIVATE_PARENT_TURN", "status": status, "error": terminalError, "items": []any{}}}})
+			}
 			if mode == "late_conflict" && request.Params["threadId"] == "PRIVATE_CHILD" {
 				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "PRIVATE_PARENT", "turn": map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "failed", "items": []any{}}}})
 			}
@@ -719,16 +730,20 @@ func TestShippedPinnedUsesRetainedHistoryScenario(t *testing.T) {
 	}
 }
 
-func TestNativeShippedCatalog(t *testing.T) {
-	binary := os.Getenv("GROK_LIVE_NATIVE_BIN")
-	if binary == "" {
-		t.Skip("activated by required runtime job")
-	}
-	subject := nativeSubject(t, binary)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	got, err := live.ShippedCatalog(ctx, subject, "catalog-only-fixture")
-	if err != nil || !got.ShippedCatalog || got.CatalogModels != 2 || got.Turns != 0 {
-		t.Fatalf("native shipped catalog: %+v %v", got, err)
+func TestShippedStartupRevalidatesAdmittedTerminal(t *testing.T) {
+	for _, mode := range []string{"startup_late_failed", "startup_late_error", "startup_late_unrelated"} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, "shipped:"+mode)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			got, err := live.ShippedStartup(ctx, options.Subject, options.APIKey)
+			accepted := mode == "startup_late_unrelated"
+			if (err == nil) != accepted || got.Completed != accepted || got.Turns != 1 {
+				t.Fatalf("terminal contradiction check: %+v %v", got, err)
+			}
+			if strings.Contains(fmt.Sprint(got, err), "PRIVATE_") {
+				t.Fatal("private terminal evidence escaped")
+			}
+		})
 	}
 }

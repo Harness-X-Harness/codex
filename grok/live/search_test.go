@@ -82,6 +82,10 @@ func fakeSearchServer() {
 				status = "failed"
 			}
 			terminal := map[string]any{"id": id, "status": status, "items": []any{item}}
+			if mode == "failed_initial" {
+				terminal["status"], terminal["items"] = "failed", []any{}
+				terminal["error"] = map[string]any{"message": "PRIVATE_RETIRED_CAPABILITY", "codexErrorInfo": "other"}
+			}
 			if mode == "empty" {
 				terminal["items"] = []any{}
 			}
@@ -116,6 +120,9 @@ func fakeSearchServer() {
 					switch mode {
 					case "late_prior_search_conflict":
 						call["input"] = "PRIVATE_CHANGED"
+						if strings.HasPrefix(scenario, "web") {
+							call["action"] = map[string]any{"type": "search", "query": "PRIVATE_CHANGED"}
+						}
 					case "late_prior_search_invalid":
 						call["status"] = "in_progress"
 					case "late_prior_search_new":
@@ -134,52 +141,85 @@ func fakeSearchServer() {
 					_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": previous}})
 				}
 			}
-			if index == 1 && mode != "missing" || index == 2 && (mode == "followup_reused_search_id" || strings.HasPrefix(mode, "budget_")) {
+			if index == 1 && mode != "missing" && mode != "failed_initial" || index == 2 && (mode == "followup_reused_search_id" || strings.HasPrefix(mode, "budget_")) {
 				call := hostedSearchFixtureCall(scenario)
 				if mode == "action_only" && strings.HasPrefix(scenario, "web") {
 					call["action"] = map[string]any{"type": "search"}
 				}
 				if mode == "unsupported" {
 					call["name"] = "x_unknown"
+					if strings.HasPrefix(scenario, "web") {
+						call["action"] = map[string]any{"type": "unsupported"}
+					}
 				}
 				if mode == "partial" {
 					call["status"] = "in_progress"
 				}
-				if mode == "output_first" {
-					notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call_output", "call_id": "PRIVATE_CALL", "output": "PRIVATE_CANARY"})
-				}
-				notify("rawResponseItem/completed", call)
-				if strings.HasPrefix(mode, "budget_") {
-					limit := 64
-					if mode == "budget_65_first" && index == 1 || mode == "budget_65_followup" && index == 2 {
-						limit++
+				if strings.HasPrefix(mode, "public_") {
+					if mode != "public_no_context" {
+						_ = output.Encode(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "thread", "turn": map[string]any{"id": id, "status": "inProgress", "items": []any{}}}})
 					}
-					for i := 1; i < limit; i++ {
-						extra := hostedSearchFixtureCall(scenario)
-						extra["id"] = fmt.Sprintf("PRIVATE_ID_%d", i)
-						notify("rawResponseItem/completed", extra)
+					if mode == "public_timeout" {
+						continue
 					}
-					// An identical duplicate remains idempotent even at the limit.
-					notify("rawResponseItem/completed", call)
-				}
-				if mode == "duplicate" {
-					notify("rawResponseItem/completed", call)
-				}
-				if mode == "conflict" {
-					call["input"] = "changed"
-					notify("rawResponseItem/completed", call)
-				}
-				if mode == "local" {
-					notify("item/completed", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
-				}
-				if mode == "coexisting_hosted" {
-					other := "web"
-					if strings.HasPrefix(scenario, "web") {
-						other = "x"
+					public := hostedXSearchItem()
+					switch mode {
+					case "public_other":
+						public["type"] = "PRIVATE_OTHER_VARIANT"
+					case "public_local_first":
+						notify("item/started", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
+					case "public_wrong_type":
+						public["type"] = 42
+					case "public_raw_local_first":
+						notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call", "id": "PRIVATE_LOCAL", "call_id": "PRIVATE_CALL", "namespace": "functions", "name": "apply_patch", "input": "PRIVATE_INPUT"})
 					}
-					coexisting := hostedSearchFixtureCall(other)
-					coexisting["id"] = "PRIVATE_OTHER"
-					notify("rawResponseItem/completed", coexisting)
+					method := "item/started"
+					if mode == "public_completed" {
+						method = "item/completed"
+					}
+					notify(method, public)
+					continue
+				}
+				if mode != "public_only" {
+					if mode == "output_first" {
+						notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call_output", "call_id": "PRIVATE_CALL", "output": "PRIVATE_CANARY"})
+					}
+					notify("rawResponseItem/completed", call)
+					if strings.HasPrefix(mode, "budget_") {
+						limit := 64
+						if mode == "budget_65_first" && index == 1 || mode == "budget_65_followup" && index == 2 {
+							limit++
+						}
+						for i := 1; i < limit; i++ {
+							extra := hostedSearchFixtureCall(scenario)
+							extra["id"] = fmt.Sprintf("PRIVATE_ID_%d", i)
+							notify("rawResponseItem/completed", extra)
+						}
+						// An identical duplicate remains idempotent even at the limit.
+						notify("rawResponseItem/completed", call)
+					}
+					if mode == "duplicate" {
+						notify("rawResponseItem/completed", call)
+					}
+					if mode == "conflict" {
+						call["input"] = "changed"
+						if strings.HasPrefix(scenario, "web") {
+							call["action"] = map[string]any{"type": "search", "query": "changed"}
+						}
+						notify("rawResponseItem/completed", call)
+					}
+					if mode == "local" {
+						notify("item/completed", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
+					}
+					if mode == "coexisting_hosted" {
+						other := "web"
+						if strings.HasPrefix(scenario, "web") {
+							other = "x"
+						}
+						coexisting := hostedSearchFixtureCall(other)
+						coexisting["id"] = "PRIVATE_OTHER"
+						notify("rawResponseItem/completed", coexisting)
+					}
 				}
 			}
 			if mode == "local_custom_first" && index == 1 || mode == "local_custom_followup" && index == 2 {
@@ -230,8 +270,8 @@ func fakeSearchServer() {
 }
 
 func TestHostedSearchRetainsEachScenarioAndSingleContinuation(t *testing.T) {
-	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "x", "x_window"} {
-		for _, mode := range []string{"ok", "duplicate", "action_only", "coexisting_hosted"} {
+	for _, scenario := range []string{"web", "web_allowed", "web_excluded"} {
+		for _, mode := range []string{"ok", "duplicate", "action_only"} {
 			t.Run(scenario+"/"+mode, func(t *testing.T) {
 				t.Parallel()
 				options := fixtureOptions(t, "search:"+mode+":"+scenario)
@@ -260,11 +300,11 @@ func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
 	for _, mode := range []string{"missing", "unsupported", "partial", "output_first", "conflict", "local", "wrong_thread", "wrong_turn", "wrong_read", "no_terminal", "empty", "failed"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
-			options := fixtureOptions(t, "search:"+mode+":x")
+			options := fixtureOptions(t, "search:"+mode+":web")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			got, err := live.HostedSearch(ctx, options, "x")
-			if err == nil || got.Completed || got.FollowupCompleted || strings.Contains(err.Error(), "PRIVATE_") {
+			got, err := live.HostedSearch(ctx, options, "web")
+			if err == nil || got.ExpectedUnsupported || got.Completed || got.FollowupCompleted || strings.Contains(err.Error(), "PRIVATE_") {
 				t.Fatalf("invalid evidence accepted or exposed: %+v, %v", got, err)
 			}
 			want := 1
@@ -281,6 +321,30 @@ func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
 	}
 }
 
+func TestHostedSearchClassifiesFailedInitialTurnWithoutCreditOrContinuation(t *testing.T) {
+	options := fixtureOptions(t, "search:failed_initial:web")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := live.HostedSearch(ctx, options, "web")
+	wantFailure := live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed", ErrorKind: "other"}
+	if err == nil || live.DescribeFailure(err) != wantFailure || strings.Contains(err.Error(), "PRIVATE_") {
+		t.Fatalf("failed search lost its bounded terminal diagnostic: %+v, %v", live.DescribeFailure(err), err)
+	}
+	if got.Completed || got.FirstCompleted || got.FollowupCompleted || got.ExpectedUnsupported || got.CanonicalCalls != 0 || got.SettledTurns != 0 || !got.Bound || got.Turns != 1 || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
+		t.Fatalf("failed search claimed credit or lost lifecycle evidence: %+v", got)
+	}
+	var script struct{ Trace string }
+	_ = json.Unmarshal([]byte(options.APIKey), &script)
+	trace, _ := os.ReadFile(script.Trace)
+	if string(trace) != "initialize\ninitialized\nthread/start\nturn/start\n" {
+		t.Fatalf("failed search submitted further semantic work: %q", trace)
+	}
+	encoded, _ := json.Marshal(got)
+	if strings.Contains(string(encoded), "PRIVATE_") {
+		t.Fatal("failed search evidence leaked private content")
+	}
+}
+
 func TestHostedSearchRejectsContradictorySettledEvidence(t *testing.T) {
 	for _, mode := range []string{
 		"settled_dynamic", "settled_mcp", "settled_command", "settled_function_output", "settled_file_change",
@@ -290,10 +354,10 @@ func TestHostedSearchRejectsContradictorySettledEvidence(t *testing.T) {
 	} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
-			options := fixtureOptions(t, "search:"+mode+":x")
+			options := fixtureOptions(t, "search:"+mode+":web")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			got, err := live.HostedSearch(ctx, options, "x")
+			got, err := live.HostedSearch(ctx, options, "web")
 			wantTurns, wantSettled := 1, 0
 			if !strings.HasPrefix(mode, "settled_") && mode != "started_local" {
 				wantTurns, wantSettled = 2, 1
@@ -316,10 +380,10 @@ func TestHostedSearchRejectsContradictorySettledEvidence(t *testing.T) {
 }
 
 func TestHostedSearchAcceptsConsistentDelayedPriorTerminal(t *testing.T) {
-	options := fixtureOptions(t, "search:late_prior_completed:x")
+	options := fixtureOptions(t, "search:late_prior_completed:web")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	got, err := live.HostedSearch(ctx, options, "x")
+	got, err := live.HostedSearch(ctx, options, "web")
 	if err != nil || !got.Completed || got.Turns != 2 || got.CanonicalCalls != 1 || got.SettledTurns != 2 {
 		t.Fatalf("consistent delayed prior terminal rejected: %+v, %v", got, err)
 	}
@@ -453,14 +517,40 @@ func hostedSearchFixtureCall(scenario string) map[string]any {
 	return map[string]any{"type": "custom_tool_call", "id": "PRIVATE_ID", "status": "completed", "call_id": "PRIVATE_CALL", "name": "x_keyword_search", "input": "PRIVATE_INPUT"}
 }
 
+func hostedXSearchItem() map[string]any {
+	return map[string]any{"type": "xSearch", "id": "PRIVATE_ID", "callId": "PRIVATE_CALL", "name": "x_keyword_search", "input": "PRIVATE_INPUT"}
+}
+
+func TestHostedSearchPublicXSearchExpectedRejection(t *testing.T) {
+	for _, scenario := range []string{"x", "x_window"} {
+		for _, mode := range []string{"public_only", "public_completed", "public_no_context"} {
+			t.Run(scenario+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				options := fixtureOptions(t, "search:"+mode+":"+scenario)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				got, err := live.RunLegacySearchDiagnosticForTest(ctx, options, scenario)
+				if !live.AcceptedXSearchRejection(got, err) || got.CanonicalCalls != 0 || got.CleanupPending || got.FirstCompleted || got.Completed || got.FollowupCompleted || got.Turns != 1 || got.SettledTurns != 0 {
+					t.Fatalf("expected rejection missing or search falsely credited: %+v, %v", got, err)
+				}
+				assertSearchInvocationCount(t, options, 1)
+				encoded, _ := json.Marshal(got)
+				if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
+					t.Fatal("private evidence leaked")
+				}
+			})
+		}
+	}
+}
+
 func TestHostedSearchRejectsCustomExecutionAtEveryObservationBoundary(t *testing.T) {
 	for _, mode := range []string{"local_custom_first", "local_custom_followup", "late_prior_custom", "settled_custom", "prior_custom"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
-			options := fixtureOptions(t, "search:"+mode+":x")
+			options := fixtureOptions(t, "search:"+mode+":web")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			got, err := live.HostedSearch(ctx, options, "x")
+			got, err := live.HostedSearch(ctx, options, "web")
 			wantTurns := 2
 			if mode == "local_custom_first" || mode == "settled_custom" {
 				wantTurns = 1
@@ -483,10 +573,10 @@ func TestHostedSearchRetainsTurnScopedCreditedIdentities(t *testing.T) {
 	for _, mode := range []string{"late_prior_search_duplicate", "late_prior_search_conflict", "late_prior_search_invalid", "late_prior_search_new", "followup_reused_search_id"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
-			options := fixtureOptions(t, "search:"+mode+":x")
+			options := fixtureOptions(t, "search:"+mode+":web")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			got, err := live.HostedSearch(ctx, options, "x")
+			got, err := live.HostedSearch(ctx, options, "web")
 			valid := mode == "late_prior_search_duplicate" || mode == "followup_reused_search_id"
 			wantCalls, wantSettled := 1, 1
 			if valid {
@@ -520,10 +610,10 @@ func TestHostedSearchIdentityBudgetsRemainPerTurn(t *testing.T) {
 	for _, mode := range []string{"budget_64", "budget_65_first", "budget_65_followup"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
-			options := fixtureOptions(t, "search:"+mode+":x")
+			options := fixtureOptions(t, "search:"+mode+":web")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			got, err := live.HostedSearch(ctx, options, "x")
+			got, err := live.HostedSearch(ctx, options, "web")
 			valid := mode == "budget_64"
 			wantTurns, wantCalls, wantSettled := 2, 128, 1
 			if valid {
@@ -540,4 +630,76 @@ func TestHostedSearchIdentityBudgetsRemainPerTurn(t *testing.T) {
 			assertSearchInvocationCount(t, options, wantTurns)
 		})
 	}
+}
+
+func TestHostedSearchExpectedRejectionRejectsOtherFailures(t *testing.T) {
+	for _, tc := range []struct{ mode, scenario string }{
+		{"public_only", "web"}, {"public_other", "x"}, {"public_wrong_type", "x"}, {"public_local_first", "x"}, {"no_terminal", "x"},
+	} {
+		t.Run(tc.mode+"/"+tc.scenario, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			got, err := live.RunLegacySearchDiagnosticForTest(ctx, fixtureOptions(t, "search:"+tc.mode+":"+tc.scenario), tc.scenario)
+			if err == nil || got.ExpectedUnsupported || live.AcceptedXSearchRejection(got, err) || got.Completed || got.CleanupPending {
+				t.Fatalf("unrelated failure accepted: %+v, %v", got, err)
+			}
+			encoded, _ := json.Marshal(got)
+			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
+				t.Fatal("private rejection data leaked")
+			}
+		})
+	}
+}
+
+func TestHostedSearchCallerTimeoutIsNotExpectedRejection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := live.RunLegacySearchDiagnosticForTest(ctx, fixtureOptions(t, "search:public_timeout:x"), "x")
+	if ctx.Err() != context.DeadlineExceeded || err == nil || got.ExpectedUnsupported || got.Completed || got.CleanupPending {
+		t.Fatalf("timeout accepted: %+v, %v", got, err)
+	}
+}
+
+func TestHostedSearchDiscardableRawBeforeXDoesNotClaimFullDelivery(t *testing.T) {
+	// On fatal decode the stock SDK may discard a raw callback not yet run.
+	// Either an observed business rejection or the exact SDK rejection is
+	// truthful; neither establishes that all preceding raw traffic was audited.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := live.RunLegacySearchDiagnosticForTest(ctx, fixtureOptions(t, "search:public_raw_local_first:x"), "x")
+	if err == nil || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || got.CleanupPending {
+		t.Fatalf("false search success: %+v, %v", got, err)
+	}
+	if !live.AcceptedXSearchRejection(got, err) && err.Error() != "live: local execution cannot establish hosted search" {
+		t.Fatalf("unexpected rejection: %v", err)
+	}
+}
+
+func TestHostedSearchRetiredXDoesNotLaunch(t *testing.T) {
+	for _, scenario := range []string{"x", "x_window"} {
+		t.Run(scenario, func(t *testing.T) {
+			options := fixtureOptions(t, "search:ok:"+scenario)
+			got, err := live.HostedSearch(context.Background(), options, scenario)
+			if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Processes != 0 || got.Turns != 0 || got.CanonicalCalls != 0 || got.Completed || got.ExpectedUnsupported {
+				t.Fatalf("retirement failed: %+v, %v", got, err)
+			}
+			var script struct{ Trace string }
+			_ = json.Unmarshal([]byte(options.APIKey), &script)
+			if _, err := os.Stat(script.Trace); !os.IsNotExist(err) {
+				t.Fatal("retired X launched a process")
+			}
+		})
+	}
+}
+
+func TestHostedSearchWebRejectsRetiredRawX(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	options := fixtureOptions(t, "search:coexisting_hosted:web")
+	got, err := live.HostedSearch(ctx, options, "web")
+	if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Completed || got.FollowupCompleted || got.ExpectedUnsupported {
+		t.Fatalf("retired X became Web proof: %+v, %v", got, err)
+	}
+	assertSearchInvocationCount(t, options, 1)
 }

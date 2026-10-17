@@ -16,12 +16,12 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/facts"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
+	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
 )
 
 const usage = `Usage: grok-facts --scenario NAME --source-sha COMMIT [--endpoint URL] [--timeout 2m]
 
-Scenarios: basic-primary, basic-pinned, encrypted-replay, shipped-routes,
-web, web-allowed, web-excluded, x, x-window, web-replay, x-replay.
+List supported scenarios with grok-scenarios --family facts --suite diagnostic.
 
 Execution requires GROK_FACTS=1 and GROK_API_KEY in the environment.
 One JSON report is written to stdout. Exit codes: 0 observed, 1 not observed
@@ -75,9 +75,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 	if flags.NArg() != 0 || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(*source) || *deadline <= 0 || *deadline > 3*time.Minute {
 		return finish("configuration_error", "invalid_arguments", 2)
 	}
-	switch *selected {
-	case "basic-primary", "basic-pinned", "encrypted-replay", "shipped-routes", "web", "web-allowed", "web-excluded", "x", "x-window", "web-replay", "x-replay":
-	default:
+	scenario, err := scenarios.Lookup("facts", *selected)
+	if err != nil {
 		return finish("configuration_error", "unknown_or_missing_scenario", 2)
 	}
 	r.Scenario, r.DeclaredSourceSHA = *selected, *source
@@ -114,32 +113,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, output 
 	}
 	ctx, cancel := context.WithTimeout(ctx, *deadline)
 	defer cancel()
-	var observed facts.Observation
-	switch *selected {
-	case "basic-primary":
-		observed, err = probe.Text(ctx, providerfixture.PrimaryModel)
-		r.Observation = &observed
-	case "basic-pinned":
-		observed, err = probe.Text(ctx, providerfixture.PinnedModel)
-		r.Observation = &observed
-	case "encrypted-replay":
-		observed, err = probe.EncryptedReplay(ctx, providerfixture.PrimaryModel)
-		r.Observation = &observed
-	case "shipped-routes":
-		r.Routes, err = probe.ShippedRoutes(ctx)
-		if len(r.Routes) != 0 {
-			observed = r.Routes[len(r.Routes)-1].Observation
-		}
-	default:
-		var search facts.SearchObservation
-		if strings.HasSuffix(*selected, "-replay") {
-			search, err = probe.SearchReplay(ctx, providerfixture.PrimaryModel, strings.TrimSuffix(*selected, "-replay"))
-		} else {
-			search, err = probe.SearchPolicy(ctx, providerfixture.PrimaryModel, strings.ReplaceAll(*selected, "-", "_"))
-		}
-		r.Search, observed = &search, search.Observation
-	}
-	if err != nil || !observed.Completed {
+	result, err := scenario.RunFacts(ctx, probe)
+	r.Observation, r.Search, r.Routes = result.Observation, result.Search, result.Routes
+	observed := result.LastObservation()
+	if err != nil || !result.Completed() {
 		reason := "probe_did_not_complete"
 		switch {
 		case ctx.Err() == context.DeadlineExceeded:

@@ -58,8 +58,13 @@ Stock pinned V8 artifacts and their checksum validation remain in use.
 Each target executes the staged launcher and runtime, checks the reported version
 against package metadata, starts the Code Mode host's help path, exercises its
 packaged `rg`, `zsh` and Linux `bwrap`, and runs the existing nonempty
-`TestNativeBasicFixture` and `TestNativeShippedCatalog` selection through the
-packaged launcher. The Basic fixture uses a controlled local backend for both
+tagged `./tests/integration` selection through the packaged launcher:
+`TestBasicFixture`, `TestShippedCatalog`,
+`TestStructuredEditFixture`,
+`TestShippedChildFixture` and
+`TestFirstRequestShape`. The JSON checker requires all five
+exact owner names, rejects skipped/incomplete runs and retains failure summaries.
+The package job does not repeat the offline Go suite. The Basic fixture uses a controlled local backend for both
 retained models; the catalog check uses the package's shipped profile/catalog.
 These checks do not make a real-provider request or establish backend claims.
 
@@ -68,7 +73,7 @@ The complete package is uploaded as
 `grok-SOURCE_SHA-TARGET.tar.gz`. Executable modes survive the archive. A separate
 `grok-package-evidence-SOURCE_SHA-TARGET-RUN_ID-RUN_ATTEMPT` artifact records the
 package file hashes, source/target, runtime and launcher versions, archive hash,
-and actual fixture log. Both artifacts have 30-day retention. The package upload
+and actual fixture JSON plus its checked summary. Both artifacts have 30-day retention. The package upload
 runs only after its target's complete smoke succeeds. Partial evidence can be
 retained on failure and is not a successful package claim.
 

@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
 	"os"
 	"path/filepath"
 )
 
 func writeFixture(home, cwd string, options Options, edit *editFixture) error {
 	if options.shippedProfile {
-		return writeShippedProfile(home, cwd)
+		return integrationfixture.WriteShippedProfile(home, cwd)
 	}
 	model := map[string]any{
 		"slug": options.Model, "display_name": options.Model, "supported_reasoning_levels": []any{},

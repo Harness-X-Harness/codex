@@ -180,7 +180,3 @@ pub(crate) fn new_web_search_call(
     cell.complete();
     cell
 }
-
-pub(crate) fn new_x_search_call(name: &str) -> PlainHistoryCell {
-    PlainHistoryCell::new(vec![Line::from(format!("• Searched X ({name})"))])
-}

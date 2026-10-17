@@ -189,7 +189,6 @@ impl GoalAccountingState {
             | TurnItem::CollabAgentToolCall(_)
             | TurnItem::SubAgentActivity(_)
             | TurnItem::WebSearch(_)
-            | TurnItem::XSearch(_)
             | TurnItem::ImageView(_)
             | TurnItem::Extension(_)
             | TurnItem::ImageGeneration(_)

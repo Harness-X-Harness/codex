@@ -5,10 +5,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Provider defaults for the inclusive X Search date window.
-///
-/// Explicit request dates override defaults independently. Empty options do not
-/// disable X Search: a nonempty Grok tool plan always includes it exactly once.
+/// Legacy X Search options retained solely for explicit configuration rejection.
+/// Hosted X Search is retired from the Codex product; these settings never enable it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrokXSearchOptions {

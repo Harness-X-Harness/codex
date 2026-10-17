@@ -8,16 +8,17 @@ on:
         description: Exact settled version-line push run containing the Linux package.
         type: string
         required: true
-      scenario:
-        description: One existing runtime scenario to execute once.
+      suite:
+        description: Diagnostic runs one named case; smoke/full run their complete Go-owned selection.
         type: choice
         required: true
+        default: diagnostic
+        options: [diagnostic, smoke, full]
+      scenario:
+        description: Required for diagnostic; ignored for smoke/full. Names come from grok-scenarios.
+        type: string
+        required: false
         default: basic-primary
-        options: [basic-primary, basic-pinned, reasoning-primary, reasoning-pinned, reasoning-no-effort-pinned,
-          structured-edit, structured-edit-declined, structured-edit-pinned,
-          structured-edit-all, image-primary, image-pinned, shipped-catalog,
-          shipped-startup, shipped-pinned, shipped-child, web, web-allowed,
-          web-excluded, x, x-window]
 
 permissions:
   contents: read
@@ -32,7 +33,7 @@ jobs:
     name: Diagnostic Live
     if: ${{ github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -57,28 +58,54 @@ jobs:
         with:
           go-version-file: grok/go.mod
           cache: false
-      - name: Build the exact harness command
+      - name: Validate the explicit Go-owned selection before backend use
         working-directory: grok
-        run: go build -o "$RUNNER_TEMP/grok-live" ./cmd/grok-live
-      - name: Prepare the hosted Linux sandbox for Live
-        run: bash grok/package/prepare_linux_sandbox_ci.sh
-      - name: Execute the explicitly selected scenario once
         env:
-          GROK_LIVE: "1"
-          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          SUITE: ${{ inputs.suite }}
           SCENARIO: ${{ inputs.scenario }}
         run: |
           set -euo pipefail
+          args=(--family live --suite "$SUITE")
+          if [[ "$SUITE" == diagnostic ]]; then
+            test -n "$SCENARIO"
+            args+=(--scenario "$SCENARIO")
+          fi
           mkdir "$RUNNER_TEMP/live-evidence"
+          go run ./cmd/grok-scenarios "${args[@]}" > "$RUNNER_TEMP/live-evidence/selected.json"
+      - name: Prepare the hosted Linux sandbox for Live
+        run: bash grok/package/prepare_linux_sandbox_ci.sh
+      - name: Execute the explicit Go Live selection once
+        working-directory: grok
+        env:
+          GROK_LIVE: "1"
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GROK_CODEX_BIN: ${{ runner.temp }}/live-package/package/bin/grok-bin
+          SUITE: ${{ inputs.suite }}
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          set -euo pipefail
           cp "$RUNNER_TEMP/live-package/selection.json" "$RUNNER_TEMP/live-evidence/"
           cp "$RUNNER_TEMP/live-package/verified.json" "$RUNNER_TEMP/live-evidence/"
           source="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["source_sha"])')"
           digest="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["runtime_sha256"])')"
-          "$RUNNER_TEMP/grok-live" --scenario "$SCENARIO" \
-            --binary "$RUNNER_TEMP/live-package/package/bin/grok-bin" --binary-sha256 "$digest" \
-            --source-sha "$source" --harness-sha "$GITHUB_SHA" \
-            --target x86_64-unknown-linux-musl --environment github-actions-diagnostic --timeout 5m \
-            > "$RUNNER_TEMP/live-evidence/result.json"
+          selection=(-grok-live-suite "$SUITE")
+          if [[ "$SUITE" == diagnostic ]]; then selection+=(-grok-live-scenario "$SCENARIO"); fi
+          mapfile -t names < <(python3 -c 'import json,os; print("\n".join(json.load(open(os.environ["RUNNER_TEMP"]+"/live-evidence/selected.json"))))')
+          required=()
+          for name in "${names[@]}"; do
+            required+=(--require "github.com/Harness-X-Harness/codex/grok/tests/live:TestLive/$name")
+          done
+          test "${#required[@]}" -gt 0
+          status=0
+          go test -tags=live -count=1 -timeout=100m -json ./tests/live -args \
+            "${selection[@]}" -grok-live-verified-subject -grok-live-binary-sha256 "$digest" \
+            -grok-live-source-sha "$source" -grok-live-harness-sha "$GITHUB_SHA" \
+            -grok-live-target x86_64-unknown-linux-musl -grok-live-environment github-actions-diagnostic \
+            > "$RUNNER_TEMP/live-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/live-evidence/tests.json" \
+            "${required[@]}" > "$RUNNER_TEMP/live-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/live-evidence/summary.json"
+          exit "$status"
       - name: Retain the bounded diagnostic result
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

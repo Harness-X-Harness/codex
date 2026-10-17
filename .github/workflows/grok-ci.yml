@@ -1,0 +1,118 @@
+name: grok-ci
+
+on:
+  pull_request:
+    # Legacy bases already run this Go suite and native proof through grok.yml.
+    branches-ignore: ["grok/rust-v*", "grok/c7-web-activity-20261008", "grok/c8-package-build-20261009"]
+    paths:
+      - "grok/**"
+      - "codex-rs/**"
+      - "sdk/**"
+      - "scripts/**"
+      - "bazel/**"
+      - "third_party/**"
+      - "patches/**"
+      - "tools/**"
+      - ".cargo/**"
+      - "rbe.bzl"
+      - "workspace_root_test_launcher.*.tpl"
+      - ".github/**"
+      - ".bazel*"
+      - "MODULE.bazel*"
+      - "BUILD.bazel"
+      - "defs.bzl"
+      - "justfile"
+  push:
+    branches-ignore: ["grok/rust-v*"]
+    paths:
+      - "grok/**"
+      - "codex-rs/**"
+      - "sdk/**"
+      - "scripts/**"
+      - "bazel/**"
+      - "third_party/**"
+      - "patches/**"
+      - "tools/**"
+      - ".cargo/**"
+      - "rbe.bzl"
+      - "workspace_root_test_launcher.*.tpl"
+      - ".github/**"
+      - ".bazel*"
+      - "MODULE.bazel*"
+      - "BUILD.bazel"
+      - "defs.bzl"
+      - "justfile"
+  # Selecting a branch runs native checks on Actions' actual event SHA. There is
+  # deliberately no source-SHA input and no paid Live or Facts invocation.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grok-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selection:
+    name: Select applicable native checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.select.outputs.native }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the execution subject and affected paths
+        id: select
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/check-grok-subject.sh
+          native="$(bash .github/scripts/grok-native-required.sh)"
+          [[ "$native" == true || "$native" == false ]]
+          printf 'native=%s\n' "$native" >> "$GITHUB_OUTPUT"
+          printf 'Applicable native checks: %s; comparison base: %s\n' "$native" "${PR_BASE_SHA:-$PUSH_BEFORE}"
+
+  go:
+    name: Fast Go
+    uses: ./.github/workflows/grok-go.yml
+
+  native:
+    name: Applicable native checks
+    needs: selection
+    if: ${{ needs.selection.outputs.native == 'true' }}
+    uses: ./.github/workflows/grok-proof.yml
+    with:
+      # This caller requires its one same-subject Go job in Cargo below.
+      offline_go: false
+
+  cargo:
+    name: Cargo
+    needs: [selection, go, native]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every applicable check on this subject
+        env:
+          SELECTION_RESULT: ${{ needs.selection.result }}
+          GO_RESULT: ${{ needs.go.result }}
+          NATIVE_REQUIRED: ${{ needs.selection.outputs.native }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          set -euo pipefail
+          test "$SELECTION_RESULT" = success
+          test "$GO_RESULT" = success
+          case "$NATIVE_REQUIRED" in
+            true) test "$NATIVE_RESULT" = success ;;
+            false) test "$NATIVE_RESULT" = skipped ;;
+            *) echo 'Native applicability was not established' >&2; exit 1 ;;
+          esac

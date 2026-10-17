@@ -456,55 +456,26 @@ User-directed Git, SSH, shell, and other subprocess traffic retain their existin
 execution and sandbox policies.
 
 
-# Live search activity
+# Hosted search items
 
-The stable v2 `item/searchActivity` notification provides transient hosted Web and X search
-visibility alongside the ordered item stream. Its payload is `{threadId,
-turnId, attemptId, outputIndex, itemId, kind, state}`. The supported
-kinds are `web` and `x`; states are `running`, `completed`, and `cleared`.
+Hosted Web search uses the existing v2 `webSearch` item through the ordered
+`item/started` and `item/completed` notifications. Clients settle the started item
+when its canonical completion arrives. Completed items retain their identity,
+query, action, and optional results in thread history; same-thread continuation
+and cold history reads use that canonical representation. There is no separate
+public early-preview notification.
 
-`attemptId` is an increasing JavaScript-safe integer scoped to one live server
-process. `outputIndex` is also JavaScript-safe, and `itemId` is nonempty and at
-most 1024 UTF-8 bytes. A client needs at most 65 simultaneous previews. A newer
-attempt supersedes old previews; ignore notifications from an older attempt.
-Clear previews on terminal turns, thread replacement, disconnect, or lost event
-delivery. Do not replay activity notifications when reconstructing history.
+Within a turn, a retained search ID cannot be reused or rebound to another item,
+including across sampling requests. A conflicting stream fails before replacing
+the retained result. New turns have independent identity reservations.
 
-A validated Web item start or supported X custom-input-done event permits
-`running`. `completed` means an authoritative completed search item arrived, potentially while an earlier assistant item remains
-open; a provider status named completed is insufficient. This stops busy UI but
-does not create history or supply results. `cleared` closes the attempt's
-remaining previews without claiming success or cancellation, including completed
-previews whose canonical item could not be retained.
+Product Hosted X search is retired. The public protocol has no `xSearch` item or
+`item/searchActivity` notification. Grok requests do not advertise `x_search`;
+explicit legacy configuration and unexpected hosted X responses fail with an
+explanatory error. They are not converted into Web items, assistant messages, or
+local tool calls and results.
 
-Keep assistant streaming independent from previews. The existing ordered
-`item/started` and `item/completed` notifications remain authoritative. Within
-the current thread, turn and attempt, match a canonical search item to its preview
-by `itemId`, suppress a second start, and promote that preview exactly once.
-Live indexed bindings cannot share an item ID. Once retained, a hosted item ID
-cannot be reused or rebound to another item type in the same turn, including
-later sampling requests; the stream fails before a second activity is published.
-An abandoned, unretained attempt releases its reservation, so retry can reuse its
-provider IDs. New turns have independent reservations. Old attempts are cleared
-before retry. Retire preview indexes after canonical completion so late activity
-cannot recreate them.
-
-Turn-owned admission tracking holds at most 256 eligible canonical/pending IDs,
-each at most 1024 UTF-8 bytes (at most 256 KiB of identifier bytes, plus bounded
-map overhead). This authority survives model-history truncation, compaction and
-sampling replacement. Ordinary canonical work continues if tracking saturates;
-further hosted admission fails closed because an untracked earlier ID could
-collide. Pending reservations count toward the limit and are released on
-abandonment. Ordinary IDs outside the hosted length range cannot collide and
-remain unrestricted. A canonical search identity changed by a contributor is
-rejected before publication; X payload and hosted provenance are also preserved. No preview becomes a model input, local tool call,
-synthetic tool output, or durable history item.
-
-Completed hosted X searches are canonical `xSearch` items with `id`, `callId`,
-`name`, and `input`. `name` and `input` preserve the provider's exact retained
-payload; they are not synthesized local results. The supported subtypes are
-`x_keyword_search`, `x_semantic_search`, `x_user_search`, and `x_thread_fetch`.
-The response-local `callId` can repeat and is not a presentation identity.
-A completed X item without a supported early signal still enters ordered history,
-without an invented running preview. Cold history uses the typed canonical item;
-clients must not infer hosted status from an arbitrary custom-tool name.
+History containing the former public X representation is unsupported and remains
+unchanged on disk. Grok replay also rejects unpaired retired hosted X calls.
+Provider-neutral custom-tool records and genuine paired local tool history remain
+separate; a custom-tool name alone does not establish hosted provenance.

@@ -162,6 +162,25 @@ func (observer *sdkHistoryObserver) observeEnvelope(method string, raw []byte, e
 	observation.Method = method
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
+	// Finished/current-prior turns retain contradiction checks through callback
+	// join, but late delivery cannot add positive completion or replay credit.
+	prior := observer.probe.previousID != "" && (observation.TurnID == observer.probe.previousID || observation.Turn.ID == observer.probe.previousID)
+	if observation.ThreadID == observer.probe.threadID && (!observer.active || prior) {
+		if observation.Method == "item/completed" && (observation.TurnID == observer.probe.turnID || prior) && observation.Item.Type == "agentMessage" && observation.Item.ID == "" {
+			return observer.reject(failedObservation("assistant_identity_missing", "live: assistant item identity not established"))
+		}
+		if observation.Method == "turn/completed" && (observation.Turn.ID == observer.probe.turnID || prior) {
+			if observation.Turn.Status != "completed" || len(observation.Turn.Error) != 0 && string(observation.Turn.Error) != "null" {
+				return observer.reject(failedTurn(observation.Turn.Status, observation.Turn.Error, "live: turn did not complete successfully"))
+			}
+			for _, item := range observation.Turn.Items {
+				if item.Type == "agentMessage" && item.ID == "" {
+					return observer.reject(failedObservation("assistant_identity_missing", "live: assistant item identity not established"))
+				}
+			}
+		}
+		return observer.cause
+	}
 	if !observer.active || observation.ThreadID != observer.probe.threadID && observation.Method != "turn/completed" {
 		return nil
 	}
@@ -261,6 +280,9 @@ func (observer *sdkHistoryObserver) reconcile(run codexsdk.ThreadRunResult) erro
 		_ = observer.acceptCallback(observation)
 	}
 	observer.pending, observer.pendingBytes = nil, 0
+	// The typed retained prefix can be admitted before its callback executes.
+	// Consume it under this lock before an inline terminal can grant readiness.
+	observer.recoverNotificationsLocked(run.Notifications)
 	hasTerminal := false
 	for _, notification := range run.Notifications {
 		if _, terminal := notification.AsTurnCompleted(); terminal {
@@ -282,6 +304,10 @@ func (observer *sdkHistoryObserver) reconcile(run codexsdk.ThreadRunResult) erro
 func (observer *sdkHistoryObserver) recoverNotifications(notifications []protocolv2.ServerNotification) {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
+	observer.recoverNotificationsLocked(notifications)
+}
+
+func (observer *sdkHistoryObserver) recoverNotificationsLocked(notifications []protocolv2.ServerNotification) {
 	// A provisional request identity cannot replace a missing or mismatched
 	// turn/start response, including during SDK EOF/failure snapshot recovery.
 	if !observer.reconciled {
