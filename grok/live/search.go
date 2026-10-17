@@ -240,7 +240,7 @@ func (p *searchProbe) notification(message frame) error {
 // item notification. Validate it without changing the current probe identity.
 func validateSearchTerminal(value turn) error {
 	if value.Status != "completed" || len(value.Error) != 0 && string(value.Error) != "null" {
-		return errors.New("live: search turn did not complete")
+		return failedTurn(value.Status, value.Error, "live: search turn did not complete")
 	}
 	for _, item := range value.Items {
 		if localSearchItem(item.Type) {

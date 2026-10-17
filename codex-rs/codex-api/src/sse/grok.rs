@@ -99,7 +99,12 @@ impl GrokSequencer {
                 // X call is unsupported and must never enter ordered delivery.
                 if matches!(&item, ResponseItem::CustomToolCall { name, .. } if is_x_search_name(name))
                 {
-                    return Err(invalid("Hosted X Search is retired and cannot be executed"));
+                    // Retrying cannot restore a retired product capability. Use
+                    // the existing terminal category instead of a stream fault.
+                    return Err(ApiError::InvalidRequest {
+                        message: "Grok stream: Hosted X Search is retired and cannot be executed"
+                            .into(),
+                    });
                 }
                 if web && index > MAX_SAFE_INTEGER {
                     return Err(invalid(

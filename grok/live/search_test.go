@@ -82,6 +82,10 @@ func fakeSearchServer() {
 				status = "failed"
 			}
 			terminal := map[string]any{"id": id, "status": status, "items": []any{item}}
+			if mode == "failed_initial" {
+				terminal["status"], terminal["items"] = "failed", []any{}
+				terminal["error"] = map[string]any{"message": "PRIVATE_RETIRED_CAPABILITY", "codexErrorInfo": "other"}
+			}
 			if mode == "empty" {
 				terminal["items"] = []any{}
 			}
@@ -137,7 +141,7 @@ func fakeSearchServer() {
 					_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": previous}})
 				}
 			}
-			if index == 1 && mode != "missing" || index == 2 && (mode == "followup_reused_search_id" || strings.HasPrefix(mode, "budget_")) {
+			if index == 1 && mode != "missing" && mode != "failed_initial" || index == 2 && (mode == "followup_reused_search_id" || strings.HasPrefix(mode, "budget_")) {
 				call := hostedSearchFixtureCall(scenario)
 				if mode == "action_only" && strings.HasPrefix(scenario, "web") {
 					call["action"] = map[string]any{"type": "search"}
@@ -314,6 +318,30 @@ func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
 				t.Fatalf("failed invocation resubmitted: %+v", got)
 			}
 		})
+	}
+}
+
+func TestHostedSearchClassifiesFailedInitialTurnWithoutCreditOrContinuation(t *testing.T) {
+	options := fixtureOptions(t, "search:failed_initial:web")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	got, err := live.HostedSearch(ctx, options, "web")
+	wantFailure := live.FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed", ErrorKind: "other"}
+	if err == nil || live.DescribeFailure(err) != wantFailure || strings.Contains(err.Error(), "PRIVATE_") {
+		t.Fatalf("failed search lost its bounded terminal diagnostic: %+v, %v", live.DescribeFailure(err), err)
+	}
+	if got.Completed || got.FirstCompleted || got.FollowupCompleted || got.ExpectedUnsupported || got.CanonicalCalls != 0 || got.SettledTurns != 0 || !got.Bound || got.Turns != 1 || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
+		t.Fatalf("failed search claimed credit or lost lifecycle evidence: %+v", got)
+	}
+	var script struct{ Trace string }
+	_ = json.Unmarshal([]byte(options.APIKey), &script)
+	trace, _ := os.ReadFile(script.Trace)
+	if string(trace) != "initialize\ninitialized\nthread/start\nturn/start\n" {
+		t.Fatalf("failed search submitted further semantic work: %q", trace)
+	}
+	encoded, _ := json.Marshal(got)
+	if strings.Contains(string(encoded), "PRIVATE_") {
+		t.Fatal("failed search evidence leaked private content")
 	}
 }
 

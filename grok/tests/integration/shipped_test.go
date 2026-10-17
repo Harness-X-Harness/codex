@@ -150,6 +150,12 @@ func TestShippedThreadSource(t *testing.T) {
 	if started.Model != providerfixture.PrimaryModel || started.ModelProvider != "grok" || started.Thread.ModelProvider != "grok" || started.Thread.ID == "" || started.CWD != cwd {
 		t.Fatal("typed thread binding missing")
 	}
+	// The stock CLI app-server launcher selects VSCode provenance. The transport
+	// name is not the session source; require that source at start and after read.
+	const expectedSource = protocolv2.SessionSourceKindVscode
+	if started.Thread.Source.Kind() != expectedSource {
+		t.Fatalf("typed root source: got %q, want %q", started.Thread.Source.Kind(), expectedSource)
+	}
 	threadID = started.Thread.ID
 	turn, err := client.Turns().Start(ctx, protocolv2.TurnStartParams{ThreadID: started.Thread.ID, Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: "Reply with a short confirmation without using tools."})}})
 	if err != nil || turn.Turn.ID == "" {
@@ -174,7 +180,22 @@ func TestShippedThreadSource(t *testing.T) {
 		t.Fatal("typed durable thread read failed")
 	}
 	thread := read.Thread
-	if thread.ID != started.Thread.ID || thread.ModelProvider != "grok" || thread.Model == nil || thread.Model.Value == nil || *thread.Model.Value != providerfixture.PrimaryModel || thread.Source.Kind() != protocolv2.SessionSourceKindAppServer || thread.ParentThreadID != nil && thread.ParentThreadID.Value != nil && *thread.ParentThreadID.Value != "" || thread.ForkedFromID != nil && thread.ForkedFromID.Value != nil && *thread.ForkedFromID.Value != "" || len(thread.Turns) != 1 || thread.Turns[0].ID != turn.Turn.ID || thread.Turns[0].Status != protocolv2.TurnStatusCompleted || thread.Turns[0].Error != nil && thread.Turns[0].Error.Value != nil {
+	if thread.ID != started.Thread.ID || thread.ModelProvider != "grok" || thread.Model == nil || thread.Model.Value == nil || *thread.Model.Value != providerfixture.PrimaryModel || thread.Source.Kind() != started.Thread.Source.Kind() || thread.ParentThreadID != nil && thread.ParentThreadID.Value != nil && *thread.ParentThreadID.Value != "" || thread.ForkedFromID != nil && thread.ForkedFromID.Value != nil && *thread.ForkedFromID.Value != "" || len(thread.Turns) != 1 || thread.Turns[0].ID != turn.Turn.ID || thread.Turns[0].Status != protocolv2.TurnStatusCompleted || thread.Turns[0].Error != nil && thread.Turns[0].Error.Value != nil {
+		// Report only identity fields, never transcript items or error contents.
+		value := func(field *protocolv2.Nullable[string]) string {
+			if field == nil || field.Value == nil {
+				return "<absent>"
+			}
+			return *field.Value
+		}
+		t.Logf("thread ID: got %q, want %q; provider: got %q, want %q", thread.ID, started.Thread.ID, thread.ModelProvider, "grok")
+		t.Logf("source: got %q, want %q; model: got %q, want %q", thread.Source.Kind(), expectedSource, value(thread.Model), providerfixture.PrimaryModel)
+		t.Logf("parentThreadId: got %q, want absent or empty; forkedFromId: got %q, want absent or empty", value(thread.ParentThreadID), value(thread.ForkedFromID))
+		t.Logf("turn count: got %d, want 1", len(thread.Turns))
+		if len(thread.Turns) > 0 {
+			first := thread.Turns[0]
+			t.Logf("first turn ID: got %q, want %q; status: got %q, want %q; error present: got %t, want false", first.ID, turn.Turn.ID, first.Status, protocolv2.TurnStatusCompleted, first.Error != nil && first.Error.Value != nil)
+		}
 		t.Fatal("durable root source, model, lineage or turn identity changed")
 	}
 	reply := ""

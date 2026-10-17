@@ -11,7 +11,7 @@ async fn retired_hosted_x_fails_before_activity_or_canonical_delivery() -> Resul
     ] {
         let item = json!({"type":"custom_tool_call", "id":"x-1", "call_id":"call-x",
             "name":name, "status":"in_progress", "input":"{}"});
-        let events = run_web_events(
+        let mut events = run_web_events(
             vec![
                 added(/*index*/ 0),
                 item_frame("response.output_item.added", /*index*/ 1, item),
@@ -31,8 +31,21 @@ async fn retired_hosted_x_fails_before_activity_or_canonical_delivery() -> Resul
                     codex_protocol::models::ResponseItem::CustomToolCall { .. }
                 ))
         )));
-        assert!(events.iter().any(|event| matches!(event, Err(error) if error.to_string().contains("Hosted X Search is retired"))));
-        assert_failed(events);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Ok(ResponseEvent::Completed { .. })))
+        );
+        let Some(Err(error @ ApiError::InvalidRequest { .. })) = events.pop() else {
+            panic!("retired Hosted X must end with a terminal capability rejection");
+        };
+        let error = codex_api::map_api_error(error);
+        assert!(matches!(
+            error.details(),
+            codex_protocol::error::CodexErrorDetails::InvalidRequest(message)
+                if message == "Grok stream: Hosted X Search is retired and cannot be executed"
+        ));
+        assert_eq!(error.retry_delay(/*retry_count*/ 1), None);
     }
     Ok(())
 }

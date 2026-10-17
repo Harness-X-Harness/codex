@@ -65,7 +65,8 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 		transport.runFailures = runFailures
 		go func() {
 			defer close(waitDone)
-			if _, err := stream.Wait(waitCtx); err != nil {
+			_, waitErr := stream.Wait(waitCtx)
+			if err := searchRunTransportFailure(waitErr, started.Start.Thread.ID, started.Run.Turn.ID); err != nil {
 				runFailures <- err
 			}
 		}()
@@ -108,6 +109,20 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 	result.Evidence = base
 	result.ExpectedUnsupported = ctx.Err() == nil && acceptedXSearchRejection(result, err)
 	return result, err
+}
+
+// The SDK dispatches the matching terminal notification before Wait returns a
+// TurnError. Leave that failure to the correlated observer; racing it through
+// the transport channel would erase its terminal classification. Unrelated,
+// wrapped, joined, and protocol/decode failures still take the early-failure path.
+func searchRunTransportFailure(err error, threadID, turnID string) error {
+	terminal, ok := err.(*codexsdk.TurnError)
+	if ok && terminal != nil && terminal.ThreadID == threadID && terminal.Turn.ID == turnID &&
+		(terminal.Turn.Status == protocolv2.TurnStatusFailed && terminal.Err == codexsdk.ErrTurnFailed ||
+			terminal.Turn.Status == protocolv2.TurnStatusInterrupted && terminal.Err == codexsdk.ErrTurnInterrupted) {
+		return nil
+	}
+	return err
 }
 
 // revalidate checks observed queue and SDK-retained typed contradictions without

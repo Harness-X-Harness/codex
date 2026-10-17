@@ -468,6 +468,12 @@ async fn unsupported_hosted_completion_fails_before_local_dispatch(case: &str) -
     }
     let mock = responses::mount_sse_once(&server, response("rejected-search", &[item])).await;
     let mut builder = builder(home(&server, "allowed_domains", WebSearchMode::Live)?);
+    if case == "retired_x" {
+        // This capability failure must stay terminal even with retries enabled.
+        builder = builder.with_config(|config| {
+            config.model_provider.stream_max_retries = Some(2);
+        });
+    }
     if case == "web_not_advertised" {
         builder = builder.with_config(|config| {
             config
@@ -505,6 +511,17 @@ async fn unsupported_hosted_completion_fails_before_local_dispatch(case: &str) -
         "before\n"
     );
     assert_eq!(mock.requests().len(), 1);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("received requests")
+            .iter()
+            .filter(|request| request.url.path().ends_with("/responses"))
+            .count(),
+        1,
+        "rejected Hosted X must not retry after the one-use mock is exhausted"
+    );
     assert!(
         persisted(&test).await?.iter().all(|item| !matches!(
             item["type"].as_str(),
