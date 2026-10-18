@@ -2,14 +2,22 @@
 
 `grok-live` makes the existing `grok/live` scenario functions independently
 invocable. Build from `grok/` with `go build -o grok-live ./cmd/grok-live`.
-`--help` lists the 19 existing primary/pinned, reasoning, edit, image, shipped
-profile/child and hosted-search selections. The command adds no product oracle.
+`grok-scenarios --family live --suite diagnostic` lists the primary/pinned,
+reasoning, edit, image, shipped profile/child and hosted-search catalog. Full has
+17 formal cases; the eighteenth, `reasoning-no-effort-pinned`, is exploratory and
+requires explicit diagnostic selection. The command adds no product oracle.
 
-One invocation selects one scenario. Provide an absolute immutable binary,
+One invocation selects one scenario. Provide an absolute source executable,
 its expected SHA-256, source SHA, harness SHA, supported package target and
 environment label. The caller establishes source/target provenance, native
-eligibility and artifact identity. The underlying runner verifies the binary
-digest and owns isolated Home/workspace creation, process cleanup and observation.
+eligibility and artifact identity. The runner verifies copied executable bytes
+and executes an owned non-writable snapshot with package-relative helpers intact.
+It owns isolated Home/workspace creation, bounded process cleanup and observation.
+An unproved join retains the snapshot and fixture and reports
+`execution_snapshot_retained` and `CleanupPending`; confirm termination before
+manual cleanup. Successful joins remove the snapshot. The
+snapshot protects against source-path replacement, not malicious same-user
+mutation, and creates no new provenance claim.
 Package callers first verify the selected archive and complete package with
 `grok/package/fetch_artifact.py`, which composes the exact selection and
 archive-extraction validators.
@@ -28,11 +36,14 @@ minutes and cannot exceed the underlying ten-minute bound. The command never
 restarts a scenario or resubmits a failed semantic turn.
 
 One JSON result contains the selected scenario, UTC time, endpoint fingerprint
-and unchanged safe evidence returned by its owner. Exit 0 is a scoped observed
-result, 1 is not observed or output failure, 2 is invalid configuration/subject,
+and safe evidence returned by its owner. Exit 0 is a scoped `observed` result.
+Exit 1 is not observed or output failure, 2 is invalid configuration/subject,
 and 3 is not run without opt-in. `shipped-catalog` records catalog observation
-without inference completion. Partial facts remain separate from overall
-completion; failures contain static reasons and no raw child/backend traffic.
+without inference completion. Product `x`/`x-window` are retired under #414 and
+fail selection before process launch. Legacy `xSearch` SDK rejection is only an
+offline diagnostic, never a successful CLI or formal Live outcome. Partial facts
+remain separate from completion; failures contain static reasons and no raw
+child/backend traffic.
 
 The command tests compile the real CLI and the existing Live package's fake
 App Server executable. They run every selection through actual child processes,
@@ -49,5 +60,19 @@ Unknown errors remain `unclassified_failure`; unknown, malformed or oversized
 terminal details remain unknown. No error message, additional details, raw
 traffic, identifiers or private content is retained. These fields locate the
 observer rejection and do not establish product or backend attribution.
-The existing `reason` still gives cancellation/deadline precedence. The proof
-outcome, last proven stage, success conditions and invocation budget are unchanged.
+The existing `reason` still gives cancellation/deadline precedence. The
+last proven stage and invocation budget remain truthful. A Web run receiving an
+unsupported public X item fails even when the exact decoder cause is known.
+Direct backend X Facts remain independently available and do not claim product
+Hosted X support.
+
+## Primary Go test entry point
+
+New local and CI invocations use `go test -tags=live ./tests/live` with explicit
+opt-in, credentials, binary and selection; see [TESTING](../../TESTING.md) for
+complete commands, safe JSON event checks and verified subject flags. The CLI
+remains a compatibility entry point for callers that consume its existing report
+shape. Both entry points share the same catalog, execution path and business
+oracles. The default manual workflow still runs only one `basic-primary` case;
+smoke/full require an explicit suite choice. Neither selecting a smaller suite
+nor retaining this CLI is evidence that omitted Stories passed.

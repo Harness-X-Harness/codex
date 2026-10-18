@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/searchfixture"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 // SearchEvidence observes canonical hosted output and same-thread continuation.
@@ -16,12 +17,17 @@ type SearchEvidence struct {
 	Scenario                     string
 	CanonicalCalls, SettledTurns int
 	FollowupCompleted            bool
+	ExpectedUnsupported          bool `json:",omitempty"`
 }
 
-// HostedSearch submits one fixed Web/X search and one follow-up, each once.
+// HostedSearch submits one supported Web search and one follow-up, each once.
+// Product Hosted X is retired; direct backend X probes belong to Facts.
 // Its isolated fixture has no local tool executor. Native config/wire/history
 // composition remains a prerequisite; this observer does not infer it from text.
 func HostedSearch(ctx context.Context, options Options, scenario string) (SearchEvidence, error) {
+	if scenario == "x" || scenario == "x_window" {
+		return SearchEvidence{Scenario: scenario}, failedObservation("hosted_x_retired", "live: product hosted X is retired")
+	}
 	_, config, prompt, err := searchfixture.Plan(scenario)
 	if err != nil {
 		return SearchEvidence{}, errors.New("live: invalid hosted search fixture")
@@ -30,39 +36,43 @@ func HostedSearch(ctx context.Context, options Options, scenario string) (Search
 }
 
 type searchProbe struct {
-	server                                 productClient
+	server                                 *sdkProductObserver
 	threadID, turnID, previousID, scenario string
 	evidence                               *Evidence
 	result                                 *SearchEvidence
 	calls                                  map[string]map[string]string
 	frames, bytes                          int
-	terminal                               bool
+	terminal, settled                      bool
 }
 
 func (p *searchProbe) observe(prompt string) error {
 	p.evidence.Turns++
-	p.frames, p.bytes, p.terminal = 0, 0, false
-	var started struct {
-		Turn turn `json:"turn"`
+	response, err := p.server.client.Turns().Start(p.server.ctx, protocolv2.TurnStartParams{ThreadID: p.threadID,
+		Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}})
+	if err != nil {
+		return shippedTransport(p.server.ctx, err)
 	}
-	if err := p.server.call("turn/start", map[string]any{"threadId": p.threadID, "input": []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}}}, &started); err != nil {
-		return err
+	return p.observeStarted(response.Turn)
+}
+
+func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
+	p.frames, p.bytes, p.terminal, p.settled = 0, 0, false, false
+	started, err := searchTurnFromSDK(value)
+	if err != nil {
+		return errors.New("live: invalid search evidence")
 	}
-	if started.Turn.ID == "" || started.Turn.ID == p.previousID {
+	if started.ID == "" || started.ID == p.previousID {
 		return errors.New("live: search turn identity unavailable")
 	}
-	p.turnID, p.evidence.Stage = started.Turn.ID, "search_turn_submitted"
+	p.turnID, p.evidence.Stage = started.ID, "search_turn_submitted"
 	if p.calls == nil {
 		p.calls = map[string]map[string]string{}
 	}
 	// Keep the previous settled turn's credited identities through the single
 	// continuation. A reused item ID in a new turn is a separate occurrence.
 	p.calls[p.turnID] = map[string]string{}
-	if started.Turn.Status != "inProgress" {
-		if err := p.complete(started.Turn); err != nil {
-			return err
-		}
-	}
+	// A start response is only a snapshot. Admit completion only through a
+	// matching turn/completed notification, including for a terminal-looking start.
 	for !p.terminal {
 		message, err := p.server.next()
 		if err != nil {
@@ -72,16 +82,26 @@ func (p *searchProbe) observe(prompt string) error {
 			return err
 		}
 	}
+	// A snapshot can contradict the observed completion, but cannot replace it.
+	if started.Status != "inProgress" {
+		if err := validateSearchTerminal(started); err != nil {
+			return err
+		}
+	}
 	// One settled read fences queued events and provides authoritative final text.
 	// It is not a second semantic invocation or a scan of unrelated session files.
-	var read struct {
-		Thread struct {
-			ID    string `json:"id"`
-			Turns []turn `json:"turns"`
-		} `json:"thread"`
+	include := true
+	read, err := p.server.client.Threads().Read(p.server.ctx, protocolv2.ThreadReadParams{ThreadID: p.threadID, IncludeTurns: &include})
+	if err != nil {
+		return shippedTransport(p.server.ctx, err)
 	}
-	if err := p.server.call("thread/read", map[string]any{"threadId": p.threadID, "includeTurns": true}, &read); err != nil {
-		return err
+	turns := make([]turn, 0, len(read.Thread.Turns))
+	for _, value := range read.Thread.Turns {
+		projected, err := searchTurnFromSDK(value)
+		if err != nil {
+			return errors.New("live: invalid search evidence")
+		}
+		turns = append(turns, projected)
 	}
 	for len(p.server.queued()) > 0 {
 		message, err := p.server.next()
@@ -92,11 +112,11 @@ func (p *searchProbe) observe(prompt string) error {
 			return err
 		}
 	}
-	if read.Thread.ID != p.threadID || len(read.Thread.Turns) != p.evidence.Turns {
+	if read.Thread.ID != p.threadID || len(turns) != p.evidence.Turns {
 		return errors.New("live: settled search history unavailable")
 	}
 	if p.previousID != "" {
-		previous := read.Thread.Turns[0]
+		previous := turns[0]
 		if previous.ID != p.previousID {
 			return errors.New("live: search history identity changed")
 		}
@@ -104,8 +124,11 @@ func (p *searchProbe) observe(prompt string) error {
 			return err
 		}
 	}
-	current := read.Thread.Turns[len(read.Thread.Turns)-1]
-	if err := p.complete(current); err != nil {
+	current := turns[len(turns)-1]
+	if current.ID != p.turnID {
+		return errors.New("live: search turn identity changed")
+	}
+	if err := validateSearchTerminal(current); err != nil {
 		return err
 	}
 	p.evidence.ReplyBytes = 0
@@ -120,6 +143,7 @@ func (p *searchProbe) observe(prompt string) error {
 	if p.evidence.ReplyBytes == 0 {
 		return errors.New("live: final search reply absent")
 	}
+	p.settled = true
 	p.result.SettledTurns++
 	return nil
 }
@@ -179,10 +203,12 @@ func (p *searchProbe) notification(message frame) error {
 	if json.Unmarshal(event.Item, &kind) != nil {
 		return errors.New("live: invalid search item")
 	}
-	// Raw canonical hosted X is distinct from local custom execution, even
-	// when the selected scenario credits Web. Public ThreadItem notifications
-	// never use raw custom_tool_call; those remain rejected by localSearchItem.
+	// Retired hosted X cannot contribute to supported Web proof. The legacy X
+	// branch below is exercised only by credential-free strict-SDK diagnostics.
 	_, hostedX := searchfixture.ReplayCall(event.Item, "x")
+	if hostedX && strings.HasPrefix(p.scenario, "web") {
+		return failedObservation("hosted_x_retired", "live: retired hosted X appeared during Web search")
+	}
 	if localSearchItem(kind.Type) && !(message.Method == "rawResponseItem/completed" && hostedX) {
 		return errors.New("live: local execution cannot establish hosted search")
 	}
@@ -205,7 +231,7 @@ func (p *searchProbe) notification(message frame) error {
 		}
 		return nil
 	}
-	if event.TurnID != p.turnID {
+	if event.TurnID != p.turnID || p.settled {
 		return errors.New("live: new hosted search evidence after settled turn")
 	}
 	if len(credited) == 64 {
@@ -220,7 +246,7 @@ func (p *searchProbe) notification(message frame) error {
 // item notification. Validate it without changing the current probe identity.
 func validateSearchTerminal(value turn) error {
 	if value.Status != "completed" || len(value.Error) != 0 && string(value.Error) != "null" {
-		return errors.New("live: search turn did not complete")
+		return failedTurn(value.Status, value.Error, "live: search turn did not complete")
 	}
 	for _, item := range value.Items {
 		if localSearchItem(item.Type) {

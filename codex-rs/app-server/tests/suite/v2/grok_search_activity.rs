@@ -1,5 +1,5 @@
 //! Schematic deterministic wire fixtures, not backend captures. The public
-//! client must observe start AND settlement before message@0 can finish.
+//! client observes canonical Web through the stock typed public boundary.
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
@@ -9,9 +9,6 @@ use axum::body::Body;
 use axum::routing::post;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::SearchActivityKind;
-use codex_app_server_protocol::SearchActivityNotification;
-use codex_app_server_protocol::SearchActivityState;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
@@ -19,7 +16,6 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError;
-use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -148,10 +144,6 @@ impl Fixture {
             .and_then(|providers| providers.get_mut("grok"))
             .and_then(toml::Value::as_table_mut)
             .context("fixture Grok provider table")?;
-        provider.insert(
-            "x_search".into(),
-            toml::from_str::<toml::Value>("from_date = \"2026-10-01\"\nto_date = \"2026-10-08\"")?,
-        );
         provider.insert("stream_max_retries".into(), i64::from(retries).into());
         provider.insert(
             "stream_idle_timeout_ms".into(),
@@ -237,7 +229,6 @@ fn suffix() -> Vec<Value> {
 struct Observed {
     text: String,
     canonical_searches: Vec<Value>,
-    activity: Vec<SearchActivityNotification>,
 }
 
 impl Observed {
@@ -248,19 +239,15 @@ impl Observed {
                 else {
                     continue;
                 };
+                assert_ne!(notification.method, "item/searchActivity");
                 let params = notification.params.context("notification params")?;
+                assert_ne!(params["item"]["type"], "xSearch");
                 match notification.method.as_str() {
                     "item/agentMessage/delta" => self
                         .text
                         .push_str(params["delta"].as_str().context("text delta")?),
-                    "item/searchActivity" => {
-                        self.activity.push(serde_json::from_value(params.clone())?)
-                    }
                     "item/completed"
-                        if matches!(
-                            params["item"]["type"].as_str(),
-                            Some("webSearch" | "xSearch")
-                        ) =>
+                        if matches!(params["item"]["type"].as_str(), Some("webSearch")) =>
                     {
                         self.canonical_searches.push(params["item"].clone())
                     }
@@ -276,7 +263,7 @@ impl Observed {
 }
 
 #[tokio::test]
-async fn grok_public_search_activity_gates_start_settlement_and_exact_transcript() -> Result<()> {
+async fn grok_public_web_search_preserves_typed_history_and_followup() -> Result<()> {
     let mut fixture = Fixture::start(/*retries*/ 0, /*idle_timeout_ms*/ 120_000).await?;
     let first_request = timeout(WAIT, fixture.server.requests.recv())
         .await?
@@ -290,45 +277,13 @@ async fn grok_public_search_activity_gates_start_settlement_and_exact_transcript
     );
     let mut seen = Observed::default();
     fixture.server.send(/*request*/ 0, prefix()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    let running = seen.activity.last().context("running activity")?.clone();
-    assert_eq!(
-        (
-            &running.thread_id,
-            &running.turn_id,
-            running.output_index,
-            running.item_id.as_str(),
-            running.kind,
-            running.state
-        ),
-        (
-            &fixture.thread_id,
-            &fixture.turn_id,
-            1,
-            "web-1",
-            SearchActivityKind::Web,
-            SearchActivityState::Running
-        )
-    );
-    assert_eq!(seen.text, "A");
-    assert!(seen.canonical_searches.is_empty());
     fixture.server.send(/*request*/ 0, settlement()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    let expected_settlement = SearchActivityNotification {
-        state: SearchActivityState::Completed,
-        ..running.clone()
-    };
-    assert_eq!(seen.activity, vec![running, expected_settlement]);
-    assert_eq!(seen.text, "A");
-    assert!(seen.canonical_searches.is_empty());
-    // Gate opens only after BOTH public observations. No timing sleep can satisfy it.
     fixture.server.send(/*request*/ 0, suffix()).await?;
     let completed: TurnCompletedNotification =
         serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
     assert_eq!(completed.turn.status, TurnStatus::Completed);
     assert_eq!(seen.text, "AB");
     assert_eq!(seen.canonical_searches.len(), 1);
-    assert_eq!(seen.activity.len(), 2);
     fixture.start_turn().await?;
     let followup = timeout(WAIT, fixture.server.requests.recv())
         .await?
@@ -391,91 +346,6 @@ async fn grok_public_search_activity_gates_start_settlement_and_exact_transcript
             .pending_notification_methods()
             .iter()
             .any(|method| method == "item/searchActivity")
-    );
-    Ok(())
-}
-
-#[test_case("eof"; "eof")]
-#[test_case("failed"; "failed")]
-#[test_case("incomplete"; "incomplete")]
-#[test_case("malformed"; "malformed")]
-#[test_case("cancel"; "cancel")]
-#[test_case("timeout"; "timeout")]
-#[tokio::test]
-async fn grok_public_search_activity_clears_completed_unretained_attempt(
-    failure: &str,
-) -> Result<()> {
-    let idle = if failure == "timeout" { 2_000 } else { 120_000 };
-    let mut fixture = Fixture::start(/*retries*/ 0, idle).await?;
-    let mut seen = Observed::default();
-    fixture.server.send(/*request*/ 0, prefix()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    fixture.server.send(/*request*/ 0, settlement()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    match failure {
-        "eof" => fixture.server.frames[0].send(None).await?,
-        "failed" => fixture.server.send(/*request*/ 0, vec![json!({"type":"response.failed","response":{"error":{"code":"server_error","message":"fixture failure"}}})]).await?,
-        "incomplete" => fixture.server.send(/*request*/ 0, vec![json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}})]).await?,
-        "malformed" => fixture.server.frames[0].send(Some("data: malformed-json\n\n".into())).await?,
-        "cancel" => { fixture.app.send_turn_interrupt_request(TurnInterruptParams { thread_id: fixture.thread_id.clone(), turn_id: fixture.turn_id.clone() }).await?; },
-        "timeout" => {},
-        _ => unreachable!(),
-    }
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    let expected = SearchActivityNotification {
-        state: SearchActivityState::Cleared,
-        ..seen.activity[0].clone()
-    };
-    assert_eq!(seen.activity.last(), Some(&expected));
-    let completed: TurnCompletedNotification =
-        serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
-    assert!(matches!(
-        completed.turn.status,
-        TurnStatus::Failed | TurnStatus::Interrupted
-    ));
-    assert!(seen.canonical_searches.is_empty());
-    assert!(
-        !completed
-            .turn
-            .items
-            .iter()
-            .any(|item| matches!(item, ThreadItem::WebSearch(_)))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn grok_public_search_activity_retry_reuses_provider_ids_in_a_new_attempt() -> Result<()> {
-    let mut fixture = Fixture::start(/*retries*/ 1, /*idle_timeout_ms*/ 120_000).await?;
-    let mut seen = Observed::default();
-    fixture.server.send(/*request*/ 0, prefix()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    fixture.server.send(/*request*/ 0, settlement()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    fixture.server.frames[0].send(None).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    assert_eq!(seen.activity[2].state, SearchActivityState::Cleared);
-    let old_attempt = seen.activity[0].attempt_id;
-    fixture.server.send(/*request*/ 1, prefix()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    assert!(seen.activity[3].attempt_id > old_attempt);
-    assert_eq!(seen.activity[3].item_id, seen.activity[0].item_id);
-    fixture.server.send(/*request*/ 1, settlement()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    fixture.server.send(/*request*/ 1, suffix()).await?;
-    let completed: TurnCompletedNotification =
-        serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
-    assert_eq!(completed.turn.status, TurnStatus::Completed);
-    assert_eq!(seen.canonical_searches.len(), 1);
-    assert_eq!(
-        seen.activity.iter().map(|a| a.state).collect::<Vec<_>>(),
-        vec![
-            SearchActivityState::Running,
-            SearchActivityState::Completed,
-            SearchActivityState::Cleared,
-            SearchActivityState::Running,
-            SearchActivityState::Completed,
-        ]
     );
     Ok(())
 }
@@ -554,7 +424,6 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
     while seen.canonical_searches.is_empty() {
         seen.until(&mut fixture.app, "item/completed").await?;
     }
-    assert_eq!(seen.activity.len(), 2);
     let first_canonical = seen.canonical_searches[0].clone();
     let (stream, index) = if matches!(collision, SearchCollision::NextSampling) {
         fixture
@@ -643,13 +512,6 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
         })
     );
 
-    assert_eq!(
-        seen.activity
-            .iter()
-            .map(|activity| activity.state)
-            .collect::<Vec<_>>(),
-        vec![SearchActivityState::Running, SearchActivityState::Completed]
-    );
     assert_eq!(seen.canonical_searches, vec![first_canonical.clone()]);
     let warm = read_thread(&mut fixture.app, &fixture.thread_id).await?;
     assert_first_search_preserved(&warm, &original_turn_id, &first_canonical)?;
@@ -694,6 +556,60 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
 }
 
 #[tokio::test]
+async fn grok_public_retired_x_fails_without_public_search_or_local_tool_items() -> Result<()> {
+    let mut fixture = Fixture::start(/*retries*/ 0, /*idle_timeout_ms*/ 120_000).await?;
+    let request = timeout(WAIT, fixture.server.requests.recv())
+        .await?
+        .context("request")?;
+    assert!(
+        request["tools"]
+            .as_array()
+            .context("tools")?
+            .iter()
+            .all(|tool| tool["type"] != "x_search")
+    );
+    let item = json!({"type":"custom_tool_call", "id":"retired-x", "call_id":"call-x",
+        "name":"x_keyword_search", "status":"in_progress", "input":"{}"});
+    fixture
+        .server
+        .send(
+            /*request*/ 0,
+            vec![
+                responses::ev_response_created("retired-x"),
+                json!({"type":"response.output_item.added", "output_index":0, "item":item}),
+            ],
+        )
+        .await?;
+    let mut seen = Observed::default();
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    assert!(
+        completed
+            .turn
+            .error
+            .context("explicit retired X failure")?
+            .message
+            .contains("Hosted X Search is retired")
+    );
+    assert!(seen.canonical_searches.is_empty());
+    let read = read_thread(&mut fixture.app, &fixture.thread_id).await?;
+    assert!(
+        read.thread
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .all(|item| !matches!(
+                item,
+                ThreadItem::DynamicToolCall { .. }
+                    | ThreadItem::CommandExecution { .. }
+                    | ThreadItem::WebSearch(_)
+            ))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn grok_public_search_activity_new_turn_may_reuse_a_retained_provider_id() -> Result<()> {
     let mut fixture = Fixture::start(/*retries*/ 0, /*idle_timeout_ms*/ 120_000).await?;
     let mut seen = Observed::default();
@@ -710,7 +626,6 @@ async fn grok_public_search_activity_new_turn_may_reuse_a_retained_provider_id()
             serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
         assert_eq!(completed.turn.status, TurnStatus::Completed);
     }
-    assert_eq!(seen.activity.len(), 4);
     assert_eq!(
         seen.canonical_searches
             .iter()
@@ -731,7 +646,6 @@ async fn grok_public_search_activity_multiple_interleaved_searches_keep_their_id
     let mut fixture = Fixture::start(/*retries*/ 0, /*idle_timeout_ms*/ 120_000).await?;
     let mut seen = Observed::default();
     fixture.server.send(/*request*/ 0, prefix()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
     let mut second = web("in_progress");
     second["id"] = json!("web-2");
     fixture
@@ -741,7 +655,6 @@ async fn grok_public_search_activity_multiple_interleaved_searches_keep_their_id
             vec![json!({"type":"response.output_item.added","output_index":2,"item":second})],
         )
         .await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
     second["status"] = json!("completed");
     fixture
         .server
@@ -750,25 +663,7 @@ async fn grok_public_search_activity_multiple_interleaved_searches_keep_their_id
             vec![json!({"type":"response.output_item.done","output_index":2,"item":second})],
         )
         .await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
     fixture.server.send(/*request*/ 0, settlement()).await?;
-    seen.until(&mut fixture.app, "item/searchActivity").await?;
-    assert_eq!(
-        seen.activity
-            .iter()
-            .map(|activity| (
-                activity.output_index,
-                activity.item_id.as_str(),
-                activity.state
-            ))
-            .collect::<Vec<_>>(),
-        vec![
-            (1, "web-1", SearchActivityState::Running),
-            (2, "web-2", SearchActivityState::Running),
-            (2, "web-2", SearchActivityState::Completed),
-            (1, "web-1", SearchActivityState::Completed),
-        ]
-    );
     assert!(seen.canonical_searches.is_empty());
     fixture.server.send(/*request*/ 0, suffix()).await?;
     seen.until(&mut fixture.app, "turn/completed").await?;
@@ -782,6 +677,3 @@ async fn grok_public_search_activity_multiple_interleaved_searches_keep_their_id
     );
     Ok(())
 }
-
-#[path = "grok_x_search_activity.rs"]
-mod x_search;

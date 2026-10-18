@@ -168,7 +168,7 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
-    /// Grok hosted X-search date defaults; explicit request dates take precedence.
+    /// Retired Hosted X configuration, retained only to reject existing settings explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_search: Option<codex_protocol::grok::GrokXSearchOptions>,
     /// Optional query parameters to append to the base URL.
@@ -295,11 +295,8 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
-        if let Some(options) = &self.x_search {
-            if self.wire_api != WireApi::GrokResponses {
-                return Err("x_search requires wire_api grok_responses".to_string());
-            }
-            options.validate()?;
+        if self.x_search.is_some() {
+            return Err("Hosted X Search is retired; remove x_search configuration".to_string());
         }
         if self.wire_api == WireApi::GrokResponses && self.supports_websockets {
             return Err("wire_api grok_responses does not support websockets".to_string());

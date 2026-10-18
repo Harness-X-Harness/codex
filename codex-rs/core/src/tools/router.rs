@@ -164,27 +164,24 @@ impl ToolRouter {
             // Flat custom wrappers are incomplete here. Do not feed their JSON deltas to
             // canonical custom-tool diff consumers or expose provider-only identities.
             ResponseEvent::OutputItemAdded(ResponseItem::FunctionCall { .. }) => Ok(None),
-            // Hosted X input is not an invocation of a same-named local custom
-            // tool. Do not create a local argument/diff consumer for its start.
-            ResponseEvent::OutputItemAdded(ResponseItem::CustomToolCall {
-                name,
-                namespace: None,
-                ..
-            }) if !self.model_visible_specs.is_empty()
-                && codex_protocol::grok_hosted::is_x_search_name(&name) =>
+            // A raw hosted call is never a local custom-tool invocation. Product X
+            // is retired; fail before telemetry, history, or local dispatch sees it.
+            ResponseEvent::OutputItemAdded(ResponseItem::CustomToolCall { name, .. })
+                if codex_protocol::grok_hosted::is_x_search_name(&name) =>
             {
-                Ok(None)
+                Err("Hosted X Search is retired and cannot be executed".into())
             }
             ResponseEvent::OutputItemDone(item) => {
-                // Only raw hosted completions from the advertised Grok plan bypass
-                // local reverse routing. Restored local custom calls have no status.
-                let hosted = (codex_protocol::grok_hosted::is_completed_x_search(&item)
-                    && !self.model_visible_specs.is_empty())
-                    || (codex_protocol::grok_hosted::is_completed_web_search(&item)
-                        && self
-                            .model_visible_specs
-                            .iter()
-                            .any(|spec| matches!(spec, ToolSpec::WebSearch { .. })));
+                if matches!(&item, ResponseItem::CustomToolCall { name, .. }
+                    if codex_protocol::grok_hosted::is_x_search_name(name))
+                {
+                    return Err("Hosted X Search is retired and cannot be executed".into());
+                }
+                let hosted = codex_protocol::grok_hosted::is_completed_web_search(&item)
+                    && self
+                        .model_visible_specs
+                        .iter()
+                        .any(|spec| matches!(spec, ToolSpec::WebSearch { .. }));
                 let item = if hosted {
                     codex_protocol::grok_hosted::project_search_replay(&item)?;
                     item

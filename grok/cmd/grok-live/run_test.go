@@ -16,10 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
-var commandPath, fixturePath, fixtureDigest string
+var commandPath, fixturePath, fixtureDigest, taggedPath string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "grok-live-command-")
@@ -32,7 +33,8 @@ func TestMain(m *testing.M) {
 		suffix = ".exe"
 	}
 	commandPath, fixturePath = filepath.Join(dir, "grok-live"+suffix), filepath.Join(dir, "live-fixture"+suffix)
-	for _, args := range [][]string{{"build", "-race", "-o", commandPath, "."}, {"test", "-c", "-race", "-o", fixturePath, "../../live"}} {
+	taggedPath = filepath.Join(dir, "live-tagged"+suffix)
+	for _, args := range [][]string{{"build", "-race", "-o", commandPath, "."}, {"test", "-c", "-race", "-o", fixturePath, "../../live"}, {"test", "-c", "-tags=live", "-race", "-o", taggedPath, "../../tests/live"}} {
 		if output, err := exec.Command("go", args...).CombinedOutput(); err != nil {
 			fmt.Fprintf(os.Stderr, "cannot build actual command/owned fixture: %v\n%s", err, output)
 			_ = os.RemoveAll(dir)
@@ -64,14 +66,15 @@ func arguments(scenario string) []string {
 }
 
 type wireReport struct {
-	SchemaVersion  int               `json:"schema_version"`
-	Outcome        string            `json:"outcome"`
-	Reason         string            `json:"reason,omitempty"`
-	Scenario       string            `json:"scenario,omitempty"`
-	EndpointSHA256 string            `json:"endpoint_sha256,omitempty"`
-	RecordedAt     string            `json:"recorded_at"`
-	Evidence       json.RawMessage   `json:"evidence,omitempty"`
-	Failure        *live.FailureInfo `json:"failure,omitempty"`
+	ExecutionSnapshotRetained bool              `json:"execution_snapshot_retained,omitempty"`
+	SchemaVersion             int               `json:"schema_version"`
+	Outcome                   string            `json:"outcome"`
+	Reason                    string            `json:"reason,omitempty"`
+	Scenario                  string            `json:"scenario,omitempty"`
+	EndpointSHA256            string            `json:"endpoint_sha256,omitempty"`
+	RecordedAt                string            `json:"recorded_at"`
+	Evidence                  json.RawMessage   `json:"evidence,omitempty"`
+	Failure                   *live.FailureInfo `json:"failure,omitempty"`
 }
 
 func invoke(t *testing.T, args []string, optIn, key string) (wireReport, int) {
@@ -138,10 +141,16 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"web", "search:ok:web", "grok-4.7", 2},
 		{"web-allowed", "search:ok:web_allowed", "grok-4.7", 2},
 		{"web-excluded", "search:ok:web_excluded", "grok-4.7", 2},
-		{"x", "search:ok:x", "grok-4.7", 2},
-		{"x-window", "search:ok:x_window", "grok-4.7", 2},
+	}
+	registered, err := scenarios.Select("live", "diagnostic", "")
+	if err != nil || len(registered) != len(cases) {
+		t.Fatal("CLI fixture coverage differs from the active catalog")
 	}
 	for _, tc := range cases {
+		entry, err := scenarios.Lookup("live", tc.scenario)
+		if err != nil || entry.SemanticTurns != tc.turns || entry.Model != tc.model {
+			t.Fatal("catalog model/turn budget differs from the executable fixture oracle")
+		}
 		t.Run(tc.scenario, func(t *testing.T) {
 			t.Parallel()
 			trace := filepath.Join(t.TempDir(), "trace")
@@ -200,6 +209,68 @@ func TestCommandRejectsPreflightWithoutStartingRuntime(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommandExecutesOwnedSnapshotAndRemovesItAfterJoin(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	key, _ := json.Marshal(map[string]string{"Mode": "turn", "Trace": trace})
+	report, code := invoke(t, arguments("basic-primary"), "1", string(key))
+	var evidence live.Evidence
+	if code != 0 || report.ExecutionSnapshotRetained || json.Unmarshal(report.Evidence, &evidence) != nil || evidence.CleanupPending || !evidence.Completed ||
+		evidence.SHA256 != fixtureDigest || evidence.SourceSHA != strings.Repeat("a", 40) || evidence.HarnessSHA != strings.Repeat("b", 40) {
+		t.Fatal("snapshot changed the verified subject or lost completion")
+	}
+	executed, err := os.ReadFile(trace + ".executable")
+	if err != nil || string(executed) == fixturePath || !filepath.IsAbs(string(executed)) {
+		t.Fatal("command did not execute the owned snapshot")
+	}
+	if _, err := os.Stat(string(executed)); !os.IsNotExist(err) {
+		t.Fatal("owned snapshot remained after joined execution")
+	}
+	if _, err := os.Stat(fixturePath); err != nil {
+		t.Fatal("snapshot cleanup altered the original executable")
+	}
+}
+
+func TestCommandRetainsSnapshotUntilStartupFailureCanBeJoined(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	key, _ := json.Marshal(map[string]string{"Mode": "initialize_stall", "Trace": trace})
+	args := append(arguments("basic-primary"), "--timeout", "2s")
+	report, code := invoke(t, args, "1", string(key))
+	var evidence live.Evidence
+	if code != 1 || report.Reason != "deadline_exceeded" || !report.ExecutionSnapshotRetained ||
+		json.Unmarshal(report.Evidence, &evidence) != nil || !evidence.CleanupPending || evidence.Completed {
+		t.Fatal("unknown startup cleanup was reported as joined")
+	}
+	executed, err := os.ReadFile(trace + ".executable")
+	if err != nil || string(executed) == fixturePath || !filepath.IsAbs(string(executed)) {
+		t.Fatal("startup cancellation did not reach the owned executable")
+	}
+	home, err := os.ReadFile(trace + ".home")
+	if err != nil || !filepath.IsAbs(string(home)) {
+		t.Fatal("startup cancellation did not reach the isolated fixture")
+	}
+	if err := os.WriteFile(trace+".release", nil, 0600); err != nil {
+		t.Fatal("cannot release controlled startup helper")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		value, err := os.ReadFile(trace + ".retention")
+		if err == nil {
+			if string(value) != "retained" {
+				t.Fatal("unjoined child lost snapshot or fixture after command return")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("controlled startup helper did not finish its file observation")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The controlled helper has finished all file reads. Production retains
+	// these paths because the SDK constructor exposes no public join handle.
+	_ = os.RemoveAll(filepath.Dir(string(executed)))
+	_ = os.RemoveAll(string(home))
 }
 
 func TestCommandRetainsFailedScenarioWithoutResubmission(t *testing.T) {
@@ -325,5 +396,35 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 				t.Fatal("failure diagnosis repeated the process or semantic turn")
 			}
 		})
+	}
+}
+
+func TestCommandRetiredXCannotCountAsCompletion(t *testing.T) {
+	for _, scenario := range []string{"x", "x-window"} {
+		t.Run(scenario, func(t *testing.T) {
+			trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+			key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:x", "Trace": trace})
+			report, code := invoke(t, arguments(scenario), "1", string(key))
+			if code != 2 || report.Outcome != "configuration_error" || report.Reason != "unknown_or_missing_scenario" || len(report.Evidence) != 0 {
+				t.Fatalf("retired X accepted: %+v", report)
+			}
+			if _, err := os.Stat(trace); !os.IsNotExist(err) {
+				t.Fatal("retired X launched runtime")
+			}
+		})
+	}
+}
+
+func TestCommandWebCannotAcceptLegacyXDecodeRejection(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
+	key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:web", "Trace": trace})
+	report, code := invoke(t, arguments("web"), "1", string(key))
+	var evidence live.SearchEvidence
+	if json.Unmarshal(report.Evidence, &evidence) != nil || code != 1 || report.Outcome != "not_observed" || evidence.ExpectedUnsupported || evidence.Completed || evidence.FirstCompleted || evidence.FollowupCompleted || evidence.CleanupPending || report.ExecutionSnapshotRetained {
+		t.Fatalf("SDK rejection became Web success: %+v", report)
+	}
+	transcript, err := os.ReadFile(trace)
+	if err != nil || strings.Count(string(transcript), "turn/start\n") != 1 {
+		t.Fatal("failed Web resubmitted work")
 	}
 }

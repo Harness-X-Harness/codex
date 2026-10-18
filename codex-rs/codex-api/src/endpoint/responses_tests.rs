@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn x_search_policy_cannot_be_ignored_by_a_different_dialect() {
+fn retired_x_search_policy_is_rejected_for_every_dialect() {
     for options in [
         GrokXSearchOptions::default(),
         GrokXSearchOptions {
@@ -11,8 +11,8 @@ fn x_search_policy_cannot_be_ignored_by_a_different_dialect() {
     ] {
         let error = validate_grok_x_search(ApiDialect::OpenAi, Some(&options)).unwrap_err();
         assert!(matches!(error, ApiError::Stream(message)
-            if message == "X Search options require the Grok Responses dialect"));
-        assert!(validate_grok_x_search(ApiDialect::Grok, Some(&options)).is_ok());
+            if message.contains("Hosted X Search is retired")));
+        assert!(validate_grok_x_search(ApiDialect::Grok, Some(&options)).is_err());
     }
     for dialect in [ApiDialect::OpenAi, ApiDialect::Grok] {
         assert!(validate_grok_x_search(dialect, /*options*/ None).is_ok());

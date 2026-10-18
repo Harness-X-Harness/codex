@@ -117,15 +117,15 @@ fn agent_status_uses_reasoning_summaries_only() {
 }
 
 #[test]
-fn agent_status_hosted_x_keeps_a_distinct_bounded_preview() {
+fn agent_status_hosted_web_preserves_bounded_query() {
     let mut store = ThreadEventStore::new(/*capacity*/ 8);
     store.push_notification(ServerNotification::ItemCompleted(
         ItemCompletedNotification {
-            item: ThreadItem::XSearch(codex_app_server_protocol::XSearchItem {
-                id: "x-item".into(),
-                call_id: "provider-call".into(),
-                name: "x_keyword_search".into(),
-                input: "private query 日本語".repeat(2_000),
+            item: ThreadItem::WebSearch(codex_app_server_protocol::WebSearchItem {
+                id: "web-item".into(),
+                query: "日".repeat(2_000),
+                action: None,
+                results: None,
             }),
             thread_id: "thread-child".into(),
             turn_id: "turn-1".into(),
@@ -133,20 +133,8 @@ fn agent_status_hosted_x_keeps_a_distinct_bounded_preview() {
         },
     ));
     let preview = AgentStatusThreadPreview::from_store("/root/reviewer".into(), &store);
-    let cell = AgentStatusHistoryCell::new(vec![preview]);
-    let rendered = cell
-        .display_lines(/*width*/ 80)
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    insta::assert_snapshot!(rendered, @r###"
-    /subagents
-    Sub-agents running
-
-      • `/root/reviewer`
-        X search: x_keyword_search
-    "###);
-    assert!(!rendered.contains("private query"));
-    assert!(!rendered.contains("provider-call"));
+    assert_eq!(
+        preview.activity,
+        vec![format!("Web search: {}...", "日".repeat(225))]
+    );
 }

@@ -1240,6 +1240,9 @@ async fn read_rollout_record(
     }
     // Legacy records do not have ordinals, so malformed complete records cannot be repaired.
     // Skip them and let the next newline-delimited record resynchronize the stream.
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) {
+        codex_rollout::validate_supported_history(&value).map_err(migration_error)?;
+    }
     let line = line_parser::parse_legacy_rollout_line(bytes).unwrap_or(None);
     Ok(Some(RolloutRecord {
         line,

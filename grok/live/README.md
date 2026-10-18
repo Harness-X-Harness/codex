@@ -1,5 +1,11 @@
 # Explicit-binary Live scenarios
 
+See [TESTING](../TESTING.md) for the default offline, tagged Integration,
+opt-in Live and independent Facts commands. This package owns business
+observations; the [Go catalog](../internal/scenarios/catalog.go) owns invocation
+selection, eligibility and budgets. The [Story index](../docs/stories/README.md)
+links every retained guarantee to its actual Go or Rust owner.
+
 `Basic(ctx, Options)` uses the pinned `llm-go/codexsdk` client to consume the
 selected binary's App Server v2 stdio API:
 initialize, one fixture-bound thread, one text turn, matching completion and a
@@ -8,14 +14,20 @@ controls and an isolated text-only profile/catalog, independent of `grok/dist`.
 
 Supply an absolute binary path and expected SHA-256, caller-established source,
 harness/target/environment metadata, model, Provider base URL and key. The binary
-must remain immutable during the invocation. A deadline of at most ten minutes
+must remain stable during a direct invocation of these functions. The canonical
+Integration and Live/CLI entry points instead prepare a byte-verified owned
+execution snapshot, preserving package-relative helpers and original subject
+metadata; see [the snapshot boundary](../TESTING.md#integration-actual-codex-and-controlled-grok-http).
+A deadline of at most ten minutes
 is required. The runner never restarts/resubmits; product retries retain their
 policy. SDK frames cap at 16 MiB; Basic's completion callback queue caps at 128
 notifications/8 MiB and SDK retention at 512 slots/8 MiB. Basic uses explicit
 `ClientOptions.Env`, `NewContext`, typed thread/turn calls and `CloseContext`
-with a separate five-second cleanup deadline. The remaining legacy scenarios
-retain their 16 MiB frame and 128-frame/8 MiB early-traffic bounds and bounded
-child cleanup.
+with a separate five-second cleanup deadline. Other scenarios retain their
+application-owned evidence and retention bounds described below, with SDK-owned
+process/transport cleanup. `CleanupPending` explicitly marks an unproved join;
+fixtures remain available on that path instead of being removed under a child
+or admitted callback. Constructor failure exposes no SDK join handle.
 
 Returned evidence contains safe declared metadata, time, counts, booleans,
 reply byte count and last stage. Errors contain no private traffic; failure
@@ -23,29 +35,32 @@ attribution remains inconclusive without independent evidence. Success observes
 only this path; source/target provenance and native eligibility are prerequisites
 for a Story claim, supplied by callers and #339's process integration.
 
-CI tests the public stdio boundary deterministically and activates
-`TestNativeBasicFixture` with its freshly built CLI. Controlled HTTP proves
+CI tests the public stdio boundary deterministically and separately activates
+`TestBasicFixture` in `tests/integration` with `-tags=integration` and its freshly built CLI. Controlled HTTP proves
 config/request/stream composition, not real backend Live. Actual execution and
 invocation integration remain #331/#339.
 
-## Fixed-input SDK migration
+## SDK migration and historical fixed input
 
-The [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
-fixes product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2` and the owner-approved SDK revision
-`8ade447507bc3d08650b830ee6306dd27bc17f23` (`v0.2.1-0.20261014071218-8ade447507bc`),
-which supersedes `9769ba362a5e946c17a6eb78d8e2155e19bb4f28`. Direct facades no longer
-arm an unowned attachment fence.
-with Go 1.26.8. The verified Linux musl x64 product executable from canonical
-run `38171472745`, attempt 1, artifact `11714608891` has SHA-256
-`26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
-Use [explicit verified package selection](../package/ARTIFACTS.md); verify
-expiration and exact subject on retrieval. `runtime_sha256` identifies the
-executable, separately from the artifact ZIP or package archive hash. The
-product source remains fixed while the declared harness SHA evolves.
+The original [ordered migration](https://github.com/Harness-X-Harness/codex/issues/379)
+used historical product source `e9268d5211064fb77f76a9fe7f0a99348488c9d2`.
+Its Linux musl reference was run `38171472745`, attempt 1, artifact `11714608891`,
+executable SHA-256 `26ee0bce9bbcb4817d87b99a31a75367e5dfe142d5e9e1f2cc93468610faf1ab`.
+Those identifiers are historical evidence, not permanent executable eligibility
+or authority for this changed product. #401/#233 now require applicable checks
+on the actual changed branch HEAD. Runtime and harness revisions remain explicit
+and distinct; `runtime_sha256` identifies executable bytes separately from ZIP
+and archive hashes. See [verified package selection](../package/ARTIFACTS.md).
+
+The SDK remains pinned to `8ade447507bc3d08650b830ee6306dd27bc17f23`
+(`v0.2.1-0.20261014071218-8ade447507bc`) on Go 1.26.8, superseding the prior
+`9769ba362a5e946c17a6eb78d8e2155e19bb4f28` dependency. Direct facades no longer
+arm an unowned attachment fence. Product ABI retirement does not change this
+SDK pin, strict stock schema or callbacks.
 
 Basic (#383), the formal/exploratory reasoning controls (#384), the four
 structured-edit entries (#385), image generation/edit (#386), the shipped
-catalog, startup, pinned-history, and child entries (#387), and hosted Web/X
+catalog, startup, pinned-history, and child entries (#387), and hosted Web
 search (#388) use the SDK. The handwritten stdio client is gone. SDK failures
 never switch clients. Real-provider Live remains outside this fixture proof.
 Shared fixture setup verifies the selected binary and isolates home/credentials.
@@ -58,7 +73,7 @@ replaces old request-abort controls with rejection/non-execution coverage, and
 retires exact legacy error/stage/code expectations. SDK defect
 [llm-go #422](https://github.com/ronhuafeng/llm-go/issues/422) remains separately
 tracked and nonblocking under #383's explicit contract decision. Native fixtures
-and ordinary CI builds do not establish real backend Live or frozen-byte proof.
+and ordinary CI builds do not establish real backend Live.
 The typed stream attachment, independent identity checks and inline-response
 snapshot also account for separately tracked SDK [#423](https://github.com/ronhuafeng/llm-go/issues/423),
 [#424](https://github.com/ronhuafeng/llm-go/issues/424) and [#425](https://github.com/ronhuafeng/llm-go/issues/425).
@@ -96,14 +111,14 @@ digest map; provisional evidence starts fresh for the continuation.
 
 Deterministic public-stdio tests cover ordering, correlation, terminal evidence,
 secret-safe failures and invocation budgets for both model controls.
-`TestNativeReasoningHistoryFixture` uses the selected product against controlled
+`TestReasoningHistoryFixture` in `tests/integration` uses the selected product against controlled
 HTTP: N returns opaque reasoning plus a named tool call, the next product
 request carries its fresh paired result, and N+1 replays the unchanged encrypted
 history with a token-free user input on the same thread. It checks exactly three
 HTTP requests and excludes plaintext reasoning from replay. The fixture supplies
 the answers, so this proves product/SDK composition and cannot establish real
 backend recall or Story PROVEN. CI uses its freshly built product; explicit
-frozen-package runs separately verify the pinned executable bytes.
+package runs separately verify their selected executable bytes and provenance.
 
 #384's scripted-test review inventory retains all 118 original modes for both
 models and adds five focused identity controls. The semantic map is:
@@ -131,8 +146,7 @@ owns acceptance, invocation budgets, downstream prerequisites and retention.
 
 #385's fixture preparation preserves all 66 scripted modes (11 positive and
 55 negative) while making their modeled responses conform to the pinned public
-SDK schema. Public edit dispatch remains on the existing runner until the SDK
-integration lands. `TestNativeStructuredEditFixture` exercises the four edit
+SDK schema. Public edit dispatch uses the shared typed SDK runner. `TestStructuredEditFixture` in `tests/integration` exercises the four edit
 entries against controlled HTTP: primary continuation, pinned, declined approval
 and replace-all. It checks actual bytes/hashes and matching call/output history;
 the supplied replies and HTTP acceptance do not establish real-provider Live.
@@ -269,41 +283,54 @@ scripts and native catalog checks do not establish those outcomes.
 
 ## C7 hosted-search scenario support
 
-`HostedSearch(ctx, Options, scenario)` retains `web`, `web_allowed`,
-`web_excluded`, `x`, and `x_window` using explicit Grok fixture binding and
-public `thread/start` configuration overrides. The fixed policy controls match
-`facts.SearchPolicy`; the fixture enables hosted Web/X and keeps local execution
-disabled. It starts one search turn and one same-thread follow-up, each once,
-with one settled `thread/read` per completed turn. Failed or incomplete first
-turns never trigger a follow-up. Product-internal transport attempts are not
-constrained by this runner's semantic invocation budget.
+`HostedSearch(ctx, Options, scenario)` supports `web`, `web_allowed` and
+`web_excluded`, using explicit Grok binding and public `thread/start` config.
+It starts one search turn and one same-thread follow-up, each once, and performs
+one settled `thread/read` per completed turn. Failed first turns cannot trigger
+a follow-up. Product `x` and `x_window` fail before launching a process with the
+safe `hosted_x_retired` classification. Direct `facts.SearchPolicy` and
+`facts.SearchReplay` X probes are backend-only and remain separate.
 
-The observer requires supported completed canonical hosted items from matching
-`rawResponseItem/completed` notifications, both terminal turns, and authoritative
-nonempty final replies in the settled thread. Consistent duplicate hosted items
-count once; conflicting duplicates, unrelated-only evidence, local calls/outputs,
-missing calls, missing final text and failed follow-up cannot complete it. The
-public raw notification follows canonical history recording in the current
-product source. This observation is not an independent durable-file inspection.
-Per turn, observation is bounded to 4096 frames / 64 MiB and 64 hosted calls of
-at most 64 KiB each, in addition to the existing stdio bounds. Credited identities
-are keyed by turn and item and retained across the single continuation, at most
-128 total. Consistent delayed prior-turn duplicates do not add credit; changed
-payloads or newly appearing hosted items after that turn's settled-read fence
-fail. Supported hosted X may coexist with a Web scenario without being mistaken
-for local custom execution; only the selected scenario earns hosted credit. Only safe metadata,
-counts, booleans and last stage leave the observer.
+The supported Web oracle requires canonical completed hosted evidence from the
+matching raw notification, both successful terminal turns and nonempty final
+replies in typed settled history. Consistent duplicate calls count once;
+conflicting, stale, local, missing or cross-turn evidence cannot complete it.
+Observed canonical X during Web fails rather than being credited or ignored.
+Bounds remain 4096 frames / 64 MiB per turn, 64 calls of at most 64 KiB each,
+and at most 128 credited identities across the single continuation. Late prior
+items cannot manufacture credit after settlement. Only safe metadata/counts
+leave the observer.
 
-Deterministic public-stdio fake-process tests execute each retained policy,
-exercise successful and failed first/follow-up turns, validate exact config
-requests, and prohibit runner resubmission. They enter the existing required
-`go test -race -count=1 -timeout=6m -v ./facts ./live` job automatically.
+The actual Integration implementation is in `tests/integration/hosted_search_test.go`.
+It uses real Codex and controlled HTTP. Offline fake-process observer tests
+preserve identity, finality, replay, effect denial, bounded retention and cleanup
+controls. They do not establish real backend relevance/policy enforcement,
+cold restart or UI streaming completeness.
 
-This is deliberately narrower than the historical packaged hosted Stories:
-HTTP wire replay and policy projection require current native composition proof;
-actual packaged/backend execution requires #331/#339 and a reviewed invocation.
-This observer does not establish outbound replay, cold restart, search-result
-relevance, UI streaming completeness or temporal lifecycle behavior (#362/#363).
-No old Story is reintroduced as accepted authority and no Live PROVEN result is
-claimed. The retained source and offline tests cannot close those independent
-obligations.
+## Original-wire SDK and retired-X boundary
+
+[#414](https://github.com/Harness-X-Harness/codex/issues/414) removes both public
+`xSearch` ThreadItem and `item/searchActivity`. No truthful official hosted-X
+representation exists at the pinned baseline, so product Hosted X is retired:
+no tool advertisement, no fake local dispatch, no relabeling as Web/prose and
+no silent historical-X dropping. Rust owns explicit unsupported legacy-history
+handling and public schema/consumer closure. Early search-specific public
+activity visibility is no longer promised; supported Web uses official item
+started/completed notifications. Historical #362/#364 activity scope is not
+silently claimed as preserved.
+
+App Server stdout still reaches the official SDK unchanged. Offline
+`TestHostedSearchPublicXSearchExpectedRejection` exercises the legacy decoder
+boundary via a test-only helper unavailable to production runners. Its actual
+SDK cause, joined cleanup and observed/retained contradiction checks remain
+useful diagnostics. `SearchEvidence.ExpectedUnsupported` and
+`AcceptedXSearchRejection` describe only that diagnostic, never positive product
+completion. Neither formal Live nor the CLI accepts it as success. Fatal SDK
+decoding may discard undelivered raw callbacks, so it cannot prove a complete
+raw audit. Also, the SDK ignores unsubscribed unknown methods and rejects raw
+subscriptions to unsupported methods: Rust emitted-output/schema tests, not
+SDK strictness alone, prove `item/searchActivity` is absent.
+
+The historical SDK/product package identifiers above describe a previous fixed
+subject. They are not evidence that this worktree, a newly compiled product or
+a different platform has passed native or real-backend acceptance.

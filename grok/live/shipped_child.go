@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 // ShippedChildCollaboration proves a bounded seed prefix, then asks the shipped
@@ -24,7 +26,7 @@ func ShippedChildCollaboration(ctx context.Context, subject Subject, key string)
 }
 
 func runShippedChildCollaboration(ctx context.Context, options Options) (Evidence, error) {
-	return sdkShippedSession(ctx, options, func(server productClient, parentID string, evidence *Evidence) error {
+	return sdkShippedSession(ctx, options, func(server *sdkProductObserver, parentID string, evidence *Evidence) error {
 		stream := childStream{}
 		server.setNotification(stream.observe)
 		var marker [16]byte
@@ -129,11 +131,10 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			}
 			children = append(children, child)
 		}
-		// All child reads finish before selecting proof, so conflicts queued during
-		// any RPC can invalidate the exact credited child without poisoning others.
 		if err := stream.failure(); err != nil {
 			return err
 		}
+		var credited []func() bool
 		for waited := 0; ; waited++ {
 			matched, pending := false, false
 			for _, child := range children {
@@ -171,6 +172,9 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					case childProven:
 					}
 					evidence.ChildBound, evidence.ChildCompleted = true, true
+					credited = append(credited, func() bool {
+						return stream.proof(child, parent, turn, reply, nonce, setupMarker) == childProven
+					})
 					matched = true
 				}
 			}
@@ -199,12 +203,27 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 				}
 			}
 		}
-		for _, message := range stream.snapshot() {
-			for _, id := range []string{seed.ID, current.ID} {
-				if _, err := productTerminal(message, parentID, id); err != nil {
-					return err
+		server.finalize = func() error {
+			if err := stream.failure(); err != nil {
+				return err
+			}
+			for _, message := range stream.snapshot() {
+				for _, id := range []string{seed.ID, current.ID} {
+					if _, err := productTerminal(message, parentID, id); err != nil {
+						return err
+					}
 				}
 			}
+			// Only candidates already credited before cleanup are eligible.
+			for _, valid := range credited {
+				if valid() {
+					return nil
+				}
+			}
+			return errors.New("live: qualifying child result absent")
+		}
+		if err := server.finalize(); err != nil {
+			return err
 		}
 		evidence.ChildResultDelivered, evidence.Stage = true, "child_result_delivered"
 		return nil
@@ -348,15 +367,16 @@ func finalProductReply(turn productTurn) (string, error) {
 	return strings.Join(final, "\n"), nil
 }
 
-func readProductThread(server productClient, id, model string) (productThread, error) {
-	var response struct {
-		Thread productThread `json:"thread"`
-	}
-	err := server.call("thread/read", map[string]any{"threadId": id, "includeTurns": true}, &response)
+func readProductThread(server *sdkProductObserver, id, model string) (productThread, error) {
+	include := true
+	response, err := server.client.Threads().Read(server.ctx, protocolv2.ThreadReadParams{ThreadID: id, IncludeTurns: &include})
 	if err != nil {
-		return response.Thread, err
+		return productThread{}, shippedTransport(server.ctx, err)
 	}
-	thread := response.Thread
+	thread, err := productThreadFromSDK(response.Thread)
+	if err != nil {
+		return thread, errors.New("live: invalid product completion")
+	}
 	if thread.ID != id || thread.Model != model || thread.Provider != "grok" || len(thread.Turns) > 32 {
 		return thread, errors.New("live: durable product binding mismatch")
 	}
@@ -380,19 +400,22 @@ func productTerminal(message frame, threadID, turnID string) (bool, error) {
 	return true, completedProductTurn(event.Turn)
 }
 
-func observeShippedTurn(server productClient, id string, evidence *Evidence, effort, prompt string) (productThread, productTurn, error) {
+func observeShippedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort, prompt string) (productThread, productTurn, error) {
 	evidence.Turns++
-	var response struct {
-		Turn productTurn `json:"turn"`
-	}
-	params := map[string]any{"threadId": id, "input": []any{map[string]any{"type": "text", "text": prompt, "textElements": []any{}}}}
+	request := protocolv2.TurnStartParams{ThreadID: id, Input: []protocolv2.UserInput{
+		protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt}),
+	}}
 	if effort != "" {
-		params["effort"] = effort
+		request.Effort = protocolv2.Value(protocolv2.ReasoningEffort(effort))
 	}
-	if err := server.call("turn/start", params, &response); err != nil {
-		return productThread{}, productTurn{}, err
+	response, err := server.client.Turns().Start(server.ctx, request)
+	if err != nil {
+		return productThread{}, productTurn{}, shippedTransport(server.ctx, err)
 	}
-	terminal := response.Turn
+	terminal, err := productTurnFromSDK(response.Turn)
+	if err != nil {
+		return productThread{}, terminal, errors.New("live: invalid product completion")
+	}
 	if terminal.ID == "" {
 		return productThread{}, terminal, errors.New("live: product turn identity absent")
 	}

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 
 	"github.com/Harness-X-Harness/codex/grok/dist"
 )
@@ -28,8 +26,18 @@ func ShippedStartup(ctx context.Context, subject Subject, key string) (Evidence,
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
 	}
-	return sdkShippedSession(ctx, options, func(server productClient, id string, evidence *Evidence) error {
-		_, _, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation that this turn completed.")
+	return sdkShippedSession(ctx, options, func(server *sdkProductObserver, id string, evidence *Evidence) error {
+		_, turn, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation that this turn completed.")
+		if err == nil {
+			server.finalize = func() error {
+				for _, message := range server.queued() {
+					if _, err := productTerminal(message, id, turn.ID); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
 		return err
 	})
 }
@@ -57,13 +65,6 @@ func shippedOptions(subject Subject, key, selected string) (Options, error) {
 		model = selected
 	}
 	return Options{Subject: subject, Model: model, BaseURL: endpoint, APIKey: key, shippedProfile: true}, nil
-}
-
-func writeShippedProfile(home, cwd string) error {
-	if os.Mkdir(cwd, 0700) != nil || os.WriteFile(filepath.Join(home, "config.toml"), []byte(dist.Profile()), 0600) != nil || os.WriteFile(filepath.Join(home, "models.json"), dist.Catalog(), 0600) != nil {
-		return errors.New("live: shipped profile copy failed")
-	}
-	return nil
 }
 
 // This is the stock Model DTO projection, including explicit null and empty

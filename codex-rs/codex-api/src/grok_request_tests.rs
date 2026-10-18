@@ -59,8 +59,7 @@ fn local_tools_use_only_the_verified_wire_fields() {
         json!({"model": "grok-test", "input": input, "reasoning": null,
             "store": false, "stream": true, "include": [], "tool_choice": "auto",
             "tools": [{"type": "function", "name": "functions__shell",
-                "description": "Run a command", "parameters": {"type": "object"}},
-                {"type": "x_search"}]})
+                "description": "Run a command", "parameters": {"type": "object"}}]})
     );
 }
 
@@ -90,90 +89,26 @@ fn rejects_unprojected_local_and_unknown_tool_fields() {
 }
 
 #[test]
-fn hosted_search_preserves_order_and_appends_x_search_once() {
-    for (tools, expected) in [
-        (
-            json!([{"type": "web_search"}]),
-            json!([{"type": "web_search"}, {"type": "x_search"}]),
-        ),
-        (
-            json!([{"type": "x_search"}, {"type": "web_search"}]),
-            json!([{"type": "x_search"}, {"type": "web_search"}]),
-        ),
-    ] {
-        assert_eq!(
-            build(&request(tools, json!([]))).unwrap(),
-            json!({"model": "grok-test", "input": [], "reasoning": null,
-                "store": false, "stream": true, "include": [], "tool_choice": "auto", "tools": expected})
-        );
+fn hosted_web_preserves_its_tool_plan() {
+    let tools = json!([{"type": "web_search"}]);
+    assert_eq!(
+        build(&request(tools.clone(), json!([]))).unwrap()["tools"],
+        tools
+    );
+}
+
+#[test]
+fn retired_hosted_x_requests_and_configuration_fail_closed() {
+    for tools in [json!([]), json!([{"type":"web_search"}])] {
+        let error = build_with_search(
+            &request(tools, json!([])),
+            Some(&GrokXSearchOptions::default()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Hosted X Search is retired"));
     }
-    assert!(
-        build(&request(
-            json!([{"type": "x_search"}, {"type": "x_search"}]),
-            json!([])
-        ))
-        .is_err()
-    );
-}
-
-#[test]
-fn configured_dates_do_not_create_a_tool_plan() {
-    let options = GrokXSearchOptions {
-        from_date: Some("2026-01-01".into()),
-        to_date: Some("2026-01-31".into()),
-    };
-    let mut request = request(json!([]), json!([]));
-    let expected = json!({"model": "grok-test", "input": [], "reasoning": null,
-        "store": false, "stream": true, "include": []});
-    assert_eq!(
-        build_with_search(&request, Some(&options)).unwrap(),
-        expected
-    );
-    request.tools = None;
-    assert_eq!(
-        build_with_search(&request, Some(&options)).unwrap(),
-        expected
-    );
-}
-
-#[test]
-fn empty_config_and_absent_config_produce_the_same_nonempty_plan() {
-    let request = request(json!([{"type": "web_search"}]), json!([]));
-    assert_eq!(
-        build_with_search(&request, Some(&GrokXSearchOptions::default())).unwrap(),
-        build(&request).unwrap()
-    );
-}
-
-#[test]
-fn provider_defaults_are_applied_and_invalid_defaults_cannot_be_overridden() {
-    let options = GrokXSearchOptions {
-        from_date: Some("2026-01-01".into()),
-        to_date: Some("2026-01-31".into()),
-    };
-    let request = request(json!([{"type": "web_search"}]), json!([]));
-    assert_eq!(
-        build_with_search(&request, Some(&options)).unwrap()["tools"],
-        json!([{"type": "web_search"},
-            {"type": "x_search", "from_date": "2026-01-01", "to_date": "2026-01-31"}])
-    );
-    let invalid = GrokXSearchOptions {
-        from_date: Some("2026-02-30".into()),
-        ..options
-    };
-    for tools in [
-        json!([]),
-        json!([{"type": "x_search", "from_date": "2026-01-01"}]),
-    ] {
-        let mut request = request.clone();
-        request.tools = Some(
-            Arc::<serde_json::value::RawValue>::from(
-                serde_json::value::to_raw_value(&tools).unwrap(),
-            )
-            .into(),
-        );
-        assert!(build_with_search(&request, Some(&invalid)).is_err());
-    }
+    let error = build(&request(json!([{"type":"x_search"}]), json!([]))).unwrap_err();
+    assert!(error.to_string().contains("Hosted X Search is retired"));
 }
 
 #[test]
@@ -225,20 +160,15 @@ fn unsupported_output_content_is_not_silently_dropped() {
 
 #[test]
 fn completed_hosted_history_preserves_order_ids_and_payload_without_wire_status() {
-    let arguments = "{ \"query\": \"launch\", \"n\": 9007199254740993 }\n";
     let input = json!([
         {"type": "web_search_call", "id": "ws_1", "status": "completed",
             "action": {"type": "search", "query": "launch"}},
-        {"type": "custom_tool_call", "id": "xs_1", "call_id": "x_1", "status": "completed",
-            "name": "x_keyword_search", "input": arguments},
         {"type": "function_call", "id": "fc_1", "call_id": "local_1",
             "name": "functions__shell", "arguments": "{}"}
     ]);
     let request = request(json!([]), input.clone());
     let mut expected = input.clone();
-    for index in [0, 1] {
-        expected[index].as_object_mut().unwrap().remove("status");
-    }
+    expected[0].as_object_mut().unwrap().remove("status");
     assert_eq!(build(&request).unwrap()["input"], expected);
     assert_eq!(serde_json::to_value(&request.input).unwrap(), input);
 }
@@ -373,4 +303,18 @@ fn encrypted_or_empty_collaboration_is_rejected_without_losing_content() {
             if message == "Grok cannot replay empty or encrypted collaboration history at input[1]"));
         assert_eq!(serde_json::to_value(&request).unwrap(), canonical);
     }
+}
+
+#[test]
+fn retired_hosted_x_history_has_an_explicit_grok_replay_error() {
+    let input = json!([{"type":"custom_tool_call", "id":"old-x", "call_id":"call-x",
+        "status":"completed", "name":"x_keyword_search", "input":"exact original input"}]);
+    let request = request(json!([]), input.clone());
+    let error = build(&request).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported history: retired Hosted X Search cannot be replayed")
+    );
+    assert_eq!(serde_json::to_value(&request.input).unwrap(), input);
 }

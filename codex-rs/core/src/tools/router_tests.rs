@@ -881,8 +881,7 @@ fn grok_x_activity_never_activates_a_same_named_local_custom_consumer() {
     assert!(
         router
             .normalize_response_event(ResponseEvent::OutputItemAdded(hosted.clone()))
-            .unwrap()
-            .is_none()
+            .is_err()
     );
     // A local call with exactly the same name still restores and builds its real
     // custom invocation from the advertised function wrapper, without hosted status.
@@ -905,12 +904,11 @@ fn grok_x_activity_never_activates_a_same_named_local_custom_consumer() {
     );
     assert!(matches!(call.payload,ToolPayload::Custom {input} if input=="local exact input"));
     let empty = flat_router(vec![]);
-    assert!(matches!(
+    assert!(
         empty
             .normalize_response_event(ResponseEvent::OutputItemAdded(hosted.clone()))
-            .unwrap(),
-        Some(ResponseEvent::OutputItemAdded(_))
-    ));
+            .is_err()
+    );
     let mut stock = router;
     stock.flat_tool_routes = None;
     let Some(ResponseEvent::OutputItemAdded(actual)) = stock

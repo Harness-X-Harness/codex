@@ -136,7 +136,10 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 			if err == nil {
 				t.Fatal("false image evidence accepted")
 			}
-			if err.Error() != want {
+			// The same rejected first-turn item can arrive before continuation
+			// (conflicting terminal) or after its identity has become stale.
+			validLateBoundary := mode == "late_conflict" && err.Error() == "live: stale image call identity"
+			if err.Error() != want && !validLateBoundary {
 				t.Fatalf("wrong rejection boundary: %v; want %s", err, want)
 			}
 			if got.Completed || got.EditedImageSHA256 != "" {
