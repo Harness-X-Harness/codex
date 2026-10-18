@@ -22,7 +22,7 @@ runs:
         configure-linux-user-namespaces: ${{ inputs.configure-linux-user-namespaces }}
 
     - name: Set up Bazel
-      uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
       # Without an explicit Bazelisk version, setup-bazel leaves PATH unchanged
       # and Windows can use the runner's standalone Bazel, ignoring .bazelversion.
       with:

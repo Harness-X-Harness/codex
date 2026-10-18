@@ -27,7 +27,7 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
@@ -132,7 +132,7 @@ jobs:
             build_dmg: "false"
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Print runner specs (Linux)
@@ -258,7 +258,7 @@ jobs:
           cargo build --target "$target" --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cargo-timings-rust-release-${{ matrix.target }}-${{ matrix.bundle }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -284,7 +284,7 @@ jobs:
             --binaries "${binaries[*]}"
 
       - name: Upload symbols archive
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-symbols
           path: codex-rs/symbols-dist/${{ matrix.artifact_name }}/*
@@ -292,7 +292,7 @@ jobs:
 
       - name: Set up Bazel for Linux voice
         if: ${{ matrix.bundle == 'primary' && contains(matrix.target, 'linux') }}
-        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-version: 1.28.1
 
@@ -348,7 +348,7 @@ jobs:
 
       - if: ${{ runner.os == 'macOS' }}
         name: Upload unsigned macOS artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-unsigned
           path: codex-rs/unsigned-dist/${{ matrix.target }}/*
@@ -489,7 +489,7 @@ jobs:
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-runtime-wheel-${{ matrix.target }}
           path: python-runtime-dist/${{ matrix.target }}/*.whl
@@ -532,7 +532,7 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ runner.os != 'macOS' }}
         with:
           name: ${{ matrix.artifact_name }}
@@ -559,13 +559,13 @@ jobs:
             runner: macos-15-intel
             prefix: macos_x86_64
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-version: 1.28.1
       - name: Build matching helper and native runtime
@@ -592,7 +592,7 @@ jobs:
           chmod -R u+w "voice-unsigned/${TARGET}/runtime"
           cp bazel-bin/codex-rs/voice-host/codex-voice-host "voice-unsigned/${TARGET}/codex-voice-host"
           tar -C "voice-unsigned/${TARGET}" -czf "voice-unsigned-${TARGET}.tar.gz" runtime codex-voice-host
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: voice-${{ matrix.target }}-unsigned
           path: voice-unsigned-${{ matrix.target }}.tar.gz
@@ -633,19 +633,19 @@ jobs:
             binaries: "codex-app-server codex-code-mode-host"
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
       - name: Download unsigned macOS binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact_name }}-unsigned
           path: ${{ runner.temp }}/unsigned-macos
 
       - name: Download unsigned voice runtime
         if: ${{ matrix.bundle == 'primary' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: voice-${{ matrix.target }}-unsigned
           path: ${{ runner.temp }}/unsigned-voice
@@ -818,14 +818,14 @@ jobs:
 
       - name: Upload signed voice runtime
         if: ${{ matrix.bundle == 'primary' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: voice-${{ matrix.target }}-signed
           path: signed-voice-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
       - name: Upload signed macOS binaries
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-signed-binaries
           path: signed-macos/${{ matrix.target }}/*
@@ -833,7 +833,7 @@ jobs:
 
       - name: Upload signed macOS helpers
         if: ${{ matrix.bundle == 'primary' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}-signed-resources
           path: signed-resources/${{ matrix.target }}/*
@@ -841,7 +841,7 @@ jobs:
 
       - name: Upload binary signing verification
         if: ${{ always() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-binary-signing-verification
           path: macos-binary-signing-verification/${{ matrix.target }}/
@@ -884,25 +884,25 @@ jobs:
             build_dmg: "false"
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
       - name: Download signed macOS binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact_name }}-signed-binaries
           path: codex-rs/target/${{ matrix.target }}/release
 
       - name: Download signed macOS helpers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.target }}-signed-resources
           path: codex-rs/signed-resources/${{ matrix.target }}
 
       - name: Download signed voice runtime
         if: ${{ matrix.bundle == 'primary' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: voice-${{ matrix.target }}-signed
           path: ${{ runner.temp }}/signed-voice
@@ -1036,7 +1036,7 @@ jobs:
 
       - name: Upload unsigned macOS DMG
         if: ${{ matrix.build_dmg == 'true' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-unsigned-dmg
           path: codex-rs/target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg
@@ -1096,7 +1096,7 @@ jobs:
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-runtime-wheel-${{ matrix.target }}
           path: python-runtime-dist/${{ matrix.target }}/*.whl
@@ -1118,7 +1118,7 @@ jobs:
           done
 
       - name: Upload packaged macOS artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-packaged
           path: codex-rs/dist/${{ matrix.target }}/*
@@ -1146,12 +1146,12 @@ jobs:
             artifact_name: x86_64-apple-darwin
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
       - name: Download unsigned macOS DMG
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact_name }}-unsigned-dmg
           path: ${{ runner.temp }}/unsigned-dmg
@@ -1205,7 +1205,7 @@ jobs:
             >"${report_dir}/signature-info.yaml"
 
       - name: Upload signed macOS DMG
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-signed-dmg
           path: ${{ runner.temp }}/unsigned-dmg/codex-${{ matrix.target }}.dmg
@@ -1213,7 +1213,7 @@ jobs:
 
       - name: Upload DMG signing verification
         if: ${{ always() }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}-dmg-signing-verification
           path: macos-dmg-signing-verification/${{ matrix.target }}/
@@ -1258,25 +1258,25 @@ jobs:
             verify_dmg: "false"
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
       - name: Download packaged macOS artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact_name }}-packaged
           path: codex-rs/dist/${{ matrix.target }}
 
       - name: Download signed macOS binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact_name }}-signed-binaries
           path: ${{ runner.temp }}/signed-binaries
 
       - name: Download signed macOS DMG
         if: ${{ matrix.verify_dmg == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ matrix.artifact_name }}-signed-dmg
           path: ${{ runner.temp }}/signed-dmg
@@ -1449,7 +1449,7 @@ jobs:
           cp "$dmg_path" "dist/${target}/codex-${target}.dmg"
 
       - name: Upload verified macOS artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact_name }}
           path: codex-rs/dist/${{ matrix.target }}/*
@@ -1490,23 +1490,23 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
       - name: Download target artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           pattern: "{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc}"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
 
@@ -1524,7 +1524,7 @@ jobs:
             --package codex-sdk
 
       - name: Upload staged npm packages
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-packages
           path: dist/npm/*.tgz
@@ -1566,7 +1566,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -1591,14 +1591,14 @@ jobs:
           echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
 
       - name: Download release artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           pattern: "{{aarch64,x86_64}-{apple-darwin{,-app-server},unknown-linux-musl{,-app-server},pc-windows-msvc},*-symbols,argument-comment-lint-*,python-runtime-wheel-*,npm-packages}"
 
       - name: Download verified provisioned macOS packages
         if: vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           pattern: "provisioned-macos-verified-candidate-*"
@@ -1737,7 +1737,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -1779,7 +1779,7 @@ jobs:
 
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
           node-version: 24
@@ -1977,7 +1977,7 @@ jobs:
       # Keep dependencies explicit because its cargo-binstall@main reference
       # violates the policy requiring full commit SHA action pins.
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+        uses: cargo-bins/cargo-binstall@8a2045612414e945291083f820cd50b4d8fc2218 # v1.26.0
         with:
           version: "1.23.0"
         env:
@@ -2032,7 +2032,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Determine whether to update the GitHub canary branch

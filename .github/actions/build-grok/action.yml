@@ -30,7 +30,7 @@ runs:
     - uses: ./.github/actions/setup-ci
       with:
         configure-linux-user-namespaces: "false"
-    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: "3.12"
     - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
@@ -296,7 +296,7 @@ runs:
         archive="$RUNNER_TEMP/grok-$GITHUB_SHA-$TARGET.tar.gz"
         tar -czf "$archive" -C "$RUNNER_TEMP/grok-dist/$TARGET" .
         shasum -a 256 "$archive" > "$RUNNER_TEMP/grok-package-evidence-$TARGET/archive.sha256"
-    - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       id: upload
       with:
         name: grok-${{ github.sha }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -305,7 +305,7 @@ runs:
         retention-days: 30
     - name: Retain package identity and smoke evidence
       if: ${{ always() }}
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: grok-package-evidence-${{ github.sha }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/grok-package-evidence-${{ inputs.target }}
@@ -313,7 +313,7 @@ runs:
         retention-days: 30
     - name: Retain failed Linux startup diagnostics and stock symbols
       if: ${{ failure() && runner.os == 'Linux' }}
-      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: grok-linux-startup-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: |
