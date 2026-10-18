@@ -1,14 +1,16 @@
 package live
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-// frame is the in-memory notification shape shared by scenario observers.
-// It is not a second App Server client.
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
+)
+
+// frame retains SDK notifications and opaque raw extension parameters only.
+// Server requests are admitted separately by codexsdk.ServerRequestHandler.
 type frame struct {
-	size   int
-	ID     json.RawMessage `json:"id,omitempty"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  json.RawMessage `json:"error,omitempty"`
+	size         int
+	Method       string
+	Params       json.RawMessage
+	Notification protocolv2.ServerNotification
 }

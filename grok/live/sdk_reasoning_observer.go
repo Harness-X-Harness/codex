@@ -135,33 +135,38 @@ func (observer *sdkHistoryObserver) notification(_ context.Context, notification
 }
 
 func (observer *sdkHistoryObserver) typedNotification(_ context.Context, notification protocolv2.ServerNotification) error {
-	method := ""
-	if _, completed := notification.AsItemCompleted(); completed {
-		method = "item/completed"
-	} else if _, terminal := notification.AsTurnCompleted(); terminal {
-		method = "turn/completed"
-	} else {
+	observation, relevant, err := historyObservationFromSDK(notification)
+	if !relevant {
 		return nil
 	}
-	// Known lifecycle events use typed SDK delivery. Only the standalone raw
-	// reasoning extension requires retaining an additional raw envelope.
-	raw, err := json.Marshal(notification)
-	return observer.observeEnvelope(method, raw, err)
+	// The early-evidence limit counts the entire encoded SDK notification,
+	// including fields outside the projection. Serialization measures that exact
+	// byte budget only; typed fields are the authority for the observation.
+	raw, marshalErr := json.Marshal(notification)
+	if err == nil {
+		err = marshalErr
+	}
+	return observer.observe(observation, len(raw), err)
 }
 
+// Only the raw response-item extension crosses a dynamic JSON boundary.
 func (observer *sdkHistoryObserver) observeEnvelope(method string, raw []byte, err error) error {
 	var envelope struct {
 		Params sdkHistoryObservation `json:"params"`
 	}
-	if err != nil || json.Unmarshal(raw, &envelope) != nil {
-		observer.mu.Lock()
-		defer observer.mu.Unlock()
-		return observer.reject(failedObservation("invalid_history_evidence", "live: invalid history evidence"))
+	if err == nil {
+		err = json.Unmarshal(raw, &envelope)
 	}
-	observation := envelope.Params
-	observation.Method = method
+	envelope.Params.Method = method
+	return observer.observe(envelope.Params, len(raw), err)
+}
+
+func (observer *sdkHistoryObserver) observe(observation sdkHistoryObservation, size int, err error) error {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
+	if err != nil {
+		return observer.reject(failedObservation("invalid_history_evidence", "live: invalid history evidence"))
+	}
 	// Finished/current-prior turns retain contradiction checks through callback
 	// join, but late delivery cannot add positive completion or replay credit.
 	prior := observer.probe.previousID != "" && (observation.TurnID == observer.probe.previousID || observation.Turn.ID == observer.probe.previousID)
@@ -185,11 +190,11 @@ func (observer *sdkHistoryObserver) observeEnvelope(method string, raw []byte, e
 		return nil
 	}
 	if !observer.reconciled {
-		if len(observer.pending) == 8192 || observer.pendingBytes+len(raw) > 8<<20 {
+		if len(observer.pending) == 8192 || observer.pendingBytes+size > 8<<20 {
 			return observer.reject(failedObservation("early_evidence_budget_exceeded", "live: early evidence budget exceeded"))
 		}
 		observer.pending = append(observer.pending, observation)
-		observer.pendingBytes += len(raw)
+		observer.pendingBytes += size
 		return nil
 	}
 	return observer.acceptCallback(observation)
@@ -291,9 +296,8 @@ func (observer *sdkHistoryObserver) reconcile(run codexsdk.ThreadRunResult) erro
 	}
 	if !hasTerminal && run.Turn.Status != protocolv2.TurnStatusInProgress {
 		observer.inlineTerminal = true
-		raw, err := json.Marshal(run.Turn)
-		var terminal historyTurn
-		if err != nil || json.Unmarshal(raw, &terminal) != nil {
+		terminal, err := historyTurnFromSDK(run.Turn)
+		if err != nil {
 			return observer.reject(failedObservation("invalid_history_evidence", "live: invalid history evidence"))
 		}
 		_ = observer.accept(sdkHistoryObservation{Method: "turn/completed", ThreadID: observer.probe.threadID, Turn: terminal})
@@ -315,21 +319,14 @@ func (observer *sdkHistoryObserver) recoverNotificationsLocked(notifications []p
 	}
 	matchingPrefix := 0
 	for _, notification := range notifications {
-		raw, err := json.Marshal(notification)
-		var envelope struct {
-			Method string                `json:"method"`
-			Params sdkHistoryObservation `json:"params"`
+		observation, relevant, err := historyObservationFromSDK(notification)
+		if err != nil || !relevant || !observer.matchingTyped(observation) {
+			continue
 		}
-		if err == nil && json.Unmarshal(raw, &envelope) == nil {
-			envelope.Params.Method = envelope.Method
-			if !observer.matchingTyped(envelope.Params) {
-				continue
-			}
-			matchingPrefix++
-			if matchingPrefix > observer.deliveredTyped && matchingPrefix > observer.recoveredTyped {
-				observer.recoveredTyped = matchingPrefix
-				_ = observer.accept(envelope.Params)
-			}
+		matchingPrefix++
+		if matchingPrefix > observer.deliveredTyped && matchingPrefix > observer.recoveredTyped {
+			observer.recoveredTyped = matchingPrefix
+			_ = observer.accept(observation)
 		}
 	}
 }

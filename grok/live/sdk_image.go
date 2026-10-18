@@ -72,9 +72,8 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			if err != nil {
 				return imageTransport(ctx, err)
 			}
-			raw, err := json.Marshal(turn.Turn)
-			var decoded imageTurn
-			if err != nil || json.Unmarshal(raw, &decoded) != nil {
+			decoded, err := imageTurnFromSDK(turn.Turn)
+			if err != nil {
 				return errors.New("live: invalid image evidence")
 			}
 			probe.mu.Lock()
@@ -91,16 +90,16 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			if err != nil {
 				return imageTransport(ctx, err)
 			}
-			encoded, err := json.Marshal(settled.Thread)
-			var thread struct {
-				ID    string      `json:"id"`
-				Turns []imageTurn `json:"turns"`
-			}
-			if err != nil || json.Unmarshal(encoded, &thread) != nil {
-				return errors.New("live: invalid image evidence")
+			turns := make([]imageTurn, 0, len(settled.Thread.Turns))
+			for _, value := range settled.Thread.Turns {
+				turn, err := imageTurnFromSDK(value)
+				if err != nil {
+					return errors.New("live: invalid image evidence")
+				}
+				turns = append(turns, turn)
 			}
 			probe.mu.Lock()
-			err = probe.settle(thread.ID, thread.Turns)
+			err = probe.settle(settled.Thread.ID, turns)
 			probe.mu.Unlock()
 			if err != nil {
 				return err
@@ -220,23 +219,33 @@ func (probe *imageProbe) typedNotification(ctx context.Context, notification pro
 	} else if _, ok := notification.AsItemCompleted(); !ok {
 		return nil
 	}
+	// Encoding measures the original full-envelope budget; evidence stays typed.
 	raw, err := json.Marshal(notification)
-	return probe.observeFrame(ctx, method, raw, err)
+	return probe.observeNotification(ctx, frame{Method: method, Notification: notification, size: len(raw)}, err)
 }
 
 func (probe *imageProbe) observeFrame(ctx context.Context, method string, raw []byte, marshalErr error) error {
-	probe.mu.Lock()
-	defer probe.mu.Unlock()
-	probe.noteCallback(ctx)
 	var envelope struct {
 		Params json.RawMessage `json:"params"`
 	}
-	if marshalErr != nil || json.Unmarshal(raw, &envelope) != nil || len(envelope.Params) == 0 {
+	if marshalErr == nil {
+		marshalErr = json.Unmarshal(raw, &envelope)
+	}
+	if len(envelope.Params) == 0 {
+		marshalErr = errors.New("live: invalid image evidence")
+	}
+	return probe.observeNotification(ctx, frame{Method: method, Params: envelope.Params, size: len(raw)}, marshalErr)
+}
+
+func (probe *imageProbe) observeNotification(ctx context.Context, message frame, marshalErr error) error {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	probe.noteCallback(ctx)
+	if marshalErr != nil {
 		probe.cause = errors.New("live: invalid image evidence")
 		probe.signal()
 		return nil
 	}
-	message := frame{Method: method, Params: envelope.Params, size: len(raw)}
 	if probe.turnID == "" {
 		probe.pending = append(probe.pending, message)
 		probe.signal()
@@ -257,4 +266,39 @@ func (probe *imageProbe) signal() {
 	case probe.changed <- struct{}{}:
 	default:
 	}
+}
+
+// Typed lifecycle fields are authoritative; only failure payloads stay encoded
+// because the image proof hashes their complete opaque diagnostic content.
+func imageItemFromSDK(value protocolv2.ThreadItem) (imageItem, error) {
+	result := imageItem{Type: string(value.Kind())}
+	if image, ok := value.AsImageGeneration(); ok {
+		result.ID, result.Status, result.Result, result.SavedPath = image.ID, image.Status, image.Result, sdkString(image.SavedPath)
+		if image.Failure != nil && image.Failure.Value != nil {
+			var err error
+			result.Failure, err = json.Marshal(*image.Failure.Value)
+			if err != nil {
+				return result, err
+			}
+		}
+	}
+	return result, nil
+}
+func imageTurnFromSDK(value protocolv2.Turn) (imageTurn, error) {
+	result := imageTurn{ID: value.ID, Status: string(value.Status)}
+	if value.Error != nil && value.Error.Value != nil {
+		var err error
+		result.Error, err = json.Marshal(*value.Error.Value)
+		if err != nil {
+			return result, err
+		}
+	}
+	for _, value := range value.Items {
+		item, err := imageItemFromSDK(value)
+		if err != nil {
+			return result, err
+		}
+		result.Items = append(result.Items, item)
+	}
+	return result, nil
 }

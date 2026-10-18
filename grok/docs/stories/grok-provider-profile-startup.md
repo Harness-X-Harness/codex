@@ -68,10 +68,10 @@ One positive semantic Grok Turn. A missing or failed terminal state is failure.
 
 ### Secret-safe evidence
 
-The callable C6 runner returns bounded safe observation metadata only. It never
+The callable runner returns bounded safe observation metadata only. It never
 returns prompts, responses, credentials, raw traffic, Thread IDs or child result
 values. Deterministic failure cases verify this boundary. It does not introduce
-a raw-session retention sink or claim C8 artifact evidence delivery.
+a raw-session retention sink or establish package provenance.
 
 
 ## Stock compatibility control
@@ -87,8 +87,11 @@ then submits one ordinary turn and requires correlated public completion and
 durable history. `ShippedPinned` selects the catalog's previous 4.6 route and
 uses the retained two-turn tool/encrypted-history scenario.
 
-C6 proves copied source asset consumption, native model/list and the deterministic
-scenario oracle. Its controlled lifecycle fixtures disable tools only in test
-copies. C7 owns full shipped tool/media/history HTTP composition; #339 owns
-packaging and #331 owns actual backend execution. This Story remains unproven
-by C6 alone. No shipped capability is disabled to make a turn pass.
+[`TestShippedThreadSource`](../../tests/integration/shipped_test.go) executes
+real Codex with controlled HTTP, checking startup and pinned encrypted-history
+composition on copied shipped source assets. [`TestShippedCatalog`](../../tests/integration/basic_test.go)
+checks the complete catalog without inference. The [offline shipped tests](../../live/shipped_test.go)
+validate rejection of incomplete evidence. No shipped capability is disabled to
+make a turn pass. [`TestLive/shipped-startup` and `shipped-pinned`](../../tests/live/live_test.go)
+require an actual identified backend run; controlled composition does not
+establish packaged real-backend acceptance.

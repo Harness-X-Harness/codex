@@ -42,14 +42,14 @@ func TestHostedSearchFixture(t *testing.T) {
 			encoded, _ := json.Marshal(got)
 			t.Logf("controlled %s: evidence=%s responses=%d failure=%s tools=%s", scenario, encoded, fixture.responses, fixture.failure, strings.Join(fixture.tools, " | "))
 			if strings.HasSuffix(scenario, "_retired") {
-				if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Completed || got.ExpectedUnsupported || got.CanonicalCalls != 0 || got.Processes != 0 || got.Turns != 0 || fixture.responses != 0 || fixture.failure != "" {
+				if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Completed || got.CanonicalCalls != 0 || got.Processes != 0 || got.Turns != 0 || fixture.responses != 0 || fixture.failure != "" {
 					t.Fatal("retired X selector launched, claimed success or lost its explicit diagnostic")
 				}
 				return
 			}
 			if scenario == "unexpected_x_rejected" {
 				failure := live.DescribeFailure(err)
-				if err == nil || (failure.Code != "hosted_x_retired" && failure.Code != "turn_unsuccessful") || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.ExpectedUnsupported || got.CanonicalCalls != 0 || got.SettledTurns != 0 || failure.Code == "turn_unsuccessful" && failure.TerminalStatus != "failed" || !got.Bound || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != 1 || got.CleanupPending || fixture.responses != 1 || fixture.failure != "" || ctx.Err() != nil {
+				if err == nil || (failure.Code != "hosted_x_retired" && failure.Code != "turn_unsuccessful") || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || failure.Code == "turn_unsuccessful" && failure.TerminalStatus != "failed" || !got.Bound || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != 1 || got.CleanupPending || fixture.responses != 1 || fixture.failure != "" || ctx.Err() != nil {
 					t.Fatalf("unexpected hosted X must fail without dispatch, fabricated credit, SDK ABI rejection or retry: evidence=%+v failure=%+v requests=%d", got, failure, fixture.responses)
 				}
 				return

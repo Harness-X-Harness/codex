@@ -44,3 +44,11 @@ retain their own policy; this Story does not promise one HTTP attempt.
   automatic rerun or product repair.
 
 Real Live is not run by required CI. A backend opt-in skip is not PROVEN.
+
+## Executable owners
+
+[`TestBasic*`](../../live/basic_test.go) validates the offline observer;
+[`TestBasicFixture`](../../tests/integration/basic_test.go) executes real Codex
+against controlled HTTP for both fixture models. [`TestLive/basic-primary` and
+`basic-pinned`](../../tests/live/live_test.go) observe the real backend only when
+explicitly invoked. None of these source entrypoints is itself a passing run.

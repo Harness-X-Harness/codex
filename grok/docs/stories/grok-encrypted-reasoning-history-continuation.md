@@ -11,7 +11,7 @@ and pinned model fixtures separately; neither defines shipped catalog policy.
 
 ## Acceptance
 
-Given an exact binary with Provider, encrypted-history and relevant #322 tool
+Given an exact binary with Provider, encrypted-history and relevant tool
 proof, an isolated fixture and a usable default execution environment, when turn
 N calls the named dynamic tool and receives a freshly generated result absent
 from its prompt, then N completes with that result in its final assistant reply.
@@ -50,3 +50,13 @@ the semantic result is the same. No automatic rerun follows NOT_PROVEN.
 This does not prove compaction, fork, multi-agent behavior, every tool or model,
 shipped profiles, future backend availability, or present product acceptance.
 Required CI tests the harness deterministically with backend opt-ins off.
+
+## Executable owners
+
+[`TestReasoningHistoryPublicProtocol`](../../live/reasoning_history_test.go) and
+[SDK observer tests](../../live/sdk_reasoning_observer_test.go) own offline
+correlation and false-evidence controls. [`TestReasoningHistoryFixture`](../../tests/integration/reasoning_test.go)
+executes real Codex with controlled HTTP and verifies unchanged encrypted replay,
+fresh paired tool output and the token-free continuation. The fixture supplies
+answers and does not prove real model recall. [`TestLive/reasoning-primary` and
+`reasoning-pinned`](../../tests/live/live_test.go) require identified backend runs.

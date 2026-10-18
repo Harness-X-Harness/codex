@@ -1,9 +1,10 @@
 # Grok image generation and same-Thread history edit
 
-Retained contract from accepted 0.157.1 (`b187b716787cf078a4c0f51986eb3555e9f6c6de`).
-C5 restores deterministic scenario support; this Story is **not proven** for the
-current source. C7/#322 owns Grok Responses tool/media/history composition,
-C8 owns packaging, #339 owns packaged invocation, and #331 owns actual backend execution.
+The implemented image tool supports generation and same-thread history edit.
+Offline Go tests validate its observer, Rust tests own image preparation and
+product behavior, and real Codex with controlled HTTP tests the pinned-model
+composition. A packaged real-xAI result requires a separately identified Live
+run; none of those controlled tests establishes it.
 
 ## User story
 
@@ -84,16 +85,9 @@ does not retry or replace either semantic Turn.
 
 ### Secret-safe evidence
 
-The retained packaged/backend acceptance requirement is unchanged: GREEN records
-nothing. A RED run preserves for 7 days the redacted session JSONL and rejected
-request key-path shapes with backend status and redacted error text; no prompt,
-model output, credential or Thread ID is recorded. That artifact-retention path
-is not implemented or proven by C5's deterministic scripts.
-
-The current deterministic runner returns only bounded, secret-safe partial
-observations described in its [evidence contract](../../live/README.md).
-Those observations do not claim Story completion or assign defect ownership.
-
+The [current failure-evidence contract](../../TESTING.md#live-failure-evidence)
+owns the bounded, secret-safe observations returned by this runner. Partial
+observations do not claim Story completion or assign defect ownership.
 
 ## Stock compatibility control
 
@@ -106,8 +100,14 @@ deterministic child proof; they are not the unique Live image-result oracle.
 
 ## Executable contract
 
-`ImageGenerationEdit(ctx, Options)` and the consumed
-`TestGrokImageGenerationEdit` in [`grok/live`](../../live/README.md).
+[`ImageGenerationEdit(ctx, Options)`](../../live/image.go) and
+[`TestGrokImageGenerationEdit`](../../live/image_test.go) own the offline observer.
+[`TestImagePinnedFixture`](../../tests/integration/image_test.go) executes real
+Codex with a controlled Responses/Images backend: generation, edit, exact image
+and history hashes, and same-thread lineage. [Rust image preparation](../../../codex-rs/core/src/image_preparation.rs)
+and [public image integration](../../../codex-rs/app-server/tests/suite/v2/imagegen_extension.rs)
+own the product transformation/lifecycle. [`TestLive/image-primary` and
+`image-pinned`](../../tests/live/live_test.go) own real-backend execution.
 The deterministic public-stdio scripts exercise the runner with an independent
 image-capable model fixture. They cannot establish the shipped model catalog,
 actual Grok HTTP egress, backend visual correctness, or packaged Story success.
@@ -116,10 +116,34 @@ The observer requires decodable image results, exact public payload/saved-byte
 agreement, fresh user-accessible artifacts, a distinct edited result, and
 correlated canonical same-Thread history selection. Stock media preparation
 may resize or re-encode history images; it does not invalidate those artifact
-requirements. The [runner contract](../../live/README.md) owns the detailed
-correlation, codec, preparation, recovery and resource checks.
+requirements. The [image observer](../../live/image.go) and [artifact checks](../../live/image_artifact.go)
+own correlation, codec, preparation, recovery and resource checks.
 
 The consumed fixture enables only the image tool. A packaged profile may use
-the historical view-image-before-edit route; that equivalent path remains
-within this retained Story and unproven by C5 scripts. Equivalent notifications
-and valid internal recovery do not consume another proof-run invocation.
+a view-image-before-edit route; that equivalent path remains within this Story
+and unproven by the isolated controlled fixture. Equivalent notifications and
+valid internal recovery do not consume another proof-run invocation.
+
+## Product image boundary
+
+The explicit Grok dialect selects image HTTP semantics, independently of Provider
+names or URLs. Stock image lifecycle and history remain authoritative. Grok
+supports up to three inline edit references; selected file references fail
+explicitly rather than exposing an older image. Stock file-backed editing,
+five-reference support and transparency behavior remain unchanged. Grok rejects
+any explicit `transparent_background` key, including false/null, before dispatch;
+arguments must be JSON objects.
+
+The [Grok Images adapter](../../../codex-rs/codex-api/src/grok_images.rs) owns request and
+normalization policy: `grok-imagine-image-2.0`, `b64_json`, retained single-image
+defaults and fail-closed unsupported options. Completed artifacts use validated
+PNG; supported still JPEG/WebP are normalized to PNG, while animated WebP and
+malformed/unsupported codecs fail without a successful artifact. PNG alpha and
+the existing orientation/color handling remain intact. The local 32 MiB byte
+and decoded-pixel budget is a resource policy, not an xAI service limit.
+
+The shared [schema owner](../../../codex-rs/tools/src/json_schema/types.rs)
+and [bounds tests](../../../codex-rs/tools/src/json_schema_bounds_tests.rs) own
+exact numeric declarations and `maxItems`, including their non-image consumers.
+These declarations do not replace runtime argument validation; malformed bounds
+must follow the owning registration/catalog rejection or fallback contract.

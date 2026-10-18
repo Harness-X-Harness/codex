@@ -211,9 +211,6 @@ func (probe *imageProbe) notification(message frame) error {
 	if probe.frames > 4096 || probe.bytes > 64<<20 {
 		return errors.New("live: image evidence budget exceeded")
 	}
-	if len(message.ID) != 0 {
-		return errors.New("live: unsupported server request")
-	}
 	if message.Method != "rawResponseItem/completed" && message.Method != "item/completed" && message.Method != "item/started" && message.Method != "turn/completed" {
 		return nil
 	}
@@ -223,7 +220,22 @@ func (probe *imageProbe) notification(message frame) error {
 		Turn     imageTurn `json:"turn"`
 		Item     imageItem `json:"item"`
 	}
-	if json.Unmarshal(message.Params, &event) != nil {
+	var err error
+	if message.Method == "rawResponseItem/completed" {
+		err = json.Unmarshal(message.Params, &event)
+	} else if value, ok := message.Notification.AsTurnCompleted(); ok {
+		event.ThreadID = value.Params.ThreadID
+		event.Turn, err = imageTurnFromSDK(value.Params.Turn)
+	} else if value, ok := message.Notification.AsItemCompleted(); ok {
+		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
+		event.Item, err = imageItemFromSDK(value.Params.Item)
+	} else if value, ok := message.Notification.AsItemStarted(); ok {
+		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
+		event.Item, err = imageItemFromSDK(value.Params.Item)
+	} else {
+		err = errors.New("live: invalid image evidence")
+	}
+	if err != nil {
 		return errors.New("live: invalid image evidence")
 	}
 	if event.ThreadID != probe.threadID {

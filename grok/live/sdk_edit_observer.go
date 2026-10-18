@@ -100,6 +100,8 @@ func (observer *sdkEditObserver) beginTurn() error {
 }
 
 func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
+	// Keep the same JSON projection as callbacks: editItem serialization also
+	// defines per-item byte charges and replay-conflict digests.
 	raw, err := json.Marshal(turn)
 	var decoded editTurn
 	observer.mu.Lock()
@@ -203,6 +205,8 @@ func (observer *sdkEditObserver) typedNotification(ctx context.Context, notifica
 		}
 		method = "turn/completed"
 	}
+	// The editItem projection is hashed and byte-budgeted downstream, including
+	// fields unused by publicItem. Its JSON type checks also precede tool checks.
 	raw, err := json.Marshal(notification)
 	return observer.observeEnvelope(method, raw, err)
 }

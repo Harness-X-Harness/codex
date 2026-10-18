@@ -65,7 +65,11 @@ func TestSearchRunTerminalClassificationSurvivesEitherSignalOrder(t *testing.T) 
 			}
 			notify := func() {
 				params := json.RawMessage(`{"threadId":"thread","turn":{"id":"turn","status":"failed","items":[],"error":{"message":"PRIVATE_REJECTED","codexErrorInfo":"other"}}}`)
-				if err := transport.observeParams(ctx, "turn/completed", params, len(params), nil); err != nil {
+				var notification protocolv2.ServerNotification
+				if err := json.Unmarshal(append(append([]byte(`{"method":"turn/completed","params":`), params...), '}'), &notification); err != nil {
+					t.Fatal(err)
+				}
+				if err := transport.typedNotification(ctx, notification); err != nil {
 					t.Fatal(err)
 				}
 			}

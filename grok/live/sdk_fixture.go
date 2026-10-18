@@ -11,6 +11,8 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
+var errSDKProtocolEnded = errors.New("live: protocol ended before proof completion")
+
 type sdkFixtureHandlers struct {
 	notifications codexsdk.ServerNotificationHandler
 	requests      codexsdk.ServerRequestHandler
@@ -56,7 +58,6 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
 			evidence.CleanupPending = !closed.ProcessReaped || closed.CallbackWorkPending != 0
-			rejectedX := sdkRejectedXSearch(ctx, closed, closeErr, runErr)
 			var callbackErr error
 			select {
 			case callbackErr = <-handlers.failures:
@@ -70,15 +71,10 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 					runErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
 				}
 			}
-			var finalized error
 			if handlers.afterClose != nil && !evidence.CleanupPending {
-				finalized = handlers.afterClose(cwd, evidence, runErr)
-				if finalized != nil {
+				if finalized := handlers.afterClose(cwd, evidence, runErr); finalized != nil {
 					runErr = preferObservation(runErr, finalized)
 				}
-			}
-			if rejectedX && callbackErr == nil && finalized == nil {
-				runErr = errSDKXSearchUnsupported
 			}
 		}()
 		evidence.Processes, evidence.Initializations, evidence.Stage = 1, 1, "initialized"

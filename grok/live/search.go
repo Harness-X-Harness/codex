@@ -17,7 +17,6 @@ type SearchEvidence struct {
 	Scenario                     string
 	CanonicalCalls, SettledTurns int
 	FollowupCompleted            bool
-	ExpectedUnsupported          bool `json:",omitempty"`
 }
 
 // HostedSearch submits one supported Web search and one follow-up, each once.
@@ -166,9 +165,6 @@ func (p *searchProbe) notification(message frame) error {
 	if p.frames > 4096 || p.bytes > 64<<20 {
 		return errors.New("live: search evidence budget exceeded")
 	}
-	if len(message.ID) != 0 {
-		return p.server.refuse(message.ID)
-	}
 	if message.Method != "rawResponseItem/completed" && message.Method != "turn/completed" && message.Method != "item/completed" && message.Method != "item/started" {
 		return nil
 	}
@@ -178,7 +174,25 @@ func (p *searchProbe) notification(message frame) error {
 		Turn     turn            `json:"turn"`
 		Item     json.RawMessage `json:"item"`
 	}
-	if json.Unmarshal(message.Params, &event) != nil {
+	var typedKind string
+	if message.Method == "rawResponseItem/completed" {
+		if json.Unmarshal(message.Params, &event) != nil {
+			return errors.New("live: invalid search evidence")
+		}
+	} else if value, ok := message.Notification.AsTurnCompleted(); ok {
+		event.ThreadID = value.Params.ThreadID
+		var err error
+		event.Turn, err = searchTurnFromSDK(value.Params.Turn)
+		if err != nil {
+			return errors.New("live: invalid search evidence")
+		}
+	} else if value, ok := message.Notification.AsItemCompleted(); ok {
+		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
+		typedKind = string(value.Params.Item.Kind())
+	} else if value, ok := message.Notification.AsItemStarted(); ok {
+		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
+		typedKind = string(value.Params.Item.Kind())
+	} else {
 		return errors.New("live: invalid search evidence")
 	}
 	if event.ThreadID != p.threadID {
@@ -196,6 +210,12 @@ func (p *searchProbe) notification(message frame) error {
 	if event.TurnID != p.turnID && (p.previousID == "" || event.TurnID != p.previousID) {
 		return nil
 	}
+	if message.Method != "rawResponseItem/completed" {
+		if localSearchItem(typedKind) {
+			return errors.New("live: local execution cannot establish hosted search")
+		}
+		return nil
+	}
 	var kind struct {
 		Type string `json:"type"`
 		ID   string `json:"id"`
@@ -203,17 +223,13 @@ func (p *searchProbe) notification(message frame) error {
 	if json.Unmarshal(event.Item, &kind) != nil {
 		return errors.New("live: invalid search item")
 	}
-	// Retired hosted X cannot contribute to supported Web proof. The legacy X
-	// branch below is exercised only by credential-free strict-SDK diagnostics.
+	// Retired hosted X cannot contribute to supported Web proof.
 	_, hostedX := searchfixture.ReplayCall(event.Item, "x")
 	if hostedX && strings.HasPrefix(p.scenario, "web") {
 		return failedObservation("hosted_x_retired", "live: retired hosted X appeared during Web search")
 	}
-	if localSearchItem(kind.Type) && !(message.Method == "rawResponseItem/completed" && hostedX) {
+	if localSearchItem(kind.Type) && !hostedX {
 		return errors.New("live: local execution cannot establish hosted search")
-	}
-	if message.Method != "rawResponseItem/completed" {
-		return nil
 	}
 	credited := p.calls[event.TurnID]
 	old, exists := credited[kind.ID]

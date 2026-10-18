@@ -100,6 +100,7 @@ by this Grok-specific adaptation. Deleted-profile rejection/recovery belongs to
 the separate cold-resume Story. No name/slug heuristic or extra persisted Provider
 definition is introduced.
 
-Native tests use copied shipped catalogs with fixture-only tools disabled until
-C7. They prove public lifecycle/dialect egress under that stated restriction;
-full unmodified shipped-tool composition remains C7.
+Native tests use copied shipped catalogs with fixture-only tools disabled to
+isolate lifecycle behavior. They prove public lifecycle/dialect egress under
+that restriction. Separate controlled shipped composition owners in the
+[Story index](README.md) do not supply a real-backend fork result.

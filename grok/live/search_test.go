@@ -62,9 +62,6 @@ func fakeSearchServer() {
 				config["tools.web_search.allowed_domains"] = []any{"reuters.com"}
 			case "web_excluded":
 				config["tools.web_search.excluded_domains"] = []any{"example.com"}
-			case "x_window":
-				config["model_providers.grok.x_search.from_date"] = "2026-08-01"
-				config["model_providers.grok.x_search.to_date"] = "2026-08-15"
 			}
 			if !reflect.DeepEqual(request.Params["config"], config) || request.Params["experimentalRawEvents"] != true {
 				return
@@ -176,71 +173,48 @@ func fakeSearchServer() {
 				if mode == "partial" {
 					call["status"] = "in_progress"
 				}
-				if strings.HasPrefix(mode, "public_") {
-					if mode != "public_no_context" {
-						_ = output.Encode(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "thread", "turn": map[string]any{"id": id, "status": "inProgress", "items": []any{}}}})
-					}
-					if mode == "public_timeout" {
-						continue
-					}
-					public := hostedXSearchItem()
-					switch mode {
-					case "public_other":
-						public["type"] = "PRIVATE_OTHER_VARIANT"
-					case "public_local_first":
-						notify("item/started", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
-					case "public_wrong_type":
-						public["type"] = 42
-					case "public_raw_local_first":
-						notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call", "id": "PRIVATE_LOCAL", "call_id": "PRIVATE_CALL", "namespace": "functions", "name": "apply_patch", "input": "PRIVATE_INPUT"})
-					}
-					method := "item/started"
-					if mode == "public_completed" {
-						method = "item/completed"
-					}
-					notify(method, public)
+				if mode == "unknown_public_type" {
+					notify("item/started", map[string]any{"type": "PRIVATE_UNKNOWN_PUBLIC_TYPE", "id": "PRIVATE_ID"})
 					continue
 				}
-				if mode != "public_only" {
-					if mode == "output_first" {
-						notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call_output", "call_id": "PRIVATE_CALL", "output": "PRIVATE_CANARY"})
+				if mode == "output_first" {
+					notify("rawResponseItem/completed", map[string]any{"type": "custom_tool_call_output", "call_id": "PRIVATE_CALL", "output": "PRIVATE_CANARY"})
+				}
+				notify("rawResponseItem/completed", call)
+				if strings.HasPrefix(mode, "budget_") {
+					limit := 64
+					if mode == "budget_65_first" && index == 1 || mode == "budget_65_followup" && index == 2 {
+						limit++
+					}
+					for i := 1; i < limit; i++ {
+						extra := hostedSearchFixtureCall(scenario)
+						extra["id"] = fmt.Sprintf("PRIVATE_ID_%d", i)
+						notify("rawResponseItem/completed", extra)
+					}
+					// An identical duplicate remains idempotent even at the limit.
+					notify("rawResponseItem/completed", call)
+				}
+				if mode == "duplicate" {
+					notify("rawResponseItem/completed", call)
+				}
+				if mode == "conflict" {
+					call["input"] = "changed"
+					if strings.HasPrefix(scenario, "web") {
+						call["action"] = map[string]any{"type": "search", "query": "changed"}
 					}
 					notify("rawResponseItem/completed", call)
-					if strings.HasPrefix(mode, "budget_") {
-						limit := 64
-						if mode == "budget_65_first" && index == 1 || mode == "budget_65_followup" && index == 2 {
-							limit++
-						}
-						for i := 1; i < limit; i++ {
-							extra := hostedSearchFixtureCall(scenario)
-							extra["id"] = fmt.Sprintf("PRIVATE_ID_%d", i)
-							notify("rawResponseItem/completed", extra)
-						}
-						// An identical duplicate remains idempotent even at the limit.
-						notify("rawResponseItem/completed", call)
+				}
+				if mode == "local" {
+					notify("item/completed", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
+				}
+				if mode == "coexisting_hosted" {
+					other := "web"
+					if strings.HasPrefix(scenario, "web") {
+						other = "x"
 					}
-					if mode == "duplicate" {
-						notify("rawResponseItem/completed", call)
-					}
-					if mode == "conflict" {
-						call["input"] = "changed"
-						if strings.HasPrefix(scenario, "web") {
-							call["action"] = map[string]any{"type": "search", "query": "changed"}
-						}
-						notify("rawResponseItem/completed", call)
-					}
-					if mode == "local" {
-						notify("item/completed", map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL"})
-					}
-					if mode == "coexisting_hosted" {
-						other := "web"
-						if strings.HasPrefix(scenario, "web") {
-							other = "x"
-						}
-						coexisting := hostedSearchFixtureCall(other)
-						coexisting["id"] = "PRIVATE_OTHER"
-						notify("rawResponseItem/completed", coexisting)
-					}
+					coexisting := hostedSearchFixtureCall(other)
+					coexisting["id"] = "PRIVATE_OTHER"
+					notify("rawResponseItem/completed", coexisting)
 				}
 			}
 			if mode == "local_custom_first" && index == 1 || mode == "local_custom_followup" && index == 2 {
@@ -354,7 +328,7 @@ func TestHostedSearchRequiresCorrelatedTerminalAfterStartSnapshot(t *testing.T) 
 					wantSettled = 2
 					wantTrace += "thread/read\n"
 				}
-				if (err == nil) != completed || got.Completed != completed || got.FollowupCompleted != completed || got.FirstCompleted != (wantSettled > 0) || got.SettledTurns != wantSettled || got.Turns != wantTurns || got.CanonicalCalls != 1 || got.ExpectedUnsupported || !got.Bound || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
+				if (err == nil) != completed || got.Completed != completed || got.FollowupCompleted != completed || got.FirstCompleted != (wantSettled > 0) || got.SettledTurns != wantSettled || got.Turns != wantTurns || got.CanonicalCalls != 1 || !got.Bound || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
 					t.Fatalf("snapshot replaced correlated terminal or lost evidence: %+v, %v", got, err)
 				}
 				switch terminal {
@@ -400,7 +374,7 @@ func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			got, err := live.HostedSearch(ctx, options, "web")
-			if err == nil || got.ExpectedUnsupported || got.Completed || got.FollowupCompleted || strings.Contains(err.Error(), "PRIVATE_") {
+			if err == nil || got.Completed || got.FollowupCompleted || strings.Contains(err.Error(), "PRIVATE_") {
 				t.Fatalf("invalid evidence accepted or exposed: %+v, %v", got, err)
 			}
 			want := 1
@@ -426,7 +400,7 @@ func TestHostedSearchClassifiesFailedInitialTurnWithoutCreditOrContinuation(t *t
 	if err == nil || live.DescribeFailure(err) != wantFailure || strings.Contains(err.Error(), "PRIVATE_") {
 		t.Fatalf("failed search lost its bounded terminal diagnostic: %+v, %v", live.DescribeFailure(err), err)
 	}
-	if got.Completed || got.FirstCompleted || got.FollowupCompleted || got.ExpectedUnsupported || got.CanonicalCalls != 0 || got.SettledTurns != 0 || !got.Bound || got.Turns != 1 || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
+	if got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || !got.Bound || got.Turns != 1 || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.CleanupPending {
 		t.Fatalf("failed search claimed credit or lost lifecycle evidence: %+v", got)
 	}
 	var script struct{ Trace string }
@@ -613,32 +587,6 @@ func hostedSearchFixtureCall(scenario string) map[string]any {
 	return map[string]any{"type": "custom_tool_call", "id": "PRIVATE_ID", "status": "completed", "call_id": "PRIVATE_CALL", "name": "x_keyword_search", "input": "PRIVATE_INPUT"}
 }
 
-func hostedXSearchItem() map[string]any {
-	return map[string]any{"type": "xSearch", "id": "PRIVATE_ID", "callId": "PRIVATE_CALL", "name": "x_keyword_search", "input": "PRIVATE_INPUT"}
-}
-
-func TestHostedSearchPublicXSearchExpectedRejection(t *testing.T) {
-	for _, scenario := range []string{"x", "x_window"} {
-		for _, mode := range []string{"public_only", "public_completed", "public_no_context"} {
-			t.Run(scenario+"/"+mode, func(t *testing.T) {
-				t.Parallel()
-				options := fixtureOptions(t, "search:"+mode+":"+scenario)
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				got, err := live.RunLegacySearchDiagnosticForTest(ctx, options, scenario)
-				if !live.AcceptedXSearchRejection(got, err) || got.CanonicalCalls != 0 || got.CleanupPending || got.FirstCompleted || got.Completed || got.FollowupCompleted || got.Turns != 1 || got.SettledTurns != 0 {
-					t.Fatalf("expected rejection missing or search falsely credited: %+v, %v", got, err)
-				}
-				assertSearchInvocationCount(t, options, 1)
-				encoded, _ := json.Marshal(got)
-				if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
-					t.Fatal("private evidence leaked")
-				}
-			})
-		}
-	}
-}
-
 func TestHostedSearchRejectsCustomExecutionAtEveryObservationBoundary(t *testing.T) {
 	for _, mode := range []string{"local_custom_first", "local_custom_followup", "late_prior_custom", "settled_custom", "prior_custom"} {
 		t.Run(mode, func(t *testing.T) {
@@ -728,56 +676,12 @@ func TestHostedSearchIdentityBudgetsRemainPerTurn(t *testing.T) {
 	}
 }
 
-func TestHostedSearchExpectedRejectionRejectsOtherFailures(t *testing.T) {
-	for _, tc := range []struct{ mode, scenario string }{
-		{"public_only", "web"}, {"public_other", "x"}, {"public_wrong_type", "x"}, {"public_local_first", "x"}, {"no_terminal", "x"},
-	} {
-		t.Run(tc.mode+"/"+tc.scenario, func(t *testing.T) {
-			t.Parallel()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			got, err := live.RunLegacySearchDiagnosticForTest(ctx, fixtureOptions(t, "search:"+tc.mode+":"+tc.scenario), tc.scenario)
-			if err == nil || got.ExpectedUnsupported || live.AcceptedXSearchRejection(got, err) || got.Completed || got.CleanupPending {
-				t.Fatalf("unrelated failure accepted: %+v, %v", got, err)
-			}
-			encoded, _ := json.Marshal(got)
-			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
-				t.Fatal("private rejection data leaked")
-			}
-		})
-	}
-}
-
-func TestHostedSearchCallerTimeoutIsNotExpectedRejection(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	got, err := live.RunLegacySearchDiagnosticForTest(ctx, fixtureOptions(t, "search:public_timeout:x"), "x")
-	if ctx.Err() != context.DeadlineExceeded || err == nil || got.ExpectedUnsupported || got.Completed || got.CleanupPending {
-		t.Fatalf("timeout accepted: %+v, %v", got, err)
-	}
-}
-
-func TestHostedSearchDiscardableRawBeforeXDoesNotClaimFullDelivery(t *testing.T) {
-	// On fatal decode the stock SDK may discard a raw callback not yet run.
-	// Either an observed business rejection or the exact SDK rejection is
-	// truthful; neither establishes that all preceding raw traffic was audited.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got, err := live.RunLegacySearchDiagnosticForTest(ctx, fixtureOptions(t, "search:public_raw_local_first:x"), "x")
-	if err == nil || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || got.CleanupPending {
-		t.Fatalf("false search success: %+v, %v", got, err)
-	}
-	if !live.AcceptedXSearchRejection(got, err) && err.Error() != "live: local execution cannot establish hosted search" {
-		t.Fatalf("unexpected rejection: %v", err)
-	}
-}
-
 func TestHostedSearchRetiredXDoesNotLaunch(t *testing.T) {
 	for _, scenario := range []string{"x", "x_window"} {
 		t.Run(scenario, func(t *testing.T) {
 			options := fixtureOptions(t, "search:ok:"+scenario)
 			got, err := live.HostedSearch(context.Background(), options, scenario)
-			if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Processes != 0 || got.Turns != 0 || got.CanonicalCalls != 0 || got.Completed || got.ExpectedUnsupported {
+			if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Processes != 0 || got.Turns != 0 || got.CanonicalCalls != 0 || got.Completed {
 				t.Fatalf("retirement failed: %+v, %v", got, err)
 			}
 			var script struct{ Trace string }
@@ -794,8 +698,25 @@ func TestHostedSearchWebRejectsRetiredRawX(t *testing.T) {
 	defer cancel()
 	options := fixtureOptions(t, "search:coexisting_hosted:web")
 	got, err := live.HostedSearch(ctx, options, "web")
-	if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Completed || got.FollowupCompleted || got.ExpectedUnsupported {
+	if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Completed || got.FollowupCompleted {
 		t.Fatalf("retired X became Web proof: %+v, %v", got, err)
 	}
 	assertSearchInvocationCount(t, options, 1)
+}
+
+// Exercise the current supported entry point and pinned SDK, without depending
+// on decoder wording or a bypass around the retired-X preflight.
+func TestHostedSearchUnknownPublicTypeFailsClosed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	options := fixtureOptions(t, "search:unknown_public_type:web")
+	got, err := live.HostedSearch(ctx, options, "web")
+	if err == nil || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || got.CleanupPending {
+		t.Fatalf("unknown public type accepted or cleanup incomplete: %+v, %v", got, err)
+	}
+	assertSearchInvocationCount(t, options, 1)
+	encoded, _ := json.Marshal(got)
+	if strings.Contains(string(encoded)+err.Error(), "PRIVATE_") {
+		t.Fatal("private protocol data leaked")
+	}
 }
