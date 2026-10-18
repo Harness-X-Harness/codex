@@ -1,10 +1,9 @@
 # Grok test tiers
 
 Run commands from the repository root with the Go version in `grok/go.mod`.
-[Story ownership](docs/stories/README.md) and the
-[test-layer inventory](docs/test-layer-inventory.md) distinguish the evidence
-produced by each tier. None of the commands below promotes a local build to a
-verified release or refreshes historical Live results.
+[Story ownership](docs/stories/README.md) distinguishes consumer guarantees and
+their code/test owners. Each tier below produces different evidence. None of
+the commands below promotes a local build to a verified release or refreshes historical Live results.
 
 ## Default: offline Go contracts
 
@@ -89,18 +88,10 @@ do not replace actual-binary Integration acceptance for
 
 The original App Server stdout reaches the pinned SDK unchanged. Supported Web
 requires a canonical hosted call, completed answer, persisted typed history and
-a completed same-thread follow-up. Under [#414](https://github.com/Harness-X-Harness/codex/issues/414),
-product Hosted X is **retired**: no advertised `x_search`, public `xSearch`
-ThreadItem or fork-only `item/searchActivity` method. Explicit product X calls
-fail before transport; unexpected backend X fails without local redispatch or
-fabricated completion. Old X history has an explicit unsupported disposition,
-owned by Rust history tests, rather than silent conversion to Web or prose.
-
-Strict `unknown variant "xSearch"` controls remain credential-free diagnostics.
-They cannot pass a formal Integration/Live Hosted X Story. The SDK ignores
-unsubscribed unknown methods and refuses subscriptions to unsupported methods;
-Rust emitted-stream and generated-schema tests therefore own the absence of
-`item/searchActivity`. SDK decoding alone is not evidence of that absence.
+a completed same-thread follow-up. See the
+[Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
+for the product exclusion, old-history disposition and the separate
+Rust emitted-stream/schema and offline SDK diagnostic owners.
 
 ## Live: actual Codex and actual Grok
 
@@ -145,17 +136,14 @@ go -C grok run ./cmd/grok-scenarios --family live --suite diagnostic
 go -C grok run ./cmd/grok-scenarios --family facts --suite full
 ```
 
-The discovery command is credential-free and prints a JSON name array. Live
-smoke contains primary Basic, primary reasoning and Web: three supported cases,
-at most five submitted semantic turns. Full has 17 formal cases and at most 26
-submitted semantic turns. Catalog-only submits zero inference turns. Diagnostic
-discovery additionally lists `reasoning-no-effort-pinned`; execution requires an
-explicit name. Product `x`/`x-window` are unavailable in every Live suite and the
-CLI, including diagnostic selection. Their legacy SDK rejection controls are
-offline tests, never positive case credit. Direct backend X Facts remain
-independent. These are invocation bounds, not measured API billing or limits on
-legitimate product-internal transport/tool activity. No paid-cost improvement is
-claimed.
+The discovery command is credential-free and prints a JSON name array. The
+catalog owns selected cases and per-case semantic-turn limits; derive those
+limits from its current entries instead of copying counts into documentation.
+Catalog-only submits zero inference turns. Diagnostic execution requires an
+explicit name. See the [Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
+for unavailable product cases and separate direct-backend Facts. Invocation
+bounds are not measured API billing or limits on legitimate product-internal
+transport/tool activity. No paid-cost improvement is claimed.
 
 Trusted workflows first use `package/fetch_artifact.py` to verify the archive,
 provenance, source/harness revisions, target and executable digest. They pass
@@ -208,6 +196,43 @@ keys, private paths, raw traffic or opaque IDs. The tagged aggregate reports
 Its `completed` count counts completed cases; `shipped-catalog` remains an
 explicit zero-inference catalog case. SDK rejection diagnostics never enter the
 formal aggregate or earn completed-case credit.
+
+### Live failure evidence
+
+[`internal/livecommand`](internal/livecommand/run.go) owns the bounded report
+shared by [`TestLive`](tests/live/live_test.go) and the compatibility CLI.
+[`live.FailureInfo`](live/failure.go) projects only allowlisted failure code,
+terminal status, error kind and a valid HTTP status when the supported typed
+terminal actually supplies it. Scenario evidence supplies stage, safe counts,
+booleans, hashes and source/harness/target provenance. Unknown or unavailable
+facts stay unknown or absent; neither an HTTP status nor a static failure code
+proves the rejection's root cause. Request bodies, rejected-request key-path
+shapes, backend error bodies and session JSONL are not collected by this path.
+A report is capped at 1 MiB including its newline. In-memory identity and content
+correlation does not authorize storing those values in the report.
+
+The per-case outcomes remain `observed`, `not_observed`, `not_run` or
+`configuration_error`; the tagged aggregate is `observed` only for a complete
+positive selection and otherwise `not_proven`. Failure, cancellation and missing
+configuration never become successful backend proof. An actual diagnostic
+observation remains scoped to its selected subject and is not release certification.
+No missing evidence authorizes semantic resubmission or paid inference.
+
+The existing [formal workflow](../.github/workflows/grok.yml) and
+[diagnostic workflow](../.github/workflows/grok-live.yml) retain Go test events,
+the checked summary and verified package selection/provenance in the existing
+Actions artifact store, including on failure when files exist. Their configured
+retention is 30 days, under the repository's existing Actions artifact access
+controls; this change grants no new access. Artifact names bind SHA, run and
+attempt (plus scenario for formal runs). Formal package selection is same-run;
+diagnostics retain the explicitly selected producer identity separately from
+the harness run. Trusted repository/ref/opt-in checks and secret isolation from
+untrusted PRs remain in those workflows. Inspect the actual run/attempt and
+artifact metadata and read back the selected files before claiming delivery;
+workflow configuration alone proves neither upload, current availability nor
+expiry. A local output file has no automatic store, access or expiry guarantee.
+
+### CI routing
 
 - `grok-ci.yml` runs credential-free offline checks on development branch HEADs.
   Relevant native/schema changes additionally reuse `grok-proof.yml` on that

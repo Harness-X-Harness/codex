@@ -93,10 +93,11 @@ no-`model_catalog_json` Rust fallback on `grok-4.6`. The stock `model/list`
 suite in the same crate is the stock compatibility control. Both Grok tests
 run through native repository `just test` in `grok-proof.yml`.
 
-## C6 proof boundary
+## Evidence boundary
 
-C6 verifies unchanged shipped catalog loading/model-list and controlled public
-lifecycle separately. Native lifecycle HTTP fixtures retain catalog identity and
-windows but disable tool registration in their test copies because C7 owns full
-shipped tool/media/history wire composition. Deterministic source/native proof
-is not packaged startup or real-backend Live evidence.
+The [Rust lifecycle fixtures](../../../codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs)
+retain catalog identity and windows but disable tool registration in their test
+copies to isolate lifecycle behavior. Shipped catalog bytes are unchanged.
+Separate controlled Integration owners are linked in the [Story index](README.md);
+those composition tests do not turn an isolated lifecycle result into packaged
+startup or real-backend evidence.

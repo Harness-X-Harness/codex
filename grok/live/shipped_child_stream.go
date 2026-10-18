@@ -3,6 +3,7 @@ package live
 import (
 	"encoding/json"
 	"errors"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 	"reflect"
 	"strings"
 	"sync"
@@ -91,7 +92,21 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 				Content                                  []struct{ Type, Text string }
 			}
 		}
-		if json.Unmarshal(message.Params, &event) != nil {
+		var err error
+		if message.Method == "rawResponseItem/completed" {
+			err = json.Unmarshal(message.Params, &event)
+		} else if value, ok := message.Notification.AsTurnStarted(); ok {
+			event.ThreadID = value.Params.ThreadID
+			event.Turn, err = productTurnFromSDK(value.Params.Turn)
+		} else if value, ok := message.Notification.AsTurnCompleted(); ok {
+			event.ThreadID = value.Params.ThreadID
+			event.Turn, err = productTurnFromSDK(value.Params.Turn)
+		} else if value, ok := message.Notification.AsThreadClosed(); ok {
+			event.ThreadID = value.Params.ThreadID
+		} else {
+			return childNotProven
+		}
+		if err != nil {
 			return childNotProven
 		}
 		if event.ThreadID != child.ID {
@@ -189,7 +204,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 					text = append(text, part.Text)
 				}
 				joined := strings.Join(text, "\n")
-				public, _ := json.Marshal(map[string]string{"id": item.ID, "type": "agentMessage", "phase": item.Phase, "text": joined})
+				public := protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: item.ID, Phase: protocolv2.Value(protocolv2.MessagePhase(item.Phase)), Text: joined})
 				observed.reply.Items = append(observed.reply.Items, public)
 				if item.Phase == "final_answer" {
 					observed.hasFinal = true
@@ -264,20 +279,14 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		if inherited {
 			// The stock fork retains user input and final assistant messages.
 			// Public history also includes diagnostics that are not model input.
-			for _, raw := range turn.Items {
-				var item struct {
-					Type, Phase, Text string
-					Content           []struct{ Type, Text string }
-				}
-				if json.Unmarshal(raw, &item) != nil {
+			for _, value := range turn.Items {
+				if item, ok := value.AsAgentMessage(); ok && item.Phase != nil && item.Phase.Value != nil && *item.Phase.Value == protocolv2.MessagePhaseFinalAnswer && containsProofValue(item.Text, nonce) {
 					return childNotProven
 				}
-				if item.Type == "agentMessage" && item.Phase == "final_answer" && containsProofValue(item.Text, nonce) {
-					return childNotProven
-				}
-				if item.Type == "userMessage" {
+				if item, ok := value.AsUserMessage(); ok {
 					for _, part := range item.Content {
-						if part.Type != "text" || containsProofValue(part.Text, nonce) {
+						text, ok := part.AsText()
+						if !ok || containsProofValue(text.Text, nonce) {
 							return childNotProven
 						}
 					}

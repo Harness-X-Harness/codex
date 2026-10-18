@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"reflect"
 	"regexp"
 	"strings"
 
@@ -52,21 +51,23 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		// The parent already knew all conversational setup text, even assistant
 		// commentary that the stock child fork does not retain as model input.
 		var knownSetup []string
-		for _, raw := range seed.Items {
-			var item struct {
-				Type, Text string
-				Content    []struct{ Type, Text string }
+		for _, item := range seed.Items {
+			// Observable parent reasoning can reveal a candidate before delegation.
+			if reasoning, ok := item.AsReasoning(); ok {
+				if reasoning.Content != nil {
+					knownSetup = append(knownSetup, (*reasoning.Content)...)
+				}
+				if reasoning.Summary != nil {
+					knownSetup = append(knownSetup, (*reasoning.Summary)...)
+				}
 			}
-			if json.Unmarshal(raw, &item) != nil {
-				return errors.New("live: invalid setup item")
+			if message, ok := item.AsAgentMessage(); ok {
+				knownSetup = append(knownSetup, message.Text)
 			}
-			switch item.Type {
-			case "agentMessage":
-				knownSetup = append(knownSetup, item.Text)
-			case "userMessage":
-				for _, part := range item.Content {
-					if part.Type == "text" {
-						knownSetup = append(knownSetup, part.Text)
+			if message, ok := item.AsUserMessage(); ok {
+				for _, part := range message.Content {
+					if text, ok := part.AsText(); ok {
+						knownSetup = append(knownSetup, text.Text)
 					}
 				}
 			}
@@ -82,25 +83,27 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		childPaths := make(map[string]string)
 		parentKnown := make(map[string]string)
 		knownBeforeSpawn := []string{setupText}
-		for _, raw := range current.Items {
-			var activity struct {
-				Type, Kind, AgentThreadID, AgentPath, Text string
-				Content                                    []struct{ Type, Text string }
+		for _, item := range current.Items {
+			if reasoning, ok := item.AsReasoning(); ok {
+				if reasoning.Content != nil {
+					knownBeforeSpawn = append(knownBeforeSpawn, (*reasoning.Content)...)
+				}
+				if reasoning.Summary != nil {
+					knownBeforeSpawn = append(knownBeforeSpawn, (*reasoning.Summary)...)
+				}
 			}
-			if json.Unmarshal(raw, &activity) != nil {
-				return errors.New("live: invalid child activity")
+			if message, ok := item.AsAgentMessage(); ok {
+				knownBeforeSpawn = append(knownBeforeSpawn, message.Text)
 			}
-			switch activity.Type {
-			case "agentMessage":
-				knownBeforeSpawn = append(knownBeforeSpawn, activity.Text)
-			case "userMessage":
-				for _, part := range activity.Content {
-					if part.Type == "text" {
-						knownBeforeSpawn = append(knownBeforeSpawn, part.Text)
+			if message, ok := item.AsUserMessage(); ok {
+				for _, part := range message.Content {
+					if text, ok := part.AsText(); ok {
+						knownBeforeSpawn = append(knownBeforeSpawn, text.Text)
 					}
 				}
 			}
-			if activity.Type != "subAgentActivity" || activity.Kind != "started" {
+			activity, ok := item.AsSubAgentActivity()
+			if !ok || activity.Kind != "started" {
 				continue
 			}
 			id, path := activity.AgentThreadID, activity.AgentPath
@@ -194,9 +197,6 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			if err != nil {
 				return err
 			}
-			if len(message.ID) != 0 {
-				return server.refuse(message.ID)
-			}
 			for _, id := range []string{seed.ID, current.ID} {
 				if _, err := productTerminal(message, parentID, id); err != nil {
 					return err
@@ -240,12 +240,11 @@ func retainsSeedPrefix(thread productThread, seed []productTurn) bool {
 			return false
 		}
 		for i, item := range original.Items {
-			var before, after any
-			source := json.NewDecoder(bytes.NewReader(item))
-			source.UseNumber()
-			copied := json.NewDecoder(bytes.NewReader(inherited.Items[i]))
-			copied.UseNumber()
-			if source.Decode(&before) != nil || copied.Decode(&after) != nil || !reflect.DeepEqual(before, after) {
+			// Compare the complete SDK union, including fields not projected into
+			// Story evidence. Canonical encoding preserves nullable wire semantics.
+			before, beforeErr := json.Marshal(item)
+			after, afterErr := json.Marshal(inherited.Items[i])
+			if beforeErr != nil || afterErr != nil || !bytes.Equal(before, after) {
 				return false
 			}
 		}
@@ -262,10 +261,10 @@ func containsProofValue(text, value string) bool {
 var childNonce = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
 type productTurn struct {
-	ID     string            `json:"id"`
-	Status string            `json:"status"`
-	Error  json.RawMessage   `json:"error"`
-	Items  []json.RawMessage `json:"items"`
+	ID     string                  `json:"id"`
+	Status string                  `json:"status"`
+	Error  json.RawMessage         `json:"error"`
+	Items  []protocolv2.ThreadItem `json:"items"`
 }
 type productThread struct {
 	ID             string              `json:"id"`
@@ -287,30 +286,6 @@ type productThreadSource struct {
 	} `json:"subAgent"`
 }
 
-func (source *productThreadSource) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) != 0 && data[0] == '"' {
-		var origin string
-		if err := json.Unmarshal(data, &origin); err != nil {
-			return err
-		}
-		switch origin {
-		case "cli", "vscode", "exec", "appServer", "unknown":
-			*source = productThreadSource{}
-			return nil
-		default:
-			return errors.New("live: unknown product thread source")
-		}
-	}
-	type objectSource productThreadSource
-	var decoded objectSource
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*source = productThreadSource(decoded)
-	return nil
-}
-
 func completedProductTurn(turn productTurn) error {
 	if turn.ID == "" {
 		return failedObservation("turn_identity_missing", "live: bound turn did not complete")
@@ -328,19 +303,23 @@ func finalProductReply(turn productTurn) (string, error) {
 	var final, legacy []string
 	identities := make(map[string][2]string)
 	size := 0
-	for _, raw := range turn.Items {
-		var item struct{ ID, Type, Phase, Text string }
-		if json.Unmarshal(raw, &item) != nil {
-			return "", errors.New("live: invalid product item")
+	for _, value := range turn.Items {
+		item, ok := value.AsAgentMessage()
+		if !ok {
+			continue
 		}
-		if item.Type != "agentMessage" || (item.Phase != "" && item.Phase != "final_answer") {
+		phase := ""
+		if item.Phase != nil && item.Phase.Value != nil {
+			phase = string(*item.Phase.Value)
+		}
+		if phase != "" && phase != "final_answer" {
 			continue
 		}
 		text := strings.TrimSpace(item.Text)
 		if item.ID == "" || text == "" {
 			return "", errors.New("live: invalid product reply")
 		}
-		value := [2]string{item.Phase, text}
+		value := [2]string{phase, text}
 		if previous, seen := identities[item.ID]; seen {
 			if previous != value {
 				return "", errors.New("live: conflicting product reply")
@@ -352,7 +331,7 @@ func finalProductReply(turn productTurn) (string, error) {
 		if size > 4096 {
 			return "", errors.New("live: product reply budget exceeded")
 		}
-		if item.Phase == "final_answer" {
+		if phase == "final_answer" {
 			final = append(final, text)
 		} else {
 			legacy = append(legacy, text)
@@ -387,17 +366,18 @@ func productTerminal(message frame, threadID, turnID string) (bool, error) {
 	if message.Method != "turn/completed" {
 		return false, nil
 	}
-	var event struct {
-		ThreadID string      `json:"threadId"`
-		Turn     productTurn `json:"turn"`
-	}
-	if json.Unmarshal(message.Params, &event) != nil {
+	value, ok := message.Notification.AsTurnCompleted()
+	if !ok {
 		return false, errors.New("live: invalid product completion")
 	}
-	if event.ThreadID != threadID || event.Turn.ID != turnID {
+	if value.Params.ThreadID != threadID || value.Params.Turn.ID != turnID {
 		return false, nil
 	}
-	return true, completedProductTurn(event.Turn)
+	turn, err := productTurnFromSDK(value.Params.Turn)
+	if err != nil {
+		return false, errors.New("live: invalid product completion")
+	}
+	return true, completedProductTurn(turn)
 }
 
 func observeShippedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort, prompt string) (productThread, productTurn, error) {
@@ -426,9 +406,6 @@ func observeShippedTurn(server *sdkProductObserver, id string, evidence *Evidenc
 			message, err := server.next()
 			if err != nil {
 				return productThread{}, terminal, err
-			}
-			if len(message.ID) != 0 {
-				return productThread{}, terminal, server.refuse(message.ID)
 			}
 			complete, err := productTerminal(message, id, terminal.ID)
 			if err != nil {

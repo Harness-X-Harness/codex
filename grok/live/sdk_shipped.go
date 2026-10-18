@@ -142,7 +142,7 @@ func shippedTransport(ctx context.Context, err error) error {
 	if errors.As(err, &protocol) {
 		return errors.New("live: protocol request failed")
 	}
-	if probeDone(err) || xSearchDecodeError(err) {
+	if probeDone(err) {
 		return errSDKProtocolEnded
 	}
 	return failedObservation("sdk_observation_failed", "live: SDK observation did not complete")
@@ -206,13 +206,6 @@ func (transport *sdkProductObserver) next() (frame, error) {
 	}
 }
 
-func (transport *sdkProductObserver) refuse(id json.RawMessage) error {
-	if len(id) == 0 {
-		return errors.New("live: unsupported server request")
-	}
-	return failedObservation("unsupported_server_request", "live: unsupported server request")
-}
-
 func (transport *sdkProductObserver) request(ctx context.Context, _ protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
 	transport.note(ctx, errors.New("live: unsupported server request"))
 	return codexsdk.ServerRequestResponse{}, nil
@@ -229,7 +222,7 @@ func (transport *sdkProductObserver) rawNotification(ctx context.Context, notifi
 	if err == nil {
 		err = json.Unmarshal(raw, &envelope)
 	}
-	return transport.observeParams(ctx, notification.Method, envelope.Params, len(raw), err)
+	return transport.observeFrame(ctx, frame{Method: notification.Method, Params: envelope.Params, size: len(raw)}, err)
 }
 
 func (transport *sdkProductObserver) typedNotification(ctx context.Context, notification protocolv2.ServerNotification) error {
@@ -254,24 +247,24 @@ func (transport *sdkProductObserver) typedNotification(ctx context.Context, noti
 	default:
 		return nil
 	}
+	// Serialization measures the existing byte budget only; consumers use SDK values.
 	raw, err := json.Marshal(params)
-	return transport.observeParams(ctx, method, raw, len(raw)+len(method)+len(`{"method":"","params":}`), err)
+	return transport.observeFrame(ctx, frame{Method: method, Notification: notification, size: len(raw) + len(method) + len(`{"method":"","params":}`)}, err)
 }
 
 // The bounded queue belongs to the application observer. SDK admission and
 // callback lifecycle remain owned by the public Client/CloseContext contract.
-func (transport *sdkProductObserver) observeParams(ctx context.Context, method string, params json.RawMessage, size int, marshalErr error) error {
+func (transport *sdkProductObserver) observeFrame(ctx context.Context, message frame, marshalErr error) error {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.noteCallback(ctx)
-	if marshalErr != nil || len(params) == 0 {
+	if marshalErr != nil || message.size == 0 {
 		if transport.cause == nil {
 			transport.cause = errors.New("live: invalid product completion")
 		}
 		transport.signal()
 		return nil
 	}
-	message := frame{Method: method, Params: params, size: size}
 	if transport.onNote != nil {
 		if err := transport.onNote(message); err != nil && transport.cause == nil {
 			transport.cause = err

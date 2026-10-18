@@ -10,8 +10,7 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-// sdkHostedSearch implements supported Web observation. Legacy X inputs are
-// reachable only through credential-free test helpers, never product selection.
+// sdkHostedSearch implements supported Web observation.
 func sdkHostedSearch(ctx context.Context, options Options, scenario string, config map[string]any, prompt string) (SearchEvidence, error) {
 	result := SearchEvidence{Scenario: scenario}
 	transport := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}
@@ -98,7 +97,6 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 		result.FollowupCompleted = false
 	}
 	result.Evidence = base
-	result.ExpectedUnsupported = ctx.Err() == nil && acceptedXSearchRejection(result, err)
 	return result, err
 }
 
@@ -118,7 +116,7 @@ func searchRunTransportFailure(err error, threadID, turnID string) error {
 
 // revalidate checks observed queue and SDK-retained typed contradictions without
 // manufacturing proof. The SDK has no retained raw-notification accessor after
-// fatal decode, so expected rejection cannot attest complete raw delivery.
+// fatal decode, so a failed run cannot attest complete raw delivery.
 func (probe *searchProbe) revalidate(notifications []protocolv2.ServerNotification) error {
 	check, savedResult, savedEvidence := *probe, *probe.result, *probe.evidence
 	check.result, check.evidence = &savedResult, &savedEvidence
@@ -130,11 +128,10 @@ func (probe *searchProbe) revalidate(notifications []protocolv2.ServerNotificati
 	retained.frames, retained.bytes = 0, 0
 	for _, notification := range notifications {
 		raw, err := json.Marshal(notification)
-		var message frame
-		if err != nil || json.Unmarshal(raw, &message) != nil {
+		if err != nil {
 			return errors.New("live: invalid search evidence")
 		}
-		message.size = len(raw)
+		message := frame{Method: string(notification.Kind()), Notification: notification, size: len(raw)}
 		if err := retained.notification(message); err != nil {
 			return err
 		}

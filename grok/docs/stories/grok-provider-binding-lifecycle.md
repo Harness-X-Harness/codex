@@ -87,10 +87,10 @@ run, not the product's valid internal orchestration.
 
 ### Secret-safe evidence
 
-The callable C6 runner returns bounded safe observation metadata only. It never
+The callable runner returns bounded safe observation metadata only. It never
 returns prompts, responses, credentials, raw traffic, Thread IDs or child result
 values. Deterministic failure cases verify this boundary. It does not introduce
-a raw-session retention sink or claim C8 artifact evidence delivery.
+a raw-session retention sink or establish package provenance.
 
 
 ## Stock compatibility control
@@ -156,11 +156,13 @@ notifications may still arrive within the original deadline. The runner waits
 only for that evidence, within the same event bound, and makes no additional RPC
 or semantic invocation. Known contradictions settle without a deadline wait.
 
-C6's native V1/V2 handlers, child runtime and owner-controlled reload tests prove
-Provider/catalog/model inheritance and stock result delivery. Deterministic Go
-scripts prove the retained scenario oracle. A real App Server V2 listener fixture
-checks initial consumed input, result and completion with inherited raw opt-in and
-an opt-out control, without a child subscription. Its stock Responses plaintext
-tool marker does not establish Grok wire support. C7 owns full model-driven child/tool
-HTTP composition, #339 owns packages and #331 owns backend execution. Those
-remain required before claiming this complete shipped-product Story.
+[Rust provider-binding tests](../../../codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs)
+and the [public child listener](../../../codex-rs/app-server/tests/suite/v2/grok_child_public_listener.rs)
+own Provider inheritance and stock listener delivery. [Offline Go scripts](../../live/shipped_test.go)
+validate the retained scenario oracle. [`TestShippedChildFixture`](../../tests/integration/child_test.go)
+executes real Codex against controlled Grok HTTP with unchanged shipped
+capabilities, checks inherited seed content/order and fresh child result plus
+parent consumption, and rejects a parent-supplied result. This is implemented
+composition coverage, not evidence of real model delegation.
+[`TestLive/shipped-child`](../../tests/live/live_test.go) requires its own
+identified package/backend run before this complete shipped Story is proven.

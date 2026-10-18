@@ -17,13 +17,7 @@ func productTurnFromSDK(value protocolv2.Turn) (productTurn, error) {
 			return result, err
 		}
 	}
-	for _, item := range value.Items {
-		raw, err := json.Marshal(item)
-		if err != nil {
-			return result, err
-		}
-		result.Items = append(result.Items, raw)
-	}
+	result.Items = append([]protocolv2.ThreadItem(nil), value.Items...)
 	return result, nil
 }
 

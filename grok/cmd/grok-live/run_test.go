@@ -403,7 +403,7 @@ func TestCommandRetiredXCannotCountAsCompletion(t *testing.T) {
 	for _, scenario := range []string{"x", "x-window"} {
 		t.Run(scenario, func(t *testing.T) {
 			trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
-			key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:x", "Trace": trace})
+			key, _ := json.Marshal(map[string]string{"Mode": "search:ok:x", "Trace": trace})
 			report, code := invoke(t, arguments(scenario), "1", string(key))
 			if code != 2 || report.Outcome != "configuration_error" || report.Reason != "unknown_or_missing_scenario" || len(report.Evidence) != 0 {
 				t.Fatalf("retired X accepted: %+v", report)
@@ -415,12 +415,12 @@ func TestCommandRetiredXCannotCountAsCompletion(t *testing.T) {
 	}
 }
 
-func TestCommandWebCannotAcceptLegacyXDecodeRejection(t *testing.T) {
+func TestCommandWebUnknownPublicTypeCannotCountAsCompletion(t *testing.T) {
 	trace := filepath.Join(t.TempDir(), "PRIVATE_TRACE")
-	key, _ := json.Marshal(map[string]string{"Mode": "search:public_only:web", "Trace": trace})
+	key, _ := json.Marshal(map[string]string{"Mode": "search:unknown_public_type:web", "Trace": trace})
 	report, code := invoke(t, arguments("web"), "1", string(key))
 	var evidence live.SearchEvidence
-	if json.Unmarshal(report.Evidence, &evidence) != nil || code != 1 || report.Outcome != "not_observed" || evidence.ExpectedUnsupported || evidence.Completed || evidence.FirstCompleted || evidence.FollowupCompleted || evidence.CleanupPending || report.ExecutionSnapshotRetained {
+	if json.Unmarshal(report.Evidence, &evidence) != nil || code != 1 || report.Outcome != "not_observed" || evidence.Completed || evidence.FirstCompleted || evidence.FollowupCompleted || evidence.CleanupPending || report.ExecutionSnapshotRetained {
 		t.Fatalf("SDK rejection became Web success: %+v", report)
 	}
 	transcript, err := os.ReadFile(trace)
