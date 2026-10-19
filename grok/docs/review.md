@@ -1,147 +1,90 @@
-# Review one complete improvement
+# Review a complete, test-backed change
 
-Use [Version-line-first development](./carry-forward.md) as policy. Review
-whether another engineer could safely continue from this increment. CI green is
-necessary evidence, not a substitute for judgment about scope and coverage.
+Apply the [current Grok development policy](./carry-forward.md) and the
+ordinary [actual-HEAD acceptance rule](https://github.com/Harness-X-Harness/codex/issues/233).
+Review whether the requested behavior and its affected contracts are
+protected by the appropriate executable evidence, without adding a
+milestone gate or second certification.
 
-## Establish the subject and assumptions
+## Subject and current contract
 
-Read the actual version-line HEAD, PR diff, exact target stock, accepted product
-reference, and owning issue. Distinguish trusted stock input, a development line,
-and an accepted Grok product baseline. Verify the identity of `S`; do not make
-re-certification of untouched stock an implicit review requirement.
+- Identify the repository, actual source branch HEAD, PR/base/merge subject
+  if applicable, relevant Story or Issue, and exact stock input when adopting
+  a new upstream version. Distinguish a tested PR merge from the feature HEAD.
+- Read current source and tests at the affected owner, its direct consumers,
+  and only the related Story requirements. Consult old migration notes only
+  when a still-operative constraint cannot be resolved from current sources.
+- State the consumer-visible positive behavior, material negative/safety
+  boundaries, intentional scope changes and non-goals. A change of supported
+  product behavior needs a reviewed decision, not just altered test expectations.
 
-Inspect the affected stock seams, callers, shared dependencies, configuration,
-generators, harnesses, and runtime boundaries. Unchanged files can still be
-impacted. Neither a narrow diff nor a convenient test filter establishes the
-impact boundary. Investigate uncertainty or broaden relevant proof.
+## Impact and smallest complete implementation
 
-Old carry results may explain an approach; they do not verify a new PR. Do not
-infer completion from an issue title, earlier reviewer prose, branch naming, or
-a green aggregate without inspecting its scope and actual execution subject.
+- Inspect stock/provider seams, callers, shared dependencies, configuration,
+  public protocols, generated representations, history, resources, and
+  external-effect ownership affected by the diff. Unchanged files may still
+  be impacted; a short diff is not proof of a small behavioral footprint.
+- Confirm that each necessary source/config/schema/generator/build change
+  travels with its owning test and consumer. No half-implemented API or
+  deferred mandatory safety proof.
+- Prefer the actual owner and the smallest complete PR. Split for a
+  demonstrated technical prerequisite or independently testable outcome,
+  not because a C0–C8 stage, previous commit grouping, or arbitrary file
+  count calls for it.
+- For context reduction, identify the current consumer/invariant of each
+  extra layer, field, historical compatibility path and test. Remove dead
+  authorities and their consumers together; keep real security, recovery,
+  provenance and privacy boundaries.
 
-## Before merge
+## Tests and execution evidence
 
-Check these responsibilities at their owner:
+| Type of change | What to inspect or execute |
+| --- | --- |
+| Pure local behavior | Closest unit/property tests, material failure cases, ordinary Go/Rust lint and formatting |
+| Shared Rust/protocol/tool/history | Affected stock regressions, native Rust, generated ABI/consistency and cross-owner tests |
+| Go SDK/observer or actual product wiring | Offline Go, relevant real-binary Integration, causal ID/status/history/side-effect checks |
+| Shipped configuration, helpers or package | Current catalog/profile checks, staging/launcher and actual affected target package consumers |
+| Real-backend capability claim | Explicitly authorized, scoped real Codex + Grok Live, or independent backend Facts when that is the claimed fact |
 
-- **Meaningful increment:** coherent behavior and explicit non-goals; no half API
-  or knowingly broken dependency deferred to another PR. Split by independently
-  useful outcomes, not arbitrary file counts or historical patch boundaries.
-- **Stock preservation:** use current stock architecture; keep provider-neutral
-  correctness neutral and Grok dialect changes at the explicit Provider boundary.
-  Do not copy historical files over moved seams or assume trust in `S` proves `S + delta`.
-- **Owner closure:** source, affected config/protocol representations, native
-  generated outputs, build/test-data registration, and consistency checks travel
-  together. No global generated-file gate or terminal cleanup ticket.
-- **Obligation coverage:** identify introduced behavior, affected stock contracts,
-  and interactions with earlier increments. Native assertions and environments
-  must cover those responsibilities in the shared reusable proof. Check meaningful,
-  non-empty execution and preservation of earlier applicable obligations.
-- **Harness:** deterministic helpers and scenario source accompany their behavior.
-  Backend opt-ins must not skip required native tests. Fixtures cannot depend on
-  product assets from a future increment.
-- **Admission:** current required `Cargo` and review pass under native protection.
-  Verify the result's applicability to the current head/base and actual checkout.
-  Squash one increment; do not bypass missing checks or add custom admission.
+Check that tests **ran**, completed and asserted the claimed behavior: a
+compile-only target, empty suite, `t.Skip`, outdated snapshot, mock HTTP or
+expected-unsupported result is not an actual product success. An offline
+negative test should still guard security-sensitive rejected actions,
+wrong identity, local redispatch, unpaired replay, stale state, resource
+overflow, secret leakage, and unauthorized effects when material.
 
-Proof scope is itself reviewed. Replacing a test requires equivalent or stronger
-coverage of its continuing obligation. Retiring an obligation requires an explicit
-semantic/scope decision, not a failing run or a desire to shorten CI. Keep the
-rationale in the PR and update the version plan when its boundary changes.
-Executed once does not mean owned forever; inherited obligations also cannot
-silently disappear. A broader suite may be appropriate for a shared seam.
-Compile success is not equivalent to behavioral test execution.
+A cleanup may remove redundant tests if an identified current invariant
+remains covered. Do not preserve historical test counts or exact instance
+lists for their own sake. Conversely, deleting a test solely to turn CI green
+does not retire the invariant.
 
-## C0 review: mechanism acceptance, not stock certification
+## Actual HEAD, merge and release evidence
 
-Review C0 as a complete infrastructure increment: version contract, native
-admission/proof path, and proof architecture bootstrap. It may contain a thin
-subject-aware bootstrap job without workspace Cargo tests or Clippy. Reject
-stock fixture, version, lockfile, or product repairs whose purpose is to turn
-stock baseline CI green; independently justified stock adaptations get their
-own scoped increment.
+- Review applicable workflow/job selections for **the exact changed source
+  HEAD**, its checked-out SHA and settled conclusions. Required failures,
+  skips, missing owners, stale runs or cancelled/pending jobs block that
+  claim. Use the actual configured branch protections; a particular branch
+  name is not a test.
+- Do not promote a PR synthetic merge result as source-HEAD proof.
+  Squash/rebase may change SHA: inspect its ordinary resulting checks,
+  without inventing post-squash certification or a Green Prefix pause.
+- Preserve source/build/package and executable digests at boundaries that
+  need them. GNU/native Integration does not certify Linux-musl/macOS
+  packages; one Live result cannot certify an untested target, backend or
+  scenario. If paid Live/Facts were not run, say **NOT_RUN**.
+- If a non-idempotent external operation can leave partial effects, check
+  bounded retries, truthful cleanup/uncertainty and authoritative readback.
+  An old green run is never a substitute for its changed subject.
 
-Require structural review and dynamic evidence, not merely valid YAML:
+## Reviewer output
 
-- exact-stock provenance, explicit trust boundary, and no future-owner placeholders;
-- real PR invocation of the local reusable proof and actual enforcement of the
-  expected required `Cargo`, including its source and applicability;
-- subject identity, permissions, event coverage, explicit required dependencies,
-  and caller/callee concurrency that preserves canonical evidence;
-- an applicable executed negative path plus review/focused checks for missing,
-  failed, skipped, cancelled, neutral, and empty required proof; the final aggregate
-  must not silently skip or convert non-success to success;
-- fresh successful final-candidate PR proof and separate successful push proof
-  on the actual canonical squash SHA using the same definition.
+Report material findings with the owner, violated invariant, concrete
+source/test evidence, consequence, smallest fix and risk. If none, say
+`none`. State exact tested SHA/run/attempt, what passed or was not executed,
+and unresolved uncertainty. Leave behavior and test ownership in code,
+current contracts in Stories, CI evidence in Actions, and historical
+decisions in existing Issues/Git—no extra roadmap, proof ledger, or
+approval state machine.
 
-The mechanism acceptance record can support unchanged invariants later; modifying
-a relevant workflow, filter, permission, subject mapping, or aggregate requires
-corresponding revalidation. A previous failed run can establish a narrowly
-applicable failure-path observation, not success for a revised candidate.
-C0 closure is neither stock correctness nor Grok product acceptance.
-
-## After squash
-
-Identify the actual canonical SHA, its checkout/test subject, workflow revision,
-and required push result. It must use the same deterministic proof definition
-as the PR, not another command list or a stale/moving external revision.
-Distinguish PR HEAD, test-merge SHA, and canonical SHA. Do not start the next
-feature increment until required exact-head proof succeeds.
-
-A green canonical prefix covers all still-applicable deterministic obligations
-introduced or affected by that prefix. It does not assert unrelated upstream CI
-was rerun, nor does it establish exhaustive correctness.
-
-For failed, absent, cancelled, or pending required proof, freeze progression.
-Classify product, harness, orchestration, and infrastructure faults. Repair or
-revert through a PR when needed; preserve the original result. A corrected
-successor or reviewed scope change does not turn the predecessor green.
-
-## Initial product acceptance
-
-Check the version-specific plan against the actual line:
-
-- selected semantics and current-stock owner closure are complete;
-- every still-applicable downstream native, affected-stock, harness, and cross-owner
-  composition obligation is covered and has passed on the actual canonical SHA;
-- selected admission, Facts/Live, and delivery capabilities exist and are usable
-  at the claimed level, not merely labeled UPDATE;
-- PR/push share the required proof definition; no semantic proof or generated
-  closure first appears during final package/process assembly;
-- upstream trust assumptions, unexecuted backend work, and evidence limitations
-  remain explicit. Final review is not a stock-wide re-certification exercise.
-
-Record acceptance against an exact green canonical revision in the existing
-roadmap or closing PR. Do not add an RC branch, bulk promotion, or a
-`PR_PROVEN`/`SUCCESSFUL` product-state machine. Normal development then continues
-through the same PR/squash/push loop.
-
-## Evidence and findings
-
-Separate trusted stock, C0 mechanism acceptance, downstream deterministic proof,
-backend Facts, real-provider Live, and artifact smoke. Label evidence as checked,
-historical, not run, skipped, or unknown. Workflow existence does not establish
-invocability; backend skips are not Live passes. Check permissions and invocation
-requirements without requesting or disclosing secret values.
-
-Report concrete findings: owner, violated invariant, evidence, consequence, and
-smallest correction. A failure outside downstream impact is not automatically a
-C0 blocker. A demonstrated defect in a premise we rely on must still be triaged.
-Do not demand universal redesign from a hypothetical risk, or dismiss a relevant
-stock regression because the original stock was trusted.
-
-For pending CI, record the exact subject, authoritative source, and next action;
-follow current user instructions rather than requiring a particular monitor.
-For no material finding, report `none`.
-
-## Context and authority discipline
-
-Keep policy in the canonical document, semantic assertions in native tests,
-admission in GitHub protections, and dynamic evidence in GitHub. Link rather
-than repeat. Do not build another test interpreter, provenance database, or
-state machine to re-evaluate GitHub's own state.
-
-Review is read-only unless the task authorizes mutation. Documentation or issue
-publication does not implement C0, complete owners, authorize branch resets or
-ruleset changes, or publish packages. Historical comments remain evidence even
-when their old instructions are explicitly superseded.
+Review does not authorize code, branch-protection, release or historical
+ref mutations without the user's explicit request.

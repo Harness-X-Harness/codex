@@ -1,102 +1,86 @@
 # Runtime evidence and optional distribution
 
-Development policy lives in [carry-forward.md](./carry-forward.md). This document
-owns only backend-evidence and package boundaries.
+[Development and acceptance policy](./carry-forward.md) governs source
+changes. This document owns only the **distinct backend, execution-subject,
+artifact and delivery** boundaries. Publishing a document, building a binary
+or enabling a workflow does not establish a supported user-visible result.
 
-Carrying an established ability to validate or package the product is different
-from executing it. The selected capability must be complete; its existence must
-not be reported as a successful run. Actual downloadable artifacts are optional.
+## What each result means
 
-## Subjects and authority
+| Evidence | Establishes | Does not establish |
+| --- | --- | --- |
+| Trusted exact stock | Agreed upstream source input | Downstream correctness after modification |
+| Rust/Go native and controlled Integration | The executed assertions on the identified source/binary | Real Grok backend or all product Stories |
+| Direct Grok Facts | Actual backend response for a specific request/environment | Codex product policy or same-thread behavior |
+| Product Live | Identified Codex binary + actual backend behavior for selected Story/scenario | Other scenarios, platforms or upstream stock tests |
+| Package build/consumer smoke | Layout, helpers, launch and actual selected target behavior | Live/backend behavior, other targets or separate source acceptance |
 
-Exact stock is a trusted upstream input, not a downstream stock-CI result. C0
-accepts the development mechanism; neither establishes the correctness of a
-modified Grok runtime or current backend behavior. A green canonical prefix
-covers the downstream deterministic obligations defined by the development
-policy; it is not a claim that all upstream CI, Live, or package builds ran.
+Backend Facts and Live must be explicitly opted into with trusted credentials
+where needed. A skipped, empty or stale run is **not** a pass. Errors,
+redacted metadata and time-bound observations must be scoped to actual
+run/attempt, source SHA, executable SHA-256 and environment where those affect
+reproducibility. Never leak credentials, plaintext reasoning, model output or
+private paths to untrusted PRs.
 
-Facts observe a backend. Product Live tests an explicitly selected binary/runtime
-composition against the backend. Artifact smoke tests the package humans receive.
-Keep those subjects and conclusions separate, even when one workflow hosts them.
+## Execution and CI boundaries
 
-Normal delivery uses an exact accepted version-line SHA. Diagnostic builds of
-other revisions are allowed when clearly identified. A successful build or Live
-run never promotes that source into an accepted baseline, and a missing artifact
-does not revoke source acceptance. A demonstrated product defect remains a real
-finding regardless of which layer discovered it.
+The product version branch owns the real `grok.yml`, reusable native
+`grok-proof.yml`, Go test packages, packaging and optional Live/Facts
+workflows. Their supported events, required selectors and trust boundaries
+must be verified against **that branch's** current workflow; neither this
+document nor workflow YAML alone proves a job was invoked or passed.
 
-## Workflow responsibilities
+- The ordinary applicable Go/Rust/native/Integration checks support
+  development decisions on the actual changed HEAD. A branch name or
+  separately named release/canonical phase is not proof.
+- Backend-only `grok-facts.yml` remains independent of Codex binary and
+  package availability. Real backend observation is not necessarily a
+  required paid run for an unrelated code change.
+- `grok-live.yml` is an explicitly authorized diagnostic using an identified
+  binary/artifact and a separately identified harness run; do not silently
+  choose the latest successful producer. A diagnostic does not certify
+  omitted product scenarios.
+- Formal enabled Live may use a same-run verified package, with a distinct
+  actual source/build/run identity. If the build failed, its dependent Live
+  is not proved. Skips and ineligible or missing credentials never become
+  positive evidence.
+- Changes to package/live/facts orchestration must have their own focused
+  deterministic tests, without reimplementing Rust/Go Story oracles in
+  shell and without maintaining a separate test-name registry.
 
-The version line's `grok.yml` keeps PR and canonical-push deterministic proof in
-the same-revision local `grok-proof.yml`. C0 may bootstrap that path thinly;
-subsequent owners add delta, affected-stock, and composition proof. Backend calls
-and release builds do not enter that required native contract. New package or
-invocation mechanisms still require their own deterministic tests in it, while
-coverage of earlier applicable downstream obligations remains intact.
+The current version branch's `grok/TESTING.md` owns exact local commands,
+opt-ins, evidence formats and selection flags. The Go scenario catalog
+owns formal/Smoke/diagnostic selection, not a stage label or copied YAML list.
 
-Once selected release capability is integrated, version-line pushes may also
-build the supported packages and run Live on the same-run Linux artifact. Each
-requested target builds once; downstream Live consumes that build's package, not
-another run or a second build. Failed build means dependent Live is not proved.
-Sibling target failures remain visible. Do not label an artifact produced before
-product acceptance as a released product merely because a push created it.
+## Complete package and honest delivery
 
-Manual artifact-backed Live is diagnostic: require an explicit existing run or
-artifact, identify its source/target and the harness revision, and reject missing,
-expired, ambiguous, or inappropriate inputs. Do not pick "latest successful" as
-an undocumented selector. No diagnostic run substitutes for native PR proof or
-post-squash exact-head proof.
+An optional human-use package includes the actual runtime, necessary helper
+binaries and resources, launcher/install assets, and the shipped
+Provider profile/catalog. Verify source revision, supported target, selected
+runtime digest, manifest and installed executable behavior; use actual
+package-consumer tests, not a Go harness alone. A native Linux GNU run does
+not prove Linux-musl or macOS package behavior.
 
-Use `grok-facts.yml` for opt-in backend observations, independently of package
-availability. Its deterministic unit/harness tests belong to the shared native
-proof as introduced by their owners. Sensitive backend credentials are supplied
-only to approved backend jobs, never exposed to untrusted PR execution. Missing
-credentials and opt-in skips are not passing backend evidence.
+Keep the user's dedicated product Home isolated; do not overwrite unrelated
+configuration or silently migrate existing state. A package can be
+unavailable or expired without changing the result of tests already
+performed on its source. Conversely, a successful artifact build does not
+authorize a claim of real backend success, publication or release.
 
-Use the actual repository's supported events and workflow-dispatch availability.
-Do not promise an invocation merely because YAML contains `workflow_dispatch`;
-verify registration, permissions, required inputs, and referenced artifacts.
+Support target-specific builds when users need them, and reuse the same-run
+artifact for dependent trusted Live when configured. No automatic rebuild
+to hide a failure, blind retry of non-idempotent operations, RC/promotion
+branch or second release-state ledger. Publication is a separately
+authorized operation using the existing release workflow and its actual
+security and permissions.
 
-## Complete human-use package
+## Triage and report
 
-Keep the supported target set driven by actual users. A package includes the
-runtime binary and helper binaries it needs, launch/install assets, and the
-profile/catalog owned by the product. It identifies repository, exact source SHA,
-and target. Run identity and checksums aid retrieval/integrity, not source
-acceptance.
-
-Installation instructions cover executable bits, entrypoints, bundled assets,
-and a dedicated product Home/configuration. Never silently overwrite or migrate
-unrelated user state. Profile/catalog behavior is implemented by its semantic
-owner, not invented during packaging.
-
-Preserve the package's observable layout and supported scenarios when adapting
-build actions to new stock. Test new staging/orchestration behavior and affected
-composition; do not compensate for missing semantic tests with a release build.
-A stock source/fixture/lock adaptation genuinely needed for delivery is a named,
-tested downstream increment, not an implicit C0 repair or an excuse to weaken
-package assertions. Preparation of required build inputs is distinct from stock
-behavioral re-certification.
-
-## Report and triage
-
-Record exact subjects, native command/result, artifact identities, and redacted
-failure evidence. Label historical and not-rerun observations honestly.
-
-- Native failure: owning source/test or deterministic CI seam.
-- Facts discrepancy: recorded backend observation versus the actual response.
-- Live failure: product, backend, environment, or harness, determined by evidence.
-- Build/staging/smoke failure: package unavailable or unusable for that target.
-
-Do not repair a test by weakening its contract solely to make the run green.
-Backend refresh is parallel unless the product contract explicitly requires it.
-Keep package execution separate from source initialization acceptance; concrete
-defects affecting relied-on contracts still require triage.
-
-A pending workflow result is not evidence. Bind any later conclusion to the
-exact run/attempt/subject and its authoritative settled status. Follow current
-user instructions for execution/monitoring, without a mandatory bot dependency.
-Do not add blind reruns, proof ledgers, publisher state machines, or post-merge
-historical PR searches. Practical artifact retention may remove a package without
-altering its accepted source history. Policy publication is not implementation,
-execution evidence, or delivery.
+State what was actually observed: source/test/binary/package identity,
+workflow and attempt, required job conclusions, backend scope, and missing
+evidence. Classify an actual failure at its source (native code, harness,
+provider/backend, environment or package) rather than inferring ownership
+from which runner happened to fail. Preserve the original failure record;
+a later passing SHA does not change it. Correct a test only when the
+product contract or a valid test oracle has changed, not to manufacture
+a green run.
