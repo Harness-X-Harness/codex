@@ -1,46 +1,46 @@
 ---
 name: grok-release-evolution
-description: Route Grok version initialization and normal incremental development, review, runtime evidence, and optional distribution through the current grok/main policy. Not for unrelated stock Codex work.
+description: Route Grok stock-version adoption, ordinary contract- and test-driven development, review, runtime evidence, and optional distribution to the current grok/main owners. Not for unrelated stock Codex work.
 ---
 
 # Grok development entrypoint
 
-Read `grok/main:grok/docs/carry-forward.md` before acting. It is the single
-current development policy. Read `review.md` in the same directory when
-reviewing, and `distribution.md` when dealing with backend evidence or packages.
-Link those policies rather than reproducing them in this skill or an issue.
+Read `grok/main:grok/docs/carry-forward.md` as the single current development
+policy. Read `review.md` in that directory for review, and
+`distribution.md` for real-backend evidence, packages or publication. This
+skill routes to authorities; it is **not** another stage plan or acceptance
+contract.
 
-Resolve the exact stock commit, previous accepted product reference, current
-version-line HEAD, and relevant existing PRs/issues using the connected tools.
-Historical carry branches are reference material, not the destination or a
-second development authority. A newly numbered version line is not necessarily
-an accepted product baseline.
+Resolve only the relevant exact upstream stock input, current target/source
+HEAD, Story/Issue, actual code/test owner and applicable CI before acting.
+The selected product branch's `grok/TESTING.md` and
+`grok/docs/stories/README.md` own local test commands and current consumer
+claims. Earlier carry versions, C0–C8, Green Prefix and old canonical
+certifications are historical context, **not** prerequisites.
 
-Apply the policy's trust boundary: C0 establishes the version contract and native
-admission/proof path, not stock re-certification. Subsequent increments own delta,
-affected-stock regression, and composition proof. Preserve coverage of earlier
-applicable obligations, not an append-only test-command list. Review impact and
-scope changes explicitly; do not hide stock adaptations in C0.
+For each requested change, identify its observable contract, affected stock
+and product behavior, direct technical dependencies, and nearest executable
+tests. Prefer a focused failing test for a new regression, and preserve
+material positive/negative tests through refactoring. Keep owned generated
+outputs and consumers with the implementation; use actual Rust/Go/native/
+Integration/paid-backend tiers according to impact. Do not build a second
+test runner, proof ledger or fixed milestone sequence.
 
-Use the ordinary loop: short-lived working branch, one complete increment per
-PR, required scoped native proof, squash into the version line, and exact-head
-post-merge proof before the next increment. Distinguish PR HEAD, test-merge
-context, and canonical SHA. Use pinned-stock native test entrypoints. Do not
-add a Grok proof runner, owner-marker detector, stage manifest, or progressive/full mode.
+Apply [#233](https://github.com/Harness-X-Harness/codex/issues/233):
+accept only the **actual tested HEAD** with all applicable required CI
+settled successful. Distinguish PR synthetic merge, source HEAD, final
+commit, runtime binary/digest and optional artifact/backend evidence.
+Normal merge/rebase/squash obeys configured GitHub rules; there is no
+extra post-merge Green Prefix ceremony. Never relabel a mock, compile-only
+test, skipped suite or historic run as product Live proof.
 
-When planning, reuse outcome owners and distinguish technical prerequisites from
-serial landing order. Publish or update issues only when authorized. Old code
-and results may inform reconstruction; they do not prove a new increment.
-Keep trusted-input, mechanism-acceptance, deterministic, historical, not-run, and
-backend evidence distinct. Policy publication does not complete implementation.
+Use genuine technical prerequisites to split work, not arbitrary C stages;
+old issues may supply context without changing current requirements.
+When tests or Actions are incomplete, report exact run/attempt/subject and
+unresolved evidence rather than assigning an acceptance status.
 
-When required CI is pending, record the exact repository, run/attempt, HEAD or
-PR context, authoritative source, completion condition, and next action. Decide
-only from the settled result for that subject. Follow current user instructions;
-a particular monitor or bot is not a policy prerequisite. Preserve historical
-failures and explicitly supersede obsolete instructions rather than erasing them.
-
-Read/review authority is not mutation authority. Verify authorization and tool
-permissions before changing branches, rulesets, code, releases, or history.
-Missing admin access is an external permission blocker, not CI waiting.
-Verify each requested external write and report what actually changed.
+Read/review does not authorize mutation. Confirm the user's requested
+write scope and account permissions; never infer permission to reset a
+branch, force-push, edit protection, publish a release, or expose secrets.
+Verify any external write through authoritative readback and report only
+what actually changed.

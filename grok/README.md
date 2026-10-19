@@ -1,22 +1,19 @@
 # Grok development
 
-Start with [Version-line-first development](./docs/carry-forward.md).
+Start with [contract- and test-driven development](./docs/carry-forward.md).
+That document is the single current engineering policy.
 
-- [Review](./docs/review.md) — obligation coverage and PR/canonical acceptance.
-- [Distribution](./docs/distribution.md) — runtime evidence and optional delivery.
-- [Agent entrypoint](../.codex/skills/grok-release-evolution/SKILL.md) — routing, not another policy.
+- [Review](./docs/review.md) — inspect behavior, affected stock contracts, tests, and actual CI evidence.
+- [Runtime evidence and distribution](./docs/distribution.md) — distinguish backend Facts, product Live, and package execution.
+- [Agent entrypoint](../.codex/skills/grok-release-evolution/SKILL.md) — routing to these owners, not another policy.
 
-`grok/main` owns current process documentation, not the product baseline.
-A new `grok/rust-vX.Y.Z` starts at trusted exact stock and grows through ordinary
-PRs. C0 establishes the version contract and native admission/proof path; it does
-not re-certify stock. Later increments prove their changes, affected stock
-contracts, and composition while retaining earlier applicable obligations.
+`grok/main` is a process/documentation overlay, not the Grok product baseline.
+A `grok/rust-vX.Y.Z` line may begin at a trusted exact stock tag; changes
+then proceed through ordinary, independently testable PRs. Current Stories,
+source, tests, and the actual tested Git HEAD define each change's scope and
+evidence. Historical C0–C8 milestones and Green Prefix ceremonies are **not**
+prerequisites for future development or stock upgrades.
 
-The line owns canonical development history from bootstrap. It becomes an
-accepted product baseline only after planned product and process closure and
-review of an actual green canonical SHA. A newer branch name, thin C0 green,
-or downloadable artifact does not imply that acceptance.
-
-Version-specific plans belong on that version line and its GitHub roadmap.
-Documented requirements do not establish implementation or executed proof.
-This README is an index, not a duplicate specification.
+Documentation is not an executable acceptance gate. See the selected version
+branch's `grok/TESTING.md` and `grok/docs/stories/README.md` for its real test
+commands and supported user-visible contracts.
