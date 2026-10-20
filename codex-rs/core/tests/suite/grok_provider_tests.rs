@@ -237,8 +237,14 @@ async fn configured_grok_provider_projects_production_request_and_stream() -> an
             });
         }
         assert_eq!(json!(trace), expected);
+        let mut body = response.single_request().body_json();
+        // Stock owns the thread-scoped base-instruction identity.
+        body["input"][0]
+            .as_object_mut()
+            .expect("base instructions")
+            .remove("id");
         assert_eq!(
-            response.single_request().body_json(),
+            body,
             json!({
                 "model":"fixture-provider-model",
                 "input":[
@@ -333,8 +339,14 @@ async fn grok_collaboration_plaintext_replay_ignores_provider_display_name() -> 
             "function",
             &codex_tools::ToolName::namespaced("collaboration", "send_message"),
         );
+        let mut body = response.single_request().body_json();
+        // Keep this comparison about Grok replay, as in stock request fixtures.
+        body["input"][0]
+            .as_object_mut()
+            .expect("base instructions")
+            .remove("id");
         assert_eq!(
-            response.single_request().body_json()["input"],
+            body["input"],
             json!([
                 {"type":"message","role":"developer","content":[{"type":"input_text","text":"Say hi"}]},
                 {"type":"function_call", "id":"fc_collaboration", "call_id":"collaboration-call",
