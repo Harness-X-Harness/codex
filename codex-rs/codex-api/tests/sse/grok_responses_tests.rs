@@ -153,7 +153,10 @@ async fn grok_bounds_pending_indexes_events_and_encoded_bytes() -> Result<()> {
     let bytes = vec![
         json!({"type":"response.output_text.delta","output_index":1,"delta":"x".repeat(2 * 1024 * 1024)}),
     ];
-    for input in [indexes, events, bytes] {
+    let unknown_field_bytes = vec![
+        json!({"type":"response.output_item.added","output_index":1,"item":message(),"unknown":"x".repeat(2 * 1024 * 1024)}),
+    ];
+    for input in [indexes, events, bytes, unknown_field_bytes] {
         let mut result = run_events(input, ApiDialect::Grok).await?;
         assert!(
             matches!(result.pop(), Some(Err(ApiError::Stream(message))) if message == "Grok stream: pending output buffer limit exceeded")

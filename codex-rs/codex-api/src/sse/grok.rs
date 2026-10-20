@@ -44,7 +44,8 @@ impl Lifetime {
 pub(super) struct GrokSequencer {
     next: u64,
     open: bool,
-    pending: BTreeMap<u64, Vec<(Event, IndexedEvent)>>,
+    // Keep original encoded lengths: typed events may discard unknown fields.
+    pending: BTreeMap<u64, Vec<(usize, ResponsesStreamEvent)>>,
     // Includes the released-but-open canonical head. Evict on canonical done;
     // the watermark rejects late arrivals, without unbounded tombstones.
     lifetimes: BTreeMap<u64, Lifetime>,
@@ -210,7 +211,7 @@ impl GrokSequencer {
     pub(super) fn push(
         &mut self,
         raw: Event,
-    ) -> Result<(Option<ResponseEvent>, Vec<Event>), ApiError> {
+    ) -> Result<(Option<ResponseEvent>, Vec<ResponsesStreamEvent>), ApiError> {
         let frame: IndexedEvent =
             serde_json::from_str(&raw.data).map_err(|_| invalid("malformed SSE event"))?;
         let event = &frame.event;
@@ -241,7 +242,7 @@ impl GrokSequencer {
             {
                 return Err(invalid("item event is missing output_index"));
             }
-            return Ok((None, vec![raw]));
+            return Ok((None, vec![frame.event]));
         };
         if matches!(
             event.kind.as_str(),
@@ -259,15 +260,18 @@ impl GrokSequencer {
             return Err(invalid("pending output buffer limit exceeded"));
         }
         let activity = self.admit(index, event, bytes)?;
-        self.pending.entry(index).or_default().push((raw, frame));
+        self.pending
+            .entry(index)
+            .or_default()
+            .push((bytes, frame.event));
         self.events += 1;
         self.bytes += bytes;
         let mut ready = Vec::new();
         while let Some(queued) = self.pending.remove(&self.next) {
-            for (raw, frame) in queued {
+            for (bytes, event) in queued {
                 self.events -= 1;
-                self.bytes -= raw.data.len();
-                match frame.event.kind.as_str() {
+                self.bytes -= bytes;
+                match event.kind.as_str() {
                     "response.output_item.added" => self.open = true,
                     "response.output_item.done" => {
                         self.open = false;
@@ -283,7 +287,7 @@ impl GrokSequencer {
                     }
                     _ => {}
                 }
-                ready.push(raw);
+                ready.push(event);
             }
         }
         Ok((activity, ready))
