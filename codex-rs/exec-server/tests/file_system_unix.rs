@@ -2,6 +2,9 @@
 #![allow(clippy::expect_used)]
 
 mod common;
+
+#[path = "file_system/conditional_write.rs"]
+mod conditional_write;
 #[cfg(target_os = "linux")]
 #[path = "common/fake_bwrap.rs"]
 mod fake_bwrap;

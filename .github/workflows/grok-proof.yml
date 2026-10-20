@@ -1,0 +1,912 @@
+name: grok-proof
+
+on:
+  workflow_call:
+    inputs:
+      offline_go:
+        description: Run offline Go here; false requires the caller's same-subject Go aggregate.
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  subject:
+    name: Execution subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify the event-owned execution subject
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_AFTER: ${{ github.event.after }}
+          OFFLINE_GO_INPUT: ${{ inputs.offline_go }}
+        run: |
+          set -euo pipefail
+          if [[ "$OFFLINE_GO_INPUT" != true ]]; then
+            test "$GITHUB_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/grok-ci.yml@$GITHUB_REF"
+          fi
+          bash .github/scripts/check-grok-subject.sh | tee "$RUNNER_TEMP/grok-subject.json"
+      - name: Retain the source and workflow identities
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-subject-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-subject.json
+          if-no-files-found: error
+          retention-days: 7
+
+  locks:
+    name: Native Provider/API proof
+    needs: subject
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+          configure-linux-user-namespaces: "false"
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: nextest@0.9.103
+      - name: Verify locked Cargo resolution
+        working-directory: codex-rs
+        run: cargo metadata --locked --format-version 1 > "$RUNNER_TEMP/cargo-metadata.json"
+      - name: Regenerate and check Cargo-owned Bazel lock
+        run: |
+          just bazel-lock-update
+          just bazel-lock-check
+          git diff --exit-code -- codex-rs/Cargo.lock MODULE.bazel.lock
+      - name: Fix scoped API lint
+        working-directory: codex-rs
+        run: just fix -p codex-api --locked --profile ci-test --timings
+      - name: Require unchanged API construction input
+        uses: ./.github/actions/check-clean-worktree
+      # Owner construction above stays uncached. Subsequent build/test compilation and
+      # strict Clippy use sccache; every selected test still executes.
+      - name: Mask the ephemeral compiler-cache token
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!token) throw new Error('GitHub Actions cache runtime token is unavailable');
+            core.setSecret(token);
+      - name: Install pinned compiler cache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+          disable_annotations: true
+      - name: Enable measured compiler cache
+        env:
+          SCCACHE_GHA_ENABLED: "on"
+          SCCACHE_GHA_VERSION: grok-compiler-v1
+          # Keep counters across long tests and strict lint steps.
+          SCCACHE_IDLE_TIMEOUT: "0"
+        run: |
+          test "$(sccache --version)" = "sccache 0.18.0"
+          test -n "$ACTIONS_CACHE_SERVICE_V2"
+          test -n "$ACTIONS_RESULTS_URL"
+          test -n "$ACTIONS_RUNTIME_TOKEN"
+          sccache --start-server
+          {
+            sccache --version
+            rustc --version --verbose
+            printf '%s\n' "backend=gha-v2 namespace=$SCCACHE_GHA_VERSION" \
+              "job=$GITHUB_JOB run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+              "checkout=$(git rev-parse HEAD)" \
+              "policy=post-construction-build-test-and-strict-clippy"
+          } | tee "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
+            "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
+            "SCCACHE_GHA_VERSION=$SCCACHE_GHA_VERSION" \
+            "SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT" >> "$GITHUB_ENV"
+      - name: Test Provider metadata with the locked workspace
+        working-directory: codex-rs
+        run: just test -p codex-model-provider-info --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test Grok and affected stock API contracts
+        working-directory: codex-rs
+        run: just test -p codex-api --locked --cargo-profile ci-test --no-tests=fail
+      # Cargo fix caps diagnostics at warn. A distinct maximal cap rechecks
+      # the existing lint policy instead of reusing the fixer's cached result.
+      - name: Check scoped API lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
+        working-directory: codex-rs
+        run: just clippy -p codex-api --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Record compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          # Unlike --show-stats alone, shutdown fails if the daemon was lost;
+          # unavailable counters must not masquerade as a healthy zero-hit cache.
+          if command -v sccache >/dev/null && timeout 30s sccache --stop-server >> "$RUNNER_TEMP/grok-sccache-measurements.txt"; then
+            cat "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          else
+            echo "::warning::Compiler-cache statistics unavailable; this run cannot establish cache effectiveness."
+            echo "statistics=unavailable" >> "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          fi
+      - name: Retain compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compiler-cache-measurements-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-sccache-measurements.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Retain API changes on failure
+        if: ${{ failure() }}
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --binary > "$RUNNER_TEMP/api-native.diff"
+          {
+            printf '%s\n' "repository=$GITHUB_REPOSITORY" \
+              "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT job=$GITHUB_JOB" \
+              "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
+              "checkout=$(git rev-parse HEAD)" \
+              "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
+              "workflow_sha=$GITHUB_WORKFLOW_SHA"
+            cargo --version || echo "cargo unavailable"
+            rustfmt --version || echo "rustfmt unavailable"
+            cargo clippy --version || echo "clippy unavailable"
+          } > "$RUNNER_TEMP/api-native-subject.txt"
+          if [[ $(wc -c < "$RUNNER_TEMP/api-native.diff") -gt 10485760 ]]; then
+            echo "Patch exceeds 10 MiB; omitted for manual diagnosis." >> "$RUNNER_TEMP/api-native-subject.txt"
+            rm "$RUNNER_TEMP/api-native.diff"
+          fi
+      - name: Retain generated locks on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-locks-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            codex-rs/Cargo.lock
+            MODULE.bazel.lock
+            ${{ runner.temp }}/api-native.diff
+            ${{ runner.temp }}/api-native-subject.txt
+          if-no-files-found: error
+
+  runtime:
+    name: Native runtime proof
+    needs: subject
+    runs-on: ubuntu-22.04
+    timeout-minutes: 135
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_CI_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Bind every native build to the checked-out source
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$source_sha" = "$GITHUB_SHA"
+          printf 'STABLE_GIT_COMMIT=%s\n' "$source_sha" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-ci
+        with:
+          configure-linux-user-namespaces: "false"
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy, rustfmt
+      - name: Normalize scoped Rust formatting
+        working-directory: codex-rs
+        run: |
+          cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item
+          cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
+      - name: Require unchanged formatting input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Check Code Mode host fixture formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
+      - name: Check affected Provider runtime crate formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
+      - name: Install native Linux test dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev bubblewrap
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: nextest@0.9.103
+      - name: Require sandbox startup capability under existing Linux permissions
+        run: |
+          test "$(id -u)" != "0"
+          for setting in kernel/unprivileged_userns_clone kernel/apparmor_restrict_unprivileged_userns; do
+            if [[ -r "/proc/sys/$setting" ]]; then
+              printf '%s=' "$setting"
+              cat "/proc/sys/$setting"
+            fi
+          done
+          bwrap --version
+          # This checks namespace startup only. Product tests own the supported
+          # proc-mount fallback and actual selected-helper filesystem enforcement.
+          if ! timeout 15s bwrap --unshare-user --unshare-ipc --unshare-pid --unshare-net \
+            --cap-drop ALL --die-with-parent --new-session \
+            --ro-bind / / --dev /dev -- /bin/true; then
+            echo "Required Linux user/IPC/PID/network namespace sandbox cannot start under existing runner permissions." >&2
+            echo "No kernel or AppArmor setting was changed. Use a compatible runner or obtain a separately reviewed permission decision." >&2
+            exit 1
+          fi
+      - name: Record bounded native build inputs
+        continue-on-error: true
+        run: |
+          cat > "$RUNNER_TEMP/grok-build-resources.py" <<'PYCODE'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+
+          def read_metric(path):
+              try:
+                  with path.open() as source:
+                      return source.read(512).strip()
+              except OSError:
+                  return "unavailable"
+
+
+          def disk_metric(variable):
+              try:
+                  usage = shutil.disk_usage(os.environ[variable])
+                  return dict(zip(("total", "used", "free"), usage))
+              except (KeyError, OSError):
+                  return "unavailable"
+
+
+          result = {"cpu_count": os.cpu_count()}
+          try:
+              result["affinity_cpu_count"] = len(os.sched_getaffinity(0))
+          except (AttributeError, OSError):
+              result["affinity_cpu_count"] = "unavailable"
+          try:
+              result["physical_memory_kib"] = next(
+                  int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
+                  if line.startswith("MemTotal:")
+              )
+          except (OSError, StopIteration, ValueError):
+              result["physical_memory_kib"] = "unavailable"
+          result["cgroup_v2_leaf_then_ancestors"] = "unavailable"
+          try:
+              relative = next(
+                  line.split(":", 2)[2] for line in Path("/proc/self/cgroup").read_text().splitlines()
+                  if line.startswith("0::")
+              )
+              root = Path("/sys/fs/cgroup")
+              group = (root / relative.lstrip("/")).resolve()
+              groups = []
+              while group.is_relative_to(root) and len(groups) < 16:
+                  groups.append({name: read_metric(group / name) for name in (
+                      "cpu.max", "memory.max", "memory.peak", "memory.events"
+                  )})
+                  group = group.parent
+              result["cgroup_v2_leaf_then_ancestors"] = groups or "unavailable"
+              result["cgroup_ancestors_truncated"] = group.is_relative_to(root)
+          except (OSError, StopIteration):
+              pass
+          result["workspace_disk_bytes"] = disk_metric("GITHUB_WORKSPACE")
+          result["target_disk_bytes"] = disk_metric("CARGO_TARGET_DIR")
+          try:
+              size = subprocess.run(
+                  ["du", "-sb", "--", os.environ["CARGO_TARGET_DIR"]],
+                  check=True, capture_output=True, text=True, timeout=10,
+              )
+              result["target_apparent_bytes"] = int(size.stdout.split()[0])
+          except (KeyError, OSError, ValueError, subprocess.SubprocessError):
+              result["target_apparent_bytes"] = "unavailable"
+          print(json.dumps(result, sort_keys=True))
+          PYCODE
+          {
+            rustc --version --verbose
+            cargo --version
+            cargo nextest --version
+            printf '%s\n' "build_jobs=$CARGO_BUILD_JOBS incremental=$CARGO_INCREMENTAL" \
+              "dev_debug=$CARGO_PROFILE_DEV_DEBUG ci_test_debug=$CARGO_PROFILE_CI_TEST_DEBUG"
+            python3 "$RUNNER_TEMP/grok-build-resources.py"
+          } | tee "$RUNNER_TEMP/grok-runtime-resources-start.txt"
+      - name: Set up Python for pinned V8 metadata
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Set up pinned Code Mode V8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+      - name: Build the consumed Code Mode host
+        working-directory: codex-rs
+        run: cargo build -p codex-code-mode-host --bin codex-code-mode-host --locked --profile ci-test --timings
+      - name: Fix scoped Code Mode host lint
+        working-directory: codex-rs
+        run: cargo clippy --fix --allow-dirty -p codex-code-mode-host --test stdio --locked --profile ci-test --timings
+      - name: Require unchanged host construction input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Fix scoped Provider runtime lint
+        working-directory: codex-rs
+        run: >-
+          python3 ../.github/scripts/grok-stock-lint.py just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
+      - name: Require unchanged runtime construction input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Install pinned SDK generator runner
+        run: python3 -m pip install uv==0.10.11
+      - name: Regenerate owned configuration and public API schemas
+        working-directory: codex-rs
+        run: |
+          cargo run -p codex-config-schema --bin codex-write-config-schema --locked --profile ci-test --timings
+          # Run the stock fixture writer with the already-built native profile.
+          export CODEX_APP_SERVER_SCHEMA_ROOT="$GITHUB_WORKSPACE/codex-rs/app-server-protocol/schema"
+          export CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL=0
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail --run-ignored only -E 'test(schema_fixtures_tests::write_schema_fixtures_from_env)'
+          uv run --project ../sdk/python --frozen --only-group test python ../sdk/python/scripts/update_sdk_artifacts.py generate-types --schema-dir app-server-protocol/schema/json
+          export CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL=1
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail --run-ignored only -E 'test(schema_fixtures_tests::write_schema_fixtures_from_env)'
+          # Owned representations must already be committed on the exact execution subject.
+          git diff --exit-code -- core/config.schema.json app-server-protocol/schema ../sdk/python/src/openai_codex/generated ../sdk/python/src/openai_codex/api.py
+          test -z "$(git ls-files --others --exclude-standard -- app-server-protocol/schema ../sdk/python/src/openai_codex/generated ../sdk/python/src/openai_codex/api.py)"
+      - name: Normalize filesystem API formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item
+      - name: Require unchanged filesystem formatting input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Fix scoped filesystem API lint
+        working-directory: codex-rs
+        run: just fix -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings
+      - name: Require unchanged filesystem construction input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Freeze unchanged native proof input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Check filesystem API formatting
+        working-directory: codex-rs
+        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item --check
+      # Owner construction above stays uncached. Subsequent build/test compilation and
+      # strict Clippy use sccache; every selected test still executes.
+      - name: Mask the ephemeral compiler-cache token
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!token) throw new Error('GitHub Actions cache runtime token is unavailable');
+            core.setSecret(token);
+      - name: Install pinned compiler cache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+          disable_annotations: true
+      - name: Enable measured compiler cache
+        env:
+          SCCACHE_GHA_ENABLED: "on"
+          SCCACHE_GHA_VERSION: grok-compiler-v1
+          # Keep counters across long tests and strict lint steps.
+          SCCACHE_IDLE_TIMEOUT: "0"
+        run: |
+          test "$(sccache --version)" = "sccache 0.18.0"
+          test -n "$ACTIONS_CACHE_SERVICE_V2"
+          test -n "$ACTIONS_RESULTS_URL"
+          test -n "$ACTIONS_RUNTIME_TOKEN"
+          sccache --start-server
+          {
+            sccache --version
+            rustc --version --verbose
+            printf '%s\n' "backend=gha-v2 namespace=$SCCACHE_GHA_VERSION" \
+              "job=$GITHUB_JOB run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT" \
+              "checkout=$(git rev-parse HEAD)" \
+              "policy=post-construction-build-test-and-strict-clippy"
+          } | tee "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
+            "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
+            "SCCACHE_GHA_VERSION=$SCCACHE_GHA_VERSION" \
+            "SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT" >> "$GITHUB_ENV"
+      - name: Test conditional API and actual mutation ownership
+        working-directory: codex-rs
+        run: |
+          just test -p codex-exec-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(file_system_mutation::tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(server::processor::conditional_write_tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(fs_sandbox::effect_tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(fs_sandbox::windows_tests::)'
+          just test -p codex-exec-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(local_file_system::) | test(remote_file_system::)'
+          just test -p codex-exec-server --test file_system_unix --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test the adapted host interrupt fixture
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(interrupt_yields_observations_without_stopping_the_cell)'
+      - name: Check scoped Code Mode host lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
+        working-directory: codex-rs
+        run: cargo clippy -p codex-code-mode-host --test stdio --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+      - name: Test standalone Code Mode numeric forwarding
+        working-directory: codex-rs
+        run: |
+          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(remote_session_persists_values_forwards_delegates_and_controls_cells)'
+          just test -p codex-code-mode-host --test stdio --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
+          just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(tcp_session_persists_values_and_forwards_tools_notifications_and_closure)'
+          just test -p codex-code-mode-host --test grpc --locked --cargo-profile ci-test --no-tests=fail -E 'test(exact_numbers::numeric_oracle_accepts_equivalent_spellings_and_distinguishes_rounding)'
+      - name: Test Provider policy and configuration boundaries
+        working-directory: codex-rs
+        run: just test -p codex-model-provider -p codex-config --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test affected client and configuration unit contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(client::) | test(client_common::) | test(config::)'
+      - name: Test exact exec and stdin numeric admission
+        working-directory: codex-rs
+        run: |
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(json_whole_number::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::unified_exec::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::unified_exec::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::unified_exec::write_stdin::numeric_tests::)'
+      - name: Test stdin trace replay and affected stock reducers
+        working-directory: codex-rs
+        run: |
+          just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(whole_number_stdin_replay_)'
+          just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test production Provider composition
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::grok_provider::) | test(suite::client::) | test(suite::client_websockets::)
+          | test(suite::websocket_fallback::) | test(suite::auth_recovery_policy::)
+          | test(suite::gateway_auth::) | test(suite::cloud_config::)'
+      - name: Test exact wait and fork numeric admission
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::wait::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents_v2::wait::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents_v2::spawn::numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::tests::wait_numeric_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::tests::fork_numeric_tests::)'
+      - name: Test affected wait and fork handler contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(tools::handlers::multi_agents::tests::wait_agent_)
+          | test(tools::handlers::multi_agents::tests::multi_agent_v2_wait_agent_)
+          | test(tools::handlers::multi_agents::tests::multi_agent_v2_spawn_)
+          | test(full_history_fork_inherits_root_service_tier)'
+      - name: Test explicit-dialect compaction and stock consumers
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::compaction::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::compact::summarize_context_three_requests_and_instructions)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::compact::auto_compact_runs_after_token_limit_hit)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::compact_remote::remote_compact_v2_reuses_compaction_trigger_for_followups)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::token_budget::token_budget_context_uses_new_window_after_compaction)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::token_budget::token_budget_mid_turn_auto_compaction_resets_before_active_follow_up)'
+      - name: Test queue admission and affected lifecycle contracts
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(session::) | test(tasks::) | test(agent::control::)'
+      - name: Test each required close-boundary regression
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::input_queue::close_tests::closed_turn_input_returns_snapshot_and_rejects_later_appends)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::inject::tests::client_inject_records_history_after_turn_input_is_closed)'
+      - name: Test the real turn-completion input boundary
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::turn_input_completion::)'
+      - name: Build the exact CLI for native integrations and Basic fixture
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+          test "$STABLE_GIT_COMMIT" = "$GITHUB_SHA"
+          cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
+      - name: Bind exact editor composition binaries
+        working-directory: codex-rs
+        run: |
+          cargo build -p codex-linux-sandbox --bin codex-linux-sandbox --locked --profile ci-test --timings
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          for binary in codex codex-linux-sandbox codex-code-mode-host; do
+            test -x "$CARGO_TARGET_DIR/ci-test/$binary"
+          done
+          {
+            printf '%s\n' "checkout=$(git rev-parse HEAD)" "profile=ci-test"
+            sha256sum "$CARGO_TARGET_DIR/ci-test/codex" \
+              "$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" \
+              "$CARGO_TARGET_DIR/ci-test/codex-code-mode-host"
+          } | tee "$RUNNER_TEMP/c4b-composition-binaries.txt"
+          printf '%s\n' \
+            "CODEX_C4B_REQUIRED=1" \
+            "CODEX_C4B_TEST_CLI_SOURCE_SHA=$(git rev-parse HEAD)" \
+            "CODEX_C4B_TEST_CLI=$CARGO_TARGET_DIR/ci-test/codex" \
+            "CODEX_C4B_TEST_CLI_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex" | cut -d ' ' -f 1)" \
+            "CODEX_TEST_LINUX_SANDBOX_EXE=$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" \
+            "CODEX_TEST_LINUX_SANDBOX_EXE_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex-linux-sandbox" | cut -d ' ' -f 1)" \
+            "CODEX_C4B_CODE_MODE_HOST=$CARGO_TARGET_DIR/ci-test/codex-code-mode-host" \
+            "CODEX_C4B_CODE_MODE_HOST_SHA256=$(sha256sum "$CARGO_TARGET_DIR/ci-test/codex-code-mode-host" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+      - name: Require unchanged editor composition input
+        uses: ./.github/actions/check-clean-worktree
+      - name: Test structured editor metadata and stock catalog loading
+        working-directory: codex-rs
+        run: |
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(openai_models::)'
+          just test -p codex-models-manager --lib --locked --cargo-profile ci-test --no-tests=fail
+          just test -p codex-prompts --lib --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test structured editor planning and shared approval runtime
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::structured_edit::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::spec_plan::tests::structured_edit_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::runtimes::apply_patch::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(safety::) | test(tools::handlers::apply_patch::) | test(tools::events::) | test(turn_diff_tracker::)'
+      - name: Test actual structured editor Local Remote and Code Mode composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_remote::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_code_mode::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::auto_review::structured_edit_and_stock_patch_guardian::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_apply_patch_via_nested_tool)'
+      - name: Test Grok local tool dispatch history and affected stock routing
+        working-directory: codex-rs
+        run: |
+          just test -p codex-tools --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(flat_projection::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::router::tests::) | test(context_manager::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::tool_roundtrip::)'
+      - name: Test Grok hosted search policy replay and affected stock configuration
+        working-directory: codex-rs
+        run: |
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(grok::tests::) | test(grok_hosted::tests::) | test(config_types::tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(config::web_search_config_tests::)'
+          just test -p core_test_support --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(responses::grok_tests::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::grok_provider::hosted_search::)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(schema_fixtures_tests::)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol::v2::tests::thread_item_rejects_unknown_wire_tags)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol::v2::tests::server_notification_rejects_unregistered_methods)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol::v2::tests::web_search_item_notification_roundtrips_opaque_results)'
+
+      - name: Test public hosted Web activity timing and cleanup
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(grok_public_)'
+          just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(notification_media::tests::hosted_web_preserves_identity_and_result_when_media_is_omitted)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(turn_timing::tests::search_activity_)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(session::search_activity::tests::)'
+          just test -p codex-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(search_activity::tests::)'
+          just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(policy::search_activity_tests::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_search_activity_)'
+          just test -p codex-rollout-trace --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(protocol_event::tests::transient_search_activity_)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(chatwidget::tests::web_search_tests::) | test(history_cell::search::tests::)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(chatwidget::tests::reasoning_status_tests::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::web_search::)'
+
+      - name: Test retired X rejection and supported Web history composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-api --test sse_end_to_end --locked --cargo-profile ci-test --no-tests=fail -E 'test(retired_hosted_x_)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(hosted_web_search_survives_follow_up_local_dispatch_and_cold_resume) | test(unsupported_hosted_completion_fails_before_local_dispatch)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(client::tests::retired_history_tests::retired_hosted_x_cannot_become_a_synthetic_local_pair_during_request_building)'
+          just test -p codex-rollout --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(retired_hosted)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(retired_hosted)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(dynamic_tools::tests::activity_metadata_is_retained_without_including_outputs)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(dynamic_tools::tests::wait_threads_preserves_snapshots_and_rejects_self_wait)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(app::agent_status_feed::tests::)'
+          INSTA_UPDATE=new just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(thread_transcript::other_items::tests::)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(summary_items_use_final_answers_and_ignore_nonterminal_messages)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(list_items_pages_whole_thread_and_per_turn_rows)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(lineage_reads_page_across_parent_and_child_segments)'
+          just test -p codex-thread-store --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(inherited_search_excludes_turns_created_after_the_fork)'
+
+      - name: Test image dialect consumers and codec normalization
+        working-directory: codex-rs
+        run: |
+          just test -p codex-image-generation-extension --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate
+          just test -p codex-utils-image --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate
+          just test -p codex-tools -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-web-search-extension --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(dynamic_tools::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(tools::spec_plan::tests::) | test(tools::handlers::mcp_resource_spec::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(tools::handlers::extension_tools::) | test(image_preparation::)'
+      - name: Test stock image model Code Mode history and filesystem composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::imagegen_extension::) | test(suite::v2::dynamic_tools::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::extension_sandbox::) | test(suite::responses_lite::)'
+      - name: Test shipped catalog and Provider-bound lifecycle
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::grok_model_list::) | test(suite::v2::grok_provider_binding::) | test(suite::v2::grok_child_public_listener::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::model_list::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::thread_fork::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::thread_resume::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::compaction::)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::model_provider_enforcement::) | test(suite::v2::config_model_provider_requirements::) | test(suite::v2::model_list_requirements_tests::)'
+          just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(models_refresh_worker::tests::) | test(config_manager::)'
+      - name: Test internal model consumers and child ownership
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(guardian::tests::grok::) | test(guardian_review_uses_) | test(guardian_review_records_missing_auto_review_model_in_analytics_metadata)'
+          just test -p codex-memories-write --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(startup_tests::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(tools::handlers::multi_agents::tests::grok::) | test(tools::handlers::multi_agents::tests::spawn_agent_) | test(tools::handlers::multi_agents::tests::build_agent_spawn_config_) | test(tools::handlers::multi_agents::tests::multi_agent_v2_followup_task_) | test(agent::role::)'
+      - name: Test inherited stock patch hook contracts
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::permission_request_hook_allows_apply_patch_with_write_alias)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_blocks_apply_patch_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_blocks_apply_patch_with_write_alias)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_apply_patch_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::post_tool_use_records_additional_context_for_apply_patch)'
+      - name: Test stock patch filesystem composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-apply-patch --locked --cargo-profile ci-test --no-tests=fail
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::apply_patch_cli::) | test(suite::apply_patch_serialization::) | test(suite::apply_patch_system_aliases::)'
+      - name: Test affected input, mailbox, hook and shell composition
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::turn_input_submission::) | test(suite::turn_state::)
+          | test(suite::scenarios::mailbox_preemption::) | test(suite::hooks::async_hook_)
+          | test(suite::user_shell_cmd::) | test(suite::interrupt_hooks::)'
+      - name: Test public injection and steering APIs
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(suite::v2::thread_inject_items::) | test(suite::v2::turn_steer::)'
+      - name: Test numeric exec producer composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::unified_exec::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_exec_command_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_code_mode_nested_exec_command_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_block_rejects_code_mode_tool_promise_before_execution)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_can_return_exec_command_output)'
+      - name: Test stdin delivery and native Code Mode composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::unified_exec::write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_write_stdin_numeric_inputs_use_returned_session)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_write_stdin_calls_run_in_parallel_across_sessions)'
+      - name: Test goal state and advisory steering contracts
+        working-directory: codex-rs
+        run: just test -p codex-goal-extension --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test generic numeric hook composition
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::numeric_tests::pre_tool_use_rewrites_wait_agent_exact_numeric_timeout)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::hooks::pre_tool_use_rewrites_local_function_tool_before_execution)'
+      - name: Test CLI display contracts
+        working-directory: codex-rs
+        run: just test -p codex-exec --lib --locked --cargo-profile ci-test --no-tests=fail
+      - name: Test both Responses reasoning displays
+        working-directory: codex-rs
+        run: >-
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail
+          -E 'test(status::tests::status_snapshot_responses_dialects_show_configured_reasoning)'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Test only real App Server and controlled Grok HTTP composition
+        working-directory: grok
+        env:
+          GROK_FACTS: "0"
+          GROK_LIVE: "0"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          export GROK_CODEX_BIN="$CARGO_TARGET_DIR/ci-test/codex"
+          test -x "$GROK_CODEX_BIN"
+          mkdir "$RUNNER_TEMP/grok-integration-evidence"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$CODEX_C4B_TEST_CLI_SOURCE_SHA" = "$GITHUB_SHA"
+          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256"
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          fields = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
+                    "GITHUB_REF", "GITHUB_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
+                    "PR_HEAD_SHA", "PR_BASE_SHA", "CODEX_C4B_TEST_CLI_SOURCE_SHA", "CODEX_C4B_TEST_CLI_SHA256")
+          subject = {key: os.environ[key] for key in fields}
+          subject["subject_kind"] = "pr_test_merge" if os.environ["GITHUB_EVENT_NAME"] == "pull_request" else "branch_head"
+          subject["binary_target"] = "x86_64-unknown-linux-gnu"
+          subject["binary_profile"] = "ci-test"
+          (Path(os.environ["RUNNER_TEMP"]) / "grok-integration-evidence/subject.json").write_text(json.dumps(subject, sort_keys=True) + "\n")
+          PYCODE
+          status=0
+          go test -race -tags=integration -count=1 -timeout=20m -json \
+            ./tests/integration \
+            > "$RUNNER_TEMP/grok-integration-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --integration \
+            --input "$RUNNER_TEMP/grok-integration-evidence/tests.json" \
+            > "$RUNNER_TEMP/grok-integration-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/grok-integration-evidence/summary.json"
+          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256" || status=1
+          exit "$status"
+      - name: Retain Go integration results even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-integration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-integration-evidence
+          if-no-files-found: error
+          retention-days: 7
+      - name: Check scoped filesystem API lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
+        working-directory: codex-rs
+        run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+      - name: Check scoped Provider runtime lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
+        working-directory: codex-rs
+        run: >-
+          python3 ../.github/scripts/grok-stock-lint.py just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Record compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          # Unlike --show-stats alone, shutdown fails if the daemon was lost;
+          # unavailable counters must not masquerade as a healthy zero-hit cache.
+          if command -v sccache >/dev/null && timeout 30s sccache --stop-server >> "$RUNNER_TEMP/grok-sccache-measurements.txt"; then
+            cat "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          else
+            echo "::warning::Compiler-cache statistics unavailable; this run cannot establish cache effectiveness."
+            echo "statistics=unavailable" >> "$RUNNER_TEMP/grok-sccache-measurements.txt"
+          fi
+      - name: Retain compiler-cache measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compiler-cache-measurements-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-sccache-measurements.txt
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Record final native build resources
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          if [[ -r "$RUNNER_TEMP/grok-build-resources.py" ]]; then
+            python3 "$RUNNER_TEMP/grok-build-resources.py"
+          else
+            echo "native resource measurements unavailable"
+          fi | tee "$RUNNER_TEMP/grok-runtime-resources-end.txt"
+      - name: Retain native build measurements
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-build-measurements-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/grok-runtime-resources-*.txt
+            ${{ runner.temp }}/c4b-composition-binaries.txt
+            ${{ env.CARGO_TARGET_DIR }}/cargo-timings/cargo-timing-*.html
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Retain native changes on failure
+        if: ${{ failure() }}
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --binary > "$RUNNER_TEMP/provider-native.diff"
+          {
+            printf '%s\n' "repository=$GITHUB_REPOSITORY" \
+              "run=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT job=$GITHUB_JOB" \
+              "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF" \
+              "checkout=$(git rev-parse HEAD)" \
+              "pr_head=$PR_HEAD_SHA pr_base=$PR_BASE_SHA" \
+              "workflow_sha=$GITHUB_WORKFLOW_SHA"
+            cargo --version || echo "cargo unavailable"
+            rustfmt --version || echo "rustfmt unavailable"
+            cargo clippy --version || echo "clippy unavailable"
+          } > "$RUNNER_TEMP/provider-native-subject.txt"
+          if [[ $(wc -c < "$RUNNER_TEMP/provider-native.diff") -gt 10485760 ]]; then
+            echo "Patch exceeds 10 MiB; omitted for manual diagnosis." >> "$RUNNER_TEMP/provider-native-subject.txt"
+            rm "$RUNNER_TEMP/provider-native.diff"
+          fi
+      - name: Stage owned inline search snapshots on failure
+        if: ${{ failure() }}
+        run: |
+          python3 - <<'PYCODE'
+          import os
+          from pathlib import Path
+          import shutil
+
+          root = Path("codex-rs/tui/src")
+          output = Path(os.environ["RUNNER_TEMP"]) / "grok-search-activity-inline-snapshots"
+          for source in (
+              Path("chatwidget/tests/search_activity_tests.rs"),
+              Path("history_cell/search_tests.rs"),
+              Path("app/agent_status_feed_tests.rs"),
+              Path("thread_transcript/other_items_tests.rs"),
+          ):
+              pending = root / source.parent / f".{source.name}.pending-snap"
+              if pending.is_file():
+                  destination = output / source.parent / f"{source.name}.pending-snap"
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(pending, destination)
+          PYCODE
+      - name: Retain generated representations on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: provider-representations-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            codex-rs/core/config.schema.json
+            codex-rs/app-server-protocol/schema
+            sdk/python/src/openai_codex/generated
+            sdk/python/src/openai_codex/api.py
+            codex-rs/tui/src/**/*.snap.new
+            ${{ runner.temp }}/grok-search-activity-inline-snapshots
+            ${{ runner.temp }}/provider-native.diff
+            ${{ runner.temp }}/provider-native-subject.txt
+          if-no-files-found: error
+
+  go:
+    name: Deterministic Go contracts
+    needs: subject
+    if: ${{ inputs.offline_go }}
+    uses: ./.github/workflows/grok-go.yml
+
+  complete:
+    name: Native proof result
+    needs: [subject, locks, runtime, go]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every native job
+        env:
+          SUBJECT_RESULT: ${{ needs.subject.result }}
+          LOCKS_RESULT: ${{ needs.locks.result }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+          GO_RESULT: ${{ needs.go.result }}
+          OFFLINE_GO: ${{ inputs.offline_go }}
+        run: |
+          set -euo pipefail
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required native job did not succeed: $result" >&2
+              exit 1
+            fi
+          done
+
+          if [[ "$OFFLINE_GO" == true ]]; then
+            test "$GO_RESULT" = success
+          else
+            test "$GO_RESULT" = skipped
+          fi

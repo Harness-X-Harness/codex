@@ -773,6 +773,20 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn turn_item_rejects_unknown_wire_tags() {
+        for tag in ["unknownProviderTool", "webSearch"] {
+            let error = serde_json::from_value::<TurnItem>(json!({
+                "type": tag,
+                "id": "search-1",
+                "query": "docs",
+                "action": {"type": "search", "query": "docs"},
+            }))
+            .expect_err("unrecognized turn item tags must not become canonical items");
+            assert!(error.to_string().contains("unknown variant"));
+        }
+    }
+
+    #[test]
     fn sleep_extension_item_preserves_type_and_kind() {
         let item = TurnItem::Extension(ExtensionItem::Sleep(SleepItem {
             id: "sleep-1".to_string(),

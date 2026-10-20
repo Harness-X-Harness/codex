@@ -14,6 +14,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::runtimes::apply_patch::ApplyPatchApprovalKey;
+use crate::tools::runtimes::apply_patch::ApplyPatchHookIdentity;
 use crate::tools::runtimes::unified_exec::UnifiedExecApprovalKey;
 use crate::tools::sandboxing::ApprovalRequestReasons;
 use crate::tools::sandboxing::PermissionRequestPayload;
@@ -96,6 +97,8 @@ pub(crate) enum ApprovalAction {
         #[serde(skip_serializing)]
         changes: Arc<HashMap<PathBuf, FileChange>>,
         permissions_preapproved: bool,
+        #[serde(skip_serializing)]
+        hook_identity: ApplyPatchHookIdentity,
     },
     McpToolCall {
         id: String,
@@ -181,10 +184,11 @@ impl ApprovalAction {
                     "additional_permissions": additional_permissions,
                 }),
             },
-            Self::ApplyPatch { patch, .. } => PermissionRequestPayload {
-                tool_name: HookToolName::apply_patch(),
-                tool_input: serde_json::json!({ "command": patch }),
-            },
+            Self::ApplyPatch {
+                patch,
+                hook_identity,
+                ..
+            } => hook_identity.permission_request_payload(patch),
             Self::McpToolCall {
                 hook_tool_name,
                 arguments,
@@ -724,6 +728,7 @@ impl Session {
             ApprovalAction::ApplyPatch {
                 changes,
                 permissions_preapproved,
+                hook_identity,
                 ..
             } => {
                 let reason = ctx
@@ -746,7 +751,7 @@ impl Session {
                 }
                 with_cached_approval(
                     &self.services,
-                    "apply_patch",
+                    hook_identity.telemetry_tool_name(),
                     action.cache_keys(),
                     || async {
                         self.request_patch_approval(

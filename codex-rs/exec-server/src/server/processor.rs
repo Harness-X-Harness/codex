@@ -654,3 +654,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "conditional_write_tests.rs"]
+mod conditional_write_tests;

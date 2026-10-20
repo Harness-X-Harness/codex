@@ -3,6 +3,7 @@
 use codex_api::is_azure_responses_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::RemoteCompactionSupport;
+use codex_model_provider_info::WireApi;
 
 /// Optional provider-backed features that Codex may expose at runtime.
 ///
@@ -30,8 +31,9 @@ impl Default for ProviderCapabilities {
 impl ProviderCapabilities {
     pub(crate) fn from_config(info: &ModelProviderInfo) -> Self {
         let defaults = Self {
-            remote_compaction: if info.is_openai()
-                || is_azure_responses_provider(&info.name, info.base_url.as_deref())
+            remote_compaction: if info.wire_api == WireApi::Responses
+                && (info.is_openai()
+                    || is_azure_responses_provider(&info.name, info.base_url.as_deref()))
             {
                 RemoteCompactionSupport::V2
             } else {
@@ -44,9 +46,13 @@ impl ProviderCapabilities {
             external_web_access: overrides
                 .external_web_access
                 .unwrap_or(defaults.external_web_access),
-            remote_compaction: overrides
-                .remote_compaction
-                .unwrap_or(defaults.remote_compaction),
+            remote_compaction: if info.wire_api == WireApi::GrokResponses {
+                RemoteCompactionSupport::Unsupported
+            } else {
+                overrides
+                    .remote_compaction
+                    .unwrap_or(defaults.remote_compaction)
+            },
             ..defaults
         }
     }

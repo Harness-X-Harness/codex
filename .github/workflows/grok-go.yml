@@ -1,0 +1,82 @@
+name: grok-go
+
+# Shared, credential-free contracts. No product binary or real backend is used.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Go contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GROK_FACTS: "0"
+      GROK_LIVE: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: true
+          cache-dependency-path: grok/go.sum
+      - name: Require formatted Go source
+        working-directory: grok
+        run: |
+          gofmt -d .
+          test -z "$(gofmt -l .)"
+      - name: Require reproducible Go dependency closure
+        working-directory: grok
+        run: go mod tidy -diff
+      - name: Test the default offline Go contracts
+        working-directory: grok
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/grok-go-evidence"
+          status=0
+          go test -race -count=1 -timeout=15m -json ./... \
+            > "$RUNNER_TEMP/grok-go-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/grok-go-evidence/tests.json" \
+            --require 'github.com/Harness-X-Harness/codex/grok/live:TestReasoningHistoryPublicProtocol' \
+            --require 'github.com/Harness-X-Harness/codex/grok/live:TestSDKEditObserverPositiveStory' \
+            > "$RUNNER_TEMP/grok-go-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/grok-go-evidence/summary.json"
+          exit "$status"
+      - name: Vet the same Go module
+        working-directory: grok
+        run: go vet ./...
+      - name: Compile the opt-in physical test packages without executing them
+        working-directory: grok
+        run: |
+          set -euo pipefail
+          for tier in integration facts live; do
+            go test -c -tags="$tier" -o "$RUNNER_TEMP/grok-$tier.test" "./tests/$tier"
+          done
+      - name: Test execution-subject and native applicability controls offline
+        run: |
+          bash .github/scripts/test-grok-ci-subject.sh
+          python3 .github/scripts/test-grok-stock-lint.py -v
+      - name: Test package staging and launcher with synthetic inputs
+        run: |
+          python3 grok/package/test_stage.py -v
+          python3 grok/package/test_diagnose_linux_binary.py -v
+      - name: Test exact artifact selection and extraction without downloads
+        run: |
+          python3 grok/package/test_select_artifact.py -v
+          python3 grok/package/test_extract_artifact.py -v
+          python3 grok/package/test_fetch_artifact.py -v
+      - name: Verify clean worktree
+        if: ${{ always() }}
+        uses: ./.github/actions/check-clean-worktree
+      - name: Retain Go contract results even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-go-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-go-evidence
+          if-no-files-found: error
+          retention-days: 7
