@@ -51,11 +51,11 @@ See `../cmd/grok-live/README.md` for outcomes and the retained scenario surface.
 
 ## Same-run Actions path
 
-On a trusted version-line push, the Live matrix depends directly on the Linux
-build. The workflow uses the same existing `GROK_LIVE` opt-in, exposed by the
-execution context's repository variable; absence or any value other than `1`
-leaves Live skipped, never accepted. No workflow step creates that variable or
-configures a credential. Ordinary PR events do not receive the backend secret.
+On every trusted version-line push, the full Live matrix depends directly on
+the successful Linux build and scenario selection. The trusted execution step
+sets `GROK_LIVE=1`; no repository-variable opt-in is required. This automatic
+path makes real API calls and incurs their costs. No workflow step configures a
+credential. Ordinary PR events do not run Live or receive the backend secret.
 
 Each selected scenario binds the current source/harness/run/attempt and the
 Linux producer's returned artifact ID. It verifies and consumes that artifact

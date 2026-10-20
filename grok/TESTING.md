@@ -226,7 +226,7 @@ retention is 30 days, under the repository's existing Actions artifact access
 controls; this change grants no new access. Artifact names bind SHA, run and
 attempt (plus scenario for formal runs). Formal package selection is same-run;
 diagnostics retain the explicitly selected producer identity separately from
-the harness run. Trusted repository/ref/opt-in checks and secret isolation from
+the harness run. Trusted repository/ref checks and secret isolation from
 untrusted PRs remain in those workflows. Inspect the actual run/attempt and
 artifact metadata and read back the selected files before claiming delivery;
 workflow configuration alone proves neither upload, current availability nor
@@ -254,8 +254,11 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   No branch rules or post-merge certification changes.
 - `build-grok` keeps its five actual package consumer owners in
   `tests/integration`; it does not repeat the offline suite.
-- Formal Live derives the supported full matrix from Go, keeps at most three jobs active,
-  and preserves trusted repository/ref/opt-in and same-run artifact checks.
+- Formal Live runs automatically on every trusted version-line push after the
+  successful Linux build and scenario selection, making real API calls and
+  incurring their costs without a repository-variable opt-in. It derives the
+  supported full matrix from Go, keeps at most three jobs active, and preserves
+  trusted repository/ref and same-run artifact checks.
 - Manual `grok-live.yml` defaults to one `basic-primary` diagnostic. Smoke/full
   are explicit complete selections; their scenario text field is ignored.
   Diagnostic runs do not become release certification.
