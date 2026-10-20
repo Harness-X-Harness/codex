@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -163,7 +164,8 @@ func fakeAppServer() {
 				executable, executableErr := os.Executable()
 				_, binaryErr := os.Stat(executable)
 				_, homeErr := os.Stat(os.Getenv("CODEX_HOME"))
-				value := "missing"
+				value := fmt.Sprintf("missing: os.Executable path=%q error=%v; executable stat error=%v; CODEX_HOME path=%q stat error=%v",
+					executable, executableErr, binaryErr, os.Getenv("CODEX_HOME"), homeErr)
 				if executableErr == nil && binaryErr == nil && homeErr == nil {
 					value = "retained"
 				}

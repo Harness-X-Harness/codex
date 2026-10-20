@@ -258,7 +258,7 @@ func TestCommandRetainsSnapshotUntilStartupFailureCanBeJoined(t *testing.T) {
 		value, err := os.ReadFile(trace + ".retention")
 		if err == nil {
 			if string(value) != "retained" {
-				t.Fatal("unjoined child lost snapshot or fixture after command return")
+				t.Fatalf("unjoined child lost snapshot or fixture after command return: %q", value)
 			}
 			break
 		}
