@@ -565,10 +565,10 @@ async fn process_sse_with_treatment(
     let mut ready = VecDeque::new();
 
     loop {
-        let start = Instant::now();
-        let (response, normalized) = if let Some(sse) = ready.pop_front() {
-            (Ok(Some(Ok(sse))), true)
+        let event = if let Some(event) = ready.pop_front() {
+            event
         } else {
+            let start = Instant::now();
             let response = tokio::select! {
                 biased;
                 _ = tx_event.closed() => return,
@@ -577,68 +577,65 @@ async fn process_sse_with_treatment(
             if let Some(t) = telemetry.as_ref() {
                 t.on_sse_poll(&response, start.elapsed());
             }
-            (response, false)
-        };
-        let sse = match response {
-            Ok(Some(Ok(sse))) => sse,
-            Ok(Some(Err(e))) => {
-                debug!("SSE Error: {e:#}");
-                let error = match e {
-                    eventsource_stream::EventStreamError::Transport(
-                        error @ codex_client::TransportError::Policy(_),
-                    ) => ApiError::Transport(error),
-                    error => ApiError::Stream(error.to_string()),
-                };
-                let _ = tx_event.send(Err(error)).await;
-                return;
-            }
-            Ok(None) => {
-                let error = response_error.unwrap_or(ApiError::Stream(
-                    "stream closed before response.completed".into(),
-                ));
-                let _ = tx_event.send(Err(error)).await;
-                return;
-            }
-            Err(_) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
-                    .await;
-                return;
-            }
-        };
-
-        trace!("SSE event: {}", &sse.data);
-
-        if let Some(sequencer) = sequencer.as_mut()
-            && !normalized
-        {
-            match sequencer.push(sse) {
-                Ok((activity, events)) => {
-                    if let Some(activity) = activity
-                        && tx_event.send(Ok(activity)).await.is_err()
-                    {
-                        return;
-                    }
-                    ready.extend(events);
-                }
-                Err(error) => {
+            let sse = match response {
+                Ok(Some(Ok(sse))) => sse,
+                Ok(Some(Err(e))) => {
+                    debug!("SSE Error: {e:#}");
+                    let error = match e {
+                        eventsource_stream::EventStreamError::Transport(
+                            error @ codex_client::TransportError::Policy(_),
+                        ) => ApiError::Transport(error),
+                        error => ApiError::Stream(error.to_string()),
+                    };
                     let _ = tx_event.send(Err(error)).await;
                     return;
                 }
-            }
-            continue;
-        }
-        let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
-            Ok(event) => event,
-            Err(e) => {
-                debug!(
-                    error_category = ?e.classify(),
-                    error_line = e.line(),
-                    error_column = e.column(),
-                    payload_bytes = sse.data.len(),
-                    "Failed to parse SSE event"
-                );
+                Ok(None) => {
+                    let error = response_error.unwrap_or(ApiError::Stream(
+                        "stream closed before response.completed".into(),
+                    ));
+                    let _ = tx_event.send(Err(error)).await;
+                    return;
+                }
+                Err(_) => {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
+                        .await;
+                    return;
+                }
+            };
+
+            trace!("SSE event: {}", &sse.data);
+
+            if let Some(sequencer) = sequencer.as_mut() {
+                match sequencer.push(sse) {
+                    Ok((activity, events)) => {
+                        if let Some(activity) = activity
+                            && tx_event.send(Ok(activity)).await.is_err()
+                        {
+                            return;
+                        }
+                        ready.extend(events);
+                    }
+                    Err(error) => {
+                        let _ = tx_event.send(Err(error)).await;
+                        return;
+                    }
+                }
                 continue;
+            }
+            match serde_json::from_str(&sse.data) {
+                Ok(event) => event,
+                Err(e) => {
+                    debug!(
+                        error_category = ?e.classify(),
+                        error_line = e.line(),
+                        error_column = e.column(),
+                        payload_bytes = sse.data.len(),
+                        "Failed to parse SSE event"
+                    );
+                    continue;
+                }
             }
         };
         let model_verifications = event.model_verifications();
