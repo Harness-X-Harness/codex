@@ -40,10 +40,9 @@ fn retired_hosted_x_cannot_become_a_synthetic_local_pair_during_request_building
                     .map(ResponseItemEnvelope::new)
                     .collect(),
             );
-            let normalized = history.clone().for_prompt_except_hosted(
-                &[InputModality::Text],
-                codex_protocol::grok_hosted::is_completed_search,
-            );
+            let normalized = history
+                .clone()
+                .for_prompt(&[InputModality::Text], codex_api::ApiDialect::Grok);
             assert_eq!(normalized, saved);
             let prompt = Prompt {
                 input: normalized,

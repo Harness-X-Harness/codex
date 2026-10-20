@@ -480,11 +480,10 @@ async fn mcp_attribution_in_constructed_request(thread: &CodexThread) -> McpAttr
     let turn_context = thread.session.new_default_turn().await;
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let prompt = crate::session::turn::build_prompt(
-        thread
-            .session
-            .clone_history()
-            .await
-            .for_prompt(&step_context.settings.model_info.input_modalities),
+        thread.session.clone_history().await.for_prompt(
+            &step_context.settings.model_info.input_modalities,
+            codex_api::ApiDialect::OpenAi,
+        ),
         &step_context,
         thread.session.get_prompt_base_instructions().await,
         thread
