@@ -17,6 +17,7 @@ use tokio::io;
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::ConditionalWriteResult;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerRuntimeOptions;
@@ -125,17 +126,29 @@ impl LocalFileSystem {
         mode: FsOpenMode,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<tokio::fs::File> {
-        if let Some(sandbox) = sandbox {
-            sandbox.validate_file_system_paths_for_current_host()?;
-            let needs_sandbox = match mode {
-                FsOpenMode::Read => sandbox.should_read_from_sandbox(),
-                FsOpenMode::Replace => sandbox.should_write_into_sandbox(),
-            };
-            if needs_sandbox {
-                return self.sandboxed()?.open_file(path, mode, Some(sandbox)).await;
+        let owner = self.clone();
+        let path = path.clone();
+        let sandbox = sandbox.cloned();
+        let operation = async move {
+            if let Some(sandbox) = sandbox.as_ref() {
+                sandbox.validate_file_system_paths_for_current_host()?;
+                let needs_sandbox = match mode {
+                    FsOpenMode::Read => sandbox.should_read_from_sandbox(),
+                    FsOpenMode::Replace => sandbox.should_write_into_sandbox(),
+                };
+                if needs_sandbox {
+                    return owner
+                        .sandboxed()?
+                        .open_file(&path, mode, Some(sandbox))
+                        .await;
+                }
             }
+            regular_file::open(path.to_abs_path()?.as_path(), mode).await
+        };
+        match mode {
+            FsOpenMode::Read => operation.await,
+            FsOpenMode::Replace => crate::file_system_mutation::run(operation).await,
         }
-        regular_file::open(path.to_abs_path()?.as_path(), mode).await
     }
 
     async fn canonicalize(
@@ -178,10 +191,63 @@ impl LocalFileSystem {
         options: WriteFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
-        file_system
-            .write_file(path, contents, options, sandbox)
-            .await
+        let (owner, path, sandbox) = (self.clone(), path.clone(), sandbox.cloned());
+        crate::file_system_mutation::run(async move {
+            let (file_system, sandbox) = owner.file_system_for_writes(sandbox.as_ref())?;
+            file_system
+                .write_file(&path, contents, options, sandbox)
+                .await
+        })
+        .await
+    }
+
+    async fn write_file_if_unchanged(
+        &self,
+        path: &PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<ConditionalWriteResult> {
+        let (owner, path, sandbox) = (self.clone(), path.clone(), sandbox.cloned());
+        #[cfg(test)]
+        let admission_path = path.clone();
+        let operation = crate::file_system_mutation::run(async move {
+            let (reader, read_sandbox) = owner.file_system_for_reads(sandbox.as_ref())?;
+            let current = reader
+                .read_file(
+                    &path,
+                    ReadFileOptions {
+                        follow_symlinks: options.follow_symlinks,
+                    },
+                    read_sandbox,
+                )
+                .await?;
+            if current != expected_contents {
+                return Ok(ConditionalWriteResult::Conflict);
+            }
+            #[cfg(test)]
+            crate::file_system_mutation::test_support::pause(
+                path.to_abs_path()?.as_path(),
+                crate::file_system_mutation::test_support::Phase::Compared,
+            )
+            .await;
+            let (writer, write_sandbox) = owner.file_system_for_writes(sandbox.as_ref())?;
+            writer
+                .write_file(&path, contents, options, write_sandbox)
+                .await?;
+            #[cfg(test)]
+            crate::file_system_mutation::test_support::pause(
+                path.to_abs_path()?.as_path(),
+                crate::file_system_mutation::test_support::Phase::Settled,
+            )
+            .await;
+            Ok(ConditionalWriteResult::Written)
+        });
+        #[cfg(test)]
+        let operation =
+            crate::file_system_mutation::test_support::observe_pending(&admission_path, operation);
+        operation.await
     }
 
     async fn create_directory(
@@ -234,8 +300,12 @@ impl LocalFileSystem {
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
-        file_system.remove(path, options, sandbox).await
+        let (owner, path, sandbox) = (self.clone(), path.clone(), sandbox.cloned());
+        crate::file_system_mutation::run(async move {
+            let (file_system, sandbox) = owner.file_system_for_writes(sandbox.as_ref())?;
+            file_system.remove(&path, options, sandbox).await
+        })
+        .await
     }
 
     async fn copy(
@@ -245,10 +315,19 @@ impl LocalFileSystem {
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
-        file_system
-            .copy(source_path, destination_path, options, sandbox)
-            .await
+        let owner = self.clone();
+        let (source, destination, sandbox) = (
+            source_path.clone(),
+            destination_path.clone(),
+            sandbox.cloned(),
+        );
+        crate::file_system_mutation::run(async move {
+            let (file_system, sandbox) = owner.file_system_for_writes(sandbox.as_ref())?;
+            file_system
+                .copy(&source, &destination, options, sandbox)
+                .await
+        })
+        .await
     }
 }
 
@@ -287,6 +366,24 @@ impl ExecutorFileSystem for LocalFileSystem {
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(LocalFileSystem::write_file(
             self, path, contents, options, sandbox,
+        ))
+    }
+
+    fn write_file_if_unchanged<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ConditionalWriteResult> {
+        Box::pin(LocalFileSystem::write_file_if_unchanged(
+            self,
+            path,
+            expected_contents,
+            contents,
+            options,
+            sandbox,
         ))
     }
 
@@ -932,6 +1029,10 @@ impl DirectFileSystem {
             }
 
             if file_type.is_file() {
+                #[cfg(test)]
+                crate::file_system_mutation::test_support::pause_blocking(
+                    destination_path.as_path(),
+                );
                 std::fs::copy(source_path.as_path(), destination_path.as_path())?;
                 return Ok(());
             }
@@ -1182,6 +1283,8 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
         if file_type.is_dir() {
             copy_dir_recursive(&source_path, &target_path)?;
         } else if file_type.is_file() {
+            #[cfg(test)]
+            crate::file_system_mutation::test_support::pause_blocking(&target_path);
             std::fs::copy(&source_path, &target_path)?;
         } else if file_type.is_symlink() {
             copy_symlink(&source_path, &target_path)?;

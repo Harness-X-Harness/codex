@@ -226,8 +226,95 @@ pub(super) async fn validate_thread_for_paginated_reads(
     }
     match metadata.history_mode {
         ThreadHistoryMode::Legacy => Err(ThreadStoreError::Unsupported { operation }),
-        ThreadHistoryMode::Paginated => Ok(()),
+        ThreadHistoryMode::Paginated => {
+            let lineage = store
+                .resolve_rollout_lineage(thread_id, /*initial_path*/ None)
+                .await?;
+            validate_supported_lineage(store, &lineage).await
+        }
     }
+}
+
+/// Check public items across the visible lineage before pagination or compaction can hide
+/// them, using complete SQLite projections when available. Fork callers pass frozen cutoffs.
+pub(in crate::local) async fn validate_supported_lineage(
+    store: &LocalThreadStore,
+    lineage: &RolloutLineage,
+) -> ThreadStoreResult<()> {
+    let mut uncached_segments = Vec::new();
+    for segment in lineage.segments() {
+        let projected_end = if store.state_db.is_some() {
+            let pool = store.thread_history_db().await?;
+            let retired: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM thread_items WHERE thread_id = ? AND rollout_ordinal >= ? AND rollout_ordinal < ? AND (item_type = 'xSearch' OR (item_type = '' AND json_extract(item_json, '$.type') = 'xSearch')))",
+            )
+            .bind(segment.rollout_id().to_string())
+            .bind(sqlite_integer(segment.start_ordinal(), "rollout ordinal")?)
+            .bind(segment.end_ordinal().map(|ordinal| sqlite_integer(ordinal, "rollout ordinal")).transpose()?.unwrap_or(i64::MAX))
+            .fetch_one(pool)
+            .await
+            .map_err(super::thread_history_error)?;
+            if retired {
+                return Err(ThreadStoreError::InvalidRequest {
+                    message: "unsupported history: this thread contains retired Hosted X Search records; the original history is unchanged".to_string(),
+                });
+            }
+            super::projection_state(store, segment.rollout_id())
+                .await?
+                .map(|state| state.next_byte_offset)
+        } else {
+            None
+        };
+        if segment.end.is_some_and(|end| {
+            projected_end.is_some_and(|projected| projected >= end.end_byte_offset)
+        }) {
+            continue;
+        }
+        uncached_segments.push((segment.clone(), projected_end));
+    }
+    // Compaction limits model replay, not the public history support contract. If SQLite is
+    // absent or behind, inspect the visible JSONL range without retaining a second history.
+    tokio::task::spawn_blocking(move || {
+        use std::io::Seek;
+        use std::io::SeekFrom;
+
+        for (segment, projected_end) in uncached_segments {
+            let mut reader = codex_rollout::open_rollout_seekable_reader(&segment.rollout_path)?;
+            let end_byte_offset = match segment.end {
+                Some(end) => end.end_byte_offset,
+                None => reader.seek(SeekFrom::End(0))?,
+            };
+            if projected_end.is_some_and(|projected| projected >= end_byte_offset) {
+                continue;
+            }
+            let mut scanner = codex_rollout::ReverseJsonlScanner::new_at(reader, end_byte_offset)?;
+            while let Some(outcome) = scanner.scan_next::<serde_json::Value>()? {
+                let codex_rollout::ScanOutcome::Parsed(value) = outcome else {
+                    continue;
+                };
+                if value["type"] == "session_meta"
+                    || value["ordinal"]
+                        .as_u64()
+                        .is_some_and(|ordinal| ordinal < segment.start_ordinal())
+                {
+                    break;
+                }
+                codex_rollout::validate_supported_history(&value)?;
+            }
+        }
+        Ok::<_, std::io::Error>(())
+    })
+    .await
+    .map_err(super::thread_history_error)?
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::Unsupported {
+            ThreadStoreError::InvalidRequest {
+                message: error.to_string(),
+            }
+        } else {
+            super::thread_history_error(error)
+        }
+    })
 }
 
 async fn load_inherited_summary_items(

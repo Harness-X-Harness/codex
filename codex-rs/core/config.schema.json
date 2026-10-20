@@ -1944,6 +1944,19 @@
       ],
       "type": "object"
     },
+    "GrokXSearchOptions": {
+      "additionalProperties": false,
+      "description": "Legacy X Search options retained solely for explicit configuration rejection. Hosted X Search is retired from the Codex product; these settings never enable it.",
+      "properties": {
+        "from_date": {
+          "type": "string"
+        },
+        "to_date": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "GuardianV2ConfigToml": {
       "additionalProperties": false,
       "description": "User-configurable prompt, approval, and context settings for Guardian v2.",
@@ -2930,6 +2943,14 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "x_search": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/GrokXSearchOptions"
+            }
+          ],
+          "description": "Retired Hosted X configuration, retained only to reject existing settings explicitly."
         }
       },
       "type": "object"
@@ -6846,6 +6867,13 @@
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
         },
+        "excluded_domains": {
+          "description": "Grok hosted Web Search only; at most five domains, exclusive with allowed_domains.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"
         }
@@ -6880,6 +6908,13 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The Grok Responses dialect over HTTP/SSE.",
+          "enum": [
+            "grok_responses"
           ],
           "type": "string"
         }

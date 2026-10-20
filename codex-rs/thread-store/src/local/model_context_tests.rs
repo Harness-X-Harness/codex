@@ -79,6 +79,220 @@ async fn stops_at_newest_usable_compaction_and_keeps_companions() {
 }
 
 #[tokio::test]
+async fn retired_hosted_cached_history_before_compaction_rejects_resume_and_visible_fork() {
+    for item_type in ["xSearch", ""] {
+        let home = TempDir::new().expect("temp dir");
+        let uuid = Uuid::from_u128(/*v*/ 3010);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+        let RolloutItem::TurnContext(mut context) = turn_context(home.path(), "latest") else {
+            unreachable!();
+        };
+        context.multi_agent_version = Some(MultiAgentVersion::V2);
+        let path = write_ordinaled_paginated_rollout(
+            home.path(),
+            "2025-01-03T13-03-00",
+            uuid,
+            [
+                user_message("valid frozen prefix"),
+                user_message("old item placeholder"),
+                compacted("latest compaction", Some(Vec::new())),
+                RolloutItem::TurnContext(context),
+                user_message("later item placeholder"),
+            ],
+        );
+        let mut lines = std::fs::read_to_string(&path)
+            .expect("read fixture")
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        for ordinal in [2, 5] {
+            lines[ordinal] = serde_json::json!({
+                "timestamp": "2025-01-03T13:03:00Z",
+                "ordinal": ordinal,
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "thread_id": thread_id,
+                    "turn_id": "old-turn",
+                    "completed_at_ms": 1,
+                    "item": {"type": "XSearch", "id": format!("old-x-{ordinal}"),
+                        "callId": "call", "name": "x_keyword_search", "input": "original"},
+                },
+            })
+            .to_string();
+        }
+        let original = format!("{}\n", lines.join("\n")).into_bytes();
+        std::fs::write(&path, &original).expect("write historical fixture");
+        let prefix = HistoryPosition {
+            thread_id,
+            end_ordinal_exclusive: 2,
+            end_byte_offset: u64::try_from(
+                lines[..2].iter().map(|line| line.len() + 1).sum::<usize>(),
+            )
+            .expect("prefix length fits u64"),
+        };
+        let through_compaction = HistoryPosition {
+            thread_id,
+            end_ordinal_exclusive: 5,
+            end_byte_offset: u64::try_from(
+                lines[..5].iter().map(|line| line.len() + 1).sum::<usize>(),
+            )
+            .expect("compacted history length fits u64"),
+        };
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state runtime");
+        let store = LocalThreadStore::new(config, Some(runtime));
+        let pool = store.thread_history_db().await.expect("history database");
+        let old_item = r#"{"type":"xSearch","id":"old-x-2","callId":"call","name":"x_keyword_search","input":"original"}"#;
+        sqlx::query("INSERT INTO thread_turns (thread_id, turn_id, rollout_ordinal, status) VALUES (?, 'old-turn', 1, 'completed')")
+            .bind(thread_id.to_string())
+            .execute(pool)
+            .await
+            .expect("seed pre-retirement completed turn");
+        sqlx::query("INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_type, item_json) VALUES (?, 'old-turn', 'old-x-2', 2, 2, 1, ?, ?)")
+            .bind(thread_id.to_string())
+            .bind(item_type)
+            .bind(old_item)
+            .execute(pool)
+            .await
+            .expect("seed pre-retirement public item");
+        sqlx::query("INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, ?, 5)")
+            .bind(thread_id.to_string())
+            .bind(i64::try_from(through_compaction.end_byte_offset).expect("fixture offset"))
+            .execute(pool)
+            .await
+            .expect("seed pre-retirement completed projection");
+
+        // A model-context scan would stop at the compaction and miss ordinal 2.
+        // The cached public lineage must reject it before that optimization.
+        let lineage = store
+            .resolve_rollout_lineage(thread_id, /*initial_path*/ None)
+            .await
+            .expect("lineage");
+        let error = load_for_fork(&store, lineage.clone(), Some(through_compaction))
+            .await
+            .expect_err("visible old X must reject fork even before compaction");
+        assert!(matches!(error, ThreadStoreError::InvalidRequest { message }
+            if message.contains("retired Hosted X Search")));
+        let error = store
+            .load_latest_model_context(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect_err("cached old X must reject resume");
+        assert!(matches!(error, ThreadStoreError::InvalidRequest { message }
+            if message.contains("retired Hosted X Search")));
+
+        // The later retired records are outside this fork's frozen prefix. Its metadata-only
+        // version scan may cross them, but must not treat them as inherited history.
+        let context = load_for_fork(&store, lineage, Some(prefix))
+            .await
+            .expect("valid prefix remains forkable");
+        let mut metadata = codex_rollout::read_session_meta_line(&path)
+            .await
+            .expect("source metadata");
+        metadata.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+        assert_eq!(
+            serde_json::to_value(context).expect("serialize prefix"),
+            serde_json::to_value(vec![
+                RolloutItem::SessionMeta(metadata),
+                user_message("valid frozen prefix"),
+            ])
+            .expect("serialize expected prefix")
+        );
+        assert_eq!(std::fs::read(&path).expect("original history"), original);
+        let cached: String = sqlx::query_scalar(
+            "SELECT item_json FROM thread_items WHERE thread_id = ? AND item_id = 'old-x-2'",
+        )
+        .bind(thread_id.to_string())
+        .fetch_one(pool)
+        .await
+        .expect("retained public history");
+        assert_eq!(cached, old_item);
+    }
+}
+
+#[tokio::test]
+async fn retired_hosted_history_before_compaction_is_rejected_without_a_complete_cache() {
+    for cache in [
+        "absent_database",
+        "missing_projection",
+        "lagging_projection",
+    ] {
+        let home = TempDir::new().expect("temp dir");
+        let uuid = Uuid::from_u128(/*v*/ 3011);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+        let path = write_ordinaled_paginated_rollout(
+            home.path(),
+            "2025-01-03T13-03-01",
+            uuid,
+            [
+                user_message("old item placeholder"),
+                compacted("latest", Some(Vec::new())),
+            ],
+        );
+        let mut lines = std::fs::read_to_string(&path)
+            .expect("read fixture")
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        lines[1] = serde_json::json!({
+            "timestamp": "2025-01-03T13:03:01Z", "ordinal": 1,
+            "type": "event_msg", "payload": {
+                "type": "item_completed", "thread_id": thread_id, "turn_id": "old-turn",
+                "completed_at_ms": 1,
+                "item": {"type": "XSearch", "id": "old-x", "callId": "call",
+                    "name": "x_keyword_search", "input": "original"},
+            },
+        })
+        .to_string();
+        let original = format!("{}\n", lines.join("\n")).into_bytes();
+        std::fs::write(&path, &original).expect("write historical fixture");
+        let config = test_config(home.path());
+        let state_db = if cache == "absent_database" {
+            None
+        } else {
+            Some(
+                codex_state::StateRuntime::init(
+                    config.sqlite.clone(),
+                    config.default_model_provider_id.clone(),
+                )
+                .await
+                .expect("state runtime"),
+            )
+        };
+        let store = LocalThreadStore::new(config, state_db);
+        if cache == "lagging_projection" {
+            sqlx::query("INSERT INTO thread_history_projection_state (thread_id, next_rollout_byte_offset, next_rollout_ordinal) VALUES (?, ?, 1)")
+                .bind(thread_id.to_string())
+                .bind(i64::try_from(lines[0].len() + 1).expect("metadata offset"))
+                .execute(store.thread_history_db().await.expect("history database"))
+                .await
+                .expect("seed projection before the unsupported record");
+        }
+        let error = store
+            .load_latest_model_context(LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await
+            .expect_err("compaction must not hide unsupported historical public items");
+        assert!(
+            matches!(error, ThreadStoreError::InvalidRequest { message }
+            if message.contains("retired Hosted X Search")),
+            "{cache}"
+        );
+        assert_eq!(std::fs::read(&path).expect("original history"), original);
+    }
+}
+
+#[tokio::test]
 async fn loads_recent_context_after_many_empty_wake_turns() {
     let home = TempDir::new().expect("temp dir");
     let uuid = Uuid::from_u128(/*v*/ 1008);
@@ -160,7 +374,7 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         .await
         .expect("read source metadata");
 
-    let context = load_for_fork(lineage, Some(history_base))
+    let context = load_for_fork(&store, lineage, Some(history_base))
         .await
         .expect("load frozen fork context");
 
@@ -237,7 +451,7 @@ async fn fork_version_stops_before_older_segments_once_resolved() {
         // The usable compaction should stop the scan before it reaches this missing segment.
         std::fs::remove_file(root_path).expect("remove older segment after resolving lineage");
 
-        let context = load_for_fork(lineage, /*history_base*/ None)
+        let context = load_for_fork(&store, lineage, /*history_base*/ None)
             .await
             .expect("resolve version without reading older segments");
         source_meta.meta.multi_agent_version = stored_version.or(Some(MultiAgentVersion::V2));
@@ -290,7 +504,7 @@ async fn fork_version_respects_inherited_segment_cutoffs() {
         .await
         .expect("read child metadata");
 
-    let context = load_for_fork(lineage, /*history_base*/ None)
+    let context = load_for_fork(&store, lineage, /*history_base*/ None)
         .await
         .expect("recover version from inherited prefix");
     source_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);

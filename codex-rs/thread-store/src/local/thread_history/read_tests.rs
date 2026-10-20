@@ -1810,3 +1810,39 @@ fn item_ids(page: &ItemPage) -> Vec<&str> {
         .map(|item| item.item_id.as_str())
         .collect()
 }
+
+#[tokio::test]
+async fn retired_hosted_x_cached_history_is_rejected_before_pagination() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let db = history_db(&store).await;
+    insert_turn(
+        db,
+        thread_id,
+        "old-turn",
+        9,
+        "completed",
+        /*error_json*/ None,
+        /*first_user_item_id*/ None,
+        /*final_agent_item_id*/ None,
+    )
+    .await;
+    sqlx::query("INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_type, item_json) VALUES (?, 'old-turn', 'old-x', 10, 10, 1, 'xSearch', ?)")
+        .bind(thread_id.to_string())
+        .bind(r#"{"type":"xSearch","id":"old-x","callId":"call","name":"x_keyword_search","input":"{}"}"#)
+        .execute(db).await.unwrap();
+    let error = validate_thread_for_paginated_reads(
+        &store,
+        thread_id,
+        /*include_archived*/ true,
+        "thread/turns/list",
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("retired Hosted X Search"));
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM thread_items WHERE thread_id = ?")
+        .bind(thread_id.to_string())
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}

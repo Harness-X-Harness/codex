@@ -3,6 +3,9 @@
 
 mod common;
 
+#[path = "file_system/conditional_write.rs"]
+mod conditional_write;
+
 #[path = "file_system/shared.rs"]
 mod shared;
 #[path = "file_system/support.rs"]

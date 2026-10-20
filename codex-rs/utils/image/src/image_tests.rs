@@ -378,3 +378,6 @@ async fn bounds_cache_by_encoded_byte_size() {
     assert!(cache.get(&key(2)).is_some());
     assert!(cache.get(&key(3)).is_none());
 }
+
+#[path = "normalize_tests.rs"]
+mod normalize_tests;

@@ -190,3 +190,32 @@ fn tool_and_notice_projection_uses_normal_transcript_presentation() {
     • Context compacted
     ");
 }
+
+#[test]
+fn hosted_web_paged_history_uses_the_live_transcript_renderer() {
+    let cwd = test_path_buf("/workspace").abs();
+    let action = WebSearchAction::Search {
+        query: Some("canonical query 日本語".into()),
+        queries: None,
+    };
+    let actual = cells(
+        ThreadItem::WebSearch(WebSearchItem {
+            id: "web-item".into(),
+            query: "canonical query 日本語".into(),
+            action: Some(action.clone()),
+            results: None,
+        }),
+        &cwd,
+    );
+    let expected = history_cell::new_web_search_call(
+        "web-item".into(),
+        "canonical query 日本語".into(),
+        action,
+    );
+    assert_eq!(actual.len(), 1);
+    assert_eq!(
+        actual[0].transcript_hyperlink_lines(/*width*/ 80),
+        expected.transcript_hyperlink_lines(/*width*/ 80),
+    );
+    assert_eq!(actual[0].raw_lines(), expected.raw_lines());
+}

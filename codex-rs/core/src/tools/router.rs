@@ -1,3 +1,4 @@
+use crate::client_common::ResponseEvent;
 use crate::function_tool::FunctionCallError;
 use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::session::session::Session;
@@ -31,6 +32,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -84,6 +86,8 @@ pub(crate) fn tool_log_payload<'a>(
 /// One finalized tool plan: its advertised surfaces and matching executable runtimes.
 pub struct ToolRouter {
     registry: ToolRegistry,
+    pub(super) flat_tool_routes: Option<codex_tools::FlatToolRoutes>,
+    pub(super) plaintext_collaboration_tools: BTreeSet<ToolName>,
     model_visible_specs: Arc<[ToolSpec]>,
     tool_mode: ToolMode,
     code_mode_tool_names: BTreeMap<String, ToolName>,
@@ -132,6 +136,8 @@ impl ToolRouter {
     ) -> Self {
         let mut router = Self {
             registry,
+            flat_tool_routes: None,
+            plaintext_collaboration_tools: BTreeSet::new(),
             model_visible_specs: model_visible_specs.into(),
             tool_mode,
             code_mode_tool_names,
@@ -143,6 +149,80 @@ impl ToolRouter {
                 .iter()
                 .all(|name| router.exposes_tool(name));
         router
+    }
+
+    pub(crate) fn direct_source(&self, call: &ToolCall) -> ToolCallSource {
+        if matches!(call.payload, ToolPayload::Function { .. })
+            && self
+                .plaintext_collaboration_tools
+                .contains(&call.tool_name.clone().with_default_namespace())
+        {
+            ToolCallSource::DirectPlaintextMessage
+        } else {
+            call.direct_source()
+        }
+    }
+
+    /// Restore the exact request plan before telemetry, history, or tool execution sees a call.
+    pub(crate) fn normalize_response_event(
+        &self,
+        event: ResponseEvent,
+    ) -> Result<Option<ResponseEvent>, String> {
+        let Some(routes) = self.flat_tool_routes.as_ref() else {
+            return Ok(Some(event));
+        };
+        match event {
+            // Flat custom wrappers are incomplete here. Do not feed their JSON deltas to
+            // canonical custom-tool diff consumers or expose provider-only identities.
+            ResponseEvent::OutputItemAdded(ResponseItem::FunctionCall { .. }) => Ok(None),
+            // A raw hosted call is never a local custom-tool invocation. Product X
+            // is retired; fail before telemetry, history, or local dispatch sees it.
+            ResponseEvent::OutputItemAdded(ResponseItem::CustomToolCall { name, .. })
+                if codex_protocol::grok_hosted::is_x_search_name(&name) =>
+            {
+                Err("Hosted X Search is retired and cannot be executed".into())
+            }
+            ResponseEvent::OutputItemDone(item) => {
+                if matches!(&item, ResponseItem::CustomToolCall { name, .. }
+                    if codex_protocol::grok_hosted::is_x_search_name(name))
+                {
+                    return Err("Hosted X Search is retired and cannot be executed".into());
+                }
+                let hosted = codex_protocol::grok_hosted::is_completed_web_search(&item)
+                    && self
+                        .model_visible_specs
+                        .iter()
+                        .any(|spec| matches!(spec, ToolSpec::WebSearch { .. }));
+                let item = if hosted {
+                    codex_protocol::grok_hosted::project_search_replay(&item)?;
+                    item
+                } else {
+                    routes.restore_response_item(item)?
+                };
+                if let ResponseItem::CustomToolCall {
+                    name,
+                    namespace,
+                    input,
+                    ..
+                } = &item
+                    && name == "apply_patch"
+                    && ToolName::new(namespace.clone(), name).is_default_namespace()
+                {
+                    // parse_patch also accepts shell heredocs. Flat calls must contain
+                    // only the canonical patch grammar, with no surrounding command.
+                    let trimmed = input.trim();
+                    if trimmed.lines().next() != Some("*** Begin Patch")
+                        || trimmed.lines().next_back() != Some("*** End Patch")
+                    {
+                        return Err("Grok apply_patch requires canonical patch markers".into());
+                    }
+                    codex_apply_patch::parse_patch(input)
+                        .map_err(|_| "Grok apply_patch has invalid patch grammar".to_string())?;
+                }
+                Ok(Some(ResponseEvent::OutputItemDone(item)))
+            }
+            other => Ok(Some(other)),
+        }
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {

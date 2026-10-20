@@ -1,3 +1,4 @@
+use codex_api::ApiDialect;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageRequestError;
@@ -75,6 +76,10 @@ impl CodexImagesBackend {
         }
     }
 
+    pub(crate) fn dialect(&self) -> ApiDialect {
+        self.provider.api_dialect()
+    }
+
     /// Resolves the provider and auth required for the current image API request.
     async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, ImageBackendError> {
         let provider = self
@@ -93,7 +98,7 @@ impl CodexImagesBackend {
         )
         .await
         .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        Ok(ImagesClient::new(transport, provider, auth))
+        Ok(ImagesClient::new(transport, provider, auth).with_dialect(self.dialect()))
     }
 
     /// Sends a standalone image generation request through the configured Images client.
