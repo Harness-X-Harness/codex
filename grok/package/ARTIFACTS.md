@@ -45,7 +45,7 @@ Acquisition failures include one fixed, allowlisted stage code in brackets:
 Codes identify the failed boundary, not the underlying cause. For example,
 `artifacts_request` alone does not establish a network error, rate limit or
 availability race. Exception text, API bodies, credentials and signed URLs
-never become error codes or error output. Request order, identity checks,
+never become stage codes or handled acquisition error output. Request order, identity checks,
 byte/time limits and fail-closed behavior are unchanged; no retry, extra wait
 or Live invocation is introduced.
 
