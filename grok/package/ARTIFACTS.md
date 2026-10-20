@@ -27,6 +27,28 @@ package is capped at 2 GiB. API responses, signed URLs and authentication errors
 are not retained in published evidence. Errors are summarized without raw
 external output. There is no automatic retry.
 
+Acquisition failures include one fixed, allowlisted stage code in brackets:
+
+- `input`: explicit arguments or an already-existing output were rejected.
+- `workspace`: private temporary workspace creation or cleanup failed.
+- `run_request`, `jobs_request`, `artifacts_request`: that bounded metadata
+  request failed, including command startup, timeout, response-size or I/O errors.
+- `run_metadata`, `jobs_metadata`, `artifacts_metadata`: the response could not
+  be read as metadata; `run_metadata` also checks the attempt before using it.
+- `selection`: the existing run/producer/artifact identity or inventory checks,
+  or the selected package byte budget, rejected the metadata.
+- `archive_request`: the bounded selected ZIP request failed.
+- `archive_verification`: archive or package verification/extraction failed.
+- `publication`: writing or publishing the verified selection failed.
+- `unknown`: an otherwise handled failure had no recognized stage code.
+
+Codes identify the failed boundary, not the underlying cause. For example,
+`artifacts_request` alone does not establish a network error, rate limit or
+availability race. Exception text, API bodies, credentials and signed URLs
+never become error codes or error output. Request order, identity checks,
+byte/time limits and fail-closed behavior are unchanged; no retry, extra wait
+or Live invocation is introduced.
+
 Before granting executable modes, extraction verifies the Actions ZIP size and
 SHA-256, the exact archive name, all required stock-layout members, source and
 target metadata, and every packaged file's size/digest. Links, traversal,
