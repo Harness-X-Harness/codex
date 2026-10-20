@@ -129,10 +129,10 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
             let (mut input, metadata): (Vec<_>, Vec<_>) = history
-                .for_prompt_annotated_except_hosted(&model_info.input_modalities, |item| {
-                    turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok
-                        && codex_protocol::grok_hosted::is_completed_search(item)
-                })
+                .for_prompt_annotated(
+                    &model_info.input_modalities,
+                    turn_context.provider.api_dialect(),
+                )
                 .into_iter()
                 .map(|envelope| (envelope.item, envelope.metadata))
                 .unzip();
@@ -268,12 +268,9 @@ pub(crate) fn capture_background_input(
         &base_instructions,
     );
     let (mut input, metadata): (Vec<_>, Vec<_>) = snapshot
-        .for_prompt_annotated_except_hosted(
+        .for_prompt_annotated(
             &step_context.settings.model_info.input_modalities,
-            |item| {
-                step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
-                    && codex_protocol::grok_hosted::is_completed_search(item)
-            },
+            step_context.turn.provider.api_dialect(),
         )
         .into_iter()
         .map(|envelope| (envelope.item, envelope.metadata))

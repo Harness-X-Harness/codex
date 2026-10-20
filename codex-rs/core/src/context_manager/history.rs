@@ -31,6 +31,7 @@ use crate::session::turn_context::TurnContext;
 use crate::utils::json::serialized_json_bytes;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_api::ApiDialect;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ConversationHistorySnapshot;
@@ -600,42 +601,24 @@ impl ContextManager {
     /// Returns the history prepared for sending to the model. This applies a proper
     /// normalization and drops un-suited items. Unsupported image and audio content
     /// is stripped from messages and tool outputs according to `input_modalities`.
-    #[cfg(test)]
-    pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        self.for_prompt_annotated(input_modalities)
-            .into_iter()
-            .map(ResponseItemEnvelope::into_item)
-            .collect()
-    }
-
-    pub(crate) fn for_prompt_except_hosted(
-        mut self,
+    pub(crate) fn for_prompt(
+        self,
         input_modalities: &[InputModality],
-        is_hosted: impl Fn(&ResponseItem) -> bool,
+        dialect: ApiDialect,
     ) -> Vec<ResponseItem> {
-        self.normalize_history_except_hosted(input_modalities, is_hosted);
-        Arc::unwrap_or_clone(self.items)
+        self.for_prompt_annotated(input_modalities, dialect)
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect()
-    }
-
-    pub(crate) fn for_prompt_annotated_except_hosted(
-        mut self,
-        input_modalities: &[InputModality],
-        is_hosted: impl Fn(&ResponseItem) -> bool,
-    ) -> Vec<ResponseItemEnvelope> {
-        self.normalize_history_except_hosted(input_modalities, is_hosted);
-        Arc::unwrap_or_clone(self.items)
     }
 
     /// Returns normalized history envelopes for internal consumers that must retain metadata.
-    #[cfg(test)]
     pub(crate) fn for_prompt_annotated(
         mut self,
         input_modalities: &[InputModality],
+        dialect: ApiDialect,
     ) -> Vec<ResponseItemEnvelope> {
-        self.normalize_history(input_modalities);
+        self.normalize_history(input_modalities, dialect);
         Arc::unwrap_or_clone(self.items)
     }
 
@@ -986,20 +969,13 @@ impl ContextManager {
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
-    #[cfg(test)]
-    fn normalize_history(&mut self, input_modalities: &[InputModality]) {
-        self.normalize_history_except_hosted(input_modalities, |_| false);
-    }
-
-    fn normalize_history_except_hosted(
-        &mut self,
-        input_modalities: &[InputModality],
-        is_hosted: impl Fn(&ResponseItem) -> bool,
-    ) {
+    fn normalize_history(&mut self, input_modalities: &[InputModality], dialect: ApiDialect) {
         let items = Arc::make_mut(&mut self.items);
 
         // Only explicitly recognized provider completions are exempt from pairing.
-        normalize::ensure_call_outputs_present_except_hosted(items, is_hosted);
+        normalize::ensure_call_outputs_present_except_hosted(items, |item| {
+            dialect == ApiDialect::Grok && codex_protocol::grok_hosted::is_completed_search(item)
+        });
 
         // Paired outputs must have a corresponding call; named external outputs stand alone.
         normalize::remove_orphan_outputs(items);

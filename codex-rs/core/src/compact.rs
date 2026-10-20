@@ -287,12 +287,9 @@ async fn run_compact_task_inner_impl(
     let mut client_session = sess.services.model_client.new_session();
     let compaction_response = loop {
         // Clone is required because of the loop
-        let mut turn_input = history.clone().for_prompt_except_hosted(
+        let mut turn_input = history.clone().for_prompt(
             &turn_context.model_info().input_modalities,
-            |item| {
-                turn_context.provider.api_dialect() == codex_api::ApiDialect::Grok
-                    && codex_protocol::grok_hosted::is_completed_search(item)
-            },
+            turn_context.provider.api_dialect(),
         );
         sess.services
             .executed_tool_calls
