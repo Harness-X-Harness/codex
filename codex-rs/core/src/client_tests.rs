@@ -1107,6 +1107,11 @@ fn responses_lite_tool_shape_follows_explicit_dialect() -> anyhow::Result<()> {
     )];
     let prompt = Prompt {
         tools: tools.clone().into(),
+        // Keep this tool-shape fixture independent of the stock instruction prefix.
+        base_instructions: BaseInstructions {
+            text: String::new(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut model = test_model_info();

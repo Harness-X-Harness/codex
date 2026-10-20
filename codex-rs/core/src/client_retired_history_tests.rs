@@ -47,6 +47,11 @@ fn retired_hosted_x_cannot_become_a_synthetic_local_pair_during_request_building
             assert_eq!(normalized, saved);
             let prompt = Prompt {
                 input: normalized,
+                // Count only replayed history, without the stock instruction prefix.
+                base_instructions: BaseInstructions {
+                    text: String::new(),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let result = client.build_responses_request(
