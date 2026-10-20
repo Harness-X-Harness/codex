@@ -70,7 +70,7 @@ jobs:
 
   live-selection:
     name: Select formal Live scenarios
-    if: ${{ github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && vars.GROK_LIVE == '1' }}
+    if: ${{ github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -95,7 +95,7 @@ jobs:
   live:
     name: Grok Live (${{ matrix.scenario }})
     needs: [build-linux-x64-musl, live-selection]
-    if: ${{ !cancelled() && github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && vars.GROK_LIVE == '1' && needs.build-linux-x64-musl.result == 'success' && needs.live-selection.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && needs.build-linux-x64-musl.result == 'success' && needs.live-selection.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -134,7 +134,7 @@ jobs:
       - name: Execute the selected owned Go Live scenario once
         working-directory: grok
         env:
-          GROK_LIVE: ${{ vars.GROK_LIVE }}
+          GROK_LIVE: "1"
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
           GROK_CODEX_BIN: ${{ runner.temp }}/live-package/package/bin/grok-bin
           SCENARIO: ${{ matrix.scenario }}
