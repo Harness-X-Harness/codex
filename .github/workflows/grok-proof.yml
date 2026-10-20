@@ -349,7 +349,7 @@ jobs:
       - name: Fix scoped Provider runtime lint
         working-directory: codex-rs
         run: >-
-          just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
+          python3 ../.github/scripts/grok-stock-lint.py just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
@@ -768,7 +768,7 @@ jobs:
           RUSTC: rustc
         working-directory: codex-rs
         run: >-
-          just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
+          python3 ../.github/scripts/grok-stock-lint.py just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
           -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
           -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
           -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid

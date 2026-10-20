@@ -57,7 +57,9 @@ jobs:
             go test -c -tags="$tier" -o "$RUNNER_TEMP/grok-$tier.test" "./tests/$tier"
           done
       - name: Test execution-subject and native applicability controls offline
-        run: bash .github/scripts/test-grok-ci-subject.sh
+        run: |
+          bash .github/scripts/test-grok-ci-subject.sh
+          python3 .github/scripts/test-grok-stock-lint.py -v
       - name: Test package staging and launcher with synthetic inputs
         run: |
           python3 grok/package/test_stage.py -v
