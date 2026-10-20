@@ -360,7 +360,7 @@ jobs:
       - name: Regenerate owned configuration and public API schemas
         working-directory: codex-rs
         run: |
-          just write-config-schema --locked --profile ci-test --timings
+          cargo run -p codex-config-schema --bin codex-write-config-schema --locked --profile ci-test --timings
           # Run the stock fixture writer with the already-built native profile.
           export CODEX_APP_SERVER_SCHEMA_ROOT="$GITHUB_WORKSPACE/codex-rs/app-server-protocol/schema"
           export CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL=0
