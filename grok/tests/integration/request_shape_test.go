@@ -29,9 +29,6 @@ func TestFirstRequestShape(t *testing.T) {
 	subject := nativeSubject(t)
 	for _, model := range []string{providerfixture.PinnedModel, providerfixture.PrimaryModel} {
 		profiles := []string{"isolated-history", "shipped-history", "isolated-edit"}
-		if model == providerfixture.PinnedModel {
-			profiles = append(profiles, "isolated-history-no-effort")
-		}
 		for _, profile := range profiles {
 			t.Run(model+"/"+profile, func(t *testing.T) {
 				integrationObservation(t)
@@ -90,8 +87,6 @@ func TestFirstRequestShape(t *testing.T) {
 					// The controlled denial stops the public scenario in its first turn.
 					got, err := live.StructuredEdit(ctx, options)
 					evidence, runErr = got.Evidence, err
-				} else if profile == "isolated-history-no-effort" {
-					evidence, runErr = live.ReasoningHistoryWithoutEffort(ctx, options)
 				} else {
 					evidence, runErr = live.ReasoningHistory(ctx, options)
 				}
@@ -120,12 +115,12 @@ func TestFirstRequestShape(t *testing.T) {
 					if shape.Store == nil || *shape.Store {
 						t.Error("server-side response storage was not explicitly disabled")
 					}
-					if profile == "isolated-history-no-effort" {
+					if profile == "isolated-history" {
 						if integrationfixture.ContainsShapeValue(shape.ReasoningFields, "effort") {
 							t.Error("omitted history effort was reintroduced on the wire")
 						}
-					} else if profile != "isolated-edit" && shape.Effort != "medium" {
-						t.Error("explicit history effort was not preserved")
+					} else if profile == "shipped-history" && shape.Effort != "high" {
+						t.Error("shipped catalog default effort was not preserved")
 					}
 				}
 				// Other presence/defaults are observations, not guessed backend rules.

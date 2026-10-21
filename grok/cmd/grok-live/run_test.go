@@ -127,7 +127,6 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"basic-pinned", "pinned", "grok-4.6", 1},
 		{"reasoning-primary", "history:turn", "grok-4.7", 2},
 		{"reasoning-pinned", "history:turn", "grok-4.6", 2},
-		{"reasoning-no-effort-pinned", "history:no_effort", "grok-4.6", 2},
 		{"structured-edit", "edit:success", "grok-4.7", 2},
 		{"structured-edit-declined", "edit:decline", "grok-4.7", 1},
 		{"structured-edit-pinned", "edit:pinned", "grok-4.6", 1},

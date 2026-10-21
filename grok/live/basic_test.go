@@ -169,7 +169,14 @@ func fakeAppServer() {
 				if executableErr == nil && binaryErr == nil && homeErr == nil {
 					value = "retained"
 				}
-				_ = os.WriteFile(script.Trace+".retention", []byte(value), 0600)
+				// File existence signals a complete observation to the command test.
+				pending := script.Trace + ".retention.tmp"
+				if err := os.WriteFile(pending, []byte(value), 0600); err != nil {
+					return
+				}
+				if err := os.Rename(pending, script.Trace+".retention"); err != nil {
+					return
+				}
 				return
 			}
 			reportedHome, _ := filepath.EvalSymlinks(os.Getenv("CODEX_HOME"))

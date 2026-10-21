@@ -40,14 +40,14 @@ func TestCommandUsesCatalogForEverySuite(t *testing.T) {
 }
 
 func TestCommandSelectionRejectsUnknownWithoutEchoingInput(t *testing.T) {
-	for _, args := range [][]string{{"--scenario", "PRIVATE_CANARY"}, {"--suite", "PRIVATE_CANARY"}, {"--family", "PRIVATE_CANARY"}, {"--PRIVATE_CANARY"}, {"PRIVATE_CANARY"}, {"--suite", "full", "--scenario", "reasoning-no-effort-pinned"}} {
+	for _, args := range [][]string{{"--scenario", "PRIVATE_CANARY"}, {"--suite", "PRIVATE_CANARY"}, {"--family", "PRIVATE_CANARY"}, {"--PRIVATE_CANARY"}, {"PRIVATE_CANARY"}} {
 		var output bytes.Buffer
 		if run(args, &output) != 2 || output.Len() != 0 {
 			t.Fatal("invalid selector succeeded or leaked input")
 		}
 	}
 	var output bytes.Buffer
-	if run([]string{"--suite", "diagnostic", "--scenario", "reasoning-no-effort-pinned"}, &output) != 0 || output.String() != "[\"reasoning-no-effort-pinned\"]\n" {
+	if run([]string{"--suite", "diagnostic", "--scenario", "reasoning-pinned"}, &output) != 0 || output.String() != "[\"reasoning-pinned\"]\n" {
 		t.Fatal("explicit diagnostic unavailable")
 	}
 	if run(nil, failedWriter{}) != 1 {

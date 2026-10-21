@@ -4,8 +4,8 @@
 invocable. Build from `grok/` with `go build -o grok-live ./cmd/grok-live`.
 `grok-scenarios --family live --suite diagnostic` lists the primary/pinned,
 reasoning, edit, image, shipped profile/child and hosted-search catalog. Full has
-17 formal cases; the eighteenth, `reasoning-no-effort-pinned`, is exploratory and
-requires explicit diagnostic selection. The command adds no product oracle.
+17 formal cases. Reasoning history leaves effort at the model default.
+The command adds no product oracle.
 
 One invocation selects one scenario. Provide an absolute source executable,
 its expected SHA-256, source SHA, harness SHA, supported package target and
