@@ -41,7 +41,7 @@ test "$(native)" = false
 (export PUSH_BEFORE=0000000000000000000000000000000000000000; test "$(native)" = true)
 (export PUSH_BEFORE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; test "$(native)" = true)
 
-# Each native build input must trigger both feature events and applicability.
+# Each native build input must trigger PR/main events and applicability.
 # Independent branches avoid credit from a previous native edit in this loop.
 index=0
 for entry in 'bazel/build.bzl:bazel/**' 'third_party/source.cc:third_party/**' \

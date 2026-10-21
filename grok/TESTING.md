@@ -234,24 +234,26 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
 
 ### CI routing
 
-- `grok-ci.yml` runs credential-free offline checks on development branch HEADs.
-  Relevant native/schema changes additionally reuse `grok-proof.yml` on that
-  exact push subject. Applicability and aggregate success fail closed. Push
-  applicability uses the branch diff from the default-branch merge base, not
-  just the last commit: a docs follow-up cannot hide unvalidated native changes.
-  This conservative base can still require native checks for a Grok fork
-  docs-only follow-up; no current-branch cost reduction is claimed. `grok-go.yml` owns format, tidy, race, JSON, vet
-  and Python checks, once per selected workflow subject.
+- `grok-ci.yml` runs credential-free offline checks for PRs outside the
+  version-line bases, `main` pushes and manual branch dispatch. Ordinary feature
+  pushes do not repeat the PR's native proof. Open a PR for automatic pre-merge
+  feedback; its synthetic merge SHA, not feature HEAD, is the tested subject.
+  Applicability and aggregate success fail closed. `grok-go.yml` owns format,
+  tidy, race, JSON, vet and Python checks once per selected workflow subject.
 - Manual `grok-ci.yml` dispatch selects a branch HEAD without arbitrary SHA
   inputs and requests native checks. GitHub requires that dispatch workflow to
-  be registered on the default branch first; ordinary feature-push execution
-  supplies the pre-merge route.
-- Version-line/PR native checks retain their existing `grok.yml` entry point.
-  A PR synthetic merge SHA is labeled separately from its feature HEAD. Native
-  jobs preserve scoped Rust owners and invoke only `tests/integration` after
-  the existing CLI build. GNU native proof does not certify Linux-musl/macOS
-  release packages; their existing applicable `grok.yml` jobs remain separate.
-  No branch rules or post-merge certification changes.
+  be registered on the default branch first.
+- Version-line pushes and PRs targeting them retain the `grok.yml` entry point.
+  Native jobs preserve scoped Rust owners and invoke only `tests/integration`
+  after the existing CLI build. GNU native proof does not certify release
+  packages: PRs additionally build and check Linux-musl; version-line pushes
+  build and check both Linux-musl and macOS. macOS release/package failures are
+  therefore detected after merge, not at the PR gate. Branch rules are unchanged.
+- Release builds use pinned sccache with GitHub's branch-scoped compiler cache.
+  They still compile/link for the current source SHA, stage a fresh package and
+  execute package acceptance. No cross-run finished package or test result is
+  reused. The sccache action reports hit/miss statistics in its post step; a
+  cold namespace and final linking/LTO can still take substantial time.
 - `build-grok` keeps its five actual package consumer owners in
   `tests/integration`; it does not repeat the offline suite.
 - Formal Live runs automatically on every trusted version-line push after the
