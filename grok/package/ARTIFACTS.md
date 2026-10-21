@@ -17,14 +17,17 @@ Diagnostic selection requires a settled version-line push of this repository's
 nonexpired source/target/run/attempt artifact. A failed sibling or earlier Live
 result remains a failed run; a valid completed Linux producer may still supply a
 diagnostic artifact. PR builds, forks, missing/ambiguous/expired artifacts and
-incomplete API inventories are rejected. No other run or latest-success fallback
-is selected. Inventories above 100 jobs or artifacts fail closed.
+incomplete API inventories are rejected. Both jobs and artifact inventories
+require `total_count` to equal the returned row count, in diagnostic and
+same-run selection alike.
+No other run or latest-success fallback is selected. Inventories above 100 jobs
+or artifacts fail closed.
 
 The command makes at most four bounded, read-only `gh api` calls: the explicit
 run, its exact attempt's jobs, that run's artifacts, and the selected ZIP. Each
 call has a 180-second limit, metadata is capped at 16 MiB, and the complete
-package is capped at 2 GiB. API responses, signed URLs and authentication errors
-are not retained in published evidence. Errors are summarized without raw
+package is capped at 2 GiB. Raw API responses, signed URLs and authentication
+errors are not retained in published evidence. Errors are summarized without raw
 external output. There is no automatic retry.
 
 Acquisition failures include one fixed, allowlisted stage code in brackets:
@@ -42,12 +45,25 @@ Acquisition failures include one fixed, allowlisted stage code in brackets:
 - `publication`: writing or publishing the verified selection failed.
 - `unknown`: an otherwise handled failure had no recognized stage code.
 
+Selection failures also carry one fixed `selection=` reason: `run_state`,
+`jobs_inventory`, `artifacts_inventory`, `identity`, `producer` or `artifact`.
+These distinguish a rejected parent state from an inconsistent inventory without
+publishing metadata. Unclassified selection errors retain only the stage code.
+
+Failed `gh` requests may include a fixed allowlisted `gh=` category and `http=`
+status recognized from bounded stderr. Unknown, ambiguous or oversized stderr
+produces no extra summary. Raw stderr, URLs, tokens and API bodies are never
+copied to output. These categories describe what `gh` reported, not a proven
+network or service root cause.
+
 Codes identify the failed boundary, not the underlying cause. For example,
 `artifacts_request` alone does not establish a network error, rate limit or
 availability race. Exception text, API bodies, credentials and signed URLs
-never become stage codes or handled acquisition error output. Request order, identity checks,
-byte/time limits and fail-closed behavior are unchanged; no retry, extra wait
-or Live invocation is introduced.
+never become stage codes or handled acquisition error output. Apart from
+accepting the evidenced `queued` parent state in same-run selection below,
+request order, identity checks, strict inventories, byte/time limits and
+fail-closed behavior are unchanged; no retry, extra wait or Live invocation is
+introduced.
 
 Before granting executable modes, extraction verifies the Actions ZIP size and
 SHA-256, the exact archive name, all required stock-layout members, source and
@@ -81,7 +97,24 @@ credential. Ordinary PR events do not run Live or receive the backend secret.
 
 Each selected scenario binds the current source/harness/run/attempt and the
 Linux producer's returned artifact ID. It verifies and consumes that artifact
-without rebuilding. The 19 existing scenario selections are separate jobs;
+without rebuilding.
+
+Same-run selection accepts only a parent run with status `queued` or
+`in_progress` and a null conclusion. GitHub can report `queued` while some jobs
+are running or already complete, so the parent status alone does not establish
+whether the selected producer finished. Other parent states and any non-null
+conclusion remain rejected. This does not change diagnostic selection, which
+still requires a settled run.
+
+The jobs and artifacts inventories must both retain exact `total_count` equality
+with their returned row counts. The rows must contain exactly one named
+`Build x86_64-unknown-linux-musl` producer with a valid job ID, the selected run
+and attempt, completed status and success conclusion. Missing, ambiguous,
+unfinished, failed or wrong-attempt producers are rejected. All
+source/harness/run/attempt/artifact identity checks remain strict. No extra API
+call, retry or wait is introduced by the queued-state correction.
+
+The Go-owned full scenario selection runs as separate jobs;
 fail-fast is disabled so one failure cannot hide other outcomes. Parallelism is
 bounded to three. Each invocation has one five-minute whole-scenario deadline,
 no scenario retry, and a typed result containing only owner-approved evidence.

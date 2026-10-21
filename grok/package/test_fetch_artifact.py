@@ -8,12 +8,14 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import time
 import tempfile
 import unittest
 from unittest import mock
 import zipfile
 
 import fetch_artifact
+import select_artifact
 from extract_artifact import EXECUTABLES, FILES
 from select_artifact import REPOSITORY, TARGET
 
@@ -82,6 +84,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 root = Path(os.environ["FAKE_GH_FIXTURES"])
 log = Path(os.environ["FAKE_GH_LOG"])
@@ -92,9 +95,22 @@ with log.open("a") as target:
 if index >= len(config["calls"]) or sys.argv[1:] != config["calls"][index]:
     print("PRIVATE_RESPONSE_CANARY unexpected gh call", file=sys.stderr)
     raise SystemExit(88)
+if "stderr" in config:
+    data = config["stderr"].encode()
+    for _ in range(config.get("stderr_repeat", 1)):
+        sys.stderr.buffer.write(data)
+    sys.stderr.buffer.flush()
+if config.get("stream_stderr"):
+    while True:
+        sys.stderr.buffer.write(b"PRIVATE_RESPONSE_CANARY" * 1024)
+if config.get("sleep_index") == index:
+    for fd in config.get("close_fds", []):
+        os.close(fd)
+    time.sleep(30)
 if config.get("fail_index") == index:
     print("PRIVATE_RESPONSE_CANARY https://signed.invalid/?secret=PRIVATE_RESPONSE_CANARY")
-    print("PRIVATE_RESPONSE_CANARY gh authentication error", file=sys.stderr)
+    if "stderr" not in config:
+        print("PRIVATE_RESPONSE_CANARY gh authentication error", file=sys.stderr)
     raise SystemExit(17)
 if config.get("create_output_index") == index:
     output = Path(config["output"])
@@ -122,10 +138,13 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             digest="sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
             size_in_bytes=archive.stat().st_size)
 
-    def invoke(self, extra=(), harness=HARNESS):
+    def prepare_fixtures(self):
         for name, body in (("run", self.run), ("jobs", self.jobs),
                            ("artifacts", self.artifacts), ("config", self.config)):
             (self.fixture_root / (name + ".json")).write_text(json.dumps(body))
+
+    def invoke(self, extra=(), harness=HARNESS):
+        self.prepare_fixtures()
         result = subprocess.run(
             [sys.executable, str(Path(__file__).with_name("fetch_artifact.py")),
              "--run-id", "37", "--harness-sha", harness, "--output", str(self.output), *extra],
@@ -142,11 +161,14 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         self.assertEqual(calls, self.expected_calls[:count])
 
-    def assert_failed(self, result, calls, code, output_absent=True):
+    def assert_failed(self, result, calls, code, output_absent=True, summary=None, selection_reason=None):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
+        detail = f"; {summary}" if summary else ""
+        if selection_reason:
+            detail += f"; selection={selection_reason}"
         self.assertEqual(result.stderr,
-                         f"Package artifact acquisition failed [{code}]; no package execution was attempted.\n")
+                         f"Package artifact acquisition failed [{code}]{detail}; no package execution was attempted.\n")
         self.assert_calls(calls)
         if output_absent:
             self.assertFalse(self.output.exists())
@@ -193,6 +215,52 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assertEqual(got["run_status"], "in_progress")
         self.assertIsNone(got["run_conclusion"])
 
+    def test_same_run_queued_parent_with_exact_inventories_fetches_once_without_execution(self):
+        self.run.update(status="queued", conclusion=None)
+        self.jobs["jobs"][1].update(status="queued", conclusion=None)
+        result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
+                              "--expected-run-attempt", "2"], harness=SHA)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assert_calls(4)
+        verified = json.loads(result.stdout)
+        self.assertEqual(verified["producer_job_id"], 101)
+        self.assertEqual(verified["run_status"], "queued")
+        self.assertIsNone(verified["run_conclusion"])
+
+    def test_same_run_mismatched_jobs_inventory_still_rejects_without_download(self):
+        for status in ("queued", "in_progress"):
+            for count in (1, 3, 101):
+                with self.subTest(status=status, count=count):
+                    self.log.unlink(missing_ok=True)
+                    self.run.update(status=status, conclusion=None)
+                    self.jobs["total_count"] = count
+                    result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
+                                          "--expected-run-attempt", "2"], harness=SHA)
+                    self.assert_failed(result, 3, "selection", selection_reason="jobs_inventory")
+
+    def test_same_run_rejected_state_is_distinct_from_inventory_failure(self):
+        for status, conclusion in (("waiting", None), ("pending", None), ("requested", None),
+                                   ("completed", "success"), ("queued", "failure"),
+                                   (PRIVATE, "https://signed.invalid/?secret=SYNTHETIC_TEST_TOKEN")):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.log.unlink(missing_ok=True)
+                self.run.update(status=status, conclusion=conclusion)
+                result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
+                                      "--expected-run-attempt", "2"], harness=SHA)
+                self.assert_failed(result, 3, "selection", selection_reason="run_state")
+
+    def test_diagnostic_queued_parent_still_rejects_before_download(self):
+        self.run.update(status="queued", conclusion=None)
+        self.assert_failed(self.invoke(), 3, "selection", selection_reason="run_state")
+
+    def test_same_run_artifact_inventory_mismatch_still_rejects(self):
+        self.run.update(status="queued", conclusion=None)
+        self.artifacts["total_count"] = 0
+        result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
+                              "--expected-run-attempt", "2"], harness=SHA)
+        self.assert_failed(result, 3, "selection", selection_reason="artifacts_inventory")
+
     def test_wrong_same_run_expected_identity_never_downloads(self):
         self.run.update(status="in_progress", conclusion=None)
         for artifact, attempt in (("502", "2"), ("501", "3")):
@@ -200,7 +268,8 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 self.log.unlink(missing_ok=True)
                 result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", artifact,
                                       "--expected-run-attempt", attempt], harness=SHA)
-                self.assert_failed(result, 3, "selection")
+                reason = "artifact" if artifact != "501" else "identity"
+                self.assert_failed(result, 3, "selection", selection_reason=reason)
 
     def test_incomplete_same_run_arguments_make_no_external_calls(self):
         self.assert_failed(self.invoke(["--same-run-source-sha", SHA], harness=SHA), 0, "input")
@@ -216,7 +285,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 original = self.run[key]
                 self.run[key] = value
                 self.log.unlink(missing_ok=True)
-                self.assert_failed(self.invoke(), 3, "selection")
+                self.assert_failed(self.invoke(), 3, "selection", selection_reason="identity")
                 self.run[key] = original
 
     def test_wrong_run_attempt_cannot_enter_an_endpoint(self):
@@ -225,20 +294,20 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
 
     def test_incomplete_jobs_inventory_never_downloads_or_falls_back(self):
         self.jobs["total_count"] = 101
-        self.assert_failed(self.invoke(), 3, "selection")
+        self.assert_failed(self.invoke(), 3, "selection", selection_reason="jobs_inventory")
 
     def test_incomplete_artifacts_inventory_never_downloads_or_falls_back(self):
         self.artifacts["total_count"] = 101
-        self.assert_failed(self.invoke(), 3, "selection")
+        self.assert_failed(self.invoke(), 3, "selection", selection_reason="artifacts_inventory")
 
     def test_unfinished_build_never_downloads(self):
         self.jobs["jobs"][0].update(status="in_progress", conclusion=None)
-        self.assert_failed(self.invoke(), 3, "selection")
+        self.assert_failed(self.invoke(), 3, "selection", selection_reason="producer")
 
     def test_ambiguous_artifact_never_downloads(self):
         self.artifacts["artifacts"].append(copy.deepcopy(self.artifacts["artifacts"][0]))
         self.artifacts["total_count"] = 2
-        self.assert_failed(self.invoke(), 3, "selection")
+        self.assert_failed(self.invoke(), 3, "selection", selection_reason="artifact")
 
     def test_failed_gh_at_any_stage_has_safe_error_and_no_extra_calls(self):
         for index, code in enumerate(("run_request", "jobs_request", "artifacts_request", "archive_request")):
@@ -246,6 +315,119 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 self.log.unlink(missing_ok=True)
                 self.config["fail_index"] = index
                 self.assert_failed(self.invoke(), index + 1, code)
+
+    def test_http_error_summaries_at_every_request_do_not_repeat_requests(self):
+        for index, code in enumerate(("run_request", "jobs_request", "artifacts_request", "archive_request")):
+            with self.subTest(index=index):
+                self.log.unlink(missing_ok=True)
+                self.config.update(fail_index=index, stderr="gh: Not Found (HTTP 404)\n")
+                self.assert_failed(self.invoke(), index + 1, code, summary="gh=not_found; http=404")
+
+    def test_allowlisted_api_status_and_error_categories(self):
+        cases = (
+            ("gh: Bad Request (HTTP 400)\n", "gh=bad_request; http=400"),
+            ("gh: Bad credentials (HTTP 401)\n", "gh=authentication; http=401"),
+            ("gh: Resource not accessible by integration (HTTP 403)\n", "gh=permission_denied; http=403"),
+            ("gh: API rate limit exceeded for 192.0.2.1. (HTTP 403)\n", "gh=rate_limit; http=403"),
+            ("gh: Request Timeout (HTTP 408)\n", "gh=timeout; http=408"),
+            ("gh: Conflict (HTTP 409)\n", "gh=conflict; http=409"),
+            ("gh: Gone (HTTP 410)\n", "gh=gone; http=410"),
+            ("gh: Validation Failed (HTTP 422)\n", "gh=validation; http=422"),
+            ("gh: Too Many Requests (HTTP 429)\n", "gh=rate_limit; http=429"),
+            ("gh: Internal Server Error (HTTP 500)\n", "gh=server_error; http=500"),
+            ("gh: Service Unavailable (HTTP 503)\n", "gh=server_error; http=503"),
+            ("gh: Gateway Timeout (HTTP 504)\n", "gh=server_error; http=504"),
+            ("HTTP 502: Bad Gateway (https://signed.invalid/?token=SYNTHETIC_TEST_TOKEN)\n",
+             "gh=server_error; http=502"),
+            ("error connecting to api.github.com\ncheck your internet connection\n", "gh=network"),
+            ("To get started with GitHub CLI, please run:\n  gh auth login\n", "gh=authentication"),
+        )
+        for stderr, summary in cases:
+            with self.subTest(summary=summary):
+                self.log.unlink(missing_ok=True)
+                self.config.update(fail_index=0, stderr=stderr)
+                self.assert_failed(self.invoke(), 1, "run_request", summary=summary)
+
+    def test_http_summary_never_echoes_secret_url_or_api_body_variants(self):
+        # Mutate sensitive-looking strings rather than assuming one redaction pattern.
+        for private in (PRIVATE, "SYNTHETIC_TEST_TOKEN", "ghp_abc123", "github_pat_abc123",
+                        "Authorization: Bearer abc123", "token=abc123", '{"message":"abc123"}'):
+            with self.subTest(private=private):
+                self.log.unlink(missing_ok=True)
+                self.config.update(fail_index=0,
+                                   stderr=f"gh: {private} https://signed.invalid/?{private} (HTTP 404)\n")
+                result = self.invoke()
+                self.assert_failed(result, 1, "run_request", summary="gh=not_found; http=404")
+                self.assertNotIn(private, result.stdout + result.stderr)
+
+    def test_unknown_control_mutated_and_ambiguous_errors_keep_exact_fallback(self):
+        for stderr in (PRIVATE + " https://signed.invalid/?secret=SYNTHETIC_TEST_TOKEN\n",
+                       "gh: HTTP 404 in an arbitrary message\n", "gh: Unknown (HTTP 499)\n",
+                       "gh: Not Found (HTTP 4040)\n", "gh: Not Found (HTTP 404) EXTRA\n",
+                       "gh: Not Found (HTTP 4\x1b[0m04)\n", "gh: \x1b[31mNot Found (HTTP 404)\n",
+                       "gh: Not\x00Found (HTTP 404)\n", "gh: Not Found (HTTP 404)\rOVERRIDE\n",
+                       "gh: Not Found (HTTP 404)\ngh: Bad credentials (HTTP 401)\n"):
+            with self.subTest(stderr=repr(stderr)):
+                self.log.unlink(missing_ok=True)
+                self.config.update(fail_index=0, stderr=stderr)
+                self.assert_failed(self.invoke(), 1, "run_request")
+
+    def test_oversized_stderr_is_drained_but_not_summarized_or_persisted(self):
+        self.config.update(fail_index=0, stderr="gh: Not Found (HTTP 404)\n" + PRIVATE * 1024,
+                           stderr_repeat=128)
+        self.assert_failed(self.invoke(), 1, "run_request")
+        self.assertFalse(list(self.root.glob("**/*stderr*")))
+
+    def test_stderr_summary_respects_exact_capture_budget(self):
+        diagnostic = "gh: Not Found (HTTP 404)\n"
+        for size in (fetch_artifact.MAX_GH_STDERR_BYTES - 1,
+                     fetch_artifact.MAX_GH_STDERR_BYTES, fetch_artifact.MAX_GH_STDERR_BYTES + 1):
+            with self.subTest(size=size):
+                self.log.unlink(missing_ok=True)
+                self.config.update(fail_index=0,
+                                   stderr="x" * (size - len(diagnostic) - 1) + "\n" + diagnostic)
+                summary = "gh=not_found; http=404" if size <= fetch_artifact.MAX_GH_STDERR_BYTES else None
+                self.assert_failed(self.invoke(), 1, "run_request", summary=summary)
+
+    def test_successful_requests_never_publish_stderr_even_when_large(self):
+        for repeat in (1, 128):
+            with self.subTest(repeat=repeat):
+                self.log.unlink(missing_ok=True)
+                self.output = self.root / f"result-{repeat}"
+                self.config.update(stderr="gh: Not Found (HTTP 404)\n" + PRIVATE * 128,
+                                   stderr_repeat=repeat)
+                result = self.invoke()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assert_calls(4)
+                for name in ("selection.json", "verified.json"):
+                    self.assertNotIn("gh=", (self.output / name).read_text())
+                    self.assertNotIn(PRIVATE, (self.output / name).read_text())
+
+    def test_stderr_or_process_wait_never_extends_the_existing_request_deadline(self):
+        self.assertEqual(fetch_artifact.GH_TIMEOUT_SECONDS, 180)
+        for close_fds, stream_stderr in (([], False), ([1], False), ([1, 2], False), ([], True)):
+            with self.subTest(close_fds=close_fds, stream_stderr=stream_stderr):
+                self.log.unlink(missing_ok=True)
+                self.config.update(sleep_index=0, close_fds=close_fds, stream_stderr=stream_stderr,
+                                   stderr="gh: Not Found (HTTP 404)\n")
+                self.prepare_fixtures()
+                stdout, stderr = io.StringIO(), io.StringIO()
+                started = time.monotonic()
+                with mock.patch.dict(os.environ, self.env), \
+                        mock.patch.object(fetch_artifact, "GH_TIMEOUT_SECONDS", 0.3), \
+                        mock.patch.object(sys, "argv", ["fetch_artifact.py", "--run-id", "37",
+                                                       "--harness-sha", HARNESS,
+                                                       "--output", str(self.output)]), \
+                        redirect_stdout(stdout), redirect_stderr(stderr):
+                    self.assertEqual(fetch_artifact.main(), 1)
+                self.assertLess(time.monotonic() - started, 2)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(stderr.getvalue(), "Package artifact acquisition failed [run_request]; "
+                                 "no package execution was attempted.\n")
+                self.assert_calls(1)
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob(".grok-artifact-*")), [])
 
     def test_invalid_json_is_not_echoed_or_followed_by_another_call(self):
         (self.fixture_root / "invalid.json").write_text(PRIVATE)
@@ -365,6 +547,66 @@ class FailureCodeTests(unittest.TestCase):
                 self.assertEqual(self.invoke_error(error),
                                  "Package artifact acquisition failed [unknown]; "
                                  "no package execution was attempted.\n")
+
+    def test_unclassified_or_mutated_gh_summaries_never_become_output(self):
+        for summary in (PRIVATE, "gh=not_found; http=404\n" + PRIVATE,
+                        "gh=not_found; http=499", [PRIVATE], None):
+            with self.subTest(summary=repr(summary)):
+                error = fetch_artifact.AcquisitionFailure("run_request", summary)
+                error.gh_summary = summary
+                self.assertEqual(self.invoke_error(error),
+                                 "Package artifact acquisition failed [run_request]; "
+                                 "no package execution was attempted.\n")
+
+    def test_selection_reasons_preserve_only_allowlisted_codes_through_outer_boundary(self):
+        for reason in ("run_state", "jobs_inventory", "artifacts_inventory", "identity", "producer", "artifact"):
+            with self.subTest(reason=reason):
+                with self.assertRaises(fetch_artifact.AcquisitionFailure) as caught:
+                    with fetch_artifact.acquisition_stage("workspace"):
+                        with fetch_artifact.acquisition_stage("selection"):
+                            raise select_artifact.SelectionFailure(
+                                reason, PRIVATE + " https://signed.invalid/?secret=SYNTHETIC_TEST_TOKEN")
+                self.assertEqual(self.invoke_error(caught.exception),
+                                 f"Package artifact acquisition failed [selection]; selection={reason}; "
+                                 "no package execution was attempted.\n")
+
+    def test_unclassified_or_mutated_selection_reasons_never_become_output(self):
+        class StringSubclass(str):
+            pass
+        for reason in (PRIVATE, "run_state\n" + PRIVATE, "https://signed.invalid/",
+                       [PRIVATE], None, StringSubclass("run_state")):
+            with self.subTest(reason=repr(reason)):
+                error = fetch_artifact.AcquisitionFailure("selection", selection_reason=reason)
+                error.selection_reason = reason
+                self.assertEqual(self.invoke_error(error),
+                                 "Package artifact acquisition failed [selection]; "
+                                 "no package execution was attempted.\n")
+                selector_error = select_artifact.SelectionFailure("run_state", PRIVATE)
+                selector_error.reason = reason
+                with self.assertRaises(fetch_artifact.AcquisitionFailure) as caught:
+                    with fetch_artifact.acquisition_stage("selection"):
+                        raise selector_error
+                self.assertEqual(self.invoke_error(caught.exception),
+                                 "Package artifact acquisition failed [selection]; "
+                                 "no package execution was attempted.\n")
+
+    def test_selection_reason_cannot_cross_another_stage_or_mask_unknown_failure(self):
+        for code in ("input", "run_request", "unknown", PRIVATE):
+            with self.subTest(code=code):
+                error = fetch_artifact.AcquisitionFailure(code, selection_reason="run_state")
+                error.selection_reason = "run_state"
+                safe_code = code if code in fetch_artifact.FAILURE_CODES else "unknown"
+                self.assertEqual(self.invoke_error(error),
+                                 f"Package artifact acquisition failed [{safe_code}]; "
+                                 "no package execution was attempted.\n")
+        plain_error = ValueError(PRIVATE)
+        plain_error.reason = "run_state"
+        with self.assertRaises(fetch_artifact.AcquisitionFailure) as caught:
+            with fetch_artifact.acquisition_stage("selection"):
+                raise plain_error
+        self.assertEqual(self.invoke_error(caught.exception),
+                         "Package artifact acquisition failed [selection]; "
+                         "no package execution was attempted.\n")
 
     def test_outer_workspace_boundary_preserves_the_inner_failure(self):
         with self.assertRaises(fetch_artifact.AcquisitionFailure) as caught:
