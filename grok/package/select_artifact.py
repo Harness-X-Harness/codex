@@ -10,6 +10,19 @@ import sys
 
 REPOSITORY = "Harness-X-Harness/codex"
 TARGET = "x86_64-unknown-linux-musl"
+SELECTION_FAILURE_REASONS = frozenset({
+    "run_state", "jobs_inventory", "artifacts_inventory", "identity", "producer", "artifact",
+})
+
+
+class SelectionFailure(ValueError):
+    """A rejected selection with a fixed, safe diagnostic reason."""
+
+    def __init__(self, reason: str, message: str):
+        if type(reason) is not str or reason not in SELECTION_FAILURE_REASONS:
+            raise ValueError("invalid selection failure reason")
+        self.reason = reason
+        super().__init__(message)
 
 
 def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str,
@@ -18,7 +31,7 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
            expected_run_attempt: int | None = None) -> dict:
     """No API calls, fallback selection, download or execution happens here."""
     if not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
-        raise ValueError("invalid harness revision")
+        raise SelectionFailure("identity", "invalid harness revision")
     sha = run.get("head_sha", "")
     attempt = run.get("run_attempt")
     same_run = any(value is not None for value in (same_run_source_sha, expected_artifact_id, expected_run_attempt))
@@ -26,14 +39,15 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
         if (same_run_source_sha != harness_sha or sha != same_run_source_sha
                 or type(expected_artifact_id) is not int or expected_artifact_id <= 0
                 or type(expected_run_attempt) is not int or expected_run_attempt <= 0
-                or attempt != expected_run_attempt
-                or run.get("status") != "in_progress" or run.get("conclusion") is not None):
-            raise ValueError("same-run package identity does not match the consuming workflow")
+                or attempt != expected_run_attempt):
+            raise SelectionFailure("identity", "same-run package identity does not match the consuming workflow")
+        if run.get("status") not in ("queued", "in_progress") or run.get("conclusion") is not None:
+            raise SelectionFailure("run_state", "same-run package run has an ineligible state")
     elif run.get("status") != "completed" or run.get("conclusion") not in (
         "success", "failure", "cancelled", "timed_out", "action_required",
         "neutral", "skipped", "stale", "startup_failure",
     ):
-        raise ValueError("diagnostic package run has not settled")
+        raise SelectionFailure("run_state", "diagnostic package run has not settled")
     if (
         type(run_id) is not int or run_id <= 0 or run.get("id") != run_id
         or type(attempt) is not int or attempt <= 0
@@ -44,28 +58,27 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
         or run.get("repository", {}).get("full_name") != REPOSITORY
         or run.get("head_repository", {}).get("full_name") != REPOSITORY
     ):
-        raise ValueError("inappropriate or unsettled package run")
+        raise SelectionFailure("identity", "inappropriate or unsettled package run")
     job_list = jobs.get("jobs")
     artifact_list = artifacts.get("artifacts")
-    if (
-        not isinstance(job_list, list) or jobs.get("total_count") != len(job_list)
-        or not isinstance(artifact_list, list) or artifacts.get("total_count") != len(artifact_list)
-    ):
-        raise ValueError("complete job and artifact inventories are required")
+    if not isinstance(job_list, list) or jobs.get("total_count") != len(job_list):
+        raise SelectionFailure("jobs_inventory", "complete job and artifact inventories are required")
+    if not isinstance(artifact_list, list) or artifacts.get("total_count") != len(artifact_list):
+        raise SelectionFailure("artifacts_inventory", "complete job and artifact inventories are required")
     producers = [job for job in job_list if job.get("name") == "Build " + TARGET]
     if len(producers) != 1:
-        raise ValueError("missing or ambiguous package producer")
+        raise SelectionFailure("producer", "missing or ambiguous package producer")
     producer = producers[0]
     if (
         type(producer.get("id")) is not int or producer["id"] <= 0
         or producer.get("run_id") != run_id or producer.get("run_attempt") != attempt
         or producer.get("status") != "completed" or producer.get("conclusion") != "success"
     ):
-        raise ValueError("the selected attempt's package build did not succeed")
+        raise SelectionFailure("producer", "the selected attempt's package build did not succeed")
     name = f"grok-{sha}-{TARGET}-{run_id}-{attempt}"
     matches = [artifact for artifact in artifact_list if artifact.get("name") == name]
     if len(matches) != 1:
-        raise ValueError("missing or ambiguous package artifact")
+        raise SelectionFailure("artifact", "missing or ambiguous package artifact")
     artifact = matches[0]
     identity = artifact.get("workflow_run", {})
     digest = artifact.get("digest", "")
@@ -77,7 +90,7 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
         or identity.get("id") != run_id or identity.get("head_sha") != sha
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
     ):
-        raise ValueError("unavailable or misidentified package artifact")
+        raise SelectionFailure("artifact", "unavailable or misidentified package artifact")
     return {
         "repository": REPOSITORY, "run_id": run_id, "run_attempt": attempt,
         "source_sha": sha, "target": TARGET, "harness_sha": harness_sha,

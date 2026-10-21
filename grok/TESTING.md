@@ -27,7 +27,7 @@ python3 grok/package/test_extract_artifact.py -v
 python3 grok/package/test_fetch_artifact.py -v
 ```
 
-These five Python files currently contain 57 tests; they use synthetic inputs
+These five Python files currently contain 91 tests; they use synthetic inputs
 and do not replace native package smoke.
 
 ## Integration: actual Codex and controlled Grok HTTP
