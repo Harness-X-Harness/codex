@@ -13,20 +13,11 @@ const historyTool = "grok_history_probe"
 const historyAssistantLimit = 4096
 
 // ReasoningHistory observes two same-thread turns without semantic reinvocation.
+// It leaves reasoning effort to the configured model rather than overriding it.
 // Native encrypted replay/tool eligibility and Subject provenance are prerequisites;
 // deterministic fixtures do not establish real-provider Story success.
 func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
-	return reasoningHistory(ctx, options, "medium")
-}
-
-// ReasoningHistoryWithoutEffort preserves the history proof while omitting the
-// turn effort override. It does not assert that provider reasoning is disabled.
-func ReasoningHistoryWithoutEffort(ctx context.Context, options Options) (Evidence, error) {
-	return reasoningHistory(ctx, options, "")
-}
-
-func reasoningHistory(ctx context.Context, options Options, effort string) (Evidence, error) {
-	return sdkReasoningHistory(ctx, options, effort)
+	return sdkReasoningHistory(ctx, options)
 }
 
 // Only the token, current turn identities and bounded reply evidence survive frames.
@@ -35,7 +26,6 @@ type historyProbe struct {
 	evidence                     *Evidence
 	threadID, turnID, previousID string
 	token                        string
-	effort                       string
 }
 
 type historyItem struct {

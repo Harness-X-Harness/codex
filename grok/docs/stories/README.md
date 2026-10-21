@@ -15,7 +15,7 @@ come from the [Go catalog](../../internal/scenarios/catalog.go).
 | Retained Story | Deterministic / controlled owner | Actual backend owner and scope |
 | --- | --- | --- |
 | [Configured Grok fixture completes a text turn](grok-provider-fixture-turn.md) | [`TestBasic*`](../../live/basic_test.go); [`TestBasicFixture`](../../tests/integration/basic_test.go) uses both fixture models | `TestLive/basic-primary`, `basic-pinned`; direct Basic Facts are separate |
-| [Encrypted reasoning survives same-thread continuation](grok-encrypted-reasoning-history-continuation.md) | [`TestReasoningHistoryPublicProtocol`](../../live/reasoning_history_test.go), SDK observer controls; [`TestReasoningHistoryFixture`](../../tests/integration/reasoning_test.go) checks three controlled HTTP requests and encrypted replay | `TestLive/reasoning-primary`, `reasoning-pinned`; `reasoning-no-effort-pinned` is diagnostic-only; direct encrypted-replay Facts do not prove product recall |
+| [Encrypted reasoning survives same-thread continuation](grok-encrypted-reasoning-history-continuation.md) | [`TestReasoningHistoryPublicProtocol`](../../live/reasoning_history_test.go), SDK observer controls; [`TestReasoningHistoryFixture`](../../tests/integration/reasoning_test.go) checks three controlled HTTP requests and encrypted replay | `TestLive/reasoning-primary`, `reasoning-pinned`; direct encrypted-replay Facts do not prove product recall |
 | [Structured exact-match file edit](grok-structured-edit.md) | [`TestStructuredEdit*`](../../live/structured_edit_test.go), [`TestSDKEditObserver*`](../../live/sdk_edit_observer_test.go); [`TestStructuredEditFixture`](../../tests/integration/structured_edit_test.go); [Rust structured-edit suites](../../../codex-rs/core/tests/suite/structured_edit.rs) own actual routing/approval/filesystem semantics | `TestLive/structured-edit`, `structured-edit-declined`, `structured-edit-pinned`, `structured-edit-all` retain exact bytes/hash, authorization and history oracles |
 | [Image generation and same-thread history edit](grok-image-generation-history-edit.md) | [`TestGrokImageGenerationEdit` and false-evidence controls](../../live/image_test.go); [`TestImagePinnedFixture`](../../tests/integration/image_test.go); [Rust image preparation](../../../codex-rs/core/src/image_preparation.rs) and [public image integration](../../../codex-rs/app-server/tests/suite/v2/imagegen_extension.rs) | `TestLive/image-primary`, `image-pinned`; the isolated fixture does not prove every packaged general-profile view-image path |
 | [Shipped profile startup](grok-provider-profile-startup.md) | [`TestShippedStartupAndChildRejectIncompleteEvidence`, `TestShippedPinnedUsesRetainedHistoryScenario`](../../live/shipped_test.go); [`TestShippedThreadSource`](../../tests/integration/shipped_test.go); [Rust provider binding](../../../codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs) | `TestLive/shipped-startup`, `shipped-pinned` use unchanged shipped assets; full tool composition needs its own executed evidence |
@@ -78,9 +78,9 @@ the retired product. They do not certify a product source, binary or supported L
 ## Formal and diagnostic scope
 
 Full and smoke Live selections are defined only by the [Go catalog](../../internal/scenarios/catalog.go).
-Omitted cases have not passed. `reasoning-no-effort-pinned` remains exploratory
-under [#384](https://github.com/Harness-X-Harness/codex/issues/384), outside formal
-full proof. Catalog-only tests need no inference; authenticated Live invocation
+Omitted cases have not passed. Reasoning history uses the model default without
+a turn effort override; it still requires actual reasoning and encrypted history.
+Catalog-only tests need no inference; authenticated Live invocation
 still follows the common opt-in contract. Linux and macOS packages have separate
 native checks; a Linux backend run does not certify macOS execution.
 

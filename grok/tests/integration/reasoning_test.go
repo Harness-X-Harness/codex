@@ -50,13 +50,12 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 		fail("request_contract")
 		return
 	}
-	include, effort := false, ""
+	include := false
 	for _, field := range body.Include {
 		include = include || field == "reasoning.encrypted_content"
 	}
-	rawEffort, hasEffort := body.Reasoning["effort"]
-	if !include || (fixture.effort == "" && hasEffort) ||
-		(fixture.effort != "" && (!hasEffort || json.Unmarshal(rawEffort, &effort) != nil || effort != fixture.effort)) {
+	_, hasEffort := body.Reasoning["effort"]
+	if !include || hasEffort {
 		fail("reasoning_request_changed")
 		return
 	}
@@ -185,12 +184,12 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 }
 
 type reasoningHTTP struct {
-	mu                                       sync.Mutex
-	model, effort, threadID, toolName, token string
-	failure                                  string
-	requests                                 int
-	replayed, continued                      bool
-	output                                   json.RawMessage
+	mu                               sync.Mutex
+	model, threadID, toolName, token string
+	failure                          string
+	requests                         int
+	replayed, continued              bool
+	output                           json.RawMessage
 }
 
 const reasoningHTTPCall = "controlled_history_call"
@@ -229,24 +228,19 @@ const reasoningHTTPPrivate = "CONTROLLED_PRIVATE_REASONING"
 func TestReasoningHistoryFixture(t *testing.T) {
 	subject := nativeSubject(t)
 	for _, tc := range []struct {
-		name, model, effort string
+		name, model string
 	}{
-		{"primary", providerfixture.PrimaryModel, "medium"},
-		{"pinned", providerfixture.PinnedModel, "medium"},
-		{"omitted-effort-control", providerfixture.PinnedModel, ""},
+		{"primary", providerfixture.PrimaryModel},
+		{"pinned", providerfixture.PinnedModel},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			integrationObservation(t)
-			fixture := &reasoningHTTP{model: tc.model, effort: tc.effort}
+			fixture := &reasoningHTTP{model: tc.model}
 			backend := httptest.NewServer(fixture)
 			defer backend.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()
-			run := live.ReasoningHistory
-			if tc.effort == "" {
-				run = live.ReasoningHistoryWithoutEffort
-			}
-			got, err := run(ctx, live.Options{Subject: subject, Model: tc.model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
+			got, err := live.ReasoningHistory(ctx, live.Options{Subject: subject, Model: tc.model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
 			fixture.mu.Lock()
 			defer fixture.mu.Unlock()
 			// Evidence and structural failure markers never contain token, raw

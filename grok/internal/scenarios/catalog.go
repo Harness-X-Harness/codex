@@ -175,7 +175,7 @@ func validate(entries []Scenario) error {
 }
 
 func liveCase(name, model, policy string, turns int, smoke bool, run func(context.Context, live.Options) (LiveResult, error)) Scenario {
-	return Scenario{Name: name, Family: "live", Model: model, Policy: policy, SemanticTurns: turns, RequiresBinary: true, RequiresBackend: turns > 0, Formal: name != "reasoning-no-effort-pinned", Smoke: smoke, liveRun: run}
+	return Scenario{Name: name, Family: "live", Model: model, Policy: policy, SemanticTurns: turns, RequiresBinary: true, RequiresBackend: turns > 0, Formal: true, Smoke: smoke, liveRun: run}
 }
 
 func plain(run func(context.Context, live.Options) (live.Evidence, error)) func(context.Context, live.Options) (LiveResult, error) {
@@ -239,9 +239,8 @@ func factsSearch(policy string, replay bool) func(context.Context, *facts.Probe)
 var catalog = []Scenario{
 	liveCase("basic-primary", providerfixture.PrimaryModel, "text", 1, true, plain(live.Basic)),
 	liveCase("basic-pinned", providerfixture.PinnedModel, "text", 1, false, plain(live.Basic)),
-	liveCase("reasoning-primary", providerfixture.PrimaryModel, "reasoning-medium", 2, true, plain(live.ReasoningHistory)),
-	liveCase("reasoning-pinned", providerfixture.PinnedModel, "reasoning-medium", 2, false, plain(live.ReasoningHistory)),
-	liveCase("reasoning-no-effort-pinned", providerfixture.PinnedModel, "reasoning-no-effort", 2, false, plain(live.ReasoningHistoryWithoutEffort)),
+	liveCase("reasoning-primary", providerfixture.PrimaryModel, "reasoning-default", 2, true, plain(live.ReasoningHistory)),
+	liveCase("reasoning-pinned", providerfixture.PinnedModel, "reasoning-default", 2, false, plain(live.ReasoningHistory)),
 	liveCase("structured-edit", providerfixture.PrimaryModel, "edit", 2, false, edit(live.StructuredEdit)),
 	liveCase("structured-edit-declined", providerfixture.PrimaryModel, "edit-declined", 1, false, edit(live.StructuredEditApprovalDeclined)),
 	liveCase("structured-edit-pinned", providerfixture.PinnedModel, "edit-pinned", 1, false, edit(live.StructuredEditPinnedPreviousModel)),

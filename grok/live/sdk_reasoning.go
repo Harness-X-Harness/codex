@@ -8,7 +8,7 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-func sdkReasoningHistory(ctx context.Context, options Options, effort string) (Evidence, error) {
+func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 	observer := newSDKHistoryObserver()
 	handlers := sdkFixtureHandlers{
 		requests: observer.request, notifications: observer.typedNotification, failures: observer.failures,
@@ -37,9 +37,6 @@ func sdkReasoningHistory(ctx context.Context, options Options, effort string) (E
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
 				Text: "Call grok_history_probe, reason about its returned token, then include the exact token in your final reply.",
 			})},
-		}
-		if effort != "" {
-			turn.Effort = protocolv2.Value(protocolv2.ReasoningEffort("medium"))
 		}
 		experimental := true
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{

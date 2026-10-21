@@ -8,6 +8,9 @@ recover its fresh tool result without submitting that result again.
 Exact binary -> configured fixture -> one thread -> reasoning/tool turn N ->
 canonical history -> turn N+1 -> visible terminal result. Exercise the primary
 and pinned model fixtures separately; neither defines shipped catalog policy.
+Leave turn effort unset: this Story proves reasoning and history continuity, not
+acceptance of a particular effort value. All reasoning/tool/history evidence
+below remains required.
 
 ## Acceptance
 

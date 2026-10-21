@@ -23,24 +23,19 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var smokeNames, diagnosticOnly []string
+	var smokeNames []string
 	for _, scenario := range smoke {
 		smokeNames = append(smokeNames, scenario.Name)
 	}
 	if !reflect.DeepEqual(smokeNames, []string{"basic-primary", "reasoning-primary", "web"}) {
 		t.Fatalf("unexpected smoke selection: %v", smokeNames)
 	}
-	for _, scenario := range diagnostic {
-		if !scenario.Formal {
-			diagnosticOnly = append(diagnosticOnly, scenario.Name)
-		}
-	}
-	if len(full) != 17 || len(diagnostic) != 18 || !reflect.DeepEqual(diagnosticOnly, []string{"reasoning-no-effort-pinned"}) {
+	if len(full) != 17 || len(diagnostic) != len(full) {
 		t.Fatal("formal proof silently changed")
 	}
 	for _, entry := range full {
 		selected, err := Select("live", "full", entry.Name)
-		if err != nil || len(selected) != 1 || selected[0].Name != entry.Name {
+		if !entry.Formal || err != nil || len(selected) != 1 || selected[0].Name != entry.Name {
 			t.Fatal("single-name selection disagrees with full suite")
 		}
 	}
@@ -56,7 +51,7 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 }
 
 func TestSelectionRejectsUnknownExcludedAndEmptyCatalog(t *testing.T) {
-	for _, args := range [][3]string{{"", "full", ""}, {"live", "", ""}, {"live", "full", "stale"}, {"facts", "full", "reasoning-primary"}, {"live", "full", "reasoning-no-effort-pinned"}, {"live", "smoke", "basic-pinned"}} {
+	for _, args := range [][3]string{{"", "full", ""}, {"live", "", ""}, {"live", "full", "stale"}, {"facts", "full", "reasoning-primary"}, {"live", "smoke", "basic-pinned"}} {
 		if selected, err := Select(args[0], args[1], args[2]); err == nil || len(selected) != 0 {
 			t.Fatal("invalid selection succeeded")
 		}
