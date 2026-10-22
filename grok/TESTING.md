@@ -250,13 +250,12 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   packages: PRs additionally build and check Linux-musl; version-line pushes
   build and check both Linux-musl and macOS. macOS release/package failures are
   therefore detected after merge, not at the PR gate. Branch rules are unchanged.
-- macOS release builds use pinned sccache with GitHub's branch-scoped compiler cache.
-  Linux release builds use direct rustc while hosted-runner shutdowns are investigated;
-  bounded numeric resource samples are emitted during compilation.
-  They still compile/link for the current source SHA, stage a fresh package and
-  execute package acceptance. No cross-run finished package or test result is
-  reused. The sccache action reports hit/miss statistics in its post step; a
-  cold namespace and final linking/LTO can still take substantial time.
+- Release builds use direct rustc while hosted-runner shutdowns and the macOS
+  release timeout are investigated. Linux emits bounded numeric resource samples
+  during compilation. Native-proof compiler caching is unchanged.
+  Release builds still compile/link for the current source SHA, stage a fresh
+  package and execute package acceptance. No cross-run finished package or test
+  result is reused. Final linking/LTO can still take substantial time.
 - `build-grok` keeps its five actual package consumer owners in
   `tests/integration`; it does not repeat the offline suite.
 - Formal Live runs automatically on every trusted version-line push after the
