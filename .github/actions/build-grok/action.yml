@@ -151,7 +151,12 @@ runs:
         set -euo pipefail
         export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
         test "$STABLE_GIT_COMMIT" = "$GITHUB_SHA"
-        cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host
+        if [[ "$RUNNER_OS" == Linux ]]; then
+          bash "$GITHUB_WORKSPACE/grok/package/observe_linux_build.sh" \
+            cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host
+        else
+          cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host
+        fi
     - name: Record Linux runtime before stripping
       if: runner.os == 'Linux'
       shell: bash
