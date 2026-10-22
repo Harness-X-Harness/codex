@@ -22,12 +22,13 @@ launcher and artifact tests remain Python contracts:
 ```sh
 python3 grok/package/test_stage.py -v
 python3 grok/package/test_diagnose_linux_binary.py -v
+python3 grok/package/test_observe_linux_build.py -v
 python3 grok/package/test_select_artifact.py -v
 python3 grok/package/test_extract_artifact.py -v
 python3 grok/package/test_fetch_artifact.py -v
 ```
 
-These five Python files currently contain 91 tests; they use synthetic inputs
+These six Python files currently contain 102 tests; they use synthetic inputs
 and do not replace native package smoke.
 
 ## Integration: actual Codex and controlled Grok HTTP
@@ -41,9 +42,10 @@ GROK_CODEX_BIN=/absolute/path/to/codex \
   ./tests/integration
 ```
 
-The actual scenario implementations live in `tests/integration`, with nine
+The actual scenario implementations live in `tests/integration`, with ten
 independently selectable owners: `TestBasicFixture`, `TestStructuredEditFixture`,
 `TestReasoningHistoryFixture`, `TestHostedSearchFixture`, `TestImagePinnedFixture`,
+`TestAttachedImagePinnedFixture`,
 `TestShippedCatalog`, `TestShippedThreadSource`, `TestShippedChildFixture` and
 `TestFirstRequestShape`. No wrapper forwards into `live/*_test.go`. Shared
 fixture mechanics live under `internal/integrationfixture`; production observers
@@ -186,7 +188,7 @@ exit "$status"
 `grok-test-results` checks JSON lifecycle events, not human output text. It
 rejects failed, absent, skipped or incomplete required tests and an empty suite;
 Go package-only `[no test files]` events are not test skips. `--integration`
-requires all nine named owners. Repeated `--require package:Test/subtest` supports
+requires all ten named owners. Repeated `--require package:Test/subtest` supports
 an exact partial package or Live selection. Never infer coverage from a green
 package containing no selected tests. A partial selection does not prove omitted
 cases passed. Per-case Live evidence retains safe counts, subject/digest,
@@ -249,11 +251,12 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   packages: PRs additionally build and check Linux-musl; version-line pushes
   build and check both Linux-musl and macOS. macOS release/package failures are
   therefore detected after merge, not at the PR gate. Branch rules are unchanged.
-- Release builds use pinned sccache with GitHub's branch-scoped compiler cache.
-  They still compile/link for the current source SHA, stage a fresh package and
-  execute package acceptance. No cross-run finished package or test result is
-  reused. The sccache action reports hit/miss statistics in its post step; a
-  cold namespace and final linking/LTO can still take substantial time.
+- Release builds use direct rustc while hosted-runner shutdowns and the macOS
+  release timeout are investigated. Linux emits bounded numeric resource samples
+  during compilation. Native-proof compiler caching is unchanged.
+  Release builds still compile/link for the current source SHA, stage a fresh
+  package and execute package acceptance. No cross-run finished package or test
+  result is reused. Final linking/LTO can still take substantial time.
 - `build-grok` keeps its five actual package consumer owners in
   `tests/integration`; it does not repeat the offline suite.
 - Formal Live runs automatically on every trusted version-line push after the

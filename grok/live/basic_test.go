@@ -25,7 +25,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "app-server" {
 		var script struct{ Mode string }
 		_ = json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script)
-		if strings.HasPrefix(script.Mode, "search:") {
+		if strings.HasPrefix(script.Mode, "attached:") {
+			fakeAttachedImageServer()
+		} else if strings.HasPrefix(script.Mode, "search:") {
 			fakeSearchServer()
 		} else if strings.HasPrefix(script.Mode, "shipped:") {
 			fakeShippedServer()

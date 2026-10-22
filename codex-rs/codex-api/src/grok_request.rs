@@ -180,12 +180,18 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
                         logprobs: _,
                     } => Ok(json!({"type": "output_text", "text": text})),
                     ContentItem::InputImage {
-                        image: _,
+                        image: ImageReference::Inline { image_url: _ },
+                        detail: _,
+                    } => Ok(json!(part)),
+                    ContentItem::InputImage {
+                        image: ImageReference::File { file_id: _ },
                         detail: _,
                     }
-                    | ContentItem::InputAudio { audio_url: _ } => Err(ApiError::Stream(format!(
-                        "Grok Basic/reasoning does not support media at input[{index}]"
-                    ))),
+                    | ContentItem::InputAudio { audio_url: _ } => Err(ApiError::InvalidRequest {
+                        message: format!(
+                            "Grok does not support file-backed images or audio at input[{index}]"
+                        ),
+                    }),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             json!({"type": "message", "role": role, "content": parts})

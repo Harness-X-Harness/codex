@@ -30,7 +30,7 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 	if !reflect.DeepEqual(smokeNames, []string{"basic-primary", "reasoning-primary", "web"}) {
 		t.Fatalf("unexpected smoke selection: %v", smokeNames)
 	}
-	if len(full) != 17 || len(diagnostic) != len(full) {
+	if len(full) != 18 || len(diagnostic) != len(full) {
 		t.Fatal("formal proof silently changed")
 	}
 	for _, entry := range full {

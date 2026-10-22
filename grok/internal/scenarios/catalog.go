@@ -245,6 +245,7 @@ var catalog = []Scenario{
 	liveCase("structured-edit-declined", providerfixture.PrimaryModel, "edit-declined", 1, false, edit(live.StructuredEditApprovalDeclined)),
 	liveCase("structured-edit-pinned", providerfixture.PinnedModel, "edit-pinned", 1, false, edit(live.StructuredEditPinnedPreviousModel)),
 	liveCase("structured-edit-all", providerfixture.PrimaryModel, "edit-replace-all", 1, false, edit(live.StructuredEditReplaceAll)),
+	liveCase("attached-image-pinned", providerfixture.PinnedModel, "attached-image-history", 2, false, plain(live.AttachedImageHistory)),
 	liveCase("image-primary", providerfixture.PrimaryModel, "image-generate-edit", 2, false, image),
 	liveCase("image-pinned", providerfixture.PinnedModel, "image-generate-edit", 2, false, image),
 	liveCase("shipped-catalog", providerfixture.PrimaryModel, "shipped-catalog", 0, false, shipped(live.ShippedCatalog)),

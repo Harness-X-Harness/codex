@@ -64,6 +64,7 @@ jobs:
         run: |
           python3 grok/package/test_stage.py -v
           python3 grok/package/test_diagnose_linux_binary.py -v
+          python3 grok/package/test_observe_linux_build.py -v
       - name: Test exact artifact selection and extraction without downloads
         run: |
           python3 grok/package/test_select_artifact.py -v

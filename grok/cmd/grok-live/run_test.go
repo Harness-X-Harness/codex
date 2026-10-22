@@ -131,6 +131,7 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"structured-edit-declined", "edit:decline", "grok-4.7", 1},
 		{"structured-edit-pinned", "edit:pinned", "grok-4.6", 1},
 		{"structured-edit-all", "edit:replace_all", "grok-4.7", 1},
+		{"attached-image-pinned", "attached:success", "grok-4.6", 2},
 		{"image-primary", "image:success", "grok-4.7", 2},
 		{"image-pinned", "image:pinned", "grok-4.6", 2},
 		{"shipped-catalog", "shipped:catalog", "grok-4.7", 0},

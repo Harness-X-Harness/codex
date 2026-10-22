@@ -127,8 +127,6 @@ async fn grok_rejects_unsupported_history_tools_and_raw_json_before_transport() 
     let state = RecordingState::default();
     let client = grok_client(&state);
     for item in [
-        json!({"type":"message","role":"user","content":[{"type":"input_image","file_id":"file_1"}]}),
-        json!({"type":"message","role":"user","content":[{"type":"input_audio","audio_url":"data:audio"}]}),
         json!({"type":"function_call","name":"f","arguments":"{}","call_id":"c","namespace":"ns","encrypted_function_args":["cipher"]}),
         json!({"type":"agent_message","author":"child","recipient":"parent","content":[{"type":"encrypted_content","encrypted_content":"cipher"}]}),
         json!({"type":"compaction","encrypted_content":"cipher"}),
@@ -198,5 +196,94 @@ async fn grok_local_tool_history_reaches_transport_with_exact_arguments() -> Res
             "include":["reasoning.encrypted_content"]
         })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_user_image_survives_first_request_and_later_history_replay() -> Result<()> {
+    use codex_protocol::models::ImageDetail;
+    use codex_protocol::models::ImageReference;
+    use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::user_input::UserInput;
+
+    let image_url = "data:image/png;base64,aW1hZ2U=";
+    let user_input = vec![
+        UserInput::Text {
+            text: "Describe this image".into(),
+            text_elements: vec![],
+        },
+        UserInput::Image {
+            image: ImageReference::Inline {
+                image_url: image_url.into(),
+            },
+            detail: Some(ImageDetail::High),
+        },
+        UserInput::Text {
+            text: "Keep its colors in mind".into(),
+            text_elements: vec![],
+        },
+    ];
+    let mut input = vec![];
+    for _ in 0..5 {
+        input.push(serde_json::from_value(json!({
+            "type": "message", "role": "developer",
+            "content": [{"type": "input_text", "text": "Context"}]
+        }))?);
+    }
+    input.push(ResponseItem::from(ResponseInputItem::from(user_input)));
+    let expected_image_message = json!({
+        "type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "Describe this image"},
+            {"type": "input_image", "image_url": image_url, "detail": "high"},
+            {"type": "input_text", "text": "Keep its colors in mind"}
+        ]
+    });
+    let state = RecordingState::default();
+    let client = grok_client(&state);
+    for replay in [false, true] {
+        if replay {
+            input.extend(serde_json::from_value::<Vec<ResponseItem>>(json!([
+                {"type": "message", "role": "assistant",
+                    "content": [{"type": "output_text", "text": "A blue circle"}]},
+                {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": "What color was it?"}]}
+            ]))?);
+        }
+        let canonical = serde_json::to_value(&input)?;
+        client
+            .stream_request(
+                common::basic_request(input.clone()),
+                ResponsesOptions::default(),
+            )
+            .await?;
+        let requests = state.take_stream_requests();
+        assert_path_ends_with(&requests, "/responses");
+        let body: serde_json::Value = serde_json::from_slice(request_body_bytes(&requests[0]))?;
+        assert_eq!(body["input"], canonical);
+        assert_eq!(body["input"][5], expected_image_message);
+        assert_eq!(serde_json::to_value(&input)?, canonical);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_unsupported_message_media_is_invalid_before_transport() -> Result<()> {
+    let state = RecordingState::default();
+    let client = grok_client(&state);
+    for content in [
+        json!({"type": "input_image", "file_id": "file_1"}),
+        json!({"type": "input_audio", "audio_url": "data:audio"}),
+    ] {
+        let request = common::basic_request(serde_json::from_value(json!([{
+            "type": "message", "role": "user", "content": [content]
+        }]))?);
+        assert!(matches!(
+            client
+                .stream_request(request, ResponsesOptions::default())
+                .await,
+            Err(ApiError::InvalidRequest { .. })
+        ));
+    }
+    assert!(state.take_stream_requests().is_empty());
     Ok(())
 }

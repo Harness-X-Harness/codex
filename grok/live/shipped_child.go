@@ -381,10 +381,14 @@ func productTerminal(message frame, threadID, turnID string) (bool, error) {
 }
 
 func observeShippedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort, prompt string) (productThread, productTurn, error) {
-	evidence.Turns++
-	request := protocolv2.TurnStartParams{ThreadID: id, Input: []protocolv2.UserInput{
+	return observeProductInputTurn(server, id, evidence, effort, []protocolv2.UserInput{
 		protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt}),
-	}}
+	})
+}
+
+func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput) (productThread, productTurn, error) {
+	evidence.Turns++
+	request := protocolv2.TurnStartParams{ThreadID: id, Input: input}
 	if effort != "" {
 		request.Effort = protocolv2.Value(protocolv2.ReasoningEffort(effort))
 	}

@@ -25,6 +25,8 @@ A digest proves bytes, not independently verified release provenance.
 - `StructuredEdit`, `StructuredEditApprovalDeclined`,
   `StructuredEditPinnedPreviousModel` and `StructuredEditReplaceAll` observe
   exact authorized filesystem effects and paired history.
+- `AttachedImageHistory` submits an actual user image, checks a visual answer,
+  then asks a different image-only fact in a text-only same-thread continuation.
 - `ImageGenerationEdit` observes generation, canonical history selection and
   a distinct same-thread edit through an isolated image-only fixture.
 - `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and

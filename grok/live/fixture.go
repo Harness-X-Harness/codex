@@ -24,7 +24,7 @@ func writeFixture(home, cwd string, options Options, edit *editFixture) error {
 		"node_repl_disabled": true, "tool_mode": "direct",
 	}
 	sandbox := "read-only"
-	if options.imageFixture {
+	if options.imageFixture || options.attachedImageFixture {
 		model["input_modalities"] = []string{"text", "image"}
 	}
 	if edit != nil {
