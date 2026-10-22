@@ -23,7 +23,7 @@ on:
       - "defs.bzl"
       - "justfile"
   push:
-    branches-ignore: ["grok/rust-v*"]
+    branches: [main]
     paths:
       - "grok/**"
       - "codex-rs/**"

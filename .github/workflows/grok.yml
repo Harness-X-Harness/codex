@@ -54,6 +54,7 @@ jobs:
           target: x86_64-unknown-linux-musl
 
   build-macos-arm64:
+    if: ${{ github.event_name == 'push' }}
     name: Build aarch64-apple-darwin
     runs-on: macos-15
     timeout-minutes: 170

@@ -95,6 +95,37 @@ runs:
     - uses: ./.github/actions/setup-rusty-v8
       with:
         target: ${{ inputs.target }}
+    # Cache compiler outputs, never the final package or its acceptance result.
+    # GitHub keeps PR caches in the PR merge-ref scope; package identity still
+    # comes from the current SHA below, including its final link and smoke.
+    - name: Mask the ephemeral compiler-cache token
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      with:
+        script: |
+          const token = process.env.ACTIONS_RUNTIME_TOKEN;
+          if (!token) throw new Error('GitHub Actions cache runtime token is unavailable');
+          core.setSecret(token);
+    - name: Install pinned compiler cache
+      uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.18.0
+    - name: Enable release compiler cache
+      shell: bash
+      env:
+        SCCACHE_GHA_ENABLED: "on"
+        SCCACHE_GHA_VERSION: grok-release-v1
+        SCCACHE_IDLE_TIMEOUT: "0"
+      run: |
+        set -euo pipefail
+        test "$(sccache --version)" = "sccache 0.18.0"
+        test -n "$ACTIONS_CACHE_SERVICE_V2"
+        test -n "$ACTIONS_RESULTS_URL"
+        test -n "$ACTIONS_RUNTIME_TOKEN"
+        sccache --start-server
+        printf '%s\n' "RUSTC_WRAPPER=$SCCACHE_PATH" \
+          "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
+          "SCCACHE_GHA_VERSION=$SCCACHE_GHA_VERSION" \
+          "SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT" >> "$GITHUB_ENV"
     - name: Build the final Linux sandbox helper
       if: runner.os == 'Linux'
       working-directory: codex-rs
