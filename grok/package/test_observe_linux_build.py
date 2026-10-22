@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -94,6 +95,19 @@ while True: time.sleep(0.01)
                                 capture_output=True, text=True, timeout=2)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
+
+    def test_release_cache_is_macos_only_and_linux_clears_wrapper(self):
+        root = Path(observer.__file__).resolve().parents[2]
+        action = (root / ".github/actions/build-grok/action.yml").read_text()
+        steps = re.split(r"^    - ", action, flags=re.MULTILINE)
+        for name in ("Mask the ephemeral compiler-cache token", "Install pinned compiler cache",
+                     "Enable release compiler cache"):
+            step = next(step for step in steps if step.startswith("name: " + name + "\n"))
+            self.assertIn("      if: runner.os == 'macOS'\n", step)
+        linux = next(step for step in steps if step.startswith("name: Prepare the Linux builder\n"))
+        self.assertIn("      if: runner.os == 'Linux'\n", linux)
+        self.assertIn('echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"', linux)
+        self.assertEqual(action.count('"RUSTC_WRAPPER=$SCCACHE_PATH"'), 1)
 
     def test_success_reaps_observer(self):
         self.assertEqual(self.invoke("sleep 0.2; exit 0").returncode, 0)

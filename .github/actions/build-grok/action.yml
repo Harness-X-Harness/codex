@@ -47,6 +47,7 @@ runs:
         mkdir -p "$cargo_home/bin"
         : > "$cargo_home/config.toml"
         echo "CARGO_HOME=$cargo_home" >> "$GITHUB_ENV"
+        echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
         echo "$cargo_home/bin" >> "$GITHUB_PATH"
         echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
         echo "AWS_LC_SYS_NO_JITTER_ENTROPY_x86_64_unknown_linux_musl=1" >> "$GITHUB_ENV"
@@ -95,10 +96,12 @@ runs:
     - uses: ./.github/actions/setup-rusty-v8
       with:
         target: ${{ inputs.target }}
-    # Cache compiler outputs, never the final package or its acceptance result.
+    # Keep Linux on direct rustc while investigating hosted-runner shutdowns.
+    # Cache macOS compiler outputs, never the final package or acceptance result.
     # GitHub keeps PR caches in the PR merge-ref scope; package identity still
     # comes from the current SHA below, including its final link and smoke.
     - name: Mask the ephemeral compiler-cache token
+      if: runner.os == 'macOS'
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       with:
         script: |
@@ -106,10 +109,12 @@ runs:
           if (!token) throw new Error('GitHub Actions cache runtime token is unavailable');
           core.setSecret(token);
     - name: Install pinned compiler cache
+      if: runner.os == 'macOS'
       uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       with:
         version: v0.18.0
     - name: Enable release compiler cache
+      if: runner.os == 'macOS'
       shell: bash
       env:
         SCCACHE_GHA_ENABLED: "on"

@@ -22,6 +22,7 @@ launcher and artifact tests remain Python contracts:
 ```sh
 python3 grok/package/test_stage.py -v
 python3 grok/package/test_diagnose_linux_binary.py -v
+python3 grok/package/test_observe_linux_build.py -v
 python3 grok/package/test_select_artifact.py -v
 python3 grok/package/test_extract_artifact.py -v
 python3 grok/package/test_fetch_artifact.py -v
@@ -249,7 +250,9 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   packages: PRs additionally build and check Linux-musl; version-line pushes
   build and check both Linux-musl and macOS. macOS release/package failures are
   therefore detected after merge, not at the PR gate. Branch rules are unchanged.
-- Release builds use pinned sccache with GitHub's branch-scoped compiler cache.
+- macOS release builds use pinned sccache with GitHub's branch-scoped compiler cache.
+  Linux release builds use direct rustc while hosted-runner shutdowns are investigated;
+  bounded numeric resource samples are emitted during compilation.
   They still compile/link for the current source SHA, stage a fresh package and
   execute package acceptance. No cross-run finished package or test result is
   reused. The sccache action reports hit/miss statistics in its post step; a
