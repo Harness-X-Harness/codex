@@ -41,9 +41,10 @@ GROK_CODEX_BIN=/absolute/path/to/codex \
   ./tests/integration
 ```
 
-The actual scenario implementations live in `tests/integration`, with nine
+The actual scenario implementations live in `tests/integration`, with ten
 independently selectable owners: `TestBasicFixture`, `TestStructuredEditFixture`,
 `TestReasoningHistoryFixture`, `TestHostedSearchFixture`, `TestImagePinnedFixture`,
+`TestAttachedImagePinnedFixture`,
 `TestShippedCatalog`, `TestShippedThreadSource`, `TestShippedChildFixture` and
 `TestFirstRequestShape`. No wrapper forwards into `live/*_test.go`. Shared
 fixture mechanics live under `internal/integrationfixture`; production observers
@@ -186,7 +187,7 @@ exit "$status"
 `grok-test-results` checks JSON lifecycle events, not human output text. It
 rejects failed, absent, skipped or incomplete required tests and an empty suite;
 Go package-only `[no test files]` events are not test skips. `--integration`
-requires all nine named owners. Repeated `--require package:Test/subtest` supports
+requires all ten named owners. Repeated `--require package:Test/subtest` supports
 an exact partial package or Live selection. Never infer coverage from a green
 package containing no selected tests. A partial selection does not prove omitted
 cases passed. Per-case Live evidence retains safe counts, subject/digest,

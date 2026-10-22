@@ -33,7 +33,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("grok-test-results", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	inputPath := flags.String("input", "", "Go JSON results file (default stdin)")
-	integration := flags.Bool("integration", false, "require all nine integration owners")
+	integration := flags.Bool("integration", false, "require all ten integration owners")
 	var required requiredTests
 	flags.Var(&required, "require", "require exact package:TestName (repeatable)")
 	if flags.Parse(args) != nil || flags.NArg() > 1 || (*inputPath != "" && flags.NArg() != 0) {

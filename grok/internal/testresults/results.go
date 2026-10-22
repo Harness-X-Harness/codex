@@ -41,6 +41,7 @@ func IntegrationTests() []Test {
 		{pkg, "TestReasoningHistoryFixture"},
 		{pkg, "TestHostedSearchFixture"},
 		{pkg, "TestImagePinnedFixture"},
+		{pkg, "TestAttachedImagePinnedFixture"},
 		{pkg, "TestShippedCatalog"},
 		{pkg, "TestShippedThreadSource"},
 		{pkg, "TestShippedChildFixture"},

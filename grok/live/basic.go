@@ -27,10 +27,10 @@ type Subject struct {
 
 // Options selects an isolated harness fixture, independent of shipped assets.
 type Options struct {
-	Subject                     Subject
-	Model, BaseURL, APIKey      string
-	imageFixture                bool
-	shippedProfile, catalogOnly bool
+	Subject                            Subject
+	Model, BaseURL, APIKey             string
+	imageFixture, attachedImageFixture bool
+	shippedProfile, catalogOnly        bool
 }
 
 // Evidence contains only safe metadata and observations, never private traffic.
