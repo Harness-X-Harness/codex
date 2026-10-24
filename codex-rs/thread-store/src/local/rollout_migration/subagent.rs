@@ -38,6 +38,7 @@ pub(super) async fn select_bounded_context(
                 ScanOutcome::Parsed(value) => value,
                 ScanOutcome::Rejected(_) => continue,
             };
+            codex_rollout::validate_supported_history(&value).map_err(migration_error)?;
             let Ok(Some(line)) = line_parser::parse_legacy_rollout_value(value) else {
                 continue;
             };

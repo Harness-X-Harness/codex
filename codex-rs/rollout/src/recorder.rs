@@ -1151,6 +1151,7 @@ impl RolloutRecorder {
                     reject_unknown_thread_history_mode(&value)?;
                 }
 
+                crate::validate_supported_history(&value)?;
                 let rollout_line = match crate::decode_rollout_line(value) {
                     Ok(rollout_line) => rollout_line,
                     Err(e) => {

@@ -24,7 +24,9 @@ mod seekable_reader;
 pub(crate) mod session_index;
 mod sqlite_metrics;
 pub mod state_db;
+mod unsupported_history;
 mod writer_lock;
+pub use unsupported_history::validate_supported_history;
 
 pub use codex_history::CompactedItem;
 pub use codex_history::CompactionResumeMetadata;
@@ -50,6 +52,7 @@ pub(crate) use codex_protocol::protocol;
 /// remains format-neutral and resume and projection use the same item decoder.
 /// Remove it once Serde supports format-specific buffering.
 pub fn decode_rollout_line(value: Value) -> serde_json::Result<RolloutLine> {
+    validate_supported_history(&value).map_err(serde_json::Error::custom)?;
     let Value::Object(mut fields) = value else {
         return Err(serde_json::Error::custom(
             "rollout line must be a JSON object",

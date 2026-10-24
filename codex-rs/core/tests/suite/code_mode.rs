@@ -140,7 +140,7 @@ use wiremock::matchers::path;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
-fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
+pub(super) fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
         Some(Value::String(text)) => {
@@ -148,6 +148,39 @@ fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value>
         }
         _ => panic!("custom tool output should be serialized as text or content items"),
     }
+}
+
+pub(super) fn scripted_json_witness(items: &[Value], marker: &str) -> Value {
+    let witnesses = items
+        .iter()
+        .filter(|item| item["type"] == "input_text")
+        .filter_map(|item| serde_json::from_str::<Value>(item["text"].as_str()?).ok())
+        .filter(|value| value["witness"] == marker)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        witnesses.len(),
+        1,
+        "bound call must return one unambiguous {marker} witness"
+    );
+    witnesses.into_iter().next().expect("unique witness")
+}
+
+#[test]
+fn scripted_json_witness_requires_one_marker_without_an_output_slot() {
+    let witness = serde_json::json!({"witness": "fixture", "observed": true});
+    let item = serde_json::json!({"type": "input_text", "text": witness.to_string()});
+    let diagnostic = serde_json::json!({"type": "input_text", "text": "host diagnostic"});
+    for items in [
+        vec![item.clone(), diagnostic.clone()],
+        vec![diagnostic.clone(), item.clone()],
+    ] {
+        assert_eq!(scripted_json_witness(&items, "fixture"), witness);
+    }
+    assert!(std::panic::catch_unwind(|| scripted_json_witness(&[diagnostic], "fixture")).is_err());
+    assert!(
+        std::panic::catch_unwind(|| scripted_json_witness(&[item.clone(), item], "fixture"))
+            .is_err()
+    );
 }
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -4289,6 +4322,128 @@ text(JSON.stringify(results));
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_write_stdin_numeric_inputs_use_returned_session() -> Result<()> {
+    core_test_support::skip_if_target_windows!(Ok(()), "uses a POSIX read/printf fixture");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("Code Mode");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("native Code Mode host");
+            config.code_mode.disable_in_process_fallback = true;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let code = r#"
+const started = await tools.exec_command({
+  cmd: "stty -echo; IFS= read -r first; printf 'FIRST:%s\\n' \"$first\"; IFS= read -r second; printf 'SECOND:%s\\n' \"$second\"",
+  tty: true,
+  yield_time_ms: 250,
+});
+if (!Number.isInteger(started.session_id)) throw new Error("missing live session_id");
+const rejected = [];
+for (const [field, token] of [
+  ["session_id", String(started.session_id) + ".0000000000000001"],
+  ["session_id", "2147483648.0"],
+  ["yield_time_ms", "1.0000000000000001"],
+  ["yield_time_ms", "18446744073709551616"],
+  ["max_output_tokens", "9007199254740993.1"],
+  ["max_output_tokens", "18446744073709551616"],
+]) {
+  try {
+    await tools.write_stdin({
+      session_id: started.session_id,
+      chars: "invalid\n",
+      [field]: JSON.rawJSON(token),
+    });
+    rejected.push(null);
+  } catch (error) {
+    rejected.push(String(error));
+  }
+}
+const decimal = await tools.write_stdin({
+  session_id: JSON.rawJSON(String(started.session_id) + ".0"),
+  chars: "decimal\n",
+  yield_time_ms: JSON.rawJSON("250.0"),
+  max_output_tokens: JSON.rawJSON("1e3"),
+});
+const exponent = await tools.write_stdin({
+  session_id: JSON.rawJSON(String(started.session_id) + "e0"),
+  chars: "exponent\n",
+  yield_time_ms: JSON.rawJSON("184467440737095516150e-1"),
+  max_output_tokens: null,
+});
+const output = decimal.output + exponent.output;
+const first = output.indexOf("FIRST:decimal");
+const second = output.indexOf("SECOND:exponent");
+text(JSON.stringify({
+  witness: "stdin-numeric",
+  rejected,
+  same_session: decimal.session_id === started.session_id,
+  lines_delivered_in_order: first >= 0 && second > first,
+  exit_code: exponent.exit_code,
+  exited: exponent.session_id === undefined,
+}));
+"#;
+    let written = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_custom_tool_call("stdin-numeric", "exec", code),
+                ev_completed("resp-stdin"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Compose stdin writes with the real exec session")
+        .await?;
+    let request = written
+        .last_request()
+        .expect("Code Mode completion request");
+    let (_, success) = custom_tool_output_body_and_success(&request, "stdin-numeric");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "stdin-numeric");
+    let mut result = scripted_json_witness(&items, "stdin-numeric");
+    result.as_object_mut().unwrap().remove("witness");
+    let rejected = result.as_object_mut().unwrap().remove("rejected").unwrap();
+    let errors = rejected.as_array().expect("numeric rejection results");
+    assert_eq!(errors.len(), 6);
+    for error in errors {
+        assert!(
+            error
+                .as_str()
+                .is_some_and(|message| !message.trim().is_empty()),
+            "each invalid write must reject with a diagnostic: {error}",
+        );
+    }
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "same_session": true,
+            "lines_delivered_in_order": true,
+            "exit_code": 0,
+            "exited": true,
+        }),
+        "invalid calls must leave both lines for later writes to the same session",
+    );
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_write_stdin_calls_run_in_parallel_across_sessions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -4315,14 +4470,17 @@ const results = await Promise.all([
   }),
 ]);
 
-text(JSON.stringify([results[0].output.includes("code-alpha-ready"), results[1].output.includes("code-beta-ready")]));
+text(JSON.stringify({ witness: "parallel-stdin", outputs: [results[0].output.includes("code-alpha-ready"), results[1].output.includes("code-beta-ready")] }));
 "#,
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    let result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
-    assert_eq!(result, serde_json::json!([true, true]));
+    let request = second_mock.single_request();
+    let (_, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
+    let result = scripted_json_witness(&items, "parallel-stdin");
+    assert_eq!(result["outputs"], serde_json::json!([true, true]));
 
     Ok(())
 }

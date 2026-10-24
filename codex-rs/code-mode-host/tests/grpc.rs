@@ -44,6 +44,8 @@ use tonic::transport::Server;
 
 #[path = "grpc/admission_tests.rs"]
 mod admission_tests;
+#[path = "support/exact_numbers.rs"]
+mod exact_numbers;
 #[path = "support/host.rs"]
 mod host;
 #[path = "grpc/image_cancellation_tests.rs"]
@@ -57,6 +59,7 @@ mod recording_delegate;
 #[path = "grpc/session_recovery_tests.rs"]
 mod session_recovery_tests;
 
+use exact_numbers::assert_exact_numbers;
 use host::HostHarness;
 use large_tool_delegate::LargeToolResultDelegate;
 use recording_delegate::RecordingDelegate;
@@ -242,7 +245,14 @@ async fn tcp_session_persists_values_and_forwards_tools_notifications_and_closur
     );
 
     let mut callback = request(
-        r#"const result = await tools.echo({ value: String(load("key")) }); notify("notice"); text(result.value);"#,
+        r#"const result = await tools.echo({
+  value: String(load("key")),
+  numbers: {
+    beyond_binary64: JSON.rawJSON("9007199254740993.0"),
+    u64_boundary: JSON.rawJSON("184467440737095516150e-1"),
+    fraction: JSON.rawJSON("1.0000000000000001"),
+  },
+}); notify("notice"); text(result.value);"#,
     );
     callback.tool_call_id = "call-2".to_string();
     callback.enabled_tools = vec![tool("echo")];
@@ -254,19 +264,25 @@ async fn tcp_session_persists_values_and_forwards_tools_notifications_and_closur
     timeout(TEST_TIMEOUT, delegate.notification_delivered.notified())
         .await
         .context("notification was not delivered")?;
-    assert_eq!(
-        *delegate
+    {
+        let invocations = delegate
             .invocations
             .lock()
-            .unwrap_or_else(PoisonError::into_inner),
-        vec![CodeModeNestedToolCall {
-            cell_id: cell_id("2"),
-            runtime_tool_call_id: "tool-1".to_string(),
-            tool_name: ToolName::plain("echo"),
-            tool_kind: CodeModeToolKind::Function,
-            input: Some(json!({ "value": "persisted" })),
-        }]
-    );
+            .unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(invocations.len(), 1);
+        let numbers = &invocations[0].input.as_ref().expect("tool input")["numbers"];
+        assert_exact_numbers(numbers);
+        assert_eq!(
+            *invocations,
+            vec![CodeModeNestedToolCall {
+                cell_id: cell_id("2"),
+                runtime_tool_call_id: "tool-1".to_string(),
+                tool_name: ToolName::plain("echo"),
+                tool_kind: CodeModeToolKind::Function,
+                input: Some(json!({ "value": "persisted", "numbers": numbers })),
+            }]
+        );
+    }
     assert_eq!(
         *delegate
             .notifications

@@ -4,6 +4,9 @@ codex_rust_crate(
     name = "write",
     compile_data = glob([
         "templates/**",
-    ]),
+    ]) + [
+        "//grok/dist:config.toml.example",
+        "//grok/dist:models.json",
+    ],
     crate_name = "codex_memories_write",
 )

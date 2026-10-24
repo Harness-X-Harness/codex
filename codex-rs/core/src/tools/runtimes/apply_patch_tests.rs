@@ -20,6 +20,11 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+
+#[cfg(target_os = "linux")]
+#[path = "apply_patch_retry_tests.rs"]
+mod retry_tests;
+
 fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::TurnEnvironment {
     crate::session::turn_context::TurnEnvironment::new(
         TurnEnvironmentSelection {
@@ -91,6 +96,8 @@ async fn approval_action_preserves_patch_path_uris() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     let approval_action = ApplyPatchRuntime::build_approval_action(&request, "call-1");
@@ -105,6 +112,7 @@ async fn approval_action_preserves_patch_path_uris() {
             patch: expected_patch,
             changes: Arc::new(HashMap::new()),
             permissions_preapproved: false,
+            hook_identity: ApplyPatchHookIdentity::ApplyPatch,
         }
     );
 }
@@ -128,6 +136,8 @@ async fn permission_request_payload_uses_apply_patch_hook_name_and_aliases() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     let payload =
@@ -162,6 +172,8 @@ async fn approval_keys_include_environment_id() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     let keys = runtime
@@ -200,6 +212,8 @@ async fn sandbox_cwd_uses_patch_action_cwd() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
 
     assert_eq!(runtime.sandbox_cwd(&req), Some(&req.action.cwd));
@@ -231,6 +245,8 @@ async fn file_system_sandbox_context_preserves_executor_workspace_permissions() 
         },
         additional_permissions: Some(additional_permissions.clone()),
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
     let exec_server_permissions = PermissionProfile::workspace_write();
     let file_system_policy = exec_server_permissions.file_system_sandbox_policy();
@@ -303,6 +319,8 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
         },
         additional_permissions: None,
         permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     };
     let permissions = PermissionProfile::Disabled;
     let manager = SandboxManager::new();
@@ -356,5 +374,52 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
         })
+    );
+}
+
+#[tokio::test]
+async fn structured_edit_approval_preserves_effective_arguments_and_environment_identity() {
+    let path = PathUri::from_abs_path(
+        &std::env::temp_dir()
+            .join("structured-edit-approval.txt")
+            .abs(),
+    );
+    let arguments = serde_json::json!({"file_path":"structured-edit-approval.txt", "old_string":"old", "new_string":"new", "environment_id":"chosen-remote"});
+    let action = ApplyPatchAction::from_exact_update(
+        path.parent().unwrap(),
+        path.clone(),
+        "old",
+        "new".to_string(),
+    );
+    let req = ApplyPatchRequest {
+        turn_environment: test_turn_environment("chosen-remote"),
+        action,
+        file_paths: vec![path.clone()],
+        changes: Arc::new(HashMap::new()),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+        write_mode: ApplyPatchWriteMode::VerifiedContents,
+        hook_identity: ApplyPatchHookIdentity::StructuredEdit {
+            arguments: arguments.clone(),
+        },
+    };
+    let approval = ApplyPatchRuntime::build_approval_action(&req, "structured-call");
+    let payload = approval.permission_request_payload();
+    assert_eq!(payload.tool_name, HookToolName::new("structured_edit"));
+    assert_eq!(payload.tool_input, arguments);
+    assert!(payload.tool_input.get("replace_all").is_none());
+    assert_eq!(
+        serde_json::to_value(approval.cache_keys()).unwrap(),
+        serde_json::json!([{"environment_id":"chosen-remote", "path":path}])
+    );
+    let guardian = approval
+        .into_guardian_request(/*exec_command_cwd_convention*/ None)
+        .unwrap();
+    assert!(
+        matches!(guardian, crate::guardian::GuardianApprovalRequest::ApplyPatch { environment_id, files, .. } if environment_id == "chosen-remote" && files == vec![path])
     );
 }

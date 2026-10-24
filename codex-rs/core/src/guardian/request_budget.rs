@@ -79,7 +79,10 @@ pub(crate) async fn prepare_prompt(
             /*include_internal*/ true,
         )?;
         let mut context = retained.context.clone();
-        context.retain_new_instructions(&history.for_prompt_annotated(&model.input_modalities));
+        context.retain_new_instructions(
+            &history
+                .for_prompt_annotated(&model.input_modalities, step.turn.provider.api_dialect()),
+        );
         let context = context
             .enforce_budget(
                 RequestBudget {

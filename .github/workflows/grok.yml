@@ -1,0 +1,167 @@
+name: grok
+
+on:
+  pull_request:
+    branches: ["grok/rust-v*", "grok/c7-web-activity-20261008", "grok/c8-package-build-20261009"]
+  push:
+    branches: ["grok/rust-v*"]
+
+permissions:
+  contents: read
+
+# A newer PR head may replace its old proof. Each canonical push retains its run.
+concurrency:
+  group: grok-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  proof:
+    name: Native proof
+    uses: ./.github/workflows/grok-proof.yml
+
+  cargo:
+    name: Cargo
+    needs: proof
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the complete native proof
+        env:
+          PROOF_RESULT: ${{ needs.proof.result }}
+        run: |
+          if [[ "$PROOF_RESULT" != "success" ]]; then
+            echo "Native proof did not succeed: $PROOF_RESULT" >&2
+            exit 1
+          fi
+
+  build-linux-x64-musl:
+    name: Build x86_64-unknown-linux-musl
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    outputs:
+      artifact-id: ${{ steps.package.outputs.artifact-id }}
+      artifact-digest: ${{ steps.package.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        id: package
+        with:
+          target: x86_64-unknown-linux-musl
+
+  build-macos-arm64:
+    if: ${{ github.event_name == 'push' }}
+    name: Build aarch64-apple-darwin
+    runs-on: macos-15
+    timeout-minutes: 170
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        with:
+          target: aarch64-apple-darwin
+
+  live-selection:
+    name: Select formal Live scenarios
+    if: ${{ github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      scenarios: ${{ steps.catalog.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: true
+          cache-dependency-path: grok/go.sum
+      - name: Read the Go-owned full Live selection
+        id: catalog
+        working-directory: grok
+        run: |
+          set -euo pipefail
+          scenarios="$(go run ./cmd/grok-scenarios --family live --suite full)"
+          printf 'scenarios=%s\n' "$scenarios" >> "$GITHUB_OUTPUT"
+
+  live:
+    name: Grok Live (${{ matrix.scenario }})
+    needs: [build-linux-x64-musl, live-selection]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && needs.build-linux-x64-musl.result == 'success' && needs.live-selection.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        scenario: ${{ fromJSON(needs.live-selection.outputs.scenarios || '[]') }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Fetch and verify the exact same-run Linux package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build-linux-x64-musl.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok.yml
+          python3 grok/package/fetch_artifact.py \
+            --run-id "$GITHUB_RUN_ID" --harness-sha "$GITHUB_SHA" \
+            --same-run-source-sha "$GITHUB_SHA" --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --expected-artifact-id "$ARTIFACT_ID" --output "$RUNNER_TEMP/live-package"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Prepare the hosted Linux sandbox for Live
+        run: bash grok/package/prepare_linux_sandbox_ci.sh
+      - name: Execute the selected owned Go Live scenario once
+        working-directory: grok
+        env:
+          GROK_LIVE: "1"
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GROK_CODEX_BIN: ${{ runner.temp }}/live-package/package/bin/grok-bin
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/live-evidence"
+          cp "$RUNNER_TEMP/live-package/selection.json" "$RUNNER_TEMP/live-evidence/"
+          cp "$RUNNER_TEMP/live-package/verified.json" "$RUNNER_TEMP/live-evidence/"
+          digest="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["runtime_sha256"])')"
+          status=0
+          go test -tags=live -count=1 -timeout=10m -json ./tests/live -args \
+            -grok-live-suite full -grok-live-scenario "$SCENARIO" \
+            -grok-live-verified-subject -grok-live-binary-sha256 "$digest" \
+            -grok-live-source-sha "$GITHUB_SHA" -grok-live-harness-sha "$GITHUB_SHA" \
+            -grok-live-target x86_64-unknown-linux-musl -grok-live-environment github-actions \
+            > "$RUNNER_TEMP/live-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/live-evidence/tests.json" \
+            --require "github.com/Harness-X-Harness/codex/grok/tests/live:TestLive/$SCENARIO" \
+            > "$RUNNER_TEMP/live-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/live-evidence/summary.json"
+          exit "$status"
+      - name: Retain the bounded scenario result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-live-${{ matrix.scenario }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-evidence
+          if-no-files-found: warn
+          retention-days: 30
