@@ -81,6 +81,8 @@ const childHTTPSeedReply = "seed accepted"
 
 const childHTTPTask = "Without running commands or tools, recall the setup marker from your inherited history and write a fresh UUID v4 yourself. Reply with the setup marker and the canonical lowercase UUID. Do not ask the parent to supply the marker."
 
+const childHTTPNewTask = "Message Type: NEW_TASK\nTask name: /root/live_child\nSender: /root\nPayload:\n" + childHTTPTask
+
 func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
@@ -135,6 +137,7 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 	}
 	var userText []string
 	seedAt, replyAt, taskAt := -1, -1, -1
+	spawnAt, spawnOutputAt, newTaskAt, newTasks := -1, -1, -1, 0
 	calls, outputs := make(map[string]childHTTPItem), make(map[string]childHTTPItem)
 	for index, raw := range body.Input {
 		var item childHTTPItem
@@ -177,6 +180,12 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 				if item.Role == "user" && strings.HasPrefix(part.Text, "Delegate one bounded task to a child named live_child ") {
 					taskAt = index
 				}
+				if item.Role == "user" && strings.HasPrefix(part.Text, "Message Type: NEW_TASK\n") {
+					newTasks++
+					if part.Text == childHTTPNewTask {
+						newTaskAt = index
+					}
+				}
 			}
 		case "function_call":
 			if item.CallID == "" || calls[item.CallID].CallID != "" {
@@ -184,12 +193,18 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 				return
 			}
 			calls[item.CallID] = item
+			if item.CallID == "child_spawn" {
+				spawnAt = index
+			}
 		case "function_call_output":
 			if item.CallID == "" || outputs[item.CallID].CallID != "" || calls[item.CallID].CallID == "" {
 				fail("output_replay_binding")
 				return
 			}
 			outputs[item.CallID] = item
+			if item.CallID == "child_spawn" {
+				spawnOutputAt = index
+			}
 		default:
 			fail("unsupported_input_kind")
 			return
@@ -213,10 +228,27 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		fail("seed_prefix_missing")
 		return
 	}
-	newTask := "Message Type: NEW_TASK\nTask name: /root/live_child\nSender: /root\nPayload:\n" + childHTTPTask
 	if threadID != fixture.parentID {
-		if fixture.childID != "" || !fixture.delegated || !strings.Contains(joined, newTask) || len(calls) != 0 || len(outputs) != 0 {
+		if fixture.childID != "" || !fixture.delegated {
 			fail("child_input_binding")
+			return
+		}
+		// Stock 0.164 preserves the full fork prefix, including the in-flight
+		// parent spawn. History normalization inserts its missing output as
+		// "aborted" immediately after the call; no other tool history is allowed.
+		spawnCall := calls["child_spawn"]
+		var spawnArgs map[string]any
+		var spawnOutput string
+		if len(calls) != 1 || len(outputs) != 1 || spawnCall.Name != fixture.spawn ||
+			json.Unmarshal([]byte(spawnCall.Arguments), &spawnArgs) != nil ||
+			!reflect.DeepEqual(spawnArgs, map[string]any{"task_name": "live_child", "message": childHTTPTask}) ||
+			json.Unmarshal(outputs["child_spawn"].Output, &spawnOutput) != nil || spawnOutput != "aborted" ||
+			spawnAt <= taskAt || spawnOutputAt != spawnAt+1 {
+			fail("child_spawn_replay_changed")
+			return
+		}
+		if newTasks != 1 || newTaskAt <= spawnOutputAt {
+			fail("child_task_binding")
 			return
 		}
 		fixture.childID = threadID
@@ -309,6 +341,7 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 func TestShippedChildFixture(t *testing.T) {
 	t.Run("fresh_child_result", func(t *testing.T) { testNativeShippedChildFixture(t, false) })
 	t.Run("parent_supplied_result_rejected", func(t *testing.T) { testNativeShippedChildFixture(t, true) })
+	t.Run("inherited_spawn_history", testShippedChildInheritedHistory)
 }
 
 type shippedChildHTTP struct {

@@ -487,11 +487,17 @@ async fn structured_edit_unavailable_remote_never_falls_back_to_usable_local() -
     let (output, success) = requests[1]
         .function_call_output_content_and_success("unavailable")
         .context("Remote failure output")?;
-    assert!(
-        success == Some(false)
-            || output.is_some_and(|text| text.contains("Error")
-                || text.contains("unavailable")
-                || text.contains("failed"))
+    assert_eq!(
+        output.as_deref(),
+        Some(
+            "No usable execution environment is available. Wait for an environment to become available before using this tool."
+        ),
+        "selected unavailable Remote must report the native environment error; success={success:?}"
+    );
+    assert_ne!(
+        success,
+        Some(true),
+        "unavailable Remote must not report success; output={output:?}"
     );
     assert_eq!(
         (std::fs::read(&local_path)?, std::fs::read(&remote_path)?),
