@@ -95,7 +95,7 @@ fn namespace_normalization_is_stable_and_duplicates_fail_closed() {
         });
         assert_eq!(
             project_flat_function_tools(&top).unwrap().0,
-            project_flat_function_tools(&[namespaced.clone()])
+            project_flat_function_tools(std::slice::from_ref(&namespaced))
                 .unwrap()
                 .0
         );
@@ -135,7 +135,9 @@ fn completed_function_calls_roundtrip_without_reencoding_arguments() {
         json!({"type":"function_call","id":"fc_test","encrypted_content":"opaque-provider-replay","status":"completed","name":"run","namespace":"mcp__server","arguments":" {\"value\": \"é\\n\"} \n","call_id":"call_1"}),
     );
     let before = canonical.clone();
-    let projected = routes.project_history(&[canonical.clone()]).unwrap();
+    let projected = routes
+        .project_history(std::slice::from_ref(&canonical))
+        .unwrap();
     let mut expected = canonical.clone();
     if let ResponseItem::FunctionCall {
         name, namespace, ..
@@ -248,7 +250,7 @@ fn web_specs_preserve_policy_but_tool_search_remains_unsupported() {
         search_context_size: None,
         search_content_types: None,
     };
-    let (projected, routes) = project_flat_function_tools(&[hosted.clone()]).unwrap();
+    let (projected, routes) = project_flat_function_tools(std::slice::from_ref(&hosted)).unwrap();
     assert_eq!(
         serde_json::to_value(projected).unwrap(),
         serde_json::to_value(vec![hosted]).unwrap()
@@ -317,7 +319,7 @@ fn outgoing_collaboration_logging_markers_are_removed_only_from_the_copy() {
         }));
         assert_eq!(
             FlatToolRoutes::default()
-                .project_history(&[canonical.clone()])
+                .project_history(std::slice::from_ref(&canonical))
                 .unwrap(),
             vec![expected]
         );
@@ -344,7 +346,7 @@ fn outgoing_actual_encryption_and_unrecognized_empty_markers_fail_closed() {
         let before = canonical.clone();
         assert!(
             FlatToolRoutes::default()
-                .project_history(&[canonical.clone()])
+                .project_history(std::slice::from_ref(&canonical))
                 .is_err()
         );
         assert_eq!(canonical, before);
