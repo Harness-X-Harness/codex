@@ -3,6 +3,10 @@ mod auth;
 mod bearer_auth_provider;
 mod capabilities;
 mod combined_auth;
+mod grok_catalog;
+#[cfg(test)]
+#[path = "grok_provider_tests.rs"]
+mod grok_provider_tests;
 mod models_endpoint;
 mod models_identity;
 mod provider;

@@ -5482,3 +5482,55 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
         );
     }
 }
+
+#[test]
+fn thread_item_rejects_unknown_wire_tags() {
+    for tag in ["unknownProviderTool", "WebSearch", "xSearch"] {
+        let error = serde_json::from_value::<ThreadItem>(serde_json::json!({
+            "type": tag,
+            "id": "search-1",
+            "query": "docs",
+            "action": {"type": "search", "query": "docs", "queries": null},
+            "results": null,
+        }))
+        .expect_err("unrecognized thread item tags must not become public items");
+        assert!(error.to_string().contains("unknown variant"));
+    }
+}
+
+#[test]
+fn server_notification_rejects_unregistered_methods() {
+    for method in ["item/providerProgress", "item/searchActivity"] {
+        let error = serde_json::from_value::<ServerNotification>(serde_json::json!({
+            "method": method,
+            "params": {"threadId": "thread-1", "turnId": "turn-1"},
+        }))
+        .expect_err("provider-specific methods must not become public notifications");
+        assert!(error.to_string().contains("unknown variant"));
+    }
+}
+
+#[test]
+fn web_search_item_notification_roundtrips_opaque_results() {
+    let wire = serde_json::json!({
+        "method": "item/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "completedAtMs": 123,
+            "item": {
+                "type": "webSearch",
+                "id": "search-1",
+                "query": "docs",
+                "action": {"type": "search", "query": "docs", "queries": null},
+                "results": [{"type": "provider_result", "extra": {"source": "docs"}}],
+            },
+        },
+    });
+    let notification: ServerNotification =
+        serde_json::from_value(wire.clone()).expect("decode existing Web item notification");
+    assert_eq!(
+        serde_json::to_value(notification).expect("encode existing Web item notification"),
+        wire
+    );
+}

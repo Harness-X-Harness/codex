@@ -94,3 +94,13 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+
+# Release-owned Go source assets; generated dist outputs remain ignored.
+!grok/dist/
+grok/dist/*
+!grok/dist/BUILD.bazel
+!grok/dist/INSTALL.md
+!grok/dist/assets.go
+!grok/dist/config.toml.example
+!grok/dist/grok
+!grok/dist/models.json

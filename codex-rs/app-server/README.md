@@ -601,6 +601,31 @@ HTTP, WebSocket, and code-mode gRPC requests use the shared destination checks.
 User-directed Git, SSH, shell, and other subprocess traffic retain their existing
 execution and sandbox policies.
 
+
+# Hosted search items
+
+Hosted Web search uses the existing v2 `webSearch` item through the ordered
+`item/started` and `item/completed` notifications. Clients settle the started item
+when its canonical completion arrives. Completed items retain their identity,
+query, action, and optional results in thread history; same-thread continuation
+and cold history reads use that canonical representation. There is no separate
+public early-preview notification.
+
+Within a turn, a retained search ID cannot be reused or rebound to another item,
+including across sampling requests. A conflicting stream fails before replacing
+the retained result. New turns have independent identity reservations.
+
+Product Hosted X search is retired. The public protocol has no `xSearch` item or
+`item/searchActivity` notification. Grok requests do not advertise `x_search`;
+explicit legacy configuration and unexpected hosted X responses fail with an
+explanatory error. They are not converted into Web items, assistant messages, or
+local tool calls and results.
+
+History containing the former public X representation is unsupported and remains
+unchanged on disk. Grok replay also rejects unpaired retired hosted X calls.
+Provider-neutral custom-tool records and genuine paired local tool history remain
+separate; a custom-tool name alone does not establish hosted provenance.
+
 # Item history anchors
 
 `thread/items/list` accepts an optional nullable `cursor`: either an opaque string

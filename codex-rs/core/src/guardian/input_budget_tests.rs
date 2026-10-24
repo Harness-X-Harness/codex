@@ -338,10 +338,10 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
             .unwrap()
             .contains("Do not publish.")
     );
-    let persisted = session
-        .clone_history()
-        .await
-        .for_prompt(&step.settings.model_info.input_modalities);
+    let persisted = session.clone_history().await.for_prompt(
+        &step.settings.model_info.input_modalities,
+        codex_api::ApiDialect::OpenAi,
+    );
     assert_eq!(prompt.input, persisted);
     assert!(
         persisted

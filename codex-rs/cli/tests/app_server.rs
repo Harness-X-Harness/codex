@@ -13,6 +13,7 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
         .env_remove("CODEX_ACCESS_TOKEN")
         .env_remove("CODEX_API_KEY")
         .env_remove("OPENAI_API_KEY")
+        .env_remove("GROK_API_KEY")
         .env_remove("OPENAI_FEDERATION_RULE_ID")
         .env_remove("OPENAI_IDENTITY_TOKEN_FILE")
         .env_remove("OPENAI_WORKLOAD_IDENTITY_CONTEXT");
@@ -298,6 +299,81 @@ fn print_startup_config_validates_configuration() -> Result<()> {
             assert!(value["configRequirements"].get("requirements").is_some());
             assert!(value.get("config").is_none());
         }
+    }
+    Ok(())
+}
+
+fn install_grok_startup_config(home: &Path) -> Result<()> {
+    std::fs::copy(
+        codex_utils_cargo_bin::find_resource!("../../grok/dist/config.toml.example")?,
+        home.join("config.toml"),
+    )?;
+    std::fs::copy(
+        codex_utils_cargo_bin::find_resource!("../../grok/dist/models.json")?,
+        home.join("models.json"),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn print_startup_config_accepts_shipped_grok_profile_without_credentials() -> Result<()> {
+    let home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let sqlite = TempDir::new()?;
+    install_grok_startup_config(home.path())?;
+    let profile = std::fs::read(home.path().join("config.toml"))?;
+    let catalog = std::fs::read(home.path().join("models.json"))?;
+
+    for client in [
+        None,
+        Some(r#"{"name":"grok_startup_test","version":"0.0.0"}"#),
+    ] {
+        let mut command = codex_command(home.path())?;
+        command
+            .current_dir(workspace.path())
+            .env("CODEX_SQLITE_HOME", sqlite.path())
+            .timeout(std::time::Duration::from_secs(15))
+            .args(["app-server", "--print-startup-config", "--strict-config"]);
+        if let Some(client) = client {
+            command.args(["--startup-client-info", client]);
+        }
+        let output = command.assert().success();
+        let value: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+        assert_eq!(value["appServerVersion"], env!("CARGO_PKG_VERSION"));
+        assert!(value["configRequirements"].get("requirements").is_some());
+        assert!(value.get("error").is_none());
+        assert!(value.get("config").is_none());
+    }
+
+    assert_eq!(std::fs::read(home.path().join("config.toml"))?, profile);
+    assert_eq!(std::fs::read(home.path().join("models.json"))?, catalog);
+    assert!(!home.path().join("auth.json").exists());
+    assert_eq!(std::fs::read_dir(sqlite.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn print_startup_config_rejects_invalid_shipped_grok_catalog_without_fallback() -> Result<()> {
+    for contents in [None, Some("not json"), Some(r#"{"models":[]}"#)] {
+        let home = TempDir::new()?;
+        let workspace = TempDir::new()?;
+        install_grok_startup_config(home.path())?;
+        let catalog = home.path().join("models.json");
+        if let Some(contents) = contents {
+            std::fs::write(&catalog, contents)?;
+        } else {
+            std::fs::remove_file(&catalog)?;
+        }
+        let output = codex_command(home.path())?
+            .current_dir(workspace.path())
+            .timeout(std::time::Duration::from_secs(15))
+            .args(["app-server", "--print-startup-config"])
+            .assert()
+            .failure();
+        let value: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+        assert_eq!(value["error"]["data"]["reason"], "configLoad");
+        assert!(value.get("configRequirements").is_none());
+        assert!(value.get("appServerVersion").is_none());
     }
     Ok(())
 }

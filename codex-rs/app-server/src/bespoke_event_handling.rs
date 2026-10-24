@@ -1084,6 +1084,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ViewImageToolCall(_) => {}
+        // Transient provider observations have no stock App Server v2 equivalent.
+        // Publish only canonical Web items through item/started and item/completed.
+        EventMsg::SearchActivity(_) => {}
         EventMsg::ItemStarted(event) => {
             let should_emit = match &event.item {
                 // Approval and guardian flows can emit the command start notification before core
