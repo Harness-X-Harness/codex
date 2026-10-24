@@ -74,7 +74,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			}
 			decoded, err := imageTurnFromSDK(turn.Turn)
 			if err != nil {
-				return errors.New("live: invalid image evidence")
+				return failedObservation("invalid_image_evidence", "live: invalid image evidence")
 			}
 			probe.mu.Lock()
 			err = probe.acceptStarted(decoded)
@@ -94,7 +94,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			for _, value := range settled.Thread.Turns {
 				turn, err := imageTurnFromSDK(value)
 				if err != nil {
-					return errors.New("live: invalid image evidence")
+					return failedObservation("invalid_image_evidence", "live: invalid image evidence")
 				}
 				turns = append(turns, turn)
 			}
@@ -109,7 +109,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 				newest, turnID := probe.newest, probe.turnID
 				if newest == nil {
 					probe.mu.Unlock()
-					return errors.New("live: completed canonical image unavailable")
+					return failedObservation("canonical_image_unavailable", "live: completed canonical image unavailable")
 				}
 				probe.prior, probe.previousID = newest, turnID
 				evidence.FirstImageSHA256, evidence.FirstHistorySHA256 = newest.digest, newest.output
@@ -120,13 +120,13 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 		newest, prior := probe.newest, probe.prior
 		probe.mu.Unlock()
 		if !evidence.HistorySelected || newest == nil || prior == nil || !newest.fromPrior || newest.digest == prior.digest {
-			return errors.New("live: distinct history-derived edit unavailable")
+			return failedObservation("distinct_image_edit_unavailable", "live: distinct history-derived edit unavailable")
 		}
 		if _, err := inspectImage(probe.root, prior.path, prior.digest); err != nil {
 			return err
 		}
 		if ctx.Err() != nil {
-			return errors.New("live: image observation deadline exceeded")
+			return failedObservation("image_observation_context_done", "live: image observation deadline exceeded")
 		}
 		evidence.EditedImageSHA256, evidence.EditedHistorySHA256 = newest.digest, newest.output
 		base.Completed, base.Stage = true, "image_edit_verified"
@@ -144,7 +144,7 @@ func (probe *imageProbe) afterClose(_ string, base *Evidence, cause error) error
 	observed := probe.cause
 	if cause == nil && observed == nil && base.Completed {
 		if probe.prior == nil || probe.newest == nil {
-			observed = errors.New("live: completed image evidence unavailable")
+			observed = failedObservation("completed_image_evidence_unavailable", "live: completed image evidence unavailable")
 		} else if _, err := inspectImage(probe.root, probe.prior.path, probe.evidence.FirstImageSHA256); err != nil {
 			observed = err
 		} else if _, err := inspectImage(probe.root, probe.newest.path, probe.evidence.EditedImageSHA256); err != nil {
@@ -161,17 +161,17 @@ func (probe *imageProbe) afterClose(_ string, base *Evidence, cause error) error
 
 func imageTransport(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
-		return errors.New("live: image observation deadline exceeded")
+		return failedObservation("image_observation_context_done", "live: image observation deadline exceeded")
 	}
 	if frameTooLarge(err) {
-		return errors.New("live: protocol frame budget exceeded")
+		return failedObservation("protocol_frame_budget_exceeded", "live: protocol frame budget exceeded")
 	}
 	var protocol *codexsdk.ProtocolError
 	if errors.As(err, &protocol) {
-		return errors.New("live: protocol request failed")
+		return failedObservation("protocol_request_failed", "live: protocol request failed")
 	}
 	if probeDone(err) {
-		return errors.New("live: protocol ended before proof completion")
+		return failedObservation("protocol_ended_before_completion", "live: protocol ended before proof completion")
 	}
 	return failedObservation("sdk_observation_failed", "live: SDK observation did not complete")
 }
@@ -207,11 +207,11 @@ func (probe *imageProbe) wait(ctx context.Context) error {
 				return cause
 			}
 			if closed != nil && frameTooLarge(closed()) {
-				return errors.New("live: protocol frame budget exceeded")
+				return failedObservation("protocol_frame_budget_exceeded", "live: protocol frame budget exceeded")
 			}
-			return errors.New("live: protocol ended before proof completion")
+			return failedObservation("protocol_ended_before_completion", "live: protocol ended before proof completion")
 		case <-ctx.Done():
-			return errors.New("live: image observation deadline exceeded")
+			return failedObservation("image_observation_context_done", "live: image observation deadline exceeded")
 		}
 	}
 }
@@ -220,7 +220,7 @@ func (probe *imageProbe) request(ctx context.Context, _ protocolv2.ServerRequest
 	probe.mu.Lock()
 	defer probe.mu.Unlock()
 	probe.noteCallback(ctx)
-	probe.cause = errors.New("live: unsupported server request")
+	probe.cause = failedObservation("unsupported_server_request", "live: unsupported server request")
 	probe.signal()
 	return codexsdk.ServerRequestResponse{}, nil
 }
@@ -255,7 +255,7 @@ func (probe *imageProbe) observeFrame(ctx context.Context, method string, raw []
 		marshalErr = json.Unmarshal(raw, &envelope)
 	}
 	if len(envelope.Params) == 0 {
-		marshalErr = errors.New("live: invalid image evidence")
+		marshalErr = failedObservation("invalid_image_evidence", "live: invalid image evidence")
 	}
 	return probe.observeNotification(ctx, frame{Method: method, Params: envelope.Params, size: len(raw)}, marshalErr)
 }
@@ -265,7 +265,7 @@ func (probe *imageProbe) observeNotification(ctx context.Context, message frame,
 	defer probe.mu.Unlock()
 	probe.noteCallback(ctx)
 	if marshalErr != nil {
-		probe.cause = errors.New("live: invalid image evidence")
+		probe.cause = failedObservation("invalid_image_evidence", "live: invalid image evidence")
 		probe.signal()
 		return nil
 	}
