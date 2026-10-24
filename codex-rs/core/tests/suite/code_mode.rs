@@ -167,9 +167,9 @@ pub(super) fn scripted_json_witness(items: &[Value], marker: &str) -> Value {
 
 #[test]
 fn scripted_json_witness_requires_one_marker_without_an_output_slot() {
-    let witness = json!({"witness": "fixture", "observed": true});
-    let item = json!({"type": "input_text", "text": witness.to_string()});
-    let diagnostic = json!({"type": "input_text", "text": "host diagnostic"});
+    let witness = serde_json::json!({"witness": "fixture", "observed": true});
+    let item = serde_json::json!({"type": "input_text", "text": witness.to_string()});
+    let diagnostic = serde_json::json!({"type": "input_text", "text": "host diagnostic"});
     for items in [
         vec![item.clone(), diagnostic.clone()],
         vec![diagnostic.clone(), item.clone()],
