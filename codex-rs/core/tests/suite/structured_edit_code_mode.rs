@@ -19,6 +19,8 @@ use serde_json::json;
 use tempfile::TempDir;
 use test_case::test_case;
 
+use super::code_mode::custom_tool_output_items;
+use super::code_mode::scripted_json_witness;
 use super::structured_edit::read_editor_hook_inputs;
 use super::structured_edit::structured_edit_builder;
 use super::structured_edit::write_editor_hooks;
@@ -32,6 +34,7 @@ use super::structured_edit_support::assert_no_commit;
 use super::structured_edit_support::establish_diff_root;
 use super::structured_edit_support::finish_turn;
 use super::structured_edit_support::mount_edit;
+use super::structured_edit_support::output_request;
 
 fn code_mode_builder() -> Result<TestCodexBuilder> {
     Ok(structured_edit_builder()
@@ -55,20 +58,67 @@ fn code_mode_builder() -> Result<TestCodexBuilder> {
 
 fn nested_edit(args: &Value) -> String {
     format!(
-        "try {{ text({{ marker: 'nested-completed', result: await tools.structured_edit({args}) }}); }} catch (error) {{ text({{ marker: 'nested-rejected', error: String(error) }}); }}"
+        "try {{ text({{ witness: 'structured-edit', outcome: 'completed', result: await tools.structured_edit({args}) }}); }} catch (error) {{ text({{ witness: 'structured-edit', outcome: 'rejected', error: String(error) }}); }}"
     )
 }
 
-fn output(request: &responses::ResponsesRequest) -> String {
-    let value = request.custom_tool_call_output("exec-edit");
-    match &value["output"] {
-        Value::String(text) => text.clone(),
-        Value::Array(items) => items
-            .iter()
-            .filter_map(|item| item["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        other => panic!("unexpected Code Mode output {other:?}"),
+fn output(request: &responses::ResponsesRequest) -> Value {
+    let (_, success) = request
+        .custom_tool_call_output_content_and_success("exec-edit")
+        .expect("actual Code Mode output");
+    assert_ne!(success, Some(false), "the controlled script must finish");
+    scripted_json_witness(
+        &custom_tool_output_items(request, "exec-edit"),
+        "structured-edit",
+    )
+}
+
+fn assert_nested_outcome(result: &Value, expected: &str) {
+    assert_eq!(result["outcome"], expected, "{result}");
+    match expected {
+        "completed" => assert!(result.get("error").is_none(), "{result}"),
+        "rejected" => {
+            assert!(result.get("result").is_none(), "{result}");
+            assert!(
+                result["error"]
+                    .as_str()
+                    .is_some_and(|error| !error.trim().is_empty()),
+                "the caught rejection must remain observable: {result}"
+            );
+        }
+        _ => panic!("unknown fixture outcome {expected}"),
+    }
+}
+
+#[test]
+fn nested_edit_witness_decodes_outcome_instead_of_matching_prose() {
+    let completed = json!({"type": "input_text", "text": r#"{
+        "witness": "structured\u002dedit", "outcome": "comple\u0074ed", "result": {}
+    }"#});
+    let rejected = json!({"type": "input_text", "text": json!({
+        "witness": "structured-edit", "outcome": "rejected",
+        "error": "completed and nested-completed are only words in this error"
+    }).to_string()});
+    let diagnostic = json!({"type": "input_text", "text": "host diagnostic: nested-completed"});
+    let result = scripted_json_witness(&[diagnostic.clone(), completed.clone()], "structured-edit");
+    assert_nested_outcome(&result, "completed");
+    let result = scripted_json_witness(&[rejected.clone(), diagnostic.clone()], "structured-edit");
+    assert_nested_outcome(&result, "rejected");
+    assert!(std::panic::catch_unwind(|| assert_nested_outcome(&result, "completed")).is_err());
+    for items in [
+        vec![completed.clone(), rejected],
+        vec![completed.clone(), completed],
+        vec![diagnostic],
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| scripted_json_witness(&items, "structured-edit")).is_err()
+        );
+    }
+    for result in [
+        json!({"outcome":"rejected", "error":""}),
+        json!({"outcome":"rejected", "error":"failed", "result":{}}),
+    ] {
+        assert!(std::panic::catch_unwind(|| assert_nested_outcome(&result, "rejected")).is_err());
     }
 }
 
@@ -119,29 +169,17 @@ async fn code_mode_structured_edit_uses_real_delegate(
     .await?;
     let events = finish_turn(&test).await;
     let requests = response.requests();
-    assert_eq!(requests.len(), 2);
-    let text = output(&requests[1]);
-    let (_, success) = requests[1]
-        .custom_tool_call_output_content_and_success("exec-edit")
-        .context("actual Code Mode output")?;
+    let request = output_request(&requests, "exec-edit");
+    let result = output(request);
     if old == "before" {
-        assert_ne!(success, Some(false), "{text}");
-        assert!(
-            text.contains("nested-completed") && text.contains("{}"),
-            "stock ApplyPatchToolOutput contract: {text}"
-        );
-        assert_committed(&events, target, Some(environment));
+        assert_nested_outcome(&result, "completed");
+        assert_committed(&events, target, environment);
         assert_eq!(std::fs::read_to_string(target)?, new);
         if environment == "remote" {
             assert_remote_cas(&fixture, &target_uri);
         }
     } else {
-        assert!(
-            text.contains("nested-rejected"),
-            "nested failure must reject the actual delegate: {text}"
-        );
-        assert!(text.contains("old_string was not found"), "{text}");
-        assert!(!text.contains("nested-completed"));
+        assert_nested_outcome(&result, "rejected");
         assert_no_commit(&events);
         assert_eq!(std::fs::read_to_string(target)?, "before");
         assert!(
@@ -230,24 +268,15 @@ async fn code_mode_structured_edit_remote_approval_is_the_actual_edit_boundary(
         .await?;
     let events = finish_turn(&test).await;
     let requests = response.requests();
-    assert_eq!(requests.len(), 2);
-    let text = output(&requests[1]);
-    let (_, success) = requests[1]
-        .custom_tool_call_output_content_and_success("exec-edit")
-        .context("Code Mode output")?;
+    let request = output_request(&requests, "exec-edit");
+    let result = output(request);
     if decision == "approve" {
-        assert_ne!(success, Some(false), "{text}");
-        assert!(
-            text.contains("nested-completed") && text.contains("{}"),
-            "nested success result: {text}"
-        );
-        assert!(!text.contains("nested-rejected"), "{text}");
-        assert_committed(&events, &path, Some("remote"));
+        assert_nested_outcome(&result, "completed");
+        assert_committed(&events, &path, "remote");
         assert_eq!(std::fs::read_to_string(&path)?, "after");
         assert_remote_cas(&fixture, &path_uri);
     } else {
-        assert!(text.contains("nested-rejected"), "{text}");
-        assert!(!text.contains("nested-completed"));
+        assert_nested_outcome(&result, "rejected");
         assert_no_commit(&events);
         assert_eq!(
             std::fs::read_to_string(&path)?,
@@ -259,8 +288,11 @@ async fn code_mode_structured_edit_remote_approval_is_the_actual_edit_boundary(
         );
         if decision == "stale" {
             assert!(
-                text.contains(codex_apply_patch::STALE_STRUCTURED_EDIT_MESSAGE),
-                "{text}"
+                result["error"]
+                    .as_str()
+                    .expect("caught rejection")
+                    .contains(codex_apply_patch::STALE_STRUCTURED_EDIT_MESSAGE),
+                "{result}"
             );
         }
         assert!(
@@ -324,15 +356,15 @@ async fn code_mode_structured_edit_uses_generic_hooks(behavior: &str) -> Result<
     .await?;
     let events = finish_turn(&test).await;
     let requests = response.requests();
-    assert_eq!(requests.len(), 2);
-    let text = output(&requests[1]);
+    let request = output_request(&requests, "exec-edit");
+    let result = output(request);
     let hooks = read_editor_hook_inputs(test.codex_home_path())?;
     assert_eq!(hooks[0]["hook_event_name"], "PreToolUse");
     assert_eq!(hooks[0]["tool_name"], "structured_edit");
     assert_eq!(hooks[0]["tool_input"]["environment_id"], "local");
     assert_eq!(std::fs::read_to_string(&local_path)?, "before");
     if behavior == "rewrite" {
-        assert_committed(&events, &remote_path, Some("remote"));
+        assert_committed(&events, &remote_path, "remote");
         assert_eq!(std::fs::read_to_string(&remote_path)?, "hook changed");
         assert_remote_cas(&fixture, &target_uri);
         let post = hooks
@@ -342,12 +374,12 @@ async fn code_mode_structured_edit_uses_generic_hooks(behavior: &str) -> Result<
         assert_eq!(post["tool_name"], "structured_edit");
         assert_eq!(post["tool_input"], effective);
         assert!(
-            requests[1]
-                .input()
+            request
+                .message_input_texts("developer")
                 .iter()
-                .any(|item| item.to_string().contains("exact edit observed"))
+                .any(|text| text.contains("exact edit observed"))
         );
-        assert!(text.contains("nested-completed"));
+        assert_nested_outcome(&result, "completed");
     } else {
         assert_eq!(hooks.len(), 1);
         assert_eq!(std::fs::read_to_string(&remote_path)?, "before");
@@ -363,9 +395,13 @@ async fn code_mode_structured_edit_uses_generic_hooks(behavior: &str) -> Result<
                 .iter()
                 .any(|rpc| rpc.method.contains("writeFile"))
         );
-        assert!(text.contains("blocked exact edit"));
-        assert!(text.contains("nested-rejected"));
-        assert!(!text.contains("nested-completed"));
+        assert_nested_outcome(&result, "rejected");
+        assert!(
+            result["error"]
+                .as_str()
+                .expect("caught rejection")
+                .contains("blocked exact edit")
+        );
     }
     test.codex.shutdown_and_wait().await?;
     fixture.stop().await

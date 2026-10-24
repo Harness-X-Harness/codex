@@ -121,7 +121,7 @@ func fakeImageServer() {
 				return
 			}
 			config, err := os.ReadFile(filepath.Join(home, "config.toml"))
-			if err != nil || !strings.Contains(string(config), "image_generation = true") || !strings.Contains(string(config), "omit_app_server_notification_media = false") {
+			if err != nil || !strings.Contains(string(config), "view_image = true") || !strings.Contains(string(config), "image_generation = true") || !strings.Contains(string(config), "omit_app_server_notification_media = false") {
 				return
 			}
 			log("image_fixture")
@@ -277,6 +277,41 @@ func fakeImageServer() {
 			if mode != "early" {
 				start()
 			}
+			if mode == "unrelated_notifications" {
+				send("turn/completed", map[string]any{"threadId": "other-thread", "turn": map[string]any{"id": "other-turn", "status": "failed", "items": []any{}}})
+				send("turn/completed", map[string]any{"threadId": "private-thread", "turn": map[string]any{"id": "uncredited-turn", "status": "failed", "items": []any{}}})
+			}
+			if second && mode == "late_prior_failure" {
+				send("turn/completed", map[string]any{"threadId": "private-thread", "turn": map[string]any{"id": "private-turn-1", "status": "failed", "items": []any{}}})
+			}
+			view := func() {
+				viewPath := firstPath
+				if mode == "view_wrong_path" {
+					viewPath = filepath.Join(home, "unrelated.png")
+				}
+				viewArgs, _ := json.Marshal(map[string]any{"path": viewPath})
+				raw(map[string]any{"type": "function_call", "call_id": "private-view", "name": "view_image", "arguments": string(viewArgs)})
+				viewData := picture(false)
+				if mode == "view_wrong_output" {
+					viewData = picture(true)
+				}
+				if mode != "view_missing_output" {
+					raw(map[string]any{"type": "function_call_output", "call_id": "private-view", "output": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(viewData)}}})
+				}
+				if mode == "view_substituted_generation" {
+					imageItem["id"] = "private-view"
+				}
+				log("bound_image_view")
+			}
+			if second && strings.HasPrefix(mode, "view_") && mode != "view_after_edit" {
+				view()
+			}
+			if second && mode == "retained_image_message" {
+				raw(map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(picture(false))}}})
+			}
+			if mode == "neutral_history_metadata" {
+				raw(map[string]any{"type": "compaction", "encrypted_content": "PRIVATE_CANARY"})
+			}
 			if second && mode == "unrelated_history" {
 				raw(map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_image", "image_url": "PRIVATE_CANARY"}}})
 			}
@@ -389,6 +424,9 @@ func fakeImageServer() {
 			if mode != "missing_output" {
 				raw(toolOutput)
 			}
+			if second && mode == "view_after_edit" {
+				view()
+			}
 			if mode == "conflicting_output" {
 				toolOutput["output"] = []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(picture(true))}}
 				raw(toolOutput)
@@ -441,7 +479,27 @@ func fakeImageServer() {
 				if mode == "changed_prior" && len(turns) == 2 {
 					turns[0].(map[string]any)["items"] = []any{}
 				}
-				result = map[string]any{"thread": imageBoundThread("private-thread", home, turns)}
+				history := append([]any(nil), turns...)
+				if mode == "reordered_history" && len(history) == 2 {
+					history[0], history[1] = history[1], history[0]
+				}
+				if mode == "extra_history" || mode == "extra_image_history" {
+					items := []any{}
+					if mode == "extra_image_history" {
+						items = history[0].(map[string]any)["items"].([]any)
+					}
+					history = append(history, map[string]any{"id": "uncredited-history", "status": "completed", "items": items})
+				}
+				if mode == "duplicate_current" {
+					history = append(history, history[len(history)-1])
+				}
+				if mode == "duplicate_prior" && len(history) == 2 {
+					history = append(history, history[0])
+				}
+				if mode == "missing_prior" && len(history) == 2 {
+					history = history[1:]
+				}
+				result = map[string]any{"thread": imageBoundThread("private-thread", home, history)}
 			}
 		default:
 			return

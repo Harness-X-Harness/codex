@@ -63,8 +63,7 @@ independently selectable owners: `TestBasicFixture`, `TestStructuredEditFixture`
 `TestReasoningHistoryFixture`, `TestHostedSearchFixture`, `TestImagePinnedFixture`,
 `TestAttachedImagePinnedFixture`,
 `TestShippedCatalog`, `TestShippedThreadSource`, `TestShippedChildFixture` and
-`TestFirstRequestShape`. No wrapper forwards into `live/*_test.go`. Shared
-fixture mechanics live under `internal/integrationfixture`; production observers
+`TestFirstRequestShape`. Shared fixture mechanics live under `internal/integrationfixture`; production observers
 and credential-free white-box tests remain in `live`. One built binary serves
 all owners. Select one with `-run '^TestBasicFixture$' ./tests/integration`.
 
@@ -204,8 +203,10 @@ exit "$status"
 `grok-test-results` checks JSON lifecycle events, not human output text. It
 rejects failed, absent, skipped or incomplete required tests and an empty suite;
 Go package-only `[no test files]` events are not test skips. `--integration`
-requires all ten named owners. Repeated `--require package:Test/subtest` supports
-an exact partial package or Live selection. Never infer coverage from a green
+requires all named owners and their mandatory proof-bearing scenarios. Repeated
+`--integration-owner TestOwner` selects complete owners from that same inventory
+for a package smoke scope. Repeated `--require package:Test/subtest` supports
+other exact partial package or Live selections. Never infer coverage from a green
 package containing no selected tests. A partial selection does not prove omitted
 cases passed. Per-case Live evidence retains safe counts, subject/digest,
 provenance and failure classifications, without prompts, model text, ciphertext,

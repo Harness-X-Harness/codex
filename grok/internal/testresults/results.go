@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 )
 
 const (
@@ -35,18 +37,70 @@ type Summary struct {
 // its children. This is independent of the paid Live scenario registry.
 func IntegrationTests() []Test {
 	const pkg = "github.com/Harness-X-Harness/codex/grok/tests/integration"
-	return []Test{
+	owners := []Test{
 		{pkg, "TestBasicFixture"},
+		{pkg, "TestBasicFixture/" + providerfixture.PrimaryModel},
+		{pkg, "TestBasicFixture/" + providerfixture.PinnedModel},
 		{pkg, "TestStructuredEditFixture"},
+		{pkg, "TestStructuredEditFixture/continuation"},
+		{pkg, "TestStructuredEditFixture/pinned"},
+		{pkg, "TestStructuredEditFixture/declined"},
+		{pkg, "TestStructuredEditFixture/replace_all"},
 		{pkg, "TestReasoningHistoryFixture"},
+		{pkg, "TestReasoningHistoryFixture/primary"},
+		{pkg, "TestReasoningHistoryFixture/pinned"},
 		{pkg, "TestHostedSearchFixture"},
+		{pkg, "TestHostedSearchFixture/web"},
+		{pkg, "TestHostedSearchFixture/web_allowed"},
+		{pkg, "TestHostedSearchFixture/web_excluded"},
+		{pkg, "TestHostedSearchFixture/x_retired"},
+		{pkg, "TestHostedSearchFixture/x_window_retired"},
+		{pkg, "TestHostedSearchFixture/unexpected_x_rejected"},
 		{pkg, "TestImagePinnedFixture"},
 		{pkg, "TestAttachedImagePinnedFixture"},
 		{pkg, "TestShippedCatalog"},
 		{pkg, "TestShippedThreadSource"},
 		{pkg, "TestShippedChildFixture"},
+		{pkg, "TestShippedChildFixture/fresh_child_result"},
+		{pkg, "TestShippedChildFixture/parent_supplied_result_rejected"},
 		{pkg, "TestFirstRequestShape"},
 	}
+	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
+		for _, profile := range []string{"isolated-history", "shipped-history", "isolated-edit"} {
+			owners = append(owners, Test{pkg, "TestFirstRequestShape/" + model + "/" + profile})
+		}
+	}
+	return owners
+}
+
+// IntegrationOwnerTests selects complete owners from the same mandatory
+// inventory. Package smoke scopes cannot replace a proof-bearing child with
+// its nominal parent pass or maintain a second, incomplete child inventory.
+func IntegrationOwnerTests(names []string) ([]Test, error) {
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		if _, duplicate := wanted[name]; duplicate || name == "" || strings.Contains(name, "/") {
+			return nil, errors.New("testresults: invalid or duplicate integration owner")
+		}
+		wanted[name] = false
+	}
+	if len(wanted) == 0 {
+		return nil, errors.New("testresults: empty integration owner selection")
+	}
+	var selected []Test
+	for _, test := range IntegrationTests() {
+		root, _, _ := strings.Cut(test.Name, "/")
+		if _, include := wanted[root]; include {
+			selected = append(selected, test)
+			wanted[root] = true
+		}
+	}
+	for _, found := range wanted {
+		if !found {
+			return nil, errors.New("testresults: unknown integration owner")
+		}
+	}
+	return selected, nil
 }
 
 type event struct {

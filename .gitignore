@@ -98,6 +98,7 @@ __pycache__/
 # Release-owned Go source assets; generated dist outputs remain ignored.
 !grok/dist/
 grok/dist/*
+!grok/dist/assets_test.go
 !grok/dist/BUILD.bazel
 !grok/dist/INSTALL.md
 !grok/dist/assets.go

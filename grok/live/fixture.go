@@ -51,7 +51,7 @@ enabled = false
 [features]
 goals = false
 shell_tool = false
-view_image = false
+view_image = %t
 sleep_tool = false
 multi_agent = false
 multi_agent_v2 = false
@@ -65,7 +65,7 @@ send_message_to_user_async = false
 token_budget = false
 request_permissions_tool = false
 deferred_executor = false
-`, options.Model, catalogPath, sandbox, options.BaseURL, options.imageFixture)
+`, options.Model, catalogPath, sandbox, options.BaseURL, options.imageFixture, options.imageFixture)
 	if os.Mkdir(cwd, 0700) != nil || os.WriteFile(catalogPath, catalog, 0600) != nil || os.WriteFile(filepath.Join(home, "config.toml"), []byte(profile), 0600) != nil {
 		return errors.New("live: isolated fixture creation failed")
 	}

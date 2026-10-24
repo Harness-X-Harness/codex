@@ -19,7 +19,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 		changed: make(chan struct{}, 1),
 	}
 	handlers := sdkFixtureHandlers{
-		requests: probe.request, notifications: probe.typedNotification, failures: make(chan error, 1),
+		requests: probe.request, notifications: probe.typedNotification, afterClose: probe.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 256 << 20},
 		// The business counter rejects the 4097th frame. The SDK default queue
 		// of 64 closes the client before that frame is delivered.
@@ -36,7 +36,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			_, closeErr := client.CloseContext(closeCtx)
 			return closeErr
 		}
-		probe.base = base
+		probe.base, probe.cwd = base, cwd
 		probe.root = filepath.Join(filepath.Dir(cwd), "generated_images")
 		policy := protocolv2.NewAskForApprovalNever()
 		experimental := true
@@ -134,6 +134,29 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 	})
 	evidence.Evidence = base
 	return evidence, err
+}
+
+// CloseContext has joined admitted callbacks before this hook runs. Revalidate
+// already credited evidence; cleanup must not create proof from a late callback.
+func (probe *imageProbe) afterClose(_ string, base *Evidence, cause error) error {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	observed := probe.cause
+	if cause == nil && observed == nil && base.Completed {
+		if probe.prior == nil || probe.newest == nil {
+			observed = errors.New("live: completed image evidence unavailable")
+		} else if _, err := inspectImage(probe.root, probe.prior.path, probe.evidence.FirstImageSHA256); err != nil {
+			observed = err
+		} else if _, err := inspectImage(probe.root, probe.newest.path, probe.evidence.EditedImageSHA256); err != nil {
+			observed = err
+		}
+	}
+	if base.Completed && (cause != nil || observed != nil) {
+		base.Completed, base.Stage = false, "image_observation_failed"
+		probe.evidence.TurnCompleted = false
+		probe.evidence.EditedImageSHA256, probe.evidence.EditedHistorySHA256 = "", ""
+	}
+	return observed
 }
 
 func imageTransport(ctx context.Context, err error) error {
@@ -272,6 +295,13 @@ func (probe *imageProbe) signal() {
 // because the image proof hashes their complete opaque diagnostic content.
 func imageItemFromSDK(value protocolv2.ThreadItem) (imageItem, error) {
 	result := imageItem{Type: string(value.Kind())}
+	if user, ok := value.AsUserMessage(); ok {
+		for _, part := range user.Content {
+			if part.Kind() == protocolv2.UserInputKindImage || part.Kind() == protocolv2.UserInputKindLocalImage {
+				result.HasImage = true
+			}
+		}
+	}
 	if image, ok := value.AsImageGeneration(); ok {
 		result.ID, result.Status, result.Result, result.SavedPath = image.ID, image.Status, image.Result, sdkString(image.SavedPath)
 		if image.Failure != nil && image.Failure.Value != nil {

@@ -1,13 +1,13 @@
 package live
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -166,7 +166,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					if !containsProofValue(parentReply, nonce) || containsProofValue(parentKnown[child.ID], nonce) {
 						continue
 					}
-					switch stream.proof(child, parent, turn, reply, nonce, setupMarker) {
+					switch stream.proof(child, parent, turn, nonce, setupMarker) {
 					case childNotProven:
 						continue
 					case childPending:
@@ -176,7 +176,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					}
 					evidence.ChildBound, evidence.ChildCompleted = true, true
 					credited = append(credited, func() bool {
-						return stream.proof(child, parent, turn, reply, nonce, setupMarker) == childProven
+						return stream.proof(child, parent, turn, nonce, setupMarker) == childProven
 					})
 					matched = true
 				}
@@ -185,7 +185,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 				break
 			}
 			if !pending {
-				return errors.New("live: qualifying child result absent")
+				return failedObservation("child_result_not_proven", "live: qualifying child result absent")
 			}
 			if waited == childStreamEventLimit {
 				return errors.New("live: child stream budget exceeded")
@@ -220,7 +220,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					return nil
 				}
 			}
-			return errors.New("live: qualifying child result absent")
+			return failedObservation("child_result_not_proven", "live: qualifying child result absent")
 		}
 		if err := server.finalize(); err != nil {
 			return err
@@ -234,19 +234,38 @@ func retainsSeedPrefix(thread productThread, seed []productTurn) bool {
 	if len(seed) == 0 || len(thread.Turns) < len(seed) {
 		return false
 	}
+	// The text setup preserves role/content/order and successful turn identity,
+	// not reconstructed item IDs or diagnostic metadata.
+	type textItem struct{ role, text string }
+	conversation := func(turn productTurn) ([]textItem, bool) {
+		var result []textItem
+		for _, item := range turn.Items {
+			if message, ok := item.AsUserMessage(); ok {
+				var parts []string
+				for _, part := range message.Content {
+					text, ok := part.AsText()
+					if !ok {
+						return nil, false
+					}
+					parts = append(parts, text.Text)
+				}
+				result = append(result, textItem{"user", strings.Join(parts, "\n")})
+			}
+			if message, ok := item.AsAgentMessage(); ok {
+				result = append(result, textItem{"assistant", message.Text})
+			}
+		}
+		return result, true
+	}
 	for index, original := range seed {
 		inherited := thread.Turns[index]
-		if inherited.ID != original.ID || inherited.Status != original.Status || completedProductTurn(inherited) != nil || len(inherited.Items) != len(original.Items) {
+		if inherited.ID != original.ID || inherited.Status != original.Status || completedProductTurn(inherited) != nil {
 			return false
 		}
-		for i, item := range original.Items {
-			// Compare the complete SDK union, including fields not projected into
-			// Story evidence. Canonical encoding preserves nullable wire semantics.
-			before, beforeErr := json.Marshal(item)
-			after, afterErr := json.Marshal(inherited.Items[i])
-			if beforeErr != nil || afterErr != nil || !bytes.Equal(before, after) {
-				return false
-			}
+		before, beforeOK := conversation(original)
+		after, afterOK := conversation(inherited)
+		if !beforeOK || !afterOK || !slices.Equal(before, after) {
+			return false
 		}
 	}
 	return true
@@ -316,7 +335,7 @@ func finalProductReply(turn productTurn) (string, error) {
 			continue
 		}
 		text := strings.TrimSpace(item.Text)
-		if item.ID == "" || text == "" {
+		if item.ID == "" {
 			return "", errors.New("live: invalid product reply")
 		}
 		value := [2]string{phase, text}
@@ -327,6 +346,11 @@ func finalProductReply(turn productTurn) (string, error) {
 			continue
 		}
 		identities[item.ID] = value
+		// Stock finalization can retain a message after stripping hidden markup.
+		// It contributes no answer, but its identity must still detect conflicts.
+		if text == "" {
+			continue
+		}
 		size += len(text)
 		if size > 4096 {
 			return "", errors.New("live: product reply budget exceeded")

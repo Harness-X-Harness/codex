@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
-	"reflect"
 	"strings"
 	"sync"
 )
@@ -61,9 +60,9 @@ func (stream *childStream) snapshot() []frame {
 	return out
 }
 
-func (stream *childStream) proof(child, parent productThread, credited productTurn, reply, nonce, setupMarker string) childProof {
+func (stream *childStream) proof(child, parent productThread, credited productTurn, nonce, setupMarker string) childProof {
 	type observedTurn struct {
-		terminalError                                      any
+		terminalError                                      bool
 		started, ended, invalid                            bool
 		status                                             string
 		inputs                                             int
@@ -140,11 +139,11 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 			if len(event.Turn.Error) != 0 && json.Unmarshal(event.Turn.Error, &terminalError) != nil {
 				return childNotProven
 			}
-			if !observed.started || (observed.ended && (observed.status != event.Turn.Status || !reflect.DeepEqual(observed.terminalError, terminalError))) {
+			if !observed.started || (observed.ended && (observed.status != event.Turn.Status || observed.terminalError != (terminalError != nil))) {
 				observed.invalid = true
 			}
 			observed.ended, observed.status = true, event.Turn.Status
-			observed.terminalError = terminalError
+			observed.terminalError = terminalError != nil
 			if observed.endedAt < 0 {
 				observed.endedAt = index
 			}
@@ -198,14 +197,19 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 				}
 				var text []string
 				for _, part := range item.Content {
-					if part.Type != "output_text" {
+					if part.Type != "output_text" && part.Type != "input_text" {
 						observed.invalid = true
 					}
 					text = append(text, part.Text)
 				}
-				joined := strings.Join(text, "\n")
+				joined := strings.Join(text, "")
 				public := protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: item.ID, Phase: protocolv2.Value(protocolv2.MessagePhase(item.Phase)), Text: joined})
 				observed.reply.Items = append(observed.reply.Items, public)
+				// Preserve identity for finalProductReply, but only visible content
+				// establishes final-answer priority or proof-value timing.
+				if strings.TrimSpace(joined) == "" {
+					continue
+				}
 				if item.Phase == "final_answer" {
 					observed.hasFinal = true
 					if observed.finalResultAt < 0 && containsProofValue(joined, nonce) {
@@ -260,12 +264,18 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	if !selected.ended {
 		return childPending
 	}
-	if selected.status != "completed" || selected.terminalError != nil || nonceAt < 0 || markerAt < 0 || selected.firstInput < 0 || selected.firstInput >= min(nonceAt, markerAt) {
+	if selected.status != "completed" || selected.terminalError || nonceAt < 0 || markerAt < 0 || selected.firstInput < 0 || selected.firstInput >= min(nonceAt, markerAt) {
 		return childNotProven
 	}
 	rawReply, err := finalProductReply(selected.reply)
-	if err != nil || rawReply != reply {
+	if err != nil || !containsProofValue(rawReply, nonce) || !containsProofValue(rawReply, setupMarker) {
 		return childNotProven
+	}
+	// Surrounding prose may differ; the credited result must remain unambiguous.
+	for _, value := range childNonce.FindAllString(rawReply, -1) {
+		if value != nonce {
+			return childNotProven
+		}
 	}
 	// Only this child's order is relevant. Every own durable turn through the
 	// credited turn needs its observed lifecycle and consumed input; a missed
@@ -299,7 +309,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		if len(turn.Error) != 0 && json.Unmarshal(turn.Error, &durableError) != nil {
 			return childNotProven
 		}
-		if own >= len(order) || order[own] != turn.ID || observed == nil || !observed.started || !observed.ended || observed.invalid || observed.inputs == 0 || observed.status != turn.Status || !reflect.DeepEqual(observed.terminalError, durableError) {
+		if own >= len(order) || order[own] != turn.ID || observed == nil || !observed.started || !observed.ended || observed.invalid || observed.inputs == 0 || observed.status != turn.Status || observed.terminalError != (durableError != nil) {
 			return childNotProven
 		}
 		own++

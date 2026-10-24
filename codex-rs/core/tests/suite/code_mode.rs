@@ -140,7 +140,7 @@ use wiremock::matchers::path;
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
 
-fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
+pub(super) fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
         Some(Value::String(text)) => {
@@ -148,6 +148,39 @@ fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value>
         }
         _ => panic!("custom tool output should be serialized as text or content items"),
     }
+}
+
+pub(super) fn scripted_json_witness(items: &[Value], marker: &str) -> Value {
+    let witnesses = items
+        .iter()
+        .filter(|item| item["type"] == "input_text")
+        .filter_map(|item| serde_json::from_str::<Value>(item["text"].as_str()?).ok())
+        .filter(|value| value["witness"] == marker)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        witnesses.len(),
+        1,
+        "bound call must return one unambiguous {marker} witness"
+    );
+    witnesses.into_iter().next().expect("unique witness")
+}
+
+#[test]
+fn scripted_json_witness_requires_one_marker_without_an_output_slot() {
+    let witness = json!({"witness": "fixture", "observed": true});
+    let item = json!({"type": "input_text", "text": witness.to_string()});
+    let diagnostic = json!({"type": "input_text", "text": "host diagnostic"});
+    for items in [
+        vec![item.clone(), diagnostic.clone()],
+        vec![diagnostic.clone(), item.clone()],
+    ] {
+        assert_eq!(scripted_json_witness(&items, "fixture"), witness);
+    }
+    assert!(std::panic::catch_unwind(|| scripted_json_witness(&[diagnostic], "fixture")).is_err());
+    assert!(
+        std::panic::catch_unwind(|| scripted_json_witness(&[item.clone(), item], "fixture"))
+            .is_err()
+    );
 }
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -4353,6 +4386,7 @@ const output = decimal.output + exponent.output;
 const first = output.indexOf("FIRST:decimal");
 const second = output.indexOf("SECOND:exponent");
 text(JSON.stringify({
+  witness: "stdin-numeric",
   rejected,
   same_session: decimal.session_id === started.session_id,
   lines_delivered_in_order: first >= 0 && second > first,
@@ -4379,8 +4413,11 @@ text(JSON.stringify({
     let request = written
         .last_request()
         .expect("Code Mode completion request");
+    let (_, success) = custom_tool_output_body_and_success(&request, "stdin-numeric");
+    assert_ne!(success, Some(false));
     let items = custom_tool_output_items(&request, "stdin-numeric");
-    let mut result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
+    let mut result = scripted_json_witness(&items, "stdin-numeric");
+    result.as_object_mut().unwrap().remove("witness");
     let rejected = result.as_object_mut().unwrap().remove("rejected").unwrap();
     let errors = rejected.as_array().expect("numeric rejection results");
     assert_eq!(errors.len(), 6);
@@ -4388,8 +4425,8 @@ text(JSON.stringify({
         assert!(
             error
                 .as_str()
-                .is_some_and(|message| message.contains("failed to parse function arguments")),
-            "expected a typed argument rejection: {error}",
+                .is_some_and(|message| !message.trim().is_empty()),
+            "each invalid write must reject with a diagnostic: {error}",
         );
     }
     assert_eq!(
@@ -4433,14 +4470,17 @@ const results = await Promise.all([
   }),
 ]);
 
-text(JSON.stringify([results[0].output.includes("code-alpha-ready"), results[1].output.includes("code-beta-ready")]));
+text(JSON.stringify({ witness: "parallel-stdin", outputs: [results[0].output.includes("code-alpha-ready"), results[1].output.includes("code-beta-ready")] }));
 "#,
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
-    let result: Value = serde_json::from_str(text_item(&items, /*index*/ 1))?;
-    assert_eq!(result, serde_json::json!([true, true]));
+    let request = second_mock.single_request();
+    let (_, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
+    let result = scripted_json_witness(&items, "parallel-stdin");
+    assert_eq!(result["outputs"], serde_json::json!([true, true]));
 
     Ok(())
 }

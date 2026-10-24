@@ -5,10 +5,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/Harness-X-Harness/codex/grok/dist"
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestShippedEndpointPreservesSourceAssets(t *testing.T) {
@@ -30,15 +32,17 @@ func TestShippedEndpointPreservesSourceAssets(t *testing.T) {
 	if err := SubstituteShippedEndpoint(home, endpoint); err != nil {
 		t.Fatal(err)
 	}
-	_, original, err := dist.Defaults()
-	if err != nil {
-		t.Fatal(err)
-	}
 	config, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Replace(string(config), endpoint, original, 1) != dist.Profile() {
+	var expected, actual map[string]any
+	if toml.Unmarshal([]byte(dist.Profile()), &expected) != nil || toml.Unmarshal(config, &actual) != nil {
+		t.Fatal("profile is not valid TOML")
+	}
+	providers := expected["model_providers"].(map[string]any)
+	providers[expected["model_provider"].(string)].(map[string]any)["base_url"] = endpoint
+	if !reflect.DeepEqual(actual, expected) {
 		t.Fatal("profile policy changed")
 	}
 	catalog, err := os.ReadFile(filepath.Join(home, "models.json"))

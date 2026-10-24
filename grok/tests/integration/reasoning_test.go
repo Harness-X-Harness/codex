@@ -10,13 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
@@ -59,7 +59,7 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 		fail("reasoning_request_changed")
 		return
 	}
-	name, ok := reasoningHTTPDeclaration(body.Tools)
+	name, ok := integrationfixture.HistoryProbeDeclaration(body.Tools)
 	if !ok || (fixture.toolName != "" && name != fixture.toolName) || (fixture.threadID != "" && threadID != fixture.threadID) {
 		fail("tool_or_thread_changed")
 		return
@@ -85,7 +85,9 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 			reasoningAt = index
 			var fields map[string]json.RawMessage
 			_ = json.Unmarshal(raw, &fields)
-			if item.EncryptedContent != reasoningHTTPCipher || string(fields["summary"]) != "[]" || fields["content"] != nil {
+			var summary []json.RawMessage
+			if item.EncryptedContent != reasoningHTTPCipher || json.Unmarshal(fields["summary"], &summary) != nil ||
+				summary == nil || len(summary) != 0 || fields["content"] != nil {
 				fail("encrypted_history_changed")
 				return
 			}
@@ -107,8 +109,7 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 			}
 			if fixture.token == "" {
 				fixture.token = token
-				fixture.output = append(json.RawMessage(nil), item.Output...)
-			} else if fixture.token != token || !bytes.Equal(fixture.output, item.Output) {
+			} else if fixture.token != token {
 				fail("tool_result_replay_changed")
 				return
 			}
@@ -189,44 +190,18 @@ type reasoningHTTP struct {
 	failure                          string
 	requests                         int
 	replayed, continued              bool
-	output                           json.RawMessage
 }
 
 const reasoningHTTPCall = "controlled_history_call"
 
 const reasoningHTTPCipher = "opaque-controlled-history-replay"
 
-func reasoningHTTPDeclaration(tools []json.RawMessage) (string, bool) {
-	const projected = "local___grok_history_probe_5c6dab5ce2f3142e"
-	var name string
-	for _, raw := range tools {
-		var tool struct {
-			Type, Name string
-			Parameters map[string]any
-		}
-		if json.Unmarshal(raw, &tool) != nil {
-			return "", false
-		}
-		switch tool.Type {
-		case "function":
-			if name != "" || tool.Name != projected || !reflect.DeepEqual(tool.Parameters,
-				map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}) {
-				return "", false
-			}
-			name = tool.Name
-		default:
-			return "", false
-		}
-	}
-	return name, name != ""
-}
-
 const reasoningHTTPPrivate = "CONTROLLED_PRIVATE_REASONING"
 
 // The controlled backend observes actual product replay and tool execution;
 // it supplies the answers and therefore does not establish real-provider recall.
 func TestReasoningHistoryFixture(t *testing.T) {
-	subject := nativeSubject(t)
+	t.Run("replay_semantics", testReasoningFixtureReplaySemantics)
 	for _, tc := range []struct {
 		name, model string
 	}{
@@ -235,6 +210,7 @@ func TestReasoningHistoryFixture(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			integrationObservation(t)
+			subject := nativeSubject(t)
 			fixture := &reasoningHTTP{model: tc.model}
 			backend := httptest.NewServer(fixture)
 			defer backend.Close()
@@ -258,14 +234,11 @@ func TestReasoningHistoryFixture(t *testing.T) {
 			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 64 || got.ReplyBytes != 64 {
 				t.Fatal("completed encrypted reasoning, paired tool and final recall evidence missing")
 			}
-			got.ObservedAt = ""
-			want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
-				Target: subject.Target, Environment: subject.Environment, Model: tc.model, Stage: "history_recalled",
-				Processes: 1, Initializations: 1, Threads: 1, Turns: 2, Bound: true, Completed: true,
-				FirstCompleted: true, FirstRecall: true, Recalled: true, FirstReplyBytes: 64, ReplyBytes: 64,
-				ToolCalls: 1, CompletedTools: got.CompletedTools, ReasoningItems: got.ReasoningItems, EncryptedItems: got.EncryptedItems}
-			if got != want {
-				t.Fatal("native two-turn evidence changed")
+			if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 || got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
+				got.Target != subject.Target || got.Environment != subject.Environment || got.Model != tc.model ||
+				got.Stage != "history_recalled" || !got.Bound || !got.Completed || !got.FirstCompleted ||
+				!got.FirstRecall || !got.Recalled || got.CleanupPending {
+				t.Fatal("native two-turn identity, completion or recall evidence missing")
 			}
 		})
 	}

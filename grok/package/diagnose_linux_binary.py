@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import shutil
 import signal
@@ -127,8 +128,17 @@ def require_success(evidence):
         raise ValueError("a release startup probe failed; see retained diagnostics")
     if results[1]["binary_sha256"] != results[2]["binary_sha256"]:
         raise ValueError("staging changed the stripped runtime bytes")
-    versions = [(evidence / phase / "version.txt").read_bytes() for phase in PHASES]
-    if not versions[0].strip() or len(set(versions)) != 1:
+    versions = []
+    for phase in PHASES:
+        output = (evidence / phase / "version.txt").read_text()
+        matches = re.findall(
+            r"(?m)^codex-cli[ \t]+([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?)(?:[ \t].*)?$",
+            output,
+        )
+        if len(matches) != 1:
+            raise ValueError("release startup output changed or lacks an unambiguous version")
+        versions.append(matches[0])
+    if len(set(versions)) != 1:
         raise ValueError("release startup output changed across package construction")
 
 

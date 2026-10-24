@@ -381,3 +381,150 @@ func TestSDKEditObserverIncompleteProof(t *testing.T) {
 		})
 	}
 }
+
+func TestSDKEditObserverSemanticReplay(t *testing.T) {
+	for _, kind := range []string{"arguments", "output_form", "output_optional_name", "file_path", "irrelevant_call_fields"} {
+		t.Run(kind, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			editSDKStory(t, observer)
+			var err error
+			switch kind {
+			case "arguments", "irrelevant_call_fields":
+				item := editSDKCall(t, observer)
+				if kind == "arguments" {
+					item.Arguments = fmt.Sprintf(` { "new_string":%q, "file_path":"./structured_edit_fixture.txt", "old_string":%q } `, editNew, editOld)
+				} else {
+					item.ID, item.Status = "transport-item-id", "completed"
+				}
+				err = editSDKRaw(t, observer, "first", item)
+			case "output_form", "output_optional_name":
+				item := editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`[{"type":"input_text","text":"PRIVATE_CANARY_result"}]`)}
+				if kind == "output_optional_name" {
+					item.Name = "structured_edit"
+				}
+				err = editSDKRaw(t, observer, "first", item)
+			case "file_path":
+				turn := editSDKTurn("first", false)
+				change, _ := turn.Items[1].AsFileChange()
+				change.Changes[0].Path = "./" + editFile
+				turn.Items[1] = protocolv2.NewThreadItemFileChange(change)
+				err = editSDKTerminal(observer, turn)
+			}
+			if err != nil || observer.requireTurnProof() != nil {
+				t.Fatal("equivalent operation facts rejected")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverReplySelection(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	editSDKStory(t, observer)
+	turn := editSDKTurn("first", false)
+	turn.Items = append(turn.Items,
+		protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "commentary", Text: "not the answer", Phase: protocolv2.Value(protocolv2.MessagePhaseCommentary)}),
+		protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "legacy", Text: "legacy fallback"}),
+		protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "second-final", Text: "Additional confirmation.", Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)}))
+	if editSDKTerminal(observer, turn) != nil || observer.requireTurnProof() != nil {
+		t.Fatal("final answer erased by commentary or legacy text")
+	}
+	got, err := observer.snapshot()
+	if err != nil || got.ReplyBytes != len("PRIVATE_CANARY\nAdditional confirmation.") {
+		t.Fatal("reply not selected by shared final-answer semantics")
+	}
+}
+
+func TestSDKEditObserverSettledTurnIdentity(t *testing.T) {
+	for _, duplicate := range []bool{false, true} {
+		observer := editSDKObserver(t, editFixture{continuation: true})
+		editSDKStory(t, observer)
+		if observer.beginTurn() != nil || observer.reconcile(protocolv2.Turn{ID: "second", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil || editSDKTerminal(observer, editSDKTurn("second", false)) != nil {
+			t.Fatal("continuation failed")
+		}
+		turns := []protocolv2.Turn{editSDKTurn("second", false), editSDKTurn("first", false)}
+		if duplicate {
+			turns[1] = turns[0]
+		}
+		err := observer.validateSettled("PRIVATE_CANARY_thread", turns)
+		if (err != nil) != duplicate {
+			t.Fatal("settled proof used array position instead of unique submitted turn identities")
+		}
+	}
+}
+
+func TestSDKEditObserverSemanticReplayRejectsInvalidAuthority(t *testing.T) {
+	for _, kind := range []string{"output_array_of_strings", "output_name", "output_namespace", "call_namespace", "call_name", "file_other_root"} {
+		t.Run(kind, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			editSDKStory(t, observer)
+			var err error
+			switch kind {
+			case "file_other_root":
+				turn := editSDKTurn("first", false)
+				change, _ := turn.Items[1].AsFileChange()
+				change.Changes[0].Path = filepath.Join(string(filepath.Separator), "OTHER", editFile)
+				turn.Items[1] = protocolv2.NewThreadItemFileChange(change)
+				err = editSDKTerminal(observer, turn)
+			case "call_namespace", "call_name":
+				item := editSDKCall(t, observer)
+				if kind == "call_name" {
+					item.Name = "local__structured_edit__deadbeefcafe"
+				} else {
+					namespace := "other"
+					item.Namespace = &namespace
+				}
+				err = editSDKRaw(t, observer, "first", item)
+			default:
+				item := editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"PRIVATE_CANARY_result"`)}
+				switch kind {
+				case "output_array_of_strings":
+					item.Output = json.RawMessage(`["PRIVATE_CANARY_result"]`)
+				case "output_name":
+					item.Name = "other"
+				case "output_namespace":
+					namespace := "other"
+					item.Namespace = &namespace
+				}
+				err = editSDKRaw(t, observer, "first", item)
+			}
+			if err == nil || observer.requireTurnProof() == nil {
+				t.Fatal("semantic normalization erased invalid authority or target")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverEmptyFragmentsBeforeFinal(t *testing.T) {
+	for _, phase := range []string{"", "final_answer"} {
+		t.Run("phase_"+phase, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			message := protocolv2.ThreadItemAgentMessage{ID: "empty-fragment", Text: " \n "}
+			if phase != "" {
+				message.Phase = protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)
+			}
+			notification := protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: protocolv2.ItemCompletedNotification{
+				ThreadID: "PRIVATE_CANARY_thread", TurnID: "first", Item: protocolv2.NewThreadItemAgentMessage(message), CompletedAtMS: 1,
+			}})
+			if observer.typedNotification(context.Background(), notification) != nil {
+				t.Fatal("empty fragment invalidated the turn before its final answer")
+			}
+			editSDKStory(t, observer)
+			got, err := observer.snapshot()
+			if err != nil || got.ReplyBytes != len("PRIVATE_CANARY") {
+				t.Fatal("empty fragment erased a later complete answer")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverConflictingCompletedReply(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	editSDKStory(t, observer)
+	turn := editSDKTurn("first", false)
+	message, _ := turn.Items[0].AsAgentMessage()
+	message.Text = "different completed answer"
+	turn.Items[0] = protocolv2.NewThreadItemAgentMessage(message)
+	if editSDKTerminal(observer, turn) == nil || observer.requireTurnProof() == nil {
+		t.Fatal("same completed message identity accepted contradictory content")
+	}
+}

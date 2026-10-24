@@ -111,37 +111,42 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 			return err
 		}
 	}
-	if read.Thread.ID != p.threadID || len(turns) != p.evidence.Turns {
+	if read.Thread.ID != p.threadID || len(turns) > 32 {
 		return errors.New("live: settled search history unavailable")
 	}
-	if p.previousID != "" {
-		previous := turns[0]
-		if previous.ID != p.previousID {
-			return errors.New("live: search history identity changed")
+	currentIndex, previousFound := -1, false
+	for index, value := range turns {
+		if value.ID == p.previousID && p.previousID != "" {
+			if previousFound {
+				return errors.New("live: search history identity duplicated")
+			}
+			previousFound = true
+			if err := validateSearchTerminal(value); err != nil {
+				return err
+			}
 		}
-		if err := validateSearchTerminal(previous); err != nil {
-			return err
-		}
-	}
-	current := turns[len(turns)-1]
-	if current.ID != p.turnID {
-		return errors.New("live: search turn identity changed")
-	}
-	if err := validateSearchTerminal(current); err != nil {
-		return err
-	}
-	p.evidence.ReplyBytes = 0
-	for _, item := range current.Items {
-		if item.Type == "agentMessage" {
-			p.evidence.ReplyBytes = 0
-			if item.Phase == "" || item.Phase == "final_answer" {
-				p.evidence.ReplyBytes = len(strings.TrimSpace(item.Text))
+		if value.ID == p.turnID {
+			if currentIndex >= 0 {
+				return errors.New("live: search turn identity duplicated")
+			}
+			currentIndex = index
+			if err := validateSearchTerminal(value); err != nil {
+				return err
 			}
 		}
 	}
-	if p.evidence.ReplyBytes == 0 {
-		return errors.New("live: final search reply absent")
+	if currentIndex < 0 || p.previousID != "" && !previousFound {
+		return errors.New("live: search history identity unavailable")
 	}
+	current, err := productTurnFromSDK(read.Thread.Turns[currentIndex])
+	if err != nil {
+		return errors.New("live: invalid search evidence")
+	}
+	reply, err := finalProductReply(current)
+	if err != nil {
+		return err
+	}
+	p.evidence.ReplyBytes = len(reply)
 	p.settled = true
 	p.result.SettledTurns++
 	return nil

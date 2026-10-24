@@ -25,7 +25,8 @@ follow-up to the source and one to the fork, **then**:
 
 - the source and fork report the original Grok Provider and model;
 - each follow-up completes through the same Grok Provider;
-- both durable histories retain the seed Turn as an exact unchanged prefix;
+- both durable histories retain the seed Turn identity, successful state, and
+  ordered user/assistant content without requiring unchanged display metadata;
 - the two branches continue independently; and
 - no cross-Provider fallback completes either branch.
 

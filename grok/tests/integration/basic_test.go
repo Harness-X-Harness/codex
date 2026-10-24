@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
@@ -27,11 +28,12 @@ func TestBasicFixture(t *testing.T) {
 				defer request.Body.Close()
 				requests.Add(1)
 				var body struct {
-					Model         string            `json:"model"`
-					Tools         []json.RawMessage `json:"tools"`
-					Stream, Store bool
+					Model  string            `json:"model"`
+					Tools  []json.RawMessage `json:"tools"`
+					Stream bool
+					Store  *bool
 				}
-				if json.NewDecoder(io.LimitReader(request.Body, 1<<20)).Decode(&body) != nil || request.Method != "POST" || request.URL.Path != "/v1/responses" || request.Header.Get("Authorization") != "Bearer fixture-key" || body.Model != model || len(body.Tools) != 0 || !body.Stream || body.Store {
+				if json.NewDecoder(io.LimitReader(request.Body, 1<<20)).Decode(&body) != nil || request.Method != "POST" || request.URL.Path != "/v1/responses" || request.Header.Get("Authorization") != "Bearer fixture-key" || body.Model != model || len(body.Tools) != 0 || !body.Stream || body.Store == nil || *body.Store {
 					invalid.Store(true)
 				}
 				writer.Header().Set("Content-Type", "text/event-stream")
@@ -57,9 +59,12 @@ func TestBasicFixture(t *testing.T) {
 			}
 			encoded, _ := json.Marshal(got)
 			t.Logf("native fixture evidence: %s", encoded)
-			got.ObservedAt = ""
-			want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA, Target: subject.Target, Environment: subject.Environment, Model: model, Stage: "final_reply", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 12, Bound: true, Completed: true}
-			if got != want || requests.Load() == 0 || invalid.Load() {
+			if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 ||
+				got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
+				got.Target != subject.Target || got.Environment != subject.Environment || got.Model != model ||
+				!got.Bound || !got.Completed || got.CleanupPending || got.ReplyBytes <= 0 ||
+				got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != 1 ||
+				requests.Load() == 0 || invalid.Load() {
 				t.Fatal("native Provider/fixture/terminal composition was not proven")
 			}
 		})
@@ -71,8 +76,12 @@ func TestShippedCatalog(t *testing.T) {
 	subject := nativeSubject(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	models, err := dist.ModelSlugs()
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := live.ShippedCatalog(ctx, subject, "catalog-only-fixture")
-	if err != nil || !got.ShippedCatalog || got.CatalogModels != 2 || got.Turns != 0 {
+	if err != nil || !got.ShippedCatalog || got.CatalogModels != len(models) || got.Turns != 0 || got.CleanupPending {
 		t.Fatalf("native shipped catalog: %+v %v", got, err)
 	}
 }

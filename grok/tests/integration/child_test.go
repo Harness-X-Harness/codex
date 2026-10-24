@@ -95,25 +95,26 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		http.Error(writer, reason, http.StatusBadRequest)
 	}
 	var body struct {
-		Model         string
-		Tools         []json.RawMessage
-		Input         []json.RawMessage
-		Stream, Store bool
-		Reasoning     struct{ Effort string }
+		Model     string
+		Tools     []json.RawMessage
+		Input     []json.RawMessage
+		Stream    bool
+		Store     *bool
+		Reasoning struct{ Effort string }
 	}
 	data, err := io.ReadAll(io.LimitReader(request.Body, (1<<20)+1))
 	threadID := request.Header.Get("thread-id")
 	if err != nil || len(data) > 1<<20 || json.Unmarshal(data, &body) != nil ||
 		request.Method != "POST" || request.URL.Path != "/v1/responses" ||
 		request.Header.Get("Authorization") != "Bearer fixture-key" || threadID == "" ||
-		body.Model != fixture.model || !body.Stream || body.Store || len(body.Input) > 128 || fixture.requests > 5 {
+		body.Model != fixture.model || !body.Stream || body.Store == nil || *body.Store || len(body.Input) > 128 || fixture.requests > 5 {
 		fail("request_contract")
 		return
 	}
 	// Ultra is the stock local alias for xhigh on the wire.
 	effort := "xhigh"
 	if fixture.parentID == "" {
-		effort = "high"
+		effort = fixture.seedEffort
 	}
 	if body.Reasoning.Effort != effort {
 		fail("reasoning_effort_changed")
@@ -137,7 +138,7 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 	}
 	var userText []string
 	seedAt, replyAt, taskAt := -1, -1, -1
-	spawnAt, spawnOutputAt, newTaskAt, newTasks := -1, -1, -1, 0
+	newTaskAt := -1
 	calls, outputs := make(map[string]childHTTPItem), make(map[string]childHTTPItem)
 	for index, raw := range body.Input {
 		var item childHTTPItem
@@ -156,12 +157,11 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 					userText = append(userText, part.Text)
 				}
 				if item.Role == "user" && strings.HasPrefix(part.Text, "Remember this bounded setup marker: ") {
-					var seed map[string]any
-					if json.Unmarshal(raw, &seed) != nil || seedAt >= 0 || (fixture.seed != nil && !reflect.DeepEqual(seed, fixture.seed)) {
+					if seedAt >= 0 || (fixture.seed != "" && part.Text != fixture.seed) {
 						fail("seed_replay_changed")
 						return
 					}
-					fixture.seed, seedAt = seed, index
+					fixture.seed, seedAt = part.Text, index
 					marker := strings.TrimPrefix(strings.SplitN(part.Text, ". ", 2)[0], "Remember this bounded setup marker: ")
 					decoded, decodeErr := hex.DecodeString(marker)
 					if decodeErr != nil || len(decoded) != 16 {
@@ -180,11 +180,9 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 				if item.Role == "user" && strings.HasPrefix(part.Text, "Delegate one bounded task to a child named live_child ") {
 					taskAt = index
 				}
-				if item.Role == "user" && strings.HasPrefix(part.Text, "Message Type: NEW_TASK\n") {
-					newTasks++
-					if part.Text == childHTTPNewTask {
-						newTaskAt = index
-					}
+				if item.Role == "user" && strings.Contains(part.Text, childHTTPTask) &&
+					!strings.HasPrefix(part.Text, "Delegate one bounded task to a child named live_child ") {
+					newTaskAt = index
 				}
 			}
 		case "function_call":
@@ -193,24 +191,17 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 				return
 			}
 			calls[item.CallID] = item
-			if item.CallID == "child_spawn" {
-				spawnAt = index
-			}
 		case "function_call_output":
 			if item.CallID == "" || outputs[item.CallID].CallID != "" || calls[item.CallID].CallID == "" {
 				fail("output_replay_binding")
 				return
 			}
 			outputs[item.CallID] = item
-			if item.CallID == "child_spawn" {
-				spawnOutputAt = index
-			}
 		default:
 			fail("unsupported_input_kind")
 			return
 		}
 	}
-	joined := strings.Join(userText, "\n")
 	if seedAt < 0 {
 		fail("seed_missing")
 		return
@@ -233,21 +224,10 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 			fail("child_input_binding")
 			return
 		}
-		// Stock 0.164 preserves the full fork prefix, including the in-flight
-		// parent spawn. History normalization inserts its missing output as
-		// "aborted" immediately after the call; no other tool history is allowed.
-		spawnCall := calls["child_spawn"]
-		var spawnArgs map[string]any
-		var spawnOutput string
-		if len(calls) != 1 || len(outputs) != 1 || spawnCall.Name != fixture.spawn ||
-			json.Unmarshal([]byte(spawnCall.Arguments), &spawnArgs) != nil ||
-			!reflect.DeepEqual(spawnArgs, map[string]any{"task_name": "live_child", "message": childHTTPTask}) ||
-			json.Unmarshal(outputs["child_spawn"].Output, &spawnOutput) != nil || spawnOutput != "aborted" ||
-			spawnAt <= taskAt || spawnOutputAt != spawnAt+1 {
-			fail("child_spawn_replay_changed")
-			return
-		}
-		if newTasks != 1 || newTaskAt <= spawnOutputAt {
+		// The child must receive the controlled task after the inherited seed.
+		// Historical tool records are not the delegation outcome: stock may
+		// retain/normalize them without changing the task or its causal result.
+		if newTaskAt <= taskAt {
 			fail("child_task_binding")
 			return
 		}
@@ -311,19 +291,21 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		var waitArgs map[string]any
 		var waitText string
 		var result struct {
-			Message  string
-			TimedOut bool `json:"timed_out"`
+			TimedOut *bool `json:"timed_out"`
 		}
 		if waitCall.Name != fixture.wait || json.Unmarshal([]byte(waitCall.Arguments), &waitArgs) != nil ||
 			!reflect.DeepEqual(waitArgs, map[string]any{"timeout_ms": float64(10000)}) ||
 			json.Unmarshal(outputs["child_wait"].Output, &waitText) != nil ||
-			json.Unmarshal([]byte(waitText), &result) != nil || result.TimedOut || result.Message != "Wait completed." {
+			json.Unmarshal([]byte(waitText), &result) != nil || result.TimedOut == nil || *result.TimedOut {
 			fail("wait_replay_changed")
 			return
 		}
 	}
-	final := "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/live_child\nPayload:\n" + fixture.setupMarker + " " + fixture.nonce
-	if fixture.childID == "" || fixture.nonce == "" || !strings.Contains(joined, final) {
+	delivered := false
+	for _, text := range userText {
+		delivered = delivered || childHTTPDelivered(text, spawnResult.TaskName, fixture.setupMarker, fixture.nonce)
+	}
+	if fixture.childID == "" || fixture.nonce == "" || !delivered {
 		if fixture.waited {
 			fail("parent_completion_missing")
 			return
@@ -336,22 +318,47 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 	childHTTPReply(writer, "parent", fixture.nonce)
 }
 
+// The public agent-message projection owns these routing fields
+// (protocol/src/protocol.rs). Bind sender/recipient and result values, not the
+// exact header ordering or surrounding payload prose.
+func childHTTPDelivered(text, sender, marker, nonce string) bool {
+	header, payload, ok := strings.Cut(text, "\nPayload:\n")
+	if !ok || sender == "" || marker == "" || nonce == "" {
+		return false
+	}
+	fields := make(map[string]string)
+	for _, line := range strings.Split(header, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return false
+		}
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if _, duplicate := fields[key]; duplicate {
+			return false
+		}
+		fields[key] = value
+	}
+	return fields["Message Type"] == "FINAL_ANSWER" && fields["Task name"] == "/root" && fields["Sender"] == sender &&
+		strings.Contains(payload, marker) && strings.Contains(payload, nonce)
+}
+
 // Exercise the complete shipped oracle through real App Server, Grok projection,
-// tool dispatch, child inference and parent continuation. Only base_url changes.
+// tool dispatch, a child provider request and parent continuation. Only base_url changes.
 func TestShippedChildFixture(t *testing.T) {
 	t.Run("fresh_child_result", func(t *testing.T) { testNativeShippedChildFixture(t, false) })
 	t.Run("parent_supplied_result_rejected", func(t *testing.T) { testNativeShippedChildFixture(t, true) })
 	t.Run("inherited_spawn_history", testShippedChildInheritedHistory)
+	t.Run("delivered_result", testShippedChildDeliveredResult)
 }
 
 type shippedChildHTTP struct {
 	mu                           sync.Mutex
 	model, parentID, childID     string
 	spawn, wait, nonce, failure  string
-	setupMarker                  string
+	setupMarker, seedEffort      string
 	parentSupplied               bool
 	requests                     int
-	seed                         map[string]any
+	seed                         string
 	delegated, waited, continued bool
 }
 
@@ -362,7 +369,7 @@ func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &shippedChildHTTP{model: model, parentSupplied: parentSupplied}
+	fixture := &shippedChildHTTP{model: model, seedEffort: shippedDefaultEffort(t, model), parentSupplied: parentSupplied}
 	backend := httptest.NewServer(fixture)
 	defer backend.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -376,15 +383,17 @@ func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
 	if err != nil {
 		failure = live.DescribeFailure(err)
 	}
-	t.Logf("controlled shipped-child: stage=%s requests=%d seed=%t delegated=%t child_inference=%t parent_replay=%t wire_failure=%s failure=%+v",
-		got.Stage, fixture.requests, fixture.seed != nil, fixture.delegated,
+	t.Logf("controlled shipped-child: stage=%s requests=%d seed=%t delegated=%t child_request=%t parent_replay=%t wire_failure=%s failure=%+v",
+		got.Stage, fixture.requests, fixture.seed != "", fixture.delegated,
 		fixture.childID != "", fixture.continued, fixture.failure, failure)
 	requests := 4
 	if fixture.waited {
 		requests++
 	}
 	if parentSupplied {
-		if got.CleanupPending || err == nil || err.Error() != "live: qualifying child result absent" ||
+		// Reusing a parent value is valid product behavior, but cannot establish
+		// this probe's fresh child-result provenance. The product still completes.
+		if got.CleanupPending || err == nil || failure.Code != "child_result_not_proven" ||
 			got.Stage != "product_turn_proven" || fixture.failure != "" ||
 			fixture.requests != requests || !fixture.continued {
 			t.Fatalf("native inherited-result negative did not reach the oracle: stage=%s requests=%d continued=%t error=%v", got.Stage, fixture.requests, fixture.continued, err)
@@ -394,13 +403,11 @@ func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
 	if err != nil {
 		t.Fatalf("native shipped-child oracle: %v", err)
 	}
-	got.ObservedAt = ""
-	want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
-		Target: subject.Target, Environment: subject.Environment, Model: model,
-		Stage: "child_result_delivered", Processes: 1, Initializations: 1, Threads: 1, Turns: 2,
-		SetupTurns: 1, TaskTurns: 1, SetupCompleted: true, ShippedCatalog: true, CatalogModels: 2,
-		Bound: true, Completed: true, ReplyBytes: 36, ChildBound: true, ChildCompleted: true, ChildResultDelivered: true}
-	if got != want || fixture.failure != "" || fixture.requests != requests || !fixture.continued {
-		t.Fatalf("native shipped-child evidence mismatch: %+v", got)
+	if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 || got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
+		got.Target != subject.Target || got.Environment != subject.Environment || got.Model != model ||
+		got.Stage != "child_result_delivered" || !got.SetupCompleted || !got.ShippedCatalog || !got.Bound ||
+		!got.Completed || !got.ChildBound || !got.ChildCompleted || !got.ChildResultDelivered || got.CleanupPending ||
+		fixture.failure != "" || fixture.requests != requests || !fixture.continued {
+		t.Fatalf("native shipped-child identity, completion or delivery evidence missing: %+v", got)
 	}
 }

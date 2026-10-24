@@ -5,7 +5,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
-	"regexp"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 //go:embed config.toml.example
@@ -42,17 +43,26 @@ func ModelSlugs() ([]string, error) {
 	return slugs, nil
 }
 
-// Defaults reads the top-level model and endpoint from this owned profile format.
+// Defaults reads the selected model and provider endpoint from the shipped profile.
 func Defaults() (model, baseURL string, err error) {
-	selected := regexp.MustCompile(`(?m)^model = "([^"]+)"$`).FindStringSubmatch(profile)
-	endpoint := regexp.MustCompile(`(?m)^base_url = "([^"]+)"$`).FindStringSubmatch(profile)
+	var config struct {
+		Model          string `toml:"model"`
+		ModelProvider  string `toml:"model_provider"`
+		ModelProviders map[string]struct {
+			BaseURL string `toml:"base_url"`
+		} `toml:"model_providers"`
+	}
+	if toml.Unmarshal([]byte(profile), &config) != nil {
+		return "", "", errors.New("invalid shipped profile")
+	}
+	endpoint := config.ModelProviders[config.ModelProvider].BaseURL
 	slugs, parseErr := ModelSlugs()
-	if len(selected) != 2 || len(endpoint) != 2 || parseErr != nil {
+	if config.Model == "" || config.ModelProvider == "" || endpoint == "" || parseErr != nil {
 		return "", "", errors.New("invalid shipped profile")
 	}
 	for _, slug := range slugs {
-		if slug == selected[1] {
-			return selected[1], endpoint[1], nil
+		if slug == config.Model {
+			return config.Model, endpoint, nil
 		}
 	}
 	return "", "", errors.New("shipped default absent from catalog")

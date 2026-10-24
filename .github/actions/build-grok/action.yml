@@ -314,11 +314,11 @@ runs:
           -run '^Test(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture|FirstRequestShape)$' \
           > "$evidence/provider-fixture.json" || status=$?
         go run ./cmd/grok-test-results --input "$evidence/provider-fixture.json" \
-          --require 'github.com/Harness-X-Harness/codex/grok/tests/integration:TestBasicFixture' \
-          --require 'github.com/Harness-X-Harness/codex/grok/tests/integration:TestShippedCatalog' \
-          --require 'github.com/Harness-X-Harness/codex/grok/tests/integration:TestStructuredEditFixture' \
-          --require 'github.com/Harness-X-Harness/codex/grok/tests/integration:TestShippedChildFixture' \
-          --require 'github.com/Harness-X-Harness/codex/grok/tests/integration:TestFirstRequestShape' \
+          --integration-owner TestBasicFixture \
+          --integration-owner TestShippedCatalog \
+          --integration-owner TestStructuredEditFixture \
+          --integration-owner TestShippedChildFixture \
+          --integration-owner TestFirstRequestShape \
           > "$evidence/provider-fixture-summary.json" || status=1
         cat "$evidence/provider-fixture-summary.json"
         exit "$status"

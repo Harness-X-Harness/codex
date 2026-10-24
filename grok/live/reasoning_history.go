@@ -51,11 +51,12 @@ type historyTurn struct {
 type historyReply struct {
 	bytes                                       int
 	completed, recall, authoritative, ambiguous bool
+	explicitFinal                               bool
 	identities                                  map[[sha256.Size]byte]historyReplyOutcome
 }
 
 type historyReplyOutcome struct {
-	finalEligible, recall bool
+	finalEligible, explicitFinal, hasContent, recall bool
 }
 
 func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) error {
@@ -63,18 +64,30 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 		return failedTurn(turn.Status, turn.Error, "live: turn did not complete successfully")
 	}
 	reply.completed = true
-	// A terminal summary's last assistant message is authoritative, even if an
-	// earlier item recalled the token or an older notification is replayed later.
+	// The public MessagePhase owner distinguishes terminal answers from
+	// commentary/partial text. An authoritative summary uses its last explicit
+	// final answer, with phase-unknown legacy fallback only when no final exists.
+	summaryAssistant := false
 	for _, item := range turn.Items {
 		if item.Type == "agentMessage" {
 			if item.ID == "" {
 				return failedObservation("assistant_identity_missing", "live: assistant item identity not established")
 			}
-			// Summary order overrides deduplication without spending its budget.
-			reply.bytes = len(item.Text)
-			reply.recall = probe.token != "" && (item.Phase == "" || item.Phase == "final_answer") && strings.Contains(item.Text, probe.token)
-			reply.authoritative, reply.ambiguous = true, false
-			reply.identities = nil
+			if !summaryAssistant {
+				// A nonempty assistant summary supersedes notifications even when
+				// it has no eligible result; it cannot borrow an older answer.
+				reply.bytes, reply.recall, reply.explicitFinal = 0, false, false
+				reply.authoritative, reply.ambiguous = true, false
+				reply.identities = nil
+				summaryAssistant = true
+			}
+			if strings.TrimSpace(item.Text) == "" {
+				continue
+			}
+			if item.Phase == "final_answer" || item.Phase == "" && !reply.explicitFinal {
+				reply.bytes, reply.recall = len(item.Text), probe.token != "" && strings.Contains(item.Text, probe.token)
+				reply.explicitFinal = item.Phase == "final_answer"
+			}
 		} else if err := probe.completedItem(item, reply); err != nil {
 			return err
 		}
@@ -93,6 +106,8 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 		identity := sha256.Sum256([]byte(item.ID))
 		outcome := historyReplyOutcome{
 			finalEligible: item.Phase == "" || item.Phase == "final_answer",
+			explicitFinal: item.Phase == "final_answer",
+			hasContent:    strings.TrimSpace(item.Text) != "",
 			recall:        probe.token != "" && strings.Contains(item.Text, probe.token),
 		}
 		if previous, seen := reply.identities[identity]; seen {
@@ -105,9 +120,17 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 			return failedObservation("assistant_identity_budget_exceeded", "live: assistant identity evidence budget exceeded")
 		}
 		reply.identities[identity] = outcome
-		// Unknown phase remains provisional. Only an unseen item can supersede
-		// it; replay cannot resurrect an old candidate. A summary always wins.
-		reply.bytes, reply.recall = len(item.Text), outcome.finalEligible && outcome.recall
+		// Empty finalized text contributes no candidate, but still carries identity.
+		if !outcome.hasContent {
+			return nil
+		}
+		// Only an unseen eligible item can replace the candidate. Explicit
+		// final answers outrank legacy text; commentary/partial cannot become
+		// final merely by arriving later. Replay and conflicts stay above.
+		if item.Phase == "final_answer" || item.Phase == "" && !reply.explicitFinal {
+			reply.bytes, reply.recall = len(item.Text), outcome.recall
+			reply.explicitFinal = item.Phase == "final_answer"
+		}
 	}
 	if probe.previousID != "" {
 		return nil

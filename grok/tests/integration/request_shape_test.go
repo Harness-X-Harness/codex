@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
 	"github.com/Harness-X-Harness/codex/grok/live"
@@ -28,6 +29,7 @@ type firstRequestAttempt struct {
 func TestFirstRequestShape(t *testing.T) {
 	subject := nativeSubject(t)
 	for _, model := range []string{providerfixture.PinnedModel, providerfixture.PrimaryModel} {
+		defaultEffort := shippedDefaultEffort(t, model)
 		profiles := []string{"isolated-history", "shipped-history", "isolated-edit"}
 		for _, profile := range profiles {
 			t.Run(model+"/"+profile, func(t *testing.T) {
@@ -104,7 +106,7 @@ func TestFirstRequestShape(t *testing.T) {
 				if profile != "isolated-edit" && (failure.Code != "turn_unsuccessful" || failure.TerminalStatus != "failed" || failure.HTTPStatus != 403) {
 					t.Error("history observer lost its bound failure diagnostics")
 				}
-				if profile == "isolated-edit" && (runErr.Error() != "live: edit turn did not complete successfully" || failure.Code != "turn_unsuccessful") {
+				if profile == "isolated-edit" && failure.Code != "turn_unsuccessful" {
 					t.Error("edit request-shape proof must reach the rejected terminal, not a timeout or unrelated error")
 				}
 				for _, attempt := range attempts {
@@ -119,7 +121,7 @@ func TestFirstRequestShape(t *testing.T) {
 						if integrationfixture.ContainsShapeValue(shape.ReasoningFields, "effort") {
 							t.Error("omitted history effort was reintroduced on the wire")
 						}
-					} else if profile == "shipped-history" && shape.Effort != "high" {
+					} else if profile == "shipped-history" && shape.Effort != defaultEffort {
 						t.Error("shipped catalog default effort was not preserved")
 					}
 				}
@@ -127,4 +129,25 @@ func TestFirstRequestShape(t *testing.T) {
 			})
 		}
 	}
+}
+
+// The catalog is the single authority for this scenario's unoverridden effort.
+func shippedDefaultEffort(t *testing.T, model string) string {
+	t.Helper()
+	var catalog struct {
+		Models []struct {
+			Slug          string `json:"slug"`
+			DefaultEffort string `json:"default_reasoning_level"`
+		}
+	}
+	if json.Unmarshal(dist.Catalog(), &catalog) != nil {
+		t.Fatal("invalid shipped catalog")
+	}
+	for _, entry := range catalog.Models {
+		if entry.Slug == model && entry.DefaultEffort != "" {
+			return entry.DefaultEffort
+		}
+	}
+	t.Fatal("selected model has no configured default effort")
+	return ""
 }

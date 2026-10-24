@@ -56,8 +56,9 @@ The packaged advertisement, durable-history, and accepted outbound replay
 requirements remain separate from observing a raw App Server call/output pair.
 The Live observer reads settled public history but does not capture outbound
 `/responses` traffic or scan session storage. The controlled Integration test
-independently checks the actual projected declaration and accepted paired HTTP
-replay. Real-backend acceptance still requires identified Live evidence; observer
+independently binds the single advertised editor symbol, then requires canonical
+`structured_edit` dispatch and accepted paired HTTP replay. A projection hash or
+a matching-looking schema alone does not establish tool authority. Real-backend acceptance still requires identified Live evidence; observer
 success alone cannot silently satisfy the outbound-request requirement.
 
 ## Proof plan
@@ -86,7 +87,11 @@ same-provider transport retry policy.
 The fixture enables the model capability and seeds a controlled CRLF file
 without a final newline. Its observer correlates exact function identity and
 arguments, paired output, file-change identity/status/path, approval identity,
-matching terminal turns and one settled `thread/read` per turn. It compares
+matching terminal turns and one settled `thread/read` per turn. Paths must resolve
+to this fixture, not merely share its basename. Equivalent argument JSON and a
+string versus one text block may carry the same operation/result; changed values,
+identities or multi-block boundaries do not. Settled turns are bound by their
+submitted identities, and final replies use the shared final-answer selection. It compares
 actual bytes after each turn and returns only subject metadata, fixed stage
 labels, counts, booleans and fixture SHA-256 values. Opaque IDs and transient
 arguments/output are used only for in-memory correlation. Frames retain the

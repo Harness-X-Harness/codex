@@ -119,6 +119,68 @@ func TestIntegrationInventory(t *testing.T) {
 	}
 }
 
+func TestIntegrationParentCannotReplaceProofDescendants(t *testing.T) {
+	for _, parent := range []string{"TestStructuredEditFixture", "TestHostedSearchFixture", "TestFirstRequestShape"} {
+		t.Run(parent, func(t *testing.T) {
+			owners := IntegrationTests()
+			pkg := owners[0].Package
+			input := encode(event{Action: "start", Package: pkg})
+			for _, owner := range owners {
+				if !strings.HasPrefix(owner.Name, parent+"/") {
+					input += encode(event{Action: "run", Package: pkg, Test: owner.Name}, event{Action: "pass", Package: pkg, Test: owner.Name})
+				}
+			}
+			input += encode(event{Action: "pass", Package: pkg})
+			if _, err := Check(strings.NewReader(input), owners); err == nil {
+				t.Fatal("parent-only pass accepted without its proof-bearing scenarios")
+			}
+		})
+	}
+}
+
+func TestIntegrationOwnerSelection(t *testing.T) {
+	for _, names := range [][]string{
+		nil, {""}, {"TestUnknown"}, {"TestBasicFixture/child"}, {"TestBasicFixture", "TestBasicFixture"},
+	} {
+		if _, err := IntegrationOwnerTests(names); err == nil {
+			t.Fatalf("invalid owner selection accepted: %v", names)
+		}
+	}
+	for _, parent := range []string{"TestBasicFixture", "TestStructuredEditFixture", "TestFirstRequestShape", "TestShippedChildFixture"} {
+		t.Run(parent, func(t *testing.T) {
+			selected, err := IntegrationOwnerTests([]string{parent})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(selected) < 2 || selected[0].Name != parent {
+				t.Fatal("selected owner lost its proof-bearing scenarios")
+			}
+			pkg := selected[0].Package
+			complete := encode(event{Action: "start", Package: pkg})
+			for _, test := range selected {
+				if test.Name != parent && !strings.HasPrefix(test.Name, parent+"/") {
+					t.Fatalf("unselected owner included: %s", test.Name)
+				}
+				complete += encode(event{Action: "run", Package: pkg, Test: test.Name}, event{Action: "pass", Package: pkg, Test: test.Name})
+			}
+			complete += encode(event{Action: "pass", Package: pkg})
+			if _, err := Check(strings.NewReader(complete), selected); err != nil {
+				t.Fatalf("complete selected scope rejected: %v", err)
+			}
+			for _, test := range selected {
+				missing := strings.ReplaceAll(complete, encode(event{Action: "run", Package: pkg, Test: test.Name}, event{Action: "pass", Package: pkg, Test: test.Name}), "")
+				if _, err := Check(strings.NewReader(missing), selected); err == nil {
+					t.Fatalf("selected proof omitted without rejection: %s", test.Name)
+				}
+			}
+		})
+	}
+	selected, err := IntegrationOwnerTests([]string{"TestShippedCatalog", "TestBasicFixture"})
+	if err != nil || len(selected) != 4 {
+		t.Fatalf("combined owner selection lost or added proofs: %v, %v", selected, err)
+	}
+}
+
 func TestRequiredOwners(t *testing.T) {
 	for _, required := range [][]Test{
 		{{"p", "TestMissing"}}, {{"wrong", "TestOne"}}, {{"", "TestOne"}}, {{"p", ""}}, {{"p", "TestOne"}, {"p", "TestOne"}},

@@ -14,69 +14,57 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/internal/scenarios"
 )
 
-// Keep CI's required owners tied to physical, tagged test implementations.
-// Runtime result checks, not source-shape inference, enforce execution outcomes.
+// Required owners must exist and remain opt-in. Their source layout or use of
+// shared helpers does not prove execution; JSON result lifecycles do.
 func TestIntegrationPhysicalOwners(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("test source unavailable")
 	}
-	root := filepath.Join(filepath.Dir(file), "../..")
+	dir := filepath.Join(filepath.Dir(file), "../../tests/integration")
 	owners := map[string]bool{}
 	for _, owner := range IntegrationTests() {
-		if owner.Package != "github.com/Harness-X-Harness/codex/grok/tests/integration" || strings.Contains(owner.Name, "/") {
-			t.Fatalf("Integration owner is not a physical top-level test: %+v", owner)
+		if owner.Package != "github.com/Harness-X-Harness/codex/grok/tests/integration" {
+			t.Fatalf("unexpected Integration package identity: %+v", owner)
 		}
-		owners[owner.Name] = false
+		root, _, _ := strings.Cut(owner.Name, "/")
+		owners[root] = false
 	}
-	for _, area := range []string{"live", "tests/integration"} {
-		dir := filepath.Join(root, area)
-		entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		source, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, entry.Name()), nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, entry := range entries {
-			if !strings.HasSuffix(entry.Name(), "_test.go") {
+		plain, tagged := build.Default, build.Default
+		plain.BuildTags, tagged.BuildTags = nil, []string{"integration"}
+		offline, err := plain.MatchFile(dir, entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		integration, err := tagged.MatchFile(dir, entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, declaration := range source.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name.Name == "TestMain" || !strings.HasPrefix(fn.Name.Name, "Test") {
 				continue
 			}
-			source, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, entry.Name()), nil, parser.ParseComments)
-			if err != nil {
-				t.Fatal(err)
+			if offline || !integration {
+				t.Errorf("Integration execution is not opt-in: %s", fn.Name.Name)
 			}
-			plain, tagged := build.Default, build.Default
-			plain.BuildTags = nil
-			tagged.BuildTags = []string{"integration"}
-			offline, err := plain.MatchFile(dir, entry.Name())
-			if err != nil {
-				t.Fatal(err)
-			}
-			integration, err := tagged.MatchFile(dir, entry.Name())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if area == "live" && integration != offline {
-				t.Errorf("Integration-tagged implementation returned to live: %s", entry.Name())
-			}
-			for _, declaration := range source.Decls {
-				fn, ok := declaration.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil {
-					continue
+			if seen, required := owners[fn.Name.Name]; required {
+				if seen {
+					t.Errorf("Duplicate required Integration owner: %s", fn.Name.Name)
 				}
-				name := fn.Name.Name
-				if area == "live" {
-					if _, owner := owners[name]; owner || strings.HasPrefix(name, "TestIntegration") {
-						t.Errorf("Integration owner returned to live: %s", name)
-					}
-					continue
-				}
-				if name == "TestMain" || !strings.HasPrefix(name, "Test") {
-					continue
-				}
-				seen, required := owners[name]
-				if !required || seen || offline || !integration {
-					t.Errorf("Unexpected, duplicate or incorrectly tagged Integration owner: %s", name)
-				}
-				owners[name] = true
+				owners[fn.Name.Name] = true
 			}
 		}
 	}

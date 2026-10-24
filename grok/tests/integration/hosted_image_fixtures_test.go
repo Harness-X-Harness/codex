@@ -90,13 +90,20 @@ func hostedToolPolicy(scenario string, tools []json.RawMessage) string {
 		if _, ok := web["filters"]; ok {
 			return "unexpected_web_filters"
 		}
-	case "web_excluded":
+	case "web_allowed", "web_excluded":
 		var filters struct {
 			Excluded []string `json:"excluded_domains"`
 			Allowed  []string `json:"allowed_domains"`
 		}
 		raw, ok := web["filters"]
-		if !ok || json.Unmarshal(raw, &filters) != nil || len(filters.Allowed) != 0 || len(filters.Excluded) != 1 || filters.Excluded[0] != "example.com" {
+		if !ok || json.Unmarshal(raw, &filters) != nil {
+			return "domain_filters"
+		}
+		if scenario == "web_allowed" {
+			if len(filters.Excluded) != 0 || len(filters.Allowed) != 1 || filters.Allowed[0] != "reuters.com" {
+				return "allowed_domains"
+			}
+		} else if len(filters.Allowed) != 0 || len(filters.Excluded) != 1 || filters.Excluded[0] != "example.com" {
 			return "excluded_domains"
 		}
 	default:

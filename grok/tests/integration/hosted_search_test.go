@@ -18,7 +18,7 @@ import (
 // X cases are explicit negatives and cannot be credited as positive search.
 func TestHostedSearchFixture(t *testing.T) {
 	subject := nativeSubject(t)
-	for _, scenario := range []string{"web", "web_excluded", "x_retired", "x_window_retired", "unexpected_x_rejected"} {
+	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "x_retired", "x_window_retired", "unexpected_x_rejected"} {
 		t.Run(scenario, func(t *testing.T) {
 			integrationObservation(t)
 			selected := scenario

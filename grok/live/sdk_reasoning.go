@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
+
 	"github.com/ronhuafeng/llm-go/codexsdk"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
@@ -44,7 +46,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 				Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
 				ExperimentalRawEvents: &experimental,
 				DynamicTools: protocolv2.Value([]protocolv2.DynamicToolSpec{protocolv2.NewDynamicToolSpecFunction(protocolv2.DynamicToolSpecFunction{
-					Name: historyTool, Description: "Return a fresh token for this history probe.",
+					Name: historyTool, Description: integrationfixture.HistoryProbeDescription,
 					InputSchema: protocolv2.JSONObject(map[string]protocolv2.JSONValue{
 						"type": protocolv2.JSONString("object"), "properties": protocolv2.JSONObject(map[string]protocolv2.JSONValue{}),
 						"additionalProperties": protocolv2.JSONBool(false),
@@ -71,16 +73,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 		if err := observeSDKHistoryTurn(ctx, observer, stream, func(run codexsdk.StartedThreadRun) codexsdk.ThreadRunResult { return run.Run }); err != nil {
 			return err
 		}
-		observer.mu.Lock()
-		observer.observations.Stage = "first_turn_proven"
-		threadID := observer.probe.threadID
-		observer.probe.previousID, observer.probe.turnID = observer.probe.turnID, ""
-		observer.reconciled = false
-		observer.inlineTerminal = false
-		observer.deliveredTyped, observer.recoveredTyped = 0, 0
-		observer.callbackTerminalSeen = false
-		observer.reply = historyReply{identities: make(map[[32]byte]historyReplyOutcome)}
-		observer.mu.Unlock()
+		threadID := observer.beginContinuation()
 		turn.Input = []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
 			Text: "Recall the exact token returned by the tool in the previous turn from this thread's history. Include it in your final reply without calling a tool.",
 		})}

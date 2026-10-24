@@ -8,10 +8,10 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/providerfixture"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 const (
@@ -109,6 +109,7 @@ type editObservation struct {
 	changeDigest                             [sha256.Size]byte
 	completed                                bool
 	replyBytes                               int
+	replies                                  []protocolv2.ThreadItem
 }
 
 func readEditFixture(path string) ([]byte, error) {
@@ -180,16 +181,20 @@ func (probe *editProbe) publicItem(item editItem, observation *editObservation) 
 		if item.ID == "" {
 			return failedObservation("invalid_edit_evidence", "live: edit reply identity unavailable")
 		}
-		observation.replyBytes = 0
-		if (item.Phase == "" || item.Phase == "final_answer") && strings.TrimSpace(item.Text) != "" {
-			observation.replyBytes = len(item.Text)
+		if item.Phase != "" && item.Phase != "final_answer" {
+			return nil
 		}
+		message := protocolv2.ThreadItemAgentMessage{ID: item.ID, Text: item.Text}
+		if item.Phase != "" {
+			message.Phase = protocolv2.Value(protocolv2.MessagePhase(item.Phase))
+		}
+		observation.replies = append(observation.replies, protocolv2.NewThreadItemAgentMessage(message))
 	case "fileChange":
 		if probe.previousID != "" || item.ID == "" || len(item.Changes) != 1 ||
-			filepath.Base(item.Changes[0].Path) != editFile || item.Changes[0].Kind.Type != "update" || item.Changes[0].Kind.MovePath != nil {
+			!editPathMatches(item.Changes[0].Path, probe.fixture.path) || item.Changes[0].Kind.Type != "update" || item.Changes[0].Kind.MovePath != nil {
 			return failedObservation("invalid_edit_file_change", "live: unexpected edit file change")
 		}
-		body, _ := json.Marshal(item.Changes)
+		body, _ := json.Marshal(editItemFacts(item, probe.fixture))
 		digest := sha256.Sum256(body)
 		if observation.changeID != "" && (observation.changeID != item.ID || observation.changeStatus != item.Status || observation.changeDigest != digest) {
 			return failedObservation("conflicting_edit_item", "live: conflicting or repeated edit file change")

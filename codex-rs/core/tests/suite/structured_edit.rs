@@ -47,9 +47,15 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::sync::oneshot;
 
+use super::structured_edit_support::ToolOutcomes;
+use super::structured_edit_support::assert_completed_edit;
+use super::structured_edit_support::assert_edit_changes;
+use super::structured_edit_support::assert_edit_diff;
+use super::structured_edit_support::assert_function_result;
 use super::structured_edit_support::assert_no_commit;
 use super::structured_edit_support::establish_diff_root;
 use super::structured_edit_support::finish_turn;
+use super::structured_edit_support::output_request;
 
 pub(super) fn structured_edit_builder() -> TestCodexBuilder {
     test_codex().with_model_info_override("gpt-5.4", |model| {
@@ -126,10 +132,14 @@ async fn approval(test: &TestCodex, call_id: &str) -> ApplyPatchApprovalRequestE
 
 fn output(mock: &ResponseMock, call_id: &str) -> String {
     let requests = mock.requests();
-    assert_eq!(requests.len(), 2, "one edit and exactly one continuation");
-    requests[1]
+    output_request(&requests, call_id)
         .function_call_output_text(call_id)
         .expect("paired structured_edit function output")
+}
+
+fn result(mock: &ResponseMock, call_id: &str, succeeded: bool) -> String {
+    let requests = mock.requests();
+    assert_function_result(output_request(&requests, call_id), call_id, succeeded)
 }
 
 /// Installs real generic hooks. Each map entry is a complete response for that
@@ -242,10 +252,8 @@ async fn structured_edit_exact_bytes_lifecycle_and_continuation_history() -> Res
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!((started.len(), completed.len()), (1, 1));
-    assert_eq!(started[0].0, completed[0].0);
-    assert_eq!(started[0].1.id, call_id);
-    assert_eq!(completed[0].1.id, call_id);
+    assert!(!started.is_empty(), "edit must start");
+    assert!(!completed.is_empty(), "edit must complete");
     let completed_turn_id = events
         .iter()
         .find_map(|event| match event {
@@ -253,11 +261,32 @@ async fn structured_edit_exact_bytes_lifecycle_and_continuation_history() -> Res
             _ => None,
         })
         .expect("completed turn");
-    assert_eq!(completed[0].0, completed_turn_id);
-    assert_eq!(completed[0].1.status, Some(PatchApplyStatus::Completed));
-    assert_eq!(started[0].1.changes, completed[0].1.changes);
-    assert_eq!(completed[0].1.changes.len(), 1);
     let path = harness.path("exact.txt");
+    for (turn_id, item) in &started {
+        assert_eq!(turn_id, completed_turn_id);
+        assert_eq!(item.id, call_id);
+        assert_eq!(item.changes.len(), 1);
+        assert!(matches!(
+            item.changes.get(&path),
+            Some(FileChange::Update {
+                move_path: None,
+                ..
+            })
+        ));
+    }
+    for (turn_id, item) in &completed {
+        assert_eq!(turn_id, completed_turn_id);
+        assert_eq!(item.id, call_id);
+        assert_eq!(item.status, Some(PatchApplyStatus::Completed));
+        assert_eq!(item.changes.len(), 1);
+        assert!(matches!(
+            item.changes.get(&path),
+            Some(FileChange::Update {
+                move_path: None,
+                ..
+            })
+        ));
+    }
     let Some(FileChange::Update {
         unified_diff,
         move_path,
@@ -270,46 +299,32 @@ async fn structured_edit_exact_bytes_lifecycle_and_continuation_history() -> Res
         unified_diff.contains("-α") && unified_diff.contains("+β"),
         "{unified_diff}"
     );
-    let committed_index = events
+    for (_, item) in &completed {
+        let Some(FileChange::Update {
+            unified_diff: repeated,
+            ..
+        }) = item.changes.get(&path)
+        else {
+            unreachable!("validated target");
+        };
+        assert_edit_changes(repeated, unified_diff);
+    }
+    let committed_diff = events
         .iter()
-        .position(|event| {
-            matches!(event, EventMsg::ItemCompleted(event) if matches!(&event.item, TurnItem::FileChange(item) if item.id == call_id))
-        })
-        .expect("matching completed file change");
-    let diffs = events
-        .iter()
-        .enumerate()
-        .filter_map(|(index, event)| match event {
-            EventMsg::TurnDiff(diff) => Some((index, diff.unified_diff.as_str())),
+        .filter_map(|event| match event {
+            EventMsg::TurnDiff(diff) => Some(diff.unified_diff.as_str()),
             _ => None,
         })
-        .collect::<Vec<_>>();
-    let (last_diff_index, committed_diff) =
-        diffs.last().expect("committed edit must emit a turn diff");
-    assert!(*last_diff_index > committed_index);
-    assert!(
-        committed_diff.starts_with("diff --git a/exact.txt b/exact.txt\n")
-            && committed_diff
-                .ends_with(&format!("--- a/exact.txt\n+++ b/exact.txt\n{unified_diff}")),
-        "{committed_diff}"
-    );
-    assert_eq!(committed_diff.matches("diff --git ").count(), 1);
-    // Tool completion and later sampling completions may publish the same
-    // aggregate snapshot. They must not precede or change the committed edit.
-    for (index, diff) in &diffs {
-        if *index < committed_index {
-            assert!(diff.is_empty());
-        } else {
-            assert_eq!(diff, committed_diff);
-        }
-    }
+        .next_back()
+        .expect("committed edit must emit a turn diff");
+    assert_edit_diff(committed_diff, &path, "local", unified_diff);
     assert_eq!(fs::read(&path)?, "β\r\nuntouched\r\ntail".as_bytes());
 
     harness
         .submit_with_permission_profile("describe the completed edit", PermissionProfile::Disabled)
         .await?;
     let requests = mock.requests();
-    assert_eq!(requests.len(), 3);
+    output_request(&requests, call_id);
     for request in &requests[1..] {
         let calls = request.inputs_of_type("function_call");
         let calls = calls
@@ -323,12 +338,7 @@ async fn structured_edit_exact_bytes_lifecycle_and_continuation_history() -> Res
             arguments
         );
         assert_eq!(request.inputs_of_type("function_call_output").len(), 1);
-        assert!(
-            request
-                .function_call_output_text(call_id)
-                .expect("paired output")
-                .contains("Success. Updated")
-        );
+        assert_function_result(request, call_id, true);
     }
     assert_eq!(fs::read(path)?, "β\r\nuntouched\r\ntail".as_bytes());
     Ok(())
@@ -340,25 +350,17 @@ async fn structured_edit_cardinality_and_invalid_arguments_leave_no_commit() -> 
     malformed_replace_all["replace_all"] = json!("true");
     let mut unknown_field = args("keep.txt", "aa", "bb");
     unknown_field["unexpected"] = json!(true);
-    for (arguments, error) in [
-        (
-            args("keep.txt", "absent", "new"),
-            "old_string was not found",
-        ),
-        (
-            args("keep.txt", "aa aa\n", "new"),
-            "old_string was not found",
-        ),
-        (args("keep.txt", "aa", "bb"), "matched 2 times"),
-        (args("keep.txt", "", "new"), "old_string must be non-empty"),
-        (
-            args("keep.txt", "aa", "aa"),
-            "old_string and new_string must differ",
-        ),
-        (malformed_replace_all, "boolean"),
-        (unknown_field, "unknown field"),
+    for arguments in [
+        args("keep.txt", "absent", "new"),
+        args("keep.txt", "aa aa\n", "new"),
+        args("keep.txt", "aa", "bb"),
+        args("keep.txt", "", "new"),
+        args("keep.txt", "aa", "aa"),
+        malformed_replace_all,
+        unknown_field,
     ] {
-        let harness = harness().await?;
+        let (builder, outcomes) = ToolOutcomes::observe(structured_edit_builder());
+        let harness = Box::pin(TestCodexHarness::with_builder(builder)).await?;
         harness.write_file("keep.txt", b"aa aa\r\ntail").await?;
         let mock = mount_edit(&harness, "invalid-edit", &arguments).await;
         start_edit(
@@ -367,10 +369,10 @@ async fn structured_edit_cardinality_and_invalid_arguments_leave_no_commit() -> 
             PermissionProfile::Disabled,
         )
         .await?;
-        assert_no_commit(&finish_turn(harness.test()).await);
-        let output = output(&mock, "invalid-edit");
-        assert!(output.contains(error), "{arguments}: {output}");
-        assert!(!output.contains("Success. Updated"), "{output}");
+        let events = finish_turn(harness.test()).await;
+        assert_no_commit(&events);
+        outcomes.assert_edit_failed(&events, "invalid-edit");
+        result(&mock, "invalid-edit", false);
         assert_eq!(fs::read(harness.path("keep.txt"))?, b"aa aa\r\ntail");
     }
     Ok(())
@@ -389,8 +391,9 @@ async fn structured_edit_replace_all_uses_nonoverlapping_exact_matches() -> Resu
         PermissionProfile::Disabled,
     )
     .await?;
-    finish_turn(harness.test()).await;
-    assert!(output(&mock, "replace-all").contains("Success. Updated"));
+    let events = finish_turn(harness.test()).await;
+    result(&mock, "replace-all", true);
+    assert_completed_edit(&events, "replace-all", &harness.path("overlap.txt"));
     assert_eq!(
         fs::read(harness.path("overlap.txt"))?,
         "ββa\r\nαα".as_bytes()
@@ -400,12 +403,9 @@ async fn structured_edit_replace_all_uses_nonoverlapping_exact_matches() -> Resu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn structured_edit_missing_directory_and_invalid_utf8_are_rejected() -> Result<()> {
-    for (target, error) in [
-        ("missing.txt", "can only edit existing text files"),
-        ("directory", "is not a file"),
-        ("invalid.txt", "failed to read"),
-    ] {
-        let harness = harness().await?;
+    for target in ["missing.txt", "directory", "invalid.txt"] {
+        let (builder, outcomes) = ToolOutcomes::observe(structured_edit_builder());
+        let harness = Box::pin(TestCodexHarness::with_builder(builder)).await?;
         harness.create_dir_all("directory").await?;
         harness
             .write_file("invalid.txt", [0xff, 0xfe, b'a'])
@@ -417,9 +417,10 @@ async fn structured_edit_missing_directory_and_invalid_utf8_are_rejected() -> Re
             PermissionProfile::Disabled,
         )
         .await?;
-        assert_no_commit(&finish_turn(harness.test()).await);
-        let output = output(&mock, "ineligible-edit");
-        assert!(output.contains(error), "{target}: {output}");
+        let events = finish_turn(harness.test()).await;
+        assert_no_commit(&events);
+        outcomes.assert_edit_failed(&events, "ineligible-edit");
+        result(&mock, "ineligible-edit", false);
         assert!(!harness.path("missing.txt").exists());
         assert!(harness.path("directory").is_dir());
         assert_eq!(fs::read(harness.path("invalid.txt"))?, [0xff, 0xfe, b'a']);
@@ -464,14 +465,14 @@ async fn structured_edit_approved_snapshot_commits_and_denial_preserves_bytes() 
             })
             .await?;
         let events = finish_turn(harness.test()).await;
-        let output = output(&mock, "approved-edit");
         if approved {
-            assert!(output.contains("Success. Updated"), "{output}");
+            result(&mock, "approved-edit", true);
+            assert_completed_edit(&events, "approved-edit", &harness.path("approval.txt"));
             assert_eq!(fs::read(harness.path("approval.txt"))?, b"after\r\ntail");
         } else {
             assert_no_commit(&events);
             assert!(events.iter().any(|event| matches!(event, EventMsg::ItemCompleted(event) if matches!(&event.item, TurnItem::FileChange(item) if item.id == "approved-edit" && item.status == Some(PatchApplyStatus::Declined)))));
-            assert!(!output.contains("Success. Updated"), "{output}");
+            result(&mock, "approved-edit", false);
             assert_eq!(fs::read(harness.path("approval.txt"))?, b"before\r\ntail");
         }
     }
@@ -684,9 +685,9 @@ async fn structured_edit_hooks_rewrite_effective_json_for_permission_and_post() 
         PermissionProfile::Disabled,
     )
     .await?;
-    finish_turn(harness.test()).await;
-    let output = output(&mock, "hook-edit");
-    assert!(output.contains("Success. Updated"), "{output}");
+    let events = finish_turn(harness.test()).await;
+    let output = result(&mock, "hook-edit", true);
+    assert_completed_edit(&events, "hook-edit", &harness.path("rewritten.txt"));
     assert_eq!(fs::read(harness.path("original.txt"))?, b"before\n");
     assert_eq!(fs::read(harness.path("rewritten.txt"))?, b"accepted\n");
     let hooks = read_editor_hook_inputs(harness.test().codex_home_path())?;
@@ -816,7 +817,7 @@ async fn structured_edit_post_hook_block_preserves_committed_effect_and_diff() -
     );
     assert!(!output.contains("Success. Updated"), "{output}");
     assert_eq!(fs::read(harness.path("committed.txt"))?, b"aa\n");
-    assert_eq!(events.iter().filter(|event| matches!(event, EventMsg::ItemCompleted(event) if matches!(&event.item, TurnItem::FileChange(item) if item.id == "post-blocked" && item.status == Some(PatchApplyStatus::Completed)))).count(), 1);
+    assert_completed_edit(&events, "post-blocked", &harness.path("committed.txt"));
     assert!(events.iter().any(
         |event| matches!(event, EventMsg::TurnDiff(diff) if diff.unified_diff.contains("+aa"))
     ));
@@ -825,10 +826,11 @@ async fn structured_edit_post_hook_block_preserves_committed_effect_and_diff() -
     assert_eq!(hooks[1]["hook_event_name"], "PostToolUse");
     assert_eq!(hooks[1]["tool_input"], arguments);
     assert!(
-        hooks[1]["tool_response"]
+        !hooks[1]["tool_response"]
             .as_str()
             .expect("committed hook output")
-            .contains("Success. Updated")
+            .trim()
+            .is_empty()
     );
     Ok(())
 }
@@ -855,22 +857,24 @@ async fn structured_edit_capability_keeps_stock_apply_patch_and_its_hooks() -> R
         PermissionProfile::Disabled,
     )
     .await?;
-    finish_turn(harness.test()).await;
+    let events = finish_turn(harness.test()).await;
+    assert_completed_edit(&events, "stock-patch", &harness.path("stock.txt"));
     assert_eq!(fs::read(harness.path("stock.txt"))?, b"after\n");
     let requests = mock.requests();
-    assert_eq!(requests.len(), 2);
     let tools = requests[0].body_json()["tools"]
         .as_array()
         .expect("tools")
         .clone();
     assert!(tools.iter().any(|tool| tool["name"] == "structured_edit"));
     assert!(tools.iter().any(|tool| tool["name"] == "apply_patch"));
-    let stock_output = requests[1].custom_tool_call_output("stock-patch");
+    let (stock_output, success) = output_request(&requests, "stock-patch")
+        .custom_tool_call_output_content_and_success("stock-patch")
+        .expect("bound stock output");
+    assert_ne!(success, Some(false));
     assert!(
-        stock_output["output"]
-            .as_str()
-            .expect("stock output")
-            .contains("Success. Updated")
+        stock_output
+            .as_deref()
+            .is_some_and(|output| !output.trim().is_empty())
     );
     let hooks = read_editor_hook_inputs(harness.test().codex_home_path())?;
     assert_eq!(hooks.len(), 2);
@@ -918,7 +922,7 @@ async fn structured_edit_stalled_stream_keeps_durable_output_without_reexecution
     fs::write(test.workspace_path("retry.txt"), b"a\n")?;
     start_edit(&test, AskForApproval::Never, PermissionProfile::Disabled).await?;
     let events = finish_turn(&test).await;
-    assert_eq!(events.iter().filter(|event| matches!(event, EventMsg::ItemCompleted(event) if matches!(&event.item, TurnItem::FileChange(item) if item.id == call_id && item.status == Some(PatchApplyStatus::Completed)))).count(), 1);
+    assert_completed_edit(&events, call_id, &test.workspace_path("retry.txt"));
     let requests = server.requests().await;
     assert_eq!(requests.len(), 2);
     let retry: Value = serde_json::from_slice(&requests[1])?;

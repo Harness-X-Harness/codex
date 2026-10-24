@@ -2383,7 +2383,8 @@ async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes()
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let (mut builder, outcomes) =
+        super::structured_edit_support::ToolOutcomes::observe(test_codex());
     let test = builder.build_with_auto_env(&server).await?;
     let start_args = json!({
         "cmd": "stty -echo; IFS= read -r first; printf 'FIRST:%s\\n' \"$first\"; IFS= read -r second; printf 'SECOND:%s\\n' \"$second\"",
@@ -2494,15 +2495,15 @@ async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes()
     )
     .await?;
     let mut interactions = Vec::new();
-    loop {
+    let turn_id = loop {
         match wait_for_event(&test.codex, |_| true).await {
             EventMsg::TerminalInteraction(event) => {
                 interactions.push((event.process_id, event.stdin));
             }
-            EventMsg::TurnComplete(_) => break,
+            EventMsg::TurnComplete(turn) => break turn.turn_id,
             _ => {}
         }
-    }
+    };
     assert_eq!(
         interactions,
         vec![
@@ -2513,12 +2514,17 @@ async fn write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes()
     );
     let request = written.last_request().expect("stdin completion request");
     for (call_id, _, _, _) in invalid_calls {
+        outcomes.assert_failed(&turn_id, call_id, "write_stdin");
         let item = request.function_call_output(call_id);
         let output = extract_output_text(&item).expect("rejection text");
         assert!(
-            output.contains("failed to parse function arguments"),
-            "{call_id}: {output}",
+            !output.trim().is_empty(),
+            "{call_id}: rejection diagnostic missing"
         );
+        let (_, success) = request
+            .function_call_output_content_and_success(call_id)
+            .expect("bound rejected write");
+        assert_ne!(success, Some(true), "invalid write must not report success");
     }
     let decimal_item = request.function_call_output("stdin-decimal");
     let decimal = parse_unified_exec_output(extract_output_text(&decimal_item).unwrap())?;

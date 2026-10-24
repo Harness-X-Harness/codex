@@ -19,7 +19,10 @@ proof, an isolated fixture and a usable default execution environment, when turn
 N calls the named dynamic tool and receives a freshly generated result absent
 from its prompt, then N completes with that result in its final assistant reply.
 When N+1 is submitted once on the same thread without the runner supplying that
-result, then N+1 completes with the same result in its final reply.
+result, then N+1 completes with the same result in its final reply. Explicit
+`final_answer` items take priority over commentary/partial text; without an
+explicit final, phase-unknown replies retain legacy compatibility. A later
+eligible final can replace an earlier answer, but replayed item identities cannot.
 
 Require actual completed reasoning, an opaque encrypted reasoning item from N,
 and a completed named tool call. Native projection/composition proof establishes

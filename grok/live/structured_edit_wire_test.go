@@ -31,3 +31,17 @@ func TestStructuredEditArgumentsRejectMalformedReplaceAll(t *testing.T) {
 		}
 	}
 }
+
+func TestStructuredEditTargetBinding(t *testing.T) {
+	const target = "/workspace/structured_edit_fixture.txt"
+	for _, candidate := range []string{editFile, "./" + editFile, target, "/workspace/./" + editFile} {
+		if !editPathMatches(candidate, target) {
+			t.Fatalf("equivalent fixture target rejected: %q", candidate)
+		}
+	}
+	for _, candidate := range []string{"", "/other/" + editFile, "other/" + editFile, "../workspace/" + editFile, "other/../" + editFile} {
+		if editPathMatches(candidate, target) {
+			t.Fatalf("unbound fixture target accepted: %q", candidate)
+		}
+	}
+}

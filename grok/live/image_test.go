@@ -13,7 +13,7 @@ import (
 
 // Callable deterministic scenario; public scripts are prerequisites only.
 func TestGrokImageGenerationEdit(t *testing.T) {
-	for _, mode := range []string{"success", "early", "duplicate_terminal", "path_selector", "pinned", "summary_only", "recovered_failure", "null_generation_selectors", "prepared_rendition", "recovered_validation_failure"} {
+	for _, mode := range []string{"success", "early", "duplicate_terminal", "path_selector", "pinned", "summary_only", "recovered_failure", "null_generation_selectors", "prepared_rendition", "recovered_validation_failure", "view_before_edit", "view_after_edit", "unrelated_notifications", "retained_image_message", "neutral_history_metadata", "reordered_history", "extra_history"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "image:"+mode)
 			if mode == "pinned" {
@@ -53,6 +53,15 @@ func TestGrokImageGenerationEdit(t *testing.T) {
 
 func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 	cases := map[string]string{
+		"extra_image_history":           "live: unattributed image history",
+		"late_prior_failure":            "live: prior image turn did not complete successfully",
+		"view_wrong_path":               "live: viewed image is not a bound artifact",
+		"view_wrong_output":             "live: viewed image does not match bound artifact",
+		"view_missing_output":           "live: image call, output or terminal evidence missing",
+		"view_substituted_generation":   "live: image view cannot establish generation",
+		"duplicate_current":             "live: settled image turn did not complete",
+		"duplicate_prior":               "live: settled image turn did not complete",
+		"missing_prior":                 "live: settled image turn did not complete",
 		"validation_started":            "live: image call, output or terminal evidence missing",
 		"validation_missing_output":     "live: image call, output or terminal evidence missing",
 		"validation_wrong_output":       "live: image output precedes canonical call",
@@ -115,7 +124,7 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 		"oversized_payload":             "live: protocol frame budget exceeded",
 		"conflicting_output":            "live: conflicting image output",
 		"changed_original_artifact":     "live: image artifact payload mismatch",
-		"read_wrong_turn":               "live: settled image turn did not complete",
+		"read_wrong_turn":               "live: unattributed image history",
 		"transparent_false":             "live: invalid image arguments",
 		"transparent_true":              "live: invalid image arguments",
 		"transparent_null":              "live: invalid image arguments",
@@ -139,7 +148,8 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 			// The same rejected first-turn item can arrive before continuation
 			// (conflicting terminal) or after its identity has become stale.
 			validLateBoundary := mode == "late_conflict" && err.Error() == "live: stale image call identity"
-			if err.Error() != want && !validLateBoundary {
+			uncreditedEvent := mode == "wrong_thread" || mode == "wrong_turn" || mode == "stale_event"
+			if err.Error() != want && !validLateBoundary && !uncreditedEvent {
 				t.Fatalf("wrong rejection boundary: %v; want %s", err, want)
 			}
 			if got.Completed || got.EditedImageSHA256 != "" {

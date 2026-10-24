@@ -51,7 +51,9 @@ func TestNativeEditResultHistoryPreservesReplay(t *testing.T) {
 		{"equivalent_content", `[{"type":"input_text","text":"saved file"}]`, `[ { "text": "saved file", "type": "input_text" } ]`, true},
 		{"changed_string", `"saved file"`, `"different result"`, false},
 		{"changed_content", `[{"type":"input_text","text":"saved file"}]`, `[{"type":"input_text","text":"different result"}]`, false},
-		{"changed_form", `"saved file"`, `[{"type":"input_text","text":"saved file"}]`, false},
+		{"equivalent_form", `"saved file"`, `[{"type":"input_text","text":"saved file"}]`, true},
+		{"equivalent_form_reverse", `[{"type":"input_text","text":"saved file"}]`, `"saved file"`, true},
+		{"block_boundaries_preserved", `[{"type":"input_text","text":"saved"},{"type":"input_text","text":" file"}]`, `"saved file"`, false},
 		{"at_capacity", `"` + strings.Repeat("x", (64<<10)-2) + `"`, `"` + strings.Repeat("x", (64<<10)-2) + `"`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,8 +110,9 @@ func TestNativeStructuredEditDeclaration(t *testing.T) {
 		{"retired_hosted_rejected", []json.RawMessage{edit, hosted}, false},
 		{"retired_hosted_first", []json.RawMessage{hosted, edit}, false},
 		{"projected_alone", []json.RawMessage{edit}, true},
-		{"plain_name", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "local___structured_edit_418464e5de0f7b1e", "structured_edit", 1))}, false},
-		{"wrong_identity", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "418464e5de0f7b1e", "418464e5de0f7b1f", 1))}, false},
+		{"plain_name", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "local___structured_edit_418464e5de0f7b1e", "structured_edit", 1))}, true},
+		{"different_projection", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "418464e5de0f7b1e", "418464e5de0f7b1f", 1))}, true},
+		{"empty_name", []json.RawMessage{json.RawMessage(strings.Replace(declaration, "local___structured_edit_418464e5de0f7b1e", "", 1))}, false},
 		{"duplicate_edit", []json.RawMessage{edit, edit, hosted}, false},
 		{"missing_edit", []json.RawMessage{hosted}, false},
 		{"duplicate_hosted", []json.RawMessage{edit, hosted, hosted}, false},
@@ -121,8 +124,40 @@ func TestNativeStructuredEditDeclaration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			name, ok := StructuredEditToolName(tc.tools)
-			if ok != tc.want || (ok && name != "local___structured_edit_418464e5de0f7b1e") {
+			var declared struct{ Name string }
+			if len(tc.tools) == 1 {
+				_ = json.Unmarshal(tc.tools[0], &declared)
+			}
+			if ok != tc.want || (ok && name != declared.Name) {
 				t.Fatalf("declaration binding = %q, %v; want admitted=%v", name, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestSameEditArgumentsBindsControlledOperation(t *testing.T) {
+	const expected = `{"file_path":"structured_edit_fixture.txt","old_string":"before","new_string":"after","replace_all":false}`
+	for _, tc := range []struct {
+		name, actual string
+		want         bool
+	}{
+		{"reordered_escaped_default", ` { "new_string":"a\u0066ter", "old_string":"before", "file_path":"./structured_edit_fixture.txt" } `, true},
+		{"different_target", strings.Replace(expected, "structured_edit_fixture.txt", "other/structured_edit_fixture.txt", 1), false},
+		{"changed_old", strings.Replace(expected, "before", "other", 1), false},
+		{"changed_new", strings.Replace(expected, "after", "other", 1), false},
+		{"replace_all_true", strings.Replace(expected, "false", "true", 1), false},
+		{"string_boolean", strings.Replace(expected, "false", `"false"`, 1), false},
+		{"null_boolean", strings.Replace(expected, "false", "null", 1), false},
+		{"duplicate_key", strings.TrimSuffix(expected, "}") + `,"replace_all":false}`, false},
+		{"extra_key", strings.TrimSuffix(expected, "}") + `,"extra":false}`, false},
+		{"missing_key", `{"file_path":"structured_edit_fixture.txt","new_string":"after"}`, false},
+		{"null_string", strings.Replace(expected, `"before"`, "null", 1), false},
+		{"traversal", strings.Replace(expected, "structured_edit_fixture.txt", "sub/../structured_edit_fixture.txt", 1), false},
+		{"trailing_value", expected + `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if SameEditArguments(tc.actual, expected) != tc.want {
+				t.Fatal("controlled operation equality mismatch")
 			}
 		})
 	}

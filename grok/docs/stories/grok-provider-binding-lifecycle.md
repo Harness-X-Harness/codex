@@ -104,8 +104,9 @@ compatibility path to the stock child flow.
 
 `ShippedChildCollaboration` in `grok/live/shipped_child.go` consumes unchanged
 shipped assets and records one completed setup Turn before the single natural
-delegation task. The parent's public setup prefix must remain unchanged. A
-qualifying child must report the setup marker in its completed result, with
+delegation task. The parent's setup must retain its successful turn identity and
+ordered user/assistant content; reconstructed item IDs and diagnostic metadata
+are not part of that conversation contract. A qualifying child must report the setup marker in its completed result, with
 complete observed own-input coverage proving that the marker was not supplied
 again before that result. Pre-result child tool execution cannot supply the
 marker through another lookup path. Lineage alone is insufficient.
@@ -114,8 +115,10 @@ Stock paginated subagent history intentionally omits inherited model records
 from the child's public turns. Exact public child seed item identities, content
 and order are therefore not a Live requirement. The actual App Server-to-Grok
 controlled HTTP prerequisite independently verifies the complete inherited seed
-content and order on the wire with unchanged shipped capabilities. That
-structural prerequisite does not replace real child recall and parent result
+content and order on the wire with unchanged shipped capabilities. The child
+request must contain the delegated task, but inherited tool records, normalized
+output wording and task-envelope presentation are not a unique required shape.
+That controlled prerequisite does not replace real child recall and parent result
 consumption.
 
 The runner accepts a bounded fresh UUID from a correctly bound, completed child
@@ -132,18 +135,21 @@ Ordinary hexadecimal letter casing does not make a supplied value fresh. This is
 a bounded proof over the observed plaintext inputs and results; it does not
 establish noninterference for arbitrary encodings or covert channels. Counts
 remain bounded observation budgets; neither setup nor delegation is resubmitted.
+The UUID is this probe's provenance witness, not a general ban on reusing parent
+results. A child provider request does not establish new internal model computation.
 
 The observer discovers children through actual public V2 `subAgentActivity`
 started items and binds their IDs/paths to public child lineage/history. The
 parent's existing `experimentalRawEvents` opt-in is inherited by child listeners.
 Ordered `rawResponseItem/completed` evidence must contain the child's consumed
-`AgentMessage` inputs and the same marker-and-nonce-bearing result as its completed
-public turn. Every own turn through that result needs complete observed input/lifecycle
-coverage. Any pre-result supplied nonce prevents credit; later mentions, later
+`AgentMessage` inputs and the same marker and nonce as its completed public
+result, without requiring identical surrounding prose. Every own turn through
+that result needs complete observed input/lifecycle coverage. Any pre-result supplied nonce prevents credit; later mentions, later
 unrelated turns and closure after a qualified completion do not. Observed terminal
 conflicts invalidate the exact credited child/turn, not independent candidates.
-Earlier own turns may fail if their observed status/error agrees with durable
-history; only the credited result must complete successfully. Inherited user
+Earlier own turns may fail if their observed terminal status and error presence
+agree with durable history; diagnostic error wording need not be identical. Only
+the credited result must complete successfully. Inherited user
 input and final assistant messages are checked for supplied values; public
 diagnostics are not treated as inherited model input.
 The setup transcript's user and assistant text is independently parent-known,

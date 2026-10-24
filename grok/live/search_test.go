@@ -84,6 +84,12 @@ func fakeSearchServer() {
 				status = "failed"
 			}
 			terminal := map[string]any{"id": id, "status": status, "items": []any{item}}
+			if mode == "commentary_after_final" {
+				terminal["items"] = append(terminal["items"].([]any), map[string]any{"type": "agentMessage", "id": "commentary", "phase": "commentary", "text": "PRIVATE_COMMENTARY"})
+			}
+			if mode == "split_final" {
+				terminal["items"] = append(terminal["items"].([]any), map[string]any{"type": "agentMessage", "id": "reply-part-2", "phase": "final_answer", "text": "PRIVATE_CONTINUED_REPLY"})
+			}
 			snapshot := snapshotPhase == "first" && index == 1 || snapshotPhase == "followup" && index == 2
 			if snapshot && (snapshotTerminal == "failed" || snapshotTerminal == "interrupted") {
 				terminal["status"] = snapshotTerminal
@@ -269,7 +275,23 @@ func fakeSearchServer() {
 				}
 			}
 			searchProtocolTurns(turns)
-			result = map[string]any{"thread": shippedProtocolThread(map[string]any{"id": id, "turns": turns})}
+			history := append([]any(nil), turns...)
+			if mode == "reordered_history" && len(history) == 2 {
+				history[0], history[1] = history[1], history[0]
+			}
+			if mode == "extra_history" {
+				history = append(history, map[string]any{"id": "uncredited-history", "status": "completed", "items": []any{}})
+			}
+			if mode == "duplicate_current" {
+				history = append(history, history[len(history)-1])
+			}
+			if mode == "duplicate_prior" && len(history) == 2 {
+				history = append(history, history[0])
+			}
+			if mode == "missing_prior" && len(history) == 2 {
+				history = history[1:]
+			}
+			result = map[string]any{"thread": shippedProtocolThread(map[string]any{"id": id, "turns": history})}
 		default:
 			return
 		}
@@ -279,7 +301,7 @@ func fakeSearchServer() {
 
 func TestHostedSearchRetainsEachScenarioAndSingleContinuation(t *testing.T) {
 	for _, scenario := range []string{"web", "web_allowed", "web_excluded"} {
-		for _, mode := range []string{"ok", "duplicate", "action_only"} {
+		for _, mode := range []string{"ok", "duplicate", "action_only", "commentary_after_final", "split_final", "reordered_history", "extra_history"} {
 			t.Run(scenario+"/"+mode, func(t *testing.T) {
 				t.Parallel()
 				options := fixtureOptions(t, "search:"+mode+":"+scenario)
@@ -367,7 +389,7 @@ func TestHostedSearchRequiresCorrelatedTerminalAfterStartSnapshot(t *testing.T) 
 }
 
 func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
-	for _, mode := range []string{"missing", "unsupported", "partial", "output_first", "conflict", "local", "wrong_thread", "wrong_turn", "wrong_read", "no_terminal", "empty", "failed"} {
+	for _, mode := range []string{"missing", "unsupported", "partial", "output_first", "conflict", "local", "wrong_thread", "wrong_turn", "wrong_read", "no_terminal", "empty", "failed", "duplicate_current", "duplicate_prior", "missing_prior"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			options := fixtureOptions(t, "search:"+mode+":web")
@@ -378,7 +400,7 @@ func TestHostedSearchRejectsMissingConflictAndLocalExecution(t *testing.T) {
 				t.Fatalf("invalid evidence accepted or exposed: %+v, %v", got, err)
 			}
 			want := 1
-			if mode == "failed" {
+			if mode == "failed" || mode == "duplicate_prior" || mode == "missing_prior" {
 				want = 2
 			}
 			var script struct{ Trace string }

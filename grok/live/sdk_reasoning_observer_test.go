@@ -253,3 +253,94 @@ func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) 
 		t.Fatal("unjoined cleanup failure retained the whole-scenario success stage")
 	}
 }
+
+// Exact capacity is exercised through the real typed observer and production
+// continuation reset, without making SDK process throughput the acceptance goal.
+func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
+	for _, mode := range []string{"limit_and_duplicate", "summary_recall", "summary_no_recall", "overflow"} {
+		t.Run(mode, func(t *testing.T) {
+			observer, token := historyObserverFixture(t)
+			for turn := 0; turn < 2; turn++ {
+				turnID := "private_turn"
+				if turn == 1 {
+					if observer.beginContinuation() != "private_thread" || observer.probe.previousID != turnID ||
+						len(observer.reply.identities) != 0 || observer.reply.completed || observer.reply.authoritative || observer.reply.explicitFinal || observer.reply.recall ||
+						observer.reconciled || observer.callbackTerminalSeen || observer.deliveredTyped != 0 || observer.recoveredTyped != 0 {
+						t.Fatal("production continuation transition retained prior reply credit or identity budget")
+					}
+					turnID = "private_next"
+					observer.active = true // The real Resume admission owns this flag.
+				}
+				if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{ID: turnID, Status: protocolv2.TurnStatusInProgress}}); err != nil {
+					t.Fatal(err)
+				}
+				item := func(id, text string) protocolv2.ThreadItem {
+					return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: id, Text: text, Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})
+				}
+				send := func(id, text string) error {
+					return observer.typedNotification(context.Background(), protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: protocolv2.ItemCompletedNotification{
+						ThreadID: "private_thread", TurnID: turnID, CompletedAtMS: 1, Item: item(id, text),
+					}}))
+				}
+				for i := 0; i < historyAssistantLimit; i++ {
+					text := "wrong"
+					if (mode == "limit_and_duplicate" || mode == "overflow") && i == historyAssistantLimit-1 {
+						text = token
+					}
+					if err := send("private_item_"+strconv.Itoa(i), text); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if len(observer.reply.identities) != historyAssistantLimit {
+					t.Fatal("exact identity capacity was not retained")
+				}
+				if mode == "limit_and_duplicate" || mode == "overflow" {
+					if err := send("private_item_0", "wrong"); err != nil {
+						t.Fatal(err)
+					}
+					if !observer.reply.recall || observer.reply.ambiguous || len(observer.reply.identities) != historyAssistantLimit {
+						t.Fatal("old duplicate spent capacity or superseded the current result")
+					}
+				}
+				if mode == "overflow" && turn == 1 {
+					err := send("private_overflow", token)
+					observer.finishTurn()
+					if DescribeFailure(err).Code != "assistant_identity_budget_exceeded" || len(observer.reply.identities) != historyAssistantLimit || observer.observations.Completed || !observer.observations.FirstCompleted || !observer.observations.FirstRecall {
+						t.Fatal("capacity + 1 was not rejected before completion or damaged prior-turn proof")
+					}
+					encoded, _ := json.Marshal(struct {
+						Evidence Evidence
+						Failure  FailureInfo
+						Error    string
+					}{observer.observations, DescribeFailure(err), err.Error()})
+					if strings.Contains(string(encoded), "private_") || strings.Contains(string(encoded), token) {
+						t.Fatal("capacity rejection exported private proof data")
+					}
+					continue
+				}
+				items := []protocolv2.ThreadItem{}
+				wantRecall := true
+				if strings.HasPrefix(mode, "summary_") {
+					text := token
+					if mode == "summary_no_recall" && turn == 1 {
+						text, wantRecall = "wrong", false
+					}
+					items = append(items, item("new-summary-id", text))
+				}
+				err := observer.typedNotification(context.Background(), protocolv2.NewServerNotificationTurnCompleted(protocolv2.ServerNotificationTurnCompleted{Params: protocolv2.TurnCompletedNotification{
+					ThreadID: "private_thread", Turn: protocolv2.Turn{ID: turnID, Status: protocolv2.TurnStatusCompleted, Items: items},
+				}}))
+				observer.finishTurn()
+				if (err == nil) != wantRecall || !observer.reply.completed || observer.reply.recall != wantRecall || observer.reply.ambiguous {
+					t.Fatal("terminal authority or capacity result changed")
+				}
+				if !wantRecall && DescribeFailure(err).Code != "history_reply_not_recalled" {
+					t.Fatal("wrong authoritative summary was not rejected as missing recall")
+				}
+				if strings.HasPrefix(mode, "summary_") && !observer.reply.authoritative {
+					t.Fatal("terminal summary at capacity lost authority")
+				}
+			}
+		})
+	}
+}

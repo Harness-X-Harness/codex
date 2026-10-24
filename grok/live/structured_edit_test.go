@@ -150,6 +150,9 @@ func fakeEditServer() {
 			if replaceAll {
 				args["replace_all"] = true
 			}
+			if mode == "relative_dot_path" {
+				args["file_path"] = "./structured_edit_fixture.txt"
+			}
 			if mode == "absolute_path" {
 				args["file_path"] = path
 			}
@@ -221,6 +224,9 @@ func fakeEditServer() {
 			if mode == "wrong_change_path" {
 				changePath = filepath.Join(filepath.Dir(path), "other.txt")
 			}
+			if mode == "wrong_change_root" {
+				changePath = filepath.Join(filepath.Dir(path), "other", filepath.Base(path))
+			}
 			change := map[string]any{"type": "fileChange", "id": callID, "status": status, "changes": []any{
 				map[string]any{"path": changePath, "kind": map[string]any{"type": "update", "move_path": nil}, "diff": "fixture diff"},
 			}}
@@ -238,6 +244,9 @@ func fakeEditServer() {
 				agent["phase"] = "commentary"
 			}
 			items := []any{agent}
+			if mode == "final_then_commentary" {
+				items = append(items, map[string]any{"type": "agentMessage", "id": "commentary-" + turnID, "phase": "commentary", "text": "Background status."})
+			}
 			if first && mode != "missing_change" {
 				items = append([]any{change}, items...)
 			}
@@ -404,7 +413,7 @@ func fakeEditServer() {
 }
 
 func TestStructuredEditScenarios(t *testing.T) {
-	for _, mode := range []string{"success", "early", "early_decline", "wire_identity", "absolute_path", "false_replace_all", "output_first", "content_output", "decline", "pinned", "replace_all", "duplicate_call", "duplicate_output", "stale_continuation", "duplicate_approval"} {
+	for _, mode := range []string{"success", "early", "early_decline", "relative_dot_path", "final_then_commentary", "absolute_path", "false_replace_all", "output_first", "content_output", "decline", "pinned", "replace_all", "duplicate_call", "duplicate_output", "stale_continuation", "duplicate_approval"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "edit:"+mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -462,9 +471,9 @@ func TestStructuredEditScenarios(t *testing.T) {
 }
 
 func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
-	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "near_identity", "near_wire_identity", "namespace", "apply_patch", "command",
+	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "near_identity", "wire_identity", "near_wire_identity", "namespace", "apply_patch", "command",
 		"missing_call", "missing_output", "wrong_output", "empty_output", "malformed_output", "duplicate_edit", "late_duplicate",
-		"missing_change", "wrong_change_id", "wrong_change_path", "move_change", "failed_change", "declined_change", "running_change", "unknown_change", "duplicate_change", "conflicting_change", "false_success", "wrong_bytes",
+		"missing_change", "wrong_change_id", "wrong_change_path", "wrong_change_root", "move_change", "failed_change", "declined_change", "running_change", "unknown_change", "duplicate_change", "conflicting_change", "false_success", "wrong_bytes",
 		"malformed_args", "duplicate_arg", "wrong_old", "wrong_path", "extra_arg", "string_replace_all", "null_replace_all", "number_replace_all", "missing_replace_all",
 		"failed", "interrupted", "empty_reply", "commentary", "read_thread", "read_failed", "read_error", "continuation_read_error", "continuation_failed", "repeat_continuation", "continuation_changes",
 		"approval_thread", "approval_turn", "approval_item", "decline_changes", "denied_effect", "shutdown_changes", "stalled_start", "missing_terminal"}
@@ -529,7 +538,7 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				wantError = "live: unexpected or invalid edit output"
 			case "missing_call", "missing_output", "wrong_output", "missing_change", "wrong_change_id", "failed_change", "declined_change", "running_change":
 				wantError = "live: edit call, output or file-change evidence missing"
-			case "wrong_change_path", "move_change":
+			case "wrong_change_path", "wrong_change_root", "move_change":
 				wantError = "live: unexpected edit file change"
 			case "duplicate_change":
 				wantError = "live: conflicting or repeated edit file change"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -38,6 +39,7 @@ type imageItem struct {
 	Result    string          `json:"result"`
 	SavedPath string          `json:"savedPath"`
 	Failure   json.RawMessage `json:"failure"`
+	HasImage  bool            `json:"-"`
 }
 type imageTurn struct {
 	ID     string          `json:"id"`
@@ -51,22 +53,23 @@ type imageTurn struct {
 type imageCall struct {
 	turnID, arguments, digest, output, path, terminal, failure, ineligible string
 	fromPrior, called, started, public, settled, verified                  bool
+	viewSource                                                             *imageCall
 }
 type imageProbe struct {
-	mu                                 sync.Mutex
-	ctx                                context.Context
-	threadID, turnID, previousID, root string
-	base                               *Evidence
-	evidence                           *ImageEvidence
-	calls                              map[string]*imageCall
-	newest, prior                      *imageCall
-	existing                           map[string]bool
-	completed                          bool
-	frames, bytes                      int
-	changed                            chan struct{}
-	clientDone                         <-chan struct{}
-	cause                              error
-	pending                            []frame
+	mu                                      sync.Mutex
+	ctx                                     context.Context
+	threadID, turnID, previousID, root, cwd string
+	base                                    *Evidence
+	evidence                                *ImageEvidence
+	calls                                   map[string]*imageCall
+	newest, prior, historySource            *imageCall
+	existing                                map[string]bool
+	completed                               bool
+	frames, bytes                           int
+	changed                                 chan struct{}
+	clientDone                              <-chan struct{}
+	cause                                   error
+	pending                                 []frame
 	// closed reports why the SDK client stopped. It is nil until the fixture
 	// owns a client. The returned error is classified locally and never forwarded.
 	closed func() error
@@ -124,17 +127,23 @@ func (probe *imageProbe) settle(readThreadID string, turns []imageTurn) error {
 	if probe.cause != nil {
 		return probe.cause
 	}
-	if readThreadID != probe.threadID || len(turns) != probe.base.Turns {
+	if readThreadID != probe.threadID || len(turns) > 32 {
 		return errors.New("live: settled image thread identity unavailable")
 	}
-	for i, turn := range turns {
-		expected := probe.turnID
-		if i == 0 && probe.previousID != "" {
-			expected = probe.previousID
+	seen := make(map[string]bool)
+	for _, turn := range turns {
+		if turn.ID != probe.turnID && (probe.previousID == "" || turn.ID != probe.previousID) {
+			for _, item := range turn.Items {
+				if item.Type == "imageGeneration" || item.Type == "imageView" || item.HasImage {
+					return errors.New("live: unattributed image history")
+				}
+			}
+			continue
 		}
-		if turn.ID != expected || turn.Status != "completed" || !nullJSON(turn.Error) {
+		if seen[turn.ID] || turn.Status != "completed" || !nullJSON(turn.Error) {
 			return errors.New("live: settled image turn did not complete")
 		}
+		seen[turn.ID] = true
 		if turn.ID == probe.turnID {
 			if err := probe.terminal(turn, true); err != nil {
 				return err
@@ -155,6 +164,9 @@ func (probe *imageProbe) settle(readThreadID string, turns []imageTurn) error {
 			}
 		}
 	}
+	if !seen[probe.turnID] || probe.previousID != "" && !seen[probe.previousID] {
+		return errors.New("live: settled image turn did not complete")
+	}
 	found := false
 	for _, call := range probe.calls {
 		if probe.ctx.Err() != nil {
@@ -165,6 +177,11 @@ func (probe *imageProbe) settle(readThreadID string, turns []imageTurn) error {
 		}
 		if !call.called || call.output == "" {
 			return errors.New("live: image call, output or terminal evidence missing")
+		}
+		if call.viewSource != nil {
+			// Viewing a bound artifact neither generates another image nor proves
+			// an edit. Its output was checked against that artifact's rendition.
+			continue
 		}
 		// Argument/reference validation fails before the extension emits any
 		// image item. A correlated text error is diagnostic, never an image.
@@ -239,10 +256,26 @@ func (probe *imageProbe) notification(message frame) error {
 		return errors.New("live: invalid image evidence")
 	}
 	if event.ThreadID != probe.threadID {
-		return errors.New("live: unrelated image thread evidence")
+		return nil
 	}
 	if message.Method == "turn/completed" {
-		return probe.terminal(event.Turn, false)
+		if event.Turn.ID == probe.turnID {
+			return probe.terminal(event.Turn, false)
+		}
+		if probe.previousID != "" && event.Turn.ID == probe.previousID {
+			if event.Turn.Status != "completed" || !nullJSON(event.Turn.Error) {
+				return errors.New("live: prior image turn did not complete successfully")
+			}
+			for _, item := range event.Turn.Items {
+				if item.Type == "imageGeneration" {
+					call := probe.calls[item.ID]
+					if call == nil || call.turnID != probe.previousID || !sameImageItem(call, item) {
+						return errors.New("live: prior image history changed")
+					}
+				}
+			}
+		}
+		return nil
 	}
 	if event.TurnID != probe.turnID {
 		// A late item for an already credited call can arrive after the next
@@ -252,7 +285,7 @@ func (probe *imageProbe) notification(message frame) error {
 				return probe.public(event.Item, false)
 			}
 		}
-		return errors.New("live: unrelated image turn evidence")
+		return nil
 	}
 	if message.Method == "rawResponseItem/completed" {
 		return probe.raw(event.Item)
@@ -308,6 +341,9 @@ func (probe *imageProbe) record(id string) (*imageCall, error) {
 func (probe *imageProbe) raw(item imageItem) error {
 	switch item.Type {
 	case "function_call":
+		if item.Name == "view_image" && (item.Namespace == nil || *item.Namespace == "") {
+			return probe.view(item)
+		}
 		if item.Name != "imagegen" || item.Namespace == nil || *item.Namespace != "image_gen" {
 			return errors.New("live: unexpected image tool identity")
 		}
@@ -320,7 +356,7 @@ func (probe *imageProbe) raw(item imageItem) error {
 		}
 		hash := editDigest([]byte(item.Arguments))
 		if call.called {
-			if call.arguments != hash {
+			if call.viewSource != nil || call.arguments != hash {
 				return errors.New("live: conflicting image call")
 			}
 			return nil
@@ -338,7 +374,7 @@ func (probe *imageProbe) raw(item imageItem) error {
 				return nil
 			}
 		} else {
-			selected := probe.newest
+			selected := probe.historySource
 			if len(args.Paths) == 1 && args.Count == nil && args.Paths[0] == probe.prior.path {
 				selected = probe.prior
 			} else if len(args.Paths) != 0 || args.Count == nil || *args.Count != 1 {
@@ -368,6 +404,16 @@ func (probe *imageProbe) raw(item imageItem) error {
 		if !call.called {
 			return errors.New("live: image output precedes canonical call")
 		}
+		if call.viewSource != nil {
+			if !strings.HasPrefix(hash, "text:") {
+				if hash != call.viewSource.output && hash != call.viewSource.digest {
+					return errors.New("live: viewed image does not match bound artifact")
+				}
+				probe.historySource = call.viewSource
+			}
+			call.output = hash
+			return nil
+		}
 		if call.ineligible != "" && !strings.HasPrefix(hash, "text:") {
 			return errors.New(call.ineligible)
 		}
@@ -375,24 +421,71 @@ func (probe *imageProbe) raw(item imageItem) error {
 		if !strings.HasPrefix(hash, "text:") {
 			call.fromPrior = probe.previousID != ""
 			probe.evidence.HistorySelected = probe.evidence.HistorySelected || call.fromPrior
-			probe.newest = call
+			probe.newest, probe.historySource = call, call
 		}
 	case "message":
-		var content []struct {
-			Type string `json:"type"`
-		}
+		var content []json.RawMessage
 		if len(item.Content) != 0 && json.Unmarshal(item.Content, &content) != nil {
 			return errors.New("live: invalid canonical image history")
 		}
 		for _, entry := range content {
-			if entry.Type == "input_image" {
-				return errors.New("live: unrelated canonical history image")
+			var kind struct{ Type string }
+			if json.Unmarshal(entry, &kind) != nil {
+				return errors.New("live: invalid canonical image history")
+			}
+			if kind.Type == "input_image" {
+				hash, err := imageOutputDigest(append(append([]byte{'['}, entry...), ']'))
+				if err != nil || probe.historySource == nil || hash != probe.historySource.output && hash != probe.historySource.digest {
+					return errors.New("live: unrelated canonical history image")
+				}
 			}
 		}
-	case "compaction", "compaction_trigger", "context_compaction", "image_generation_call", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "tool_search_call":
-		return errors.New("live: unsupported image history mutation")
+	case "image_generation_call", "custom_tool_call", "custom_tool_call_output", "local_shell_call":
+		// These are not capabilities of this isolated fixture and cannot
+		// substitute for its canonical image tool. Neutral history metadata is
+		// not rejected merely for its type or position.
+		return errors.New("live: unsupported image fixture tool")
 	}
 	return nil
+}
+
+// A view is an optional inspection of an already observed generated artifact.
+// Binding its path and output prevents it from substituting an unrelated image
+// into num_last_images_to_include, while preserving the ordinary edit flow.
+func (probe *imageProbe) view(item imageItem) error {
+	var args struct{ Path string }
+	if len(item.Arguments) > 4096 || json.Unmarshal([]byte(item.Arguments), &args) != nil || args.Path == "" {
+		return errors.New("live: invalid image view arguments")
+	}
+	path := args.Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(probe.cwd, path)
+	}
+	path = filepath.Clean(path)
+	call, err := probe.record(item.CallID)
+	if err != nil {
+		return err
+	}
+	if call.public || call.started {
+		return errors.New("live: image view cannot establish generation")
+	}
+	hash := editDigest([]byte(item.Arguments))
+	if call.called {
+		if call.viewSource == nil || call.arguments != hash {
+			return errors.New("live: conflicting image call")
+		}
+		return nil
+	}
+	for _, source := range probe.calls {
+		if source.viewSource == nil && source.path == path && source.public && source.terminal == "completed" && source.output != "" && !strings.HasPrefix(source.output, "text:") {
+			if _, err := inspectImage(probe.root, path, source.digest); err != nil {
+				return err
+			}
+			call.called, call.arguments, call.viewSource = true, hash, source
+			return nil
+		}
+	}
+	return errors.New("live: viewed image is not a bound artifact")
 }
 
 func (probe *imageProbe) public(item imageItem, settled bool) error {
@@ -405,6 +498,9 @@ func (probe *imageProbe) public(item imageItem, settled bool) error {
 	call, err := probe.record(item.ID)
 	if err != nil {
 		return err
+	}
+	if call.viewSource != nil {
+		return errors.New("live: image view cannot establish generation")
 	}
 	if call.ineligible != "" {
 		return errors.New(call.ineligible)

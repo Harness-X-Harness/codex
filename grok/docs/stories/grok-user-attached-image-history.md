@@ -18,16 +18,20 @@ object's color and shape from the earlier picture.
 
 Both distinct Turns must have matching successful terminal evidence and
 successful bound history readback. The first accepted final answer contains
-only the left fact, and public assistant commentary must not add other facts,
-so that public answer text cannot supply the second answer. The original inline
+only the left fact. Public assistant commentary may describe the work without
+repeating that answer; this bounded observer rejects either explicit protected
+second-fact token in that commentary. The original inline
 attachment remains in the first user message in public Thread history after
-both Turns. Answers are compared as semantic enums with case, whitespace and
-punctuation normalization, never substring matching. Prompts and filenames do
+both Turns. The bounded English answer check extracts the requested color and
+shape, allowing articles, copulas and property order changes. Negation, guesses,
+conflicting properties and unexplained words are not visual proof. It does not
+compare an exact answer phrase or use substring matching. Prompts and filenames do
 not disclose either answer; the picture pixels carry the facts.
 
 Partial success, wrong-thread terminals, failed terminals, absent attachments,
 missing retained image, duplicate Turn identity, a nonvisual generic answer,
-and a first answer that reveals the second fact do not complete this Story.
+and an explicitly detected second-fact disclosure in the first answer do not
+complete this Story.
 An unavailable answer is not replaced by another invocation. Product-internal
 retry policy and the existing scenario deadline remain unchanged.
 
@@ -46,13 +50,20 @@ retry policy and the existing scenario deadline remain unchanged.
   are unchanged; the original seventeen scenarios remain required.
 - Retained evidence contains only subject metadata, counts, stages, booleans,
   and reply lengths. `FirstRecall` means the first visual answer matched;
-  `Recalled` means the distinct second visual answer matched, not simple recall
-  of the prior assistant's text. No image, prompt, reply, private identifier,
+  `Recalled` means the distinct requested second fact matched in the same
+  image-bearing Thread; it does not identify which internal or public
+  representation supplied that answer. No image, prompt, reply, private identifier,
   credentials or raw traffic is exported.
 - A separately authorized identified real-backend run is required to establish
   the user-visible result. Offline checks do not establish Live acceptance.
   This Story does not prove arbitrary images, other models, generation/edit,
   cold restart, compaction, latency or absence of product-internal attempts.
+
+The finite English checks are not a general natural-language judge: the public
+commentary check rejects either second-fact token, but does not establish the
+absence of every possible paraphrase or coded disclosure. A pass must not be
+reported as proof of universal non-leakage or pixel-only recall. The controlled
+negative cases include a leaked full answer and each separately leaked property.
 
 Opaque/internal reasoning may retain visual observations. The outcome proves a
 usable image-bearing same-thread continuation, not that the second backend

@@ -3,6 +3,8 @@ package integrationfixture
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,10 +22,12 @@ func (history *EditResultHistory) Accept(raw json.RawMessage) bool {
 	if json.Unmarshal(raw, &output) != nil {
 		return false
 	}
+	var texts []string
 	if text, ok := output.AsString(); ok {
 		if strings.TrimSpace(text) == "" {
 			return false
 		}
+		texts = []string{text}
 	} else if content, ok := output.AsArray(); ok {
 		if len(content) == 0 {
 			return false
@@ -33,11 +37,12 @@ func (history *EditResultHistory) Accept(raw json.RawMessage) bool {
 			if !ok || strings.TrimSpace(text.Text) == "" {
 				return false
 			}
+			texts = append(texts, text.Text)
 		}
 	} else {
 		return false
 	}
-	canonical, err := json.Marshal(output)
+	canonical, err := json.Marshal(texts)
 	if err != nil {
 		return false
 	}
@@ -99,18 +104,18 @@ func EditFailureDetail(raw json.RawMessage) map[string]any {
 	return map[string]any{"format": "json_string", "captured": true, "text": text, "truncated": truncated, "filtered_lines": filtered}
 }
 
-// Retain only the bounded paired result privately. Canonical SDK serialization
-// permits equivalent JSON encoding while preserving the result in continuation.
+// Retain the bounded paired text privately. String and one input_text block carry
+// the same result; preserve text and multiple-block boundaries on continuation.
 type EditResultHistory struct {
 	mu     sync.Mutex
 	output json.RawMessage
 }
 
-// This fixture is tied to the plain structured_edit capability in the identified
-// Grok package. The name is flat_wire_name("function", ToolName::plain(...));
-// return the declaration's name so the response uses the actual wire identity.
+// The isolated scenario advertises one editor and no alternative tools. Bind its
+// actual declared symbol instead of duplicating the projection algorithm here.
+// This is only declaration discovery: the integration must also prove canonical
+// structured_edit dispatch, exact call/result identity and actual target bytes.
 func StructuredEditToolName(tools []json.RawMessage) (string, bool) {
-	const projectedName = "local___structured_edit_418464e5de0f7b1e"
 	var bound string
 	for _, raw := range tools {
 		var tool struct {
@@ -128,7 +133,7 @@ func StructuredEditToolName(tools []json.RawMessage) (string, bool) {
 		switch tool.Type {
 		case "function":
 			schema := tool.Parameters
-			if bound != "" || tool.Name != projectedName || schema.Type != "object" ||
+			if bound != "" || strings.TrimSpace(tool.Name) == "" || schema.Type != "object" ||
 				schema.AdditionalProperties == nil || *schema.AdditionalProperties ||
 				len(schema.Required) != 3 || len(schema.Properties) < 4 || len(schema.Properties) > 5 {
 				return "", false
@@ -165,4 +170,88 @@ func StructuredEditToolName(tools []json.RawMessage) (string, bool) {
 		}
 	}
 	return bound, bound != ""
+}
+
+// EditArguments are the closed exact-match operation shared by the controlled
+// backend fixture and the Live raw-event observer.
+type EditArguments struct {
+	FilePath, OldString, NewString string
+	ReplaceAll                     bool
+}
+
+// ParseEditArguments rejects ambiguity and coercion before semantic comparison.
+func ParseEditArguments(raw string) (EditArguments, bool) {
+	var parsed EditArguments
+	if len(raw) > 4096 {
+		return parsed, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return parsed, false
+	}
+	args := map[string]json.RawMessage{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return parsed, false
+		}
+		name, ok := key.(string)
+		if !ok || args[name] != nil {
+			return parsed, false
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return parsed, false
+		}
+		args[name] = value
+	}
+	if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') {
+		return parsed, false
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return parsed, false
+	}
+	if len(args) != 3 && len(args) != 4 {
+		return parsed, false
+	}
+	for key, target := range map[string]*string{"file_path": &parsed.FilePath, "old_string": &parsed.OldString, "new_string": &parsed.NewString} {
+		if strings.TrimSpace(string(args[key])) == "null" || json.Unmarshal(args[key], target) != nil {
+			return parsed, false
+		}
+	}
+	value, present := args["replace_all"]
+	if !present {
+		return parsed, len(args) == 3
+	}
+	switch strings.TrimSpace(string(value)) {
+	case "true":
+		parsed.ReplaceAll = true
+	case "false":
+	default:
+		return parsed, false
+	}
+	return parsed, true
+}
+
+// SameEditArguments compares the controlled operation, not JSON formatting. The
+// fixture sends relative paths; only harmless dot spelling is normalized here.
+func SameEditArguments(actual, expected string) bool {
+	left, leftOK := ParseEditArguments(actual)
+	right, rightOK := ParseEditArguments(expected)
+	if !leftOK || !rightOK {
+		return false
+	}
+	for _, args := range []*EditArguments{&left, &right} {
+		if args.FilePath == "" {
+			return false
+		}
+		for _, part := range strings.Split(filepath.ToSlash(args.FilePath), "/") {
+			if part == ".." {
+				return false
+			}
+		}
+		args.FilePath = filepath.Clean(args.FilePath)
+	}
+	return left == right
 }

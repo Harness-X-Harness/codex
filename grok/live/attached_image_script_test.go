@@ -20,14 +20,14 @@ import (
 )
 
 func TestAttachedImageHistory(t *testing.T) {
-	for _, mode := range []string{"success", "inline", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak"} {
+	for _, mode := range []string{"success", "inline", "natural_answer", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "attached:"+mode)
 			options.Model = providerfixture.PinnedModel
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			got, err := live.AttachedImageHistory(ctx, options)
-			success := mode == "success" || mode == "inline"
+			success := mode == "success" || mode == "inline" || mode == "natural_answer" || mode == "harmless_commentary"
 			if success && (err != nil || !got.Completed || !got.FirstCompleted || !got.FirstRecall || !got.Recalled || got.Turns != 2 || got.Threads != 1) {
 				t.Fatalf("missing image history proof: %+v %v", got, err)
 			}
@@ -125,6 +125,12 @@ func fakeAttachedImageServer() {
 			if mode == "leaked_second" && index == 0 {
 				answer = "red circle blue square"
 			}
+			if mode == "natural_answer" {
+				answer = "The circle is red."
+				if index == 1 {
+					answer = "The blue object is a square."
+				}
+			}
 			id := fmt.Sprintf("turn-%d", index)
 			if mode == "duplicate_turn" {
 				id = "turn-0"
@@ -138,8 +144,11 @@ func fakeAttachedImageServer() {
 				turns[0].(map[string]any)["items"].([]any)[0].(map[string]any)["content"] = []any{map[string]any{"type": "text", "text": "attachment omitted"}}
 			}
 			terminal := map[string]any{"id": id, "status": status, "error": nil, "items": []any{map[string]any{"type": "userMessage", "id": "user-" + id, "content": content}, map[string]any{"type": "agentMessage", "id": "answer-" + id, "phase": "final_answer", "text": answer}}}
-			if mode == "commentary_leak" && index == 0 {
-				terminal["items"] = append(terminal["items"].([]any), map[string]any{"type": "agentMessage", "id": "commentary", "phase": "commentary", "text": "blue square"})
+			if index == 0 {
+				commentary := map[string]string{"commentary_leak": "blue square", "color_leak": "The other object is blue.", "shape_leak": "The other shape is a square.", "harmless_commentary": "I will inspect the attached picture."}[mode]
+				if commentary != "" {
+					terminal["items"] = append(terminal["items"].([]any), map[string]any{"type": "agentMessage", "id": "commentary", "phase": "commentary", "text": commentary})
+				}
 			}
 			turns = append(turns, terminal)
 			if mode == "inline" {
@@ -158,7 +167,18 @@ func fakeAttachedImageServer() {
 				continue
 			}
 		case "thread/read":
-			result = map[string]any{"thread": shippedProtocolThread(map[string]any{"id": "attached-thread", "model": providerfixture.PinnedModel, "turns": turns})}
+			history := append([]any(nil), turns...)
+			if len(history) == 2 {
+				switch mode {
+				case "duplicate_prior":
+					history = append(history, history[0])
+				case "prior_failed":
+					history[0].(map[string]any)["status"] = "failed"
+				case "missing_prior":
+					history = history[1:]
+				}
+			}
+			result = map[string]any{"thread": shippedProtocolThread(map[string]any{"id": "attached-thread", "model": providerfixture.PinnedModel, "turns": history})}
 		default:
 			return
 		}

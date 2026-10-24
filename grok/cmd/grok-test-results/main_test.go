@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Harness-X-Harness/codex/grok/internal/testresults"
 )
 
 const validResults = `{"Action":"start","Package":"p"}
@@ -24,6 +26,10 @@ func TestResultCommand(t *testing.T) {
 		{"stdin", validResults, nil, 0},
 		{"required", validResults, []string{"--require", "p:TestOne"}, 0},
 		{"integration_incomplete", validResults, []string{"--integration"}, 1},
+		{"integration_owner_incomplete", validResults, []string{"--integration-owner", "TestBasicFixture"}, 1},
+		{"integration_owner_unknown", validResults, []string{"--integration-owner", "TestUnknown"}, 2},
+		{"integration_owner_duplicate", validResults, []string{"--integration-owner", "TestBasicFixture", "--integration-owner", "TestBasicFixture"}, 2},
+		{"integration_owner_conflict", validResults, []string{"--integration", "--integration-owner", "TestBasicFixture"}, 2},
 		{"empty", "", nil, 1},
 		{"missing_owner", validResults, []string{"--require", "p:TestMissing"}, 1},
 		{"duplicate_owner", validResults, []string{"--require", "p:TestOne", "--require", "p:TestOne"}, 1},
@@ -44,6 +50,38 @@ func TestResultCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResultCommandIntegrationOwnerProofs(t *testing.T) {
+	selected, err := testresults.IntegrationOwnerTests([]string{"TestBasicFixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, parentOnly := range []bool{false, true} {
+		var input, out, diagnostic bytes.Buffer
+		enc := json.NewEncoder(&input)
+		pkg := selected[0].Package
+		if err := enc.Encode(map[string]string{"Action": "start", "Package": pkg}); err != nil {
+			t.Fatal(err)
+		}
+		for _, test := range selected {
+			if parentOnly && strings.Contains(test.Name, "/") {
+				continue
+			}
+			for _, action := range []string{"run", "pass"} {
+				if err := enc.Encode(map[string]string{"Action": action, "Package": pkg, "Test": test.Name}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := enc.Encode(map[string]string{"Action": "pass", "Package": pkg}); err != nil {
+			t.Fatal(err)
+		}
+		code := run([]string{"--integration-owner", "TestBasicFixture"}, &input, &out, &diagnostic)
+		if (code == 0) == parentOnly {
+			t.Fatalf("parentOnly=%v code=%d diagnostic=%s", parentOnly, code, diagnostic.String())
+		}
 	}
 }
 

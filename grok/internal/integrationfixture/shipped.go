@@ -4,24 +4,20 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
 
 	"github.com/Harness-X-Harness/codex/grok/dist"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Test-only, after the ordinary shipped writer. Verify and reread both assets:
 // controlled transport must not silently weaken any shipped capability.
 func SubstituteShippedEndpoint(home, endpoint string) error {
 	if err := validateEndpoint(endpoint); err != nil {
-		return err
-	}
-	_, original, err := dist.Defaults()
-	if err != nil {
 		return err
 	}
 	path := filepath.Join(home, "config.toml")
@@ -33,15 +29,27 @@ func SubstituteShippedEndpoint(home, endpoint string) error {
 	if err != nil || !bytes.Equal(catalog, dist.Catalog()) {
 		return errors.New("native child: shipped catalog changed")
 	}
-	oldLine, newLine := fmt.Sprintf("base_url = %q\n", original), fmt.Sprintf("base_url = %q\n", endpoint)
-	if strings.Count(string(profile), oldLine) != 1 {
-		return errors.New("native child: endpoint line is ambiguous")
+	var expected map[string]any
+	if toml.Unmarshal(profile, &expected) != nil {
+		return errors.New("native child: shipped profile is invalid")
 	}
-	if err := os.WriteFile(path, []byte(strings.Replace(string(profile), oldLine, newLine, 1)), 0600); err != nil {
+	providerName, _ := expected["model_provider"].(string)
+	providers, _ := expected["model_providers"].(map[string]any)
+	provider, _ := providers[providerName].(map[string]any)
+	if original, ok := provider["base_url"].(string); !ok || original == "" {
+		return errors.New("native child: selected provider endpoint is absent")
+	}
+	provider["base_url"] = endpoint
+	encoded, err := toml.Marshal(expected)
+	if err != nil {
+		return errors.New("native child: endpoint substitution failed")
+	}
+	if err := os.WriteFile(path, encoded, 0600); err != nil {
 		return err
 	}
 	profile, err = os.ReadFile(path)
-	if err != nil || strings.Replace(string(profile), newLine, oldLine, 1) != dist.Profile() {
+	var actual map[string]any
+	if err != nil || toml.Unmarshal(profile, &actual) != nil || !reflect.DeepEqual(actual, expected) {
 		return errors.New("native child: endpoint substitution changed profile")
 	}
 	catalog, err = os.ReadFile(filepath.Join(home, "models.json"))

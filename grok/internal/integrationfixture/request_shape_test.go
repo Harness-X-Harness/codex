@@ -24,17 +24,19 @@ func TestFirstRequestEffortPresence(t *testing.T) {
 }
 
 func TestFirstRequestHistoryDeclaration(t *testing.T) {
-	const valid = `{"type":"function","name":"local___grok_history_probe_5c6dab5ce2f3142e","parameters":{"type":"object","properties":{},"additionalProperties":false}}`
+	const valid = `{"type":"function","name":"emitted_probe_name","description":"` + HistoryProbeDescription + `","parameters":{"type":"object","properties":{},"additionalProperties":false}}`
 	for _, tc := range []struct {
 		name  string
 		tools []json.RawMessage
 		want  bool
 	}{
-		{"flat", []json.RawMessage{json.RawMessage(valid)}, true},
+		{"flat", []json.RawMessage{json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "Call this function directly to invoke `grok_history_probe`. Do not invoke it through another tool.\\n\\n"+HistoryProbeDescription, 1))}, true},
 		{"retired_hosted", []json.RawMessage{json.RawMessage(valid), json.RawMessage(`{"type":"x_search"}`)}, false},
-		{"canonical", []json.RawMessage{json.RawMessage(strings.Replace(valid, "local___grok_history_probe_5c6dab5ce2f3142e", "grok_history_probe", 1))}, false},
+		{"canonical", []json.RawMessage{json.RawMessage(strings.Replace(valid, "emitted_probe_name", "grok_history_probe", 1))}, true},
+		{"wrong_capability", []json.RawMessage{json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "unrelated capability", 1))}, false},
+		{"ambiguous_name", []json.RawMessage{json.RawMessage(valid), json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "unrelated capability", 1))}, false},
 		{"duplicate", []json.RawMessage{json.RawMessage(valid), json.RawMessage(valid)}, false},
-		{"open_schema", []json.RawMessage{json.RawMessage(strings.Replace(valid, `"additionalProperties":false`, `"additionalProperties":true`, 1))}, false},
+		{"open_schema", []json.RawMessage{json.RawMessage(strings.Replace(valid, `"additionalProperties":false`, `"additionalProperties":true`, 1))}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := FirstRequestScenarioTool(tc.tools, "isolated-history"); got != tc.want {

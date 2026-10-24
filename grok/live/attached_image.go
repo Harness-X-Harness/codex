@@ -16,8 +16,8 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-const attachedImageFirstPrompt = "Look at the attached picture. Reply with only the color and shape of the object on the left, in that order. Do not describe anything else or use tools."
-const attachedImageNextPrompt = "From the picture attached earlier in this same conversation, reply with only the color and shape of the object on the right, in that order. Do not use tools."
+const attachedImageFirstPrompt = "Look at the attached picture. Briefly describe only the color and shape of the object on the left. Do not describe anything else or use tools."
+const attachedImageNextPrompt = "From the picture attached earlier in this same conversation, briefly describe only the color and shape of the object on the right. Do not use tools."
 
 // attachedImageURL carries the answers only in pixels, not a filename or prompt.
 // The second fact is deliberately absent from the first accepted reply.
@@ -39,10 +39,33 @@ func attachedImageURL() (string, error) {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data.Bytes()), nil
 }
 
-func attachedImageAnswer(text, expected string) bool {
-	// Case and ordinary surrounding punctuation do not change the semantic enum.
-	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) })
-	return strings.Join(words, " ") == expected
+// This is a bounded English fact check, not a judge of arbitrary prose. Word
+// order, articles and copulas are immaterial; negation, guesses, alternative
+// properties and unexplained words cannot establish either visual fact.
+func attachedImageWords(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) })
+}
+
+func attachedImageAnswer(text, expectedColor, expectedShape, side string) bool {
+	if strings.Contains(text, "?") {
+		return false
+	}
+	color, shape := false, false
+	for _, word := range attachedImageWords(text) {
+		if expectedShape == "circle" && word == "circular" {
+			word = "circle"
+		}
+		switch word {
+		case expectedColor:
+			color = true
+		case expectedShape:
+			shape = true
+		case side, "a", "an", "the", "it", "is", "its", "object", "on", "and", "has", "with", "of", "color", "colour", "shape", "colored", "coloured":
+		default:
+			return false
+		}
+	}
+	return color && shape
 }
 
 // AttachedImageHistory observes real user input, not the image-generation tool.
@@ -72,7 +95,7 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 			{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: attachedImageFirstPrompt}), protocolv2.NewUserInputImage(protocolv2.UserInputImage{URL: &pictureValue})},
 			{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: attachedImageNextPrompt})},
 		}
-		expected := []string{"red circle", "blue square"}
+		expected := [][3]string{{"red", "circle", "left"}, {"blue", "square", "right"}}
 		var turns []string
 		var terminalMu sync.Mutex
 		var terminals []frame
@@ -115,6 +138,20 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 				}
 			}
 			turns = append(turns, turn.ID)
+			for _, id := range turns {
+				found := 0
+				for _, retained := range thread.Turns {
+					if retained.ID == id {
+						found++
+						if err := completedProductTurn(retained); err != nil {
+							return err
+						}
+					}
+				}
+				if found != 1 {
+					return failedObservation("turn_history_identity_invalid", "live: submitted image turn absent or duplicated")
+				}
+			}
 			if !attachedImageFirstReplyIsolated(thread, turns[0]) {
 				return failedObservation("visual_answer_leaked", "live: first reply disclosed more than the requested visual fact")
 			}
@@ -125,7 +162,7 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 			if err != nil {
 				return err
 			}
-			if !attachedImageAnswer(reply, expected[index]) {
+			if !attachedImageAnswer(reply, expected[index][0], expected[index][1], expected[index][2]) {
 				return failedObservation("visual_answer_mismatch", "live: visual answer not established")
 			}
 			if index == 0 {
@@ -174,8 +211,12 @@ func attachedImageFirstReplyIsolated(thread productThread, firstID string) bool 
 			continue
 		}
 		for _, item := range turn.Items {
-			if reply, ok := item.AsAgentMessage(); ok && !attachedImageAnswer(reply.Text, "red circle") {
-				return false
+			if reply, ok := item.AsAgentMessage(); ok {
+				for _, word := range attachedImageWords(reply.Text) {
+					if word == "blue" || word == "square" {
+						return false
+					}
+				}
 			}
 		}
 	}

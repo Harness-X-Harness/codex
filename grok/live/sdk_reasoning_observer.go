@@ -49,6 +49,22 @@ func newSDKHistoryObserver() *sdkHistoryObserver {
 	return observer
 }
 
+// beginContinuation owns the per-turn proof reset. The same observer retains
+// prior-turn contradiction checks and the tool token, not prior reply credit.
+func (observer *sdkHistoryObserver) beginContinuation() string {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.observations.Stage = "first_turn_proven"
+	threadID := observer.probe.threadID
+	observer.probe.previousID, observer.probe.turnID = observer.probe.turnID, ""
+	observer.reconciled = false
+	observer.inlineTerminal = false
+	observer.deliveredTyped, observer.recoveredTyped = 0, 0
+	observer.callbackTerminalSeen = false
+	observer.reply = historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
+	return threadID
+}
+
 func (observer *sdkHistoryObserver) reject(err error) error {
 	if observer.cause == nil {
 		observer.cause = err

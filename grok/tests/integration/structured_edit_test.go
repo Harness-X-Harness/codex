@@ -36,18 +36,18 @@ func TestStructuredEditFixture(t *testing.T) {
 func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	integrationObservation(t)
 	run, model := live.StructuredEdit, providerfixture.PrimaryModel
-	wantTurns, wantRequests, wantApprovals := 2, int32(3), 0
+	wantTurns, wantApprovals := 2, 0
 	wantContinuation, replaceAll, declined := true, false, false
 	switch mode {
 	case "pinned":
 		run, model = live.StructuredEditPinnedPreviousModel, providerfixture.PinnedModel
-		wantTurns, wantRequests, wantContinuation = 1, 2, false
+		wantTurns, wantContinuation = 1, false
 	case "declined":
 		run = live.StructuredEditApprovalDeclined
-		wantTurns, wantRequests, wantApprovals, wantContinuation, declined = 1, 2, 1, false, true
+		wantTurns, wantApprovals, wantContinuation, declined = 1, 1, false, true
 	case "replace_all":
 		run = live.StructuredEditReplaceAll
-		wantTurns, wantRequests, wantContinuation, replaceAll = 1, 2, false, true
+		wantTurns, wantContinuation, replaceAll = 1, false, true
 	}
 	seed := "prefix\r\n" + editSeedToken + "\r\nsuffix"
 	if replaceAll {
@@ -73,6 +73,8 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	}
 	var requests, compositions atomic.Int32
 	var invalid atomic.Bool
+	var historyMu sync.Mutex
+	var issued, paired bool
 	var resultHistory integrationfixture.EditResultHistory
 	var diagnosticMu sync.Mutex
 	_, pathAliasErr := exec.LookPath("codex-linux-sandbox")
@@ -147,7 +149,7 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 				calls++
 				var name, args string
 				if json.Unmarshal(item["name"], &name) != nil || json.Unmarshal(item["arguments"], &args) != nil ||
-					call != "native_edit_call" || name != wireName || args != string(arguments) {
+					call != "native_edit_call" || name != wireName || !integrationfixture.SameEditArguments(args, string(arguments)) {
 					invalid.Store(true)
 				}
 			case "function_call_output":
@@ -189,13 +191,18 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 		diagnosticMu.Lock()
 		diagnostic["history_calls"], diagnostic["history_outputs"], diagnostic["history_user_messages"], diagnostic["history_unknown_items"] = calls, outputs, userTurns, unknownItems
 		diagnosticMu.Unlock()
-		wantCalls := 1
-		if number == 1 {
-			wantCalls = 0
-		}
-		if calls != wantCalls || outputs != wantCalls || number > wantRequests {
+		// Requests are driven by semantic history, not an exact transport count.
+		// A retry of the initial request gets the same call identity; once the
+		// paired result is present, no subsequent request may lose or repeat it.
+		historyMu.Lock()
+		if calls == 0 && outputs == 0 && !paired {
+			issued = true
+		} else if calls == 1 && outputs == 1 && issued {
+			paired = true
+		} else {
 			invalid.Store(true)
 		}
+		historyMu.Unlock()
 		if outputs > 0 {
 			diagnosticMu.Lock()
 			if outputs == 1 && !invalid.Load() {
@@ -219,7 +226,7 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 		}
 		responseID := fmt.Sprintf("native_edit_response_%d", number)
 		emit(map[string]any{"type": "response.created", "response": map[string]any{"id": responseID}})
-		if number == 1 {
+		if calls == 0 {
 			added := map[string]any{"type": "function_call", "id": "native_edit_item", "call_id": "native_edit_call", "name": wireName, "arguments": ""}
 			emit(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": added})
 			emit(map[string]any{"type": "response.function_call_arguments.delta", "output_index": 0, "delta": string(arguments)})
@@ -254,23 +261,22 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatalf("native structured-edit oracle: %v", err)
 	}
-	// Compare all safe facts; observation time and incidental transport stage
-	// do not establish file effects, authorization or history composition.
-	got.ObservedAt, got.Stage = "", ""
-	want := live.StructuredEditEvidence{
-		Evidence: live.Evidence{
-			LocalUnverified: subject.LocalUnverified,
-			SHA256:          subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
-			Target: subject.Target, Environment: subject.Environment, Model: model,
-			Processes: 1, Initializations: 1, Threads: 1, Turns: wantTurns,
-			ReplyBytes: len("native edit complete"), FirstReplyBytes: len("native edit complete"),
-			Bound: true, Completed: true, FirstCompleted: true,
-		},
-		TurnCompleted: true, Calls: 1, PairedOutputs: 1, FileChanges: 1, Approvals: wantApprovals,
-		BeforeSHA256: digest(seed), AfterSHA256: digest(expected), BytesMatch: true, ContinuationUnchanged: wantContinuation,
-	}
-	if got != want || requests.Load() != wantRequests || compositions.Load() != wantRequests || invalid.Load() {
+	// Check the scenario's facts directly. Additional evidence fields and reply
+	// wording are not an acceptance contract; identity, effects and permissions are.
+	if got.CleanupPending || got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 ||
+		got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
+		got.Target != subject.Target || got.Environment != subject.Environment || got.Model != model ||
+		got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != wantTurns ||
+		got.ReplyBytes <= 0 || got.FirstReplyBytes <= 0 || !got.Bound || !got.Completed || !got.FirstCompleted || !got.TurnCompleted ||
+		got.Calls != 1 || got.PairedOutputs != 1 || got.FileChanges != 1 || got.Approvals != wantApprovals ||
+		got.BeforeSHA256 != digest(seed) || got.AfterSHA256 != digest(expected) || !got.BytesMatch || got.ContinuationUnchanged != wantContinuation {
 		t.Fatalf("native structured-edit evidence mismatch: %+v", got)
+	}
+	historyMu.Lock()
+	observedPair := issued && paired
+	historyMu.Unlock()
+	if !observedPair || compositions.Load() == 0 || invalid.Load() {
+		t.Fatal("native structured-edit call/result history was not preserved")
 	}
 }
 

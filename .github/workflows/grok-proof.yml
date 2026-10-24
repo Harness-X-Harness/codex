@@ -701,6 +701,15 @@ jobs:
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::unified_exec::write_stdin_numeric_inputs_reject_before_consuming_live_session_bytes)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_write_stdin_numeric_inputs_use_returned_session)'
           just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::code_mode_write_stdin_calls_run_in_parallel_across_sessions)'
+      - name: Test semantic outcome and causal overlap witnesses
+        working-directory: codex-rs
+        run: |
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::structured_edit_support::success_without_effect_is_not_a_rejection)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::code_mode::scripted_json_witness_requires_one_marker_without_an_output_slot)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::tool_lifecycle::command_lifecycle::)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::tool_parallelism::read_file_tools_run_in_parallel)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::tool_parallelism::mixed_parallel_tools_run_in_parallel)'
+          just test -p codex-core --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::tool_parallelism::mixed_tool_gate_rejects_serial_execution_and_releases_shell)'
       - name: Test goal state and advisory steering contracts
         working-directory: codex-rs
         run: just test -p codex-goal-extension --locked --cargo-profile ci-test --no-tests=fail

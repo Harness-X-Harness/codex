@@ -52,7 +52,11 @@ func TestSDKHistoryProjectionNullableEvidence(t *testing.T) {
 			if tc.tool {
 				wantTools = 1
 			}
-			if observer.observations.CompletedTools != wantTools || observer.observations.FirstRecall != tc.recall || observer.observations.FirstReplyBytes != len("回答: "+token) || observer.observations.FirstCompleted {
+			wantReplyBytes := 0
+			if tc.recall {
+				wantReplyBytes = len("回答: " + token)
+			}
+			if observer.observations.CompletedTools != wantTools || observer.observations.FirstRecall != tc.recall || observer.observations.FirstReplyBytes != wantReplyBytes || observer.observations.FirstCompleted {
 				t.Fatalf("nullable projection changed evidence: %+v", observer.observations)
 			}
 		})

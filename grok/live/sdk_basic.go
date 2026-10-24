@@ -18,6 +18,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 	retainedBytes := 0
 	notifications := make(chan protocolv2.ServerNotification, 128)
 	failures := make(chan error, 1)
+	observer := &basicObservation{notifications: notifications, failures: failures}
 	clientContexts := make(chan context.Context, 1)
 	reject := func(err error) error {
 		select {
@@ -27,8 +28,9 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 		return err
 	}
 	handlers := sdkFixtureHandlers{
-		retention: codexsdk.NotificationRetentionBudget{MaxCount: 512, MaxBytes: 8 << 20},
-		failures:  failures,
+		retention:  codexsdk.NotificationRetentionBudget{MaxCount: 512, MaxBytes: 8 << 20},
+		failures:   failures,
+		afterClose: observer.afterClose,
 		requests: func(_ context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
 			err := reject(failedObservation("unsupported_server_request", "live: unsupported server request"))
 			if request.Kind() == protocolv2.ServerRequestKindItemToolCall {
@@ -66,6 +68,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 	}
 	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		evidence.Threads = 1
+		observer.evidence = evidence
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
 				Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
@@ -98,41 +101,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			return failedObservation("missing_turn_identity", "live: turn identity unavailable")
 		}
 		evidence.Stage = "turn_submitted"
-		observeReply := func(entry protocolv2.ThreadItem) {
-			agent, ok := entry.AsAgentMessage()
-			if ok && (agent.Phase == nil || agent.Phase.Value == nil || *agent.Phase.Value == protocolv2.MessagePhaseFinalAnswer) && strings.TrimSpace(agent.Text) != "" {
-				evidence.ReplyBytes = len(agent.Text)
-				if !evidence.Completed {
-					evidence.Stage = "reply_observed"
-				}
-			}
-		}
-		observeTurn := func(terminal protocolv2.Turn) error {
-			select {
-			case err := <-failures:
-				return err
-			default:
-			}
-			if terminal.Status != protocolv2.TurnStatusCompleted || terminal.Error != nil && terminal.Error.Value != nil {
-				raw, _ := json.Marshal(terminal.Error)
-				return failedTurn(string(terminal.Status), raw, "live: turn did not complete successfully")
-			}
-			evidence.Completed, evidence.Stage = true, "turn_completed"
-			for _, entry := range terminal.Items {
-				observeReply(entry)
-			}
-			return nil
-		}
-		observeNotification := func(notification protocolv2.ServerNotification) error {
-			if completed, ok := notification.AsItemCompleted(); ok {
-				if completed.Params.ThreadID == started.Start.Thread.ID && completed.Params.TurnID == started.Run.Turn.ID {
-					observeReply(completed.Params.Item)
-				}
-			} else if completed, ok := notification.AsTurnCompleted(); ok && completed.Params.ThreadID == started.Start.Thread.ID && completed.Params.Turn.ID == started.Run.Turn.ID {
-				return observeTurn(completed.Params.Turn)
-			}
-			return nil
-		}
+		observer.threadID, observer.turnID = started.Start.Thread.ID, started.Run.Turn.ID
 		observationFailure := func(cause error) error {
 			select {
 			case err := <-failures:
@@ -144,7 +113,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			// merely because its application callback has not run yet.
 			if latest, ok := stream.Result(); ok {
 				for _, notification := range latest.Run.Notifications {
-					if err := observeNotification(notification); err != nil {
+					if err := observer.notification(notification); err != nil {
 						return err
 					}
 				}
@@ -159,12 +128,12 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			if _, ok := notification.AsTurnCompleted(); ok {
 				hasTerminal = true
 			}
-			if err := observeNotification(notification); err != nil {
+			if err := observer.notification(notification); err != nil {
 				return err
 			}
 		}
 		if !hasTerminal && started.Run.Turn.Status != protocolv2.TurnStatusInProgress {
-			if err := observeTurn(started.Run.Turn); err != nil {
+			if err := observer.turn(started.Run.Turn); err != nil {
 				return err
 			}
 		}
@@ -187,7 +156,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 				mu.Lock()
 				retainedBytes -= len(raw)
 				mu.Unlock()
-				if err := observeNotification(notification); err != nil {
+				if err := observer.notification(notification); err != nil {
 					return err
 				}
 			case callbackCtx := <-clientContexts:
@@ -216,4 +185,78 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 		evidence.Stage = "final_reply"
 		return nil
 	})
+}
+
+// basicObservation owns the same bound proof during the turn and after joined
+// callback cleanup. Cleanup may revoke existing completion, never create it.
+type basicObservation struct {
+	threadID, turnID string
+	evidence         *Evidence
+	notifications    <-chan protocolv2.ServerNotification
+	failures         <-chan error
+}
+
+func (observer *basicObservation) reply(entry protocolv2.ThreadItem) {
+	agent, ok := entry.AsAgentMessage()
+	if ok && (agent.Phase == nil || agent.Phase.Value == nil || *agent.Phase.Value == protocolv2.MessagePhaseFinalAnswer) && strings.TrimSpace(agent.Text) != "" {
+		observer.evidence.ReplyBytes = len(agent.Text)
+		if !observer.evidence.Completed {
+			observer.evidence.Stage = "reply_observed"
+		}
+	}
+}
+
+func (observer *basicObservation) turn(terminal protocolv2.Turn) error {
+	select {
+	case err := <-observer.failures:
+		return err
+	default:
+	}
+	if terminal.Status != protocolv2.TurnStatusCompleted || terminal.Error != nil && terminal.Error.Value != nil {
+		raw, _ := json.Marshal(terminal.Error)
+		return failedTurn(string(terminal.Status), raw, "live: turn did not complete successfully")
+	}
+	observer.evidence.Completed, observer.evidence.Stage = true, "turn_completed"
+	for _, entry := range terminal.Items {
+		observer.reply(entry)
+	}
+	return nil
+}
+
+func (observer *basicObservation) notification(notification protocolv2.ServerNotification) error {
+	if completed, ok := notification.AsItemCompleted(); ok {
+		if completed.Params.ThreadID == observer.threadID && completed.Params.TurnID == observer.turnID {
+			observer.reply(completed.Params.Item)
+		}
+	} else if completed, ok := notification.AsTurnCompleted(); ok && completed.Params.ThreadID == observer.threadID && completed.Params.Turn.ID == observer.turnID {
+		return observer.turn(completed.Params.Turn)
+	}
+	return nil
+}
+
+func (observer *basicObservation) afterClose(_ string, evidence *Evidence, cause error) error {
+	// A rejected run retains its existing partial terminal facts. Only an
+	// otherwise credited result needs joined callbacks to confirm that credit.
+	if cause != nil {
+		return nil
+	}
+	if evidence.Completed {
+		stage := evidence.Stage
+	drain:
+		for {
+			select {
+			case notification := <-observer.notifications:
+				if cause = observer.notification(notification); cause != nil {
+					break drain
+				}
+			default:
+				break drain
+			}
+		}
+		evidence.Stage = stage
+	}
+	if cause != nil {
+		evidence.Completed, evidence.Stage = false, "turn_observation_failed"
+	}
+	return cause
 }

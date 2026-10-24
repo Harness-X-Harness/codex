@@ -67,9 +67,8 @@ func shippedOptions(subject Subject, key, selected string) (Options, error) {
 	return Options{Subject: subject, Model: model, BaseURL: endpoint, APIKey: key, shippedProfile: true}, nil
 }
 
-// This is the stock Model DTO projection, including explicit null and empty
-// values. Comparing the whole response rejects extra/reordered/duplicate rows,
-// metadata loss, pagination and additional defaults.
+// This projects the bundled model policy for sameShippedCatalog's semantic
+// comparison of identities, defaults, supported efforts and input capabilities.
 func shippedModelList() (map[string]any, error) {
 	var catalog struct {
 		Models []map[string]any `json:"models"`

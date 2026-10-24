@@ -25,8 +25,9 @@ resumes that Thread, and sends one ordinary follow-up, **then**:
 
 - the resumed Thread reports the same Grok Provider and model;
 - the follow-up completes through the same Grok Provider;
-- the original durable Turn remains an exact unchanged prefix of the resumed
-  Thread history; and
+- the resumed history retains the original Turn identity, successful state,
+  and ordered user/assistant content without requiring unchanged display
+  metadata; and
 - no OpenAI Provider request or cross-Provider fallback completes the
   scenario.
 

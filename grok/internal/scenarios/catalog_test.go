@@ -3,7 +3,7 @@ package scenarios
 import (
 	"context"
 	"errors"
-	"reflect"
+	"maps"
 	"testing"
 
 	"github.com/Harness-X-Harness/codex/grok/facts"
@@ -23,15 +23,27 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var smokeNames []string
-	for _, scenario := range smoke {
-		smokeNames = append(smokeNames, scenario.Name)
+	names := func(entries []Scenario) map[string]bool {
+		result := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			result[entry.Name] = true
+		}
+		return result
 	}
-	if !reflect.DeepEqual(smokeNames, []string{"basic-primary", "reasoning-primary", "web"}) {
-		t.Fatalf("unexpected smoke selection: %v", smokeNames)
+	if !maps.Equal(names(smoke), map[string]bool{"basic-primary": true, "reasoning-primary": true, "web": true}) {
+		t.Fatalf("unexpected smoke selection: %v", names(smoke))
 	}
-	if len(full) != 18 || len(diagnostic) != len(full) {
-		t.Fatal("formal proof silently changed")
+	formal := map[string]bool{
+		"basic-primary": true, "basic-pinned": true,
+		"reasoning-primary": true, "reasoning-pinned": true,
+		"structured-edit": true, "structured-edit-declined": true,
+		"structured-edit-pinned": true, "structured-edit-all": true,
+		"attached-image-pinned": true, "image-primary": true, "image-pinned": true,
+		"shipped-catalog": true, "shipped-startup": true, "shipped-pinned": true,
+		"shipped-child": true, "web": true, "web-allowed": true, "web-excluded": true,
+	}
+	if !maps.Equal(names(full), formal) || !maps.Equal(names(diagnostic), formal) {
+		t.Fatal("formal proof identities changed")
 	}
 	for _, entry := range full {
 		selected, err := Select("live", "full", entry.Name)
@@ -40,7 +52,13 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 		}
 	}
 	facts, err := Select("facts", "full", "")
-	if err != nil || len(facts) != 11 {
+	expectedFacts := map[string]bool{
+		"basic-primary": true, "basic-pinned": true, "encrypted-replay": true,
+		"shipped-routes": true, "web": true, "web-allowed": true,
+		"web-excluded": true, "x": true, "x-window": true,
+		"web-replay": true, "x-replay": true,
+	}
+	if err != nil || !maps.Equal(names(facts), expectedFacts) {
 		t.Fatal("independent Facts coverage changed")
 	}
 	for _, entry := range facts {

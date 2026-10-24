@@ -93,6 +93,21 @@ class LinuxStartupDiagnostics(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("output changed", result.stderr)
 
+    def test_equivalent_version_with_diagnostic_text_is_accepted(self):
+        self.capture("before-strip", self.binary("before", version="startup note\ncodex-cli 0.163.0\n"))
+        binary = self.binary()
+        for phase in ("after-strip", "staged"):
+            self.capture(phase, binary)
+        result = self.invoke("--require-success")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_ambiguous_version_output_cannot_pass(self):
+        self.capture("before-strip", self.binary("before", version="codex-cli 0.163.0\ncodex-cli 0.164.0"))
+        binary = self.binary()
+        for phase in ("after-strip", "staged"):
+            self.capture(phase, binary)
+        self.assertNotEqual(self.invoke("--require-success").returncode, 0)
+
     def test_missing_phase_cannot_pass(self):
         self.capture("before-strip", self.binary())
         self.assertNotEqual(self.invoke("--require-success").returncode, 0)

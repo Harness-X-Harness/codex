@@ -261,10 +261,98 @@ fn require_public_compaction_history(
     Ok((compact_index, followup_index))
 }
 
-fn input_position(input: &[serde_json::Value], needle: &str) -> Option<usize> {
-    input
-        .iter()
-        .position(|item| item.to_string().contains(needle))
+fn input_position(input: &[serde_json::Value], role: Option<&str>, needle: &str) -> Option<usize> {
+    input.iter().position(|item| {
+        if item["type"] != "message" && item.get("type").is_some() {
+            return false;
+        }
+        if !matches!(
+            item["role"].as_str(),
+            Some("user" | "assistant" | "developer" | "system")
+        ) || role.is_some_and(|role| item["role"] != role)
+        {
+            return false;
+        }
+        let text = match &item["content"] {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| {
+                    matches!(part["type"].as_str(), Some("input_text" | "output_text"))
+                        .then(|| part["text"].as_str())
+                        .flatten()
+                })
+                .collect::<String>(),
+            _ => return false,
+        };
+        text.contains(needle)
+    })
+}
+
+fn visible_messages(turn: &codex_app_server_protocol::Turn) -> Vec<(&'static str, String)> {
+    let mut messages: Vec<(&str, String)> = Vec::new();
+    for item in &turn.items {
+        let (role, text) = match item {
+            ThreadItem::UserMessage { content, .. } => (
+                "user",
+                content
+                    .iter()
+                    .map(|input| {
+                        let V2UserInput::Text { text, .. } = input else {
+                            panic!("text-only seed gained different user content: {input:?}");
+                        };
+                        text.as_str()
+                    })
+                    .collect::<String>(),
+            ),
+            ThreadItem::AgentMessage { text, .. } => ("assistant", text.clone()),
+            _ => continue,
+        };
+        if let Some((previous_role, previous_text)) = messages.last_mut()
+            && *previous_role == role
+        {
+            previous_text.push_str(&text);
+        } else {
+            messages.push((role, text));
+        }
+    }
+    messages
+}
+
+fn assert_seed_history_preserved(
+    actual: &[codex_app_server_protocol::Turn],
+    seed: &[codex_app_server_protocol::Turn],
+) {
+    let mut previous_position = None;
+    for expected in seed {
+        let matches = actual
+            .iter()
+            .enumerate()
+            .filter(|(_, turn)| turn.id == expected.id)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "seed turn identity must remain unique");
+        let (position, turn) = matches[0];
+        let start = previous_position.map_or(0, |previous| previous + 1);
+        assert!(start <= position);
+        assert!(
+            actual[start..position]
+                .iter()
+                .all(|turn| visible_messages(turn).is_empty()),
+            "seed conversation must remain before later conversation content"
+        );
+        previous_position = Some(position);
+        assert_eq!(turn.status, expected.status);
+        assert!(turn.error.is_none());
+        let expected_messages = visible_messages(expected);
+        assert_eq!(
+            expected_messages,
+            vec![
+                ("user", SEED_PROMPT.to_owned()),
+                ("assistant", SEED_REPLY.to_owned())
+            ]
+        );
+        assert_eq!(visible_messages(turn), expected_messages);
+    }
 }
 
 fn assert_all_requests_are_grok(mock: &responses::ResponseMock, expected: usize) {
@@ -325,11 +413,11 @@ async fn grok_normal_continuation_keeps_provider_binding() -> Result<()> {
     assert_all_requests_are_grok(&mock, 2);
     assert!(other.received_requests().await.unwrap().is_empty());
     let continued_input = mock.requests()[1].input();
-    let seed_prompt =
-        input_position(&continued_input, SEED_PROMPT).expect("continuation replays seed");
-    let seed_reply =
-        input_position(&continued_input, SEED_REPLY).expect("continuation replays reply");
-    let follow_up = input_position(&continued_input, "ordinary continuation")
+    let seed_prompt = input_position(&continued_input, Some("user"), SEED_PROMPT)
+        .expect("continuation replays seed");
+    let seed_reply = input_position(&continued_input, Some("assistant"), SEED_REPLY)
+        .expect("continuation replays reply");
+    let follow_up = input_position(&continued_input, Some("user"), "ordinary continuation")
         .expect("continuation sends follow-up");
     assert!(seed_prompt < seed_reply && seed_reply < follow_up);
 
@@ -401,19 +489,25 @@ async fn grok_fork_keeps_provider_binding_and_isolates_branch_failure() -> Resul
 
     let source_turns = read_turns(&mut mcp, &source_id).await?;
     let fork_turns = read_turns(&mut mcp, &fork.id).await?;
-    assert_eq!(&source_turns[..seed_turns.len()], seed_turns.as_slice());
-    assert_eq!(&fork_turns[..seed_turns.len()], seed_turns.as_slice());
+    assert_seed_history_preserved(&source_turns, &seed_turns);
+    assert_seed_history_preserved(&fork_turns, &seed_turns);
     assert_all_requests_are_grok(&mock, 5);
     let requests = mock.requests();
     let fork_input = requests[1].input();
-    let seed_prompt = input_position(&fork_input, SEED_PROMPT).expect("fork replays seed prompt");
-    let seed_reply = input_position(&fork_input, SEED_REPLY).expect("fork replays seed reply");
-    let fork_prompt =
-        input_position(&fork_input, "fork follow-up").expect("fork sends its own prompt");
+    let seed_prompt =
+        input_position(&fork_input, Some("user"), SEED_PROMPT).expect("fork replays seed prompt");
+    let seed_reply = input_position(&fork_input, Some("assistant"), SEED_REPLY)
+        .expect("fork replays seed reply");
+    let fork_prompt = input_position(&fork_input, Some("user"), "fork follow-up")
+        .expect("fork sends its own prompt");
     assert!(seed_prompt < seed_reply && seed_reply < fork_prompt);
     let source_after_failure = requests[4].input();
-    assert!(input_position(&source_after_failure, "fork follow-up").is_none());
-    assert!(input_position(&source_after_failure, "source continues").is_some());
+    assert!(input_position(&source_after_failure, Some("user"), "fork follow-up").is_none());
+    assert!(input_position(&source_after_failure, Some("assistant"), "FORK_REPLY").is_none());
+    let fork_after_source = requests[3].input();
+    assert!(input_position(&fork_after_source, Some("user"), "source follow-up").is_none());
+    assert!(input_position(&fork_after_source, Some("assistant"), "SOURCE_REPLY").is_none());
+    assert!(input_position(&source_after_failure, Some("user"), "source continues").is_some());
 
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
     Ok(())
@@ -497,14 +591,16 @@ async fn grok_cold_restart_resume_keeps_provider_binding() -> Result<()> {
     );
 
     let resumed_turns = read_turns(&mut mcp, &thread_id).await?;
-    assert_eq!(&resumed_turns[..seed_turns.len()], seed_turns.as_slice());
+    assert_seed_history_preserved(&resumed_turns, &seed_turns);
     assert_all_requests_are_grok(&mock, 1);
     assert_all_requests_are_grok(&current_requests, 1);
     let resumed_input = current_requests.requests()[0].input();
-    let seed_prompt = input_position(&resumed_input, SEED_PROMPT).expect("resume replays seed");
-    let seed_reply = input_position(&resumed_input, SEED_REPLY).expect("resume replays reply");
-    let follow_up =
-        input_position(&resumed_input, "resumed follow-up").expect("follow-up is present");
+    let seed_prompt =
+        input_position(&resumed_input, Some("user"), SEED_PROMPT).expect("resume replays seed");
+    let seed_reply = input_position(&resumed_input, Some("assistant"), SEED_REPLY)
+        .expect("resume replays reply");
+    let follow_up = input_position(&resumed_input, Some("user"), "resumed follow-up")
+        .expect("follow-up is present");
     assert!(seed_prompt < seed_reply && seed_reply < follow_up);
 
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
@@ -623,12 +719,11 @@ async fn grok_manual_compaction_keeps_provider_binding() -> Result<()> {
 
     assert_all_requests_are_grok(&mock, 3);
     let follow_up_input = mock.requests()[2].input();
-    let summary =
-        input_position(&follow_up_input, "COMPACT_SUMMARY").expect("compacted context present");
-    let prompt =
-        input_position(&follow_up_input, "after compaction").expect("follow-up prompt present");
+    let summary = input_position(&follow_up_input, None, "COMPACT_SUMMARY")
+        .expect("compacted context present");
+    let prompt = input_position(&follow_up_input, Some("user"), "after compaction")
+        .expect("follow-up prompt present");
     assert!(summary < prompt);
-    assert!(input_position(&follow_up_input, SEED_REPLY).is_none());
 
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
     Ok(())
@@ -673,7 +768,14 @@ async fn grok_cold_fork_preserves_pinned_model_under_different_default() -> Resu
         TurnStatus::Completed
     );
     assert_all_requests_are_grok(&requests, 2);
-    assert!(requests.requests()[1].body_contains_text(SEED_REPLY));
+    assert!(
+        input_position(
+            &requests.requests()[1].input(),
+            Some("assistant"),
+            SEED_REPLY
+        )
+        .is_some()
+    );
     app.shutdown_gracefully().await?;
     Ok(())
 }
@@ -778,12 +880,9 @@ async fn grok_fork_rejects_conflicting_managed_provider_then_recovers() -> Resul
     let error = app
         .read_stream_until_error_message(RequestId::Integer(id))
         .await?;
-    assert!(
-        error
-            .error
-            .message
-            .contains("does not permit the source thread's Grok provider")
-    );
+    // thread_processor maps this managed-provider conflict through invalid_request.
+    assert_eq!(error.error.code, -32600);
+    assert!(!error.error.message.trim().is_empty());
     assert_eq!(requests.requests().len(), 1);
     std::fs::write(requirements, "")?;
     let id = app

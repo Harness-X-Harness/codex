@@ -3,6 +3,7 @@ package integrationfixture
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 )
 
 func ContainsShapeValue(tools []string, want string) bool {
@@ -14,45 +15,45 @@ func ContainsShapeValue(tools []string, want string) bool {
 	return false
 }
 
-func FirstRequestScenarioTool(tools []json.RawMessage, profile string) bool {
-	// flat_wire_name("function", ToolName::plain("grok_history_probe")),
-	// owned by codex-rs/tools/src/flat_projection.rs, not the canonical name.
-	want := "local___grok_history_probe_5c6dab5ce2f3142e"
-	if profile == "isolated-edit" {
-		// The external-package StructuredEditToolName test owns the
-		// complete edit declaration; here we check only its same wire identity.
-		want = "local___structured_edit_418464e5de0f7b1e"
-	}
-	count := 0
+// HistoryProbeDescription is the controlled capability registered by this
+// scenario. Its emitted function name belongs to the product's tool projection.
+const HistoryProbeDescription = "Return a fresh token for this history probe."
+
+// HistoryProbeDeclaration identifies the capability, not schema validity.
+// The actual tool call and returned token prove callability in the history run.
+func HistoryProbeDeclaration(tools []json.RawMessage) (string, bool) {
+	var bound string
+	seenNames := make(map[string]bool)
 	for _, raw := range tools {
-		var tool struct {
-			Type, Name string
-			Parameters struct {
-				Type                 string
-				Properties           map[string]json.RawMessage
-				Required             []string
-				AdditionalProperties *bool
-			}
-		}
+		var tool struct{ Type, Name, Description string }
 		if json.Unmarshal(raw, &tool) != nil || tool.Type == "x_search" {
-			return false
+			return "", false
 		}
-		if tool.Name != want {
+		if tool.Type == "function" && tool.Name != "" {
+			if seenNames[tool.Name] {
+				return "", false
+			}
+			seenNames[tool.Name] = true
+		}
+		// The flat projection prepends routing instructions to this owned text.
+		if tool.Description != HistoryProbeDescription && !strings.HasSuffix(tool.Description, "\n\n"+HistoryProbeDescription) {
 			continue
 		}
-		count++
-		if tool.Type != "function" {
-			return false
+		if tool.Type != "function" || tool.Name == "" || bound != "" {
+			return "", false
 		}
-		if profile == "isolated-edit" {
-			continue
-		}
-		if tool.Parameters.Type != "object" || len(tool.Parameters.Properties) != 0 ||
-			len(tool.Parameters.Required) != 0 || tool.Parameters.AdditionalProperties == nil || *tool.Parameters.AdditionalProperties {
-			return false
-		}
+		bound = tool.Name
 	}
-	return count == 1
+	return bound, bound != ""
+}
+
+func FirstRequestScenarioTool(tools []json.RawMessage, profile string) bool {
+	if profile != "isolated-edit" {
+		_, ok := HistoryProbeDeclaration(tools)
+		return ok
+	}
+	_, ok := StructuredEditToolName(tools)
+	return ok
 }
 
 type FirstRequestShape struct {

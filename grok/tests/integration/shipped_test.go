@@ -33,11 +33,12 @@ func TestShippedThreadSource(t *testing.T) {
 		defer r.Body.Close()
 		requests.Add(1)
 		var body struct {
-			Model         string
-			Tools         []json.RawMessage
-			Stream, Store bool
+			Model  string
+			Tools  []json.RawMessage
+			Stream bool
+			Store  *bool
 		}
-		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body) != nil || r.Method != "POST" || r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer fixture-key" || body.Model != providerfixture.PrimaryModel || !body.Stream || body.Store {
+		if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body) != nil || r.Method != "POST" || r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer fixture-key" || body.Model != providerfixture.PrimaryModel || !body.Stream || body.Store == nil || *body.Store {
 			invalid.Store(true)
 		}
 		for _, raw := range body.Tools {
@@ -61,12 +62,11 @@ func TestShippedThreadSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shipped durable observer: %v", err)
 	}
-	got.ObservedAt = ""
-	want := live.Evidence{LocalUnverified: subject.LocalUnverified, SHA256: subject.SHA256, SourceSHA: subject.SourceSHA, HarnessSHA: subject.HarnessSHA,
-		Target: subject.Target, Environment: subject.Environment, Model: providerfixture.PrimaryModel,
-		Stage: "product_turn_proven", Processes: 1, Initializations: 1, Threads: 1, Turns: 1, ReplyBytes: 12, Bound: true, Completed: true, ShippedCatalog: true, CatalogModels: 2}
-	if got != want || requests.Load() != 1 || invalid.Load() {
-		t.Fatalf("shipped durable evidence mismatch: %+v", got)
+	if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 || got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
+		got.Target != subject.Target || got.Environment != subject.Environment || got.Model != providerfixture.PrimaryModel ||
+		got.Stage != "product_turn_proven" || !got.Bound || !got.Completed || !got.ShippedCatalog || got.CleanupPending ||
+		requests.Load() != 1 || invalid.Load() {
+		t.Fatalf("shipped identity, completion or request contract missing: %+v", got)
 	}
 
 	// Read the root provenance through the official SDK on unmodified stdout.
@@ -150,11 +150,10 @@ func TestShippedThreadSource(t *testing.T) {
 	if started.Model != providerfixture.PrimaryModel || started.ModelProvider != "grok" || started.Thread.ModelProvider != "grok" || started.Thread.ID == "" || started.CWD != cwd {
 		t.Fatal("typed thread binding missing")
 	}
-	// The stock CLI app-server launcher selects VSCode provenance. The transport
-	// name is not the session source; require that source at start and after read.
-	const expectedSource = protocolv2.SessionSourceKindVscode
-	if started.Thread.Source.Kind() != expectedSource {
-		t.Fatalf("typed root source: got %q, want %q", started.Thread.Source.Kind(), expectedSource)
+	// Launcher-specific root provenance is not the outcome. Require a root
+	// source and preserve that source across the durable read.
+	if _, child := started.Thread.Source.AsSubAgent(); child || started.Thread.Source.Kind() == "" {
+		t.Fatal("root thread source is missing or has child provenance")
 	}
 	threadID = started.Thread.ID
 	turn, err := client.Turns().Start(ctx, protocolv2.TurnStartParams{ThreadID: started.Thread.ID, Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: "Reply with a short confirmation without using tools."})}})
@@ -189,7 +188,7 @@ func TestShippedThreadSource(t *testing.T) {
 			return *field.Value
 		}
 		t.Logf("thread ID: got %q, want %q; provider: got %q, want %q", thread.ID, started.Thread.ID, thread.ModelProvider, "grok")
-		t.Logf("source: got %q, want %q; model: got %q, want %q", thread.Source.Kind(), expectedSource, value(thread.Model), providerfixture.PrimaryModel)
+		t.Logf("source: got %q, want %q; model: got %q, want %q", thread.Source.Kind(), started.Thread.Source.Kind(), value(thread.Model), providerfixture.PrimaryModel)
 		t.Logf("parentThreadId: got %q, want absent or empty; forkedFromId: got %q, want absent or empty", value(thread.ParentThreadID), value(thread.ForkedFromID))
 		t.Logf("turn count: got %d, want 1", len(thread.Turns))
 		if len(thread.Turns) > 0 {

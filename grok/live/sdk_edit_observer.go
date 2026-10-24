@@ -101,7 +101,7 @@ func (observer *sdkEditObserver) beginTurn() error {
 
 func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
 	// Keep the same JSON projection as callbacks: editItem serialization also
-	// defines per-item byte charges and replay-conflict digests.
+	// defines byte charges; replay conflicts compare scenario facts below.
 	raw, err := json.Marshal(turn)
 	var decoded editTurn
 	observer.mu.Lock()
@@ -205,8 +205,8 @@ func (observer *sdkEditObserver) typedNotification(ctx context.Context, notifica
 		}
 		method = "turn/completed"
 	}
-	// The editItem projection is hashed and byte-budgeted downstream, including
-	// fields unused by publicItem. Its JSON type checks also precede tool checks.
+	// Charge the full projection before comparing the relevant scenario facts.
+	// Its JSON type checks also precede tool checks.
 	raw, err := json.Marshal(notification)
 	return observer.observeEnvelope(method, raw, err)
 }
@@ -302,7 +302,8 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 			identity = item.CallID
 		}
 		key := sha256.Sum256([]byte(observation.method + "\x00" + item.Type + "\x00" + identity))
-		digest := sha256.Sum256(raw)
+		facts, _ := json.Marshal(editItemFacts(item, observer.fixture))
+		digest := sha256.Sum256(facts)
 		if previous, exists := ledger.seen[key]; exists {
 			if previous != digest {
 				return observer.reject(failedObservation("conflicting_edit_item", "live: conflicting edit item evidence"))
@@ -331,11 +332,22 @@ func (observer *sdkEditObserver) validateSettled(threadID string, turns []protoc
 	if threadID != observer.threadID || len(turns) != len(observer.ledgers) || len(turns) == 0 {
 		return observer.reject(failedObservation("invalid_settled_edit_thread", "live: settled edit thread identity not established"))
 	}
-	for index, turn := range turns {
+	seen := make(map[string]bool, len(turns))
+	for _, turn := range turns {
 		raw, err := json.Marshal(turn)
 		var decoded editTurn
-		ledger := observer.ledgers[index]
-		if observer.budget(len(raw)) != nil || err != nil || json.Unmarshal(raw, &decoded) != nil || !ledger.reconciled || decoded.ID != ledger.probe.turnID {
+		if observer.budget(len(raw)) != nil || err != nil || json.Unmarshal(raw, &decoded) != nil || seen[decoded.ID] {
+			return observer.reject(failedObservation("invalid_settled_edit_thread", "live: settled edit thread identity not established"))
+		}
+		seen[decoded.ID] = true
+		var ledger *sdkEditLedger
+		for _, candidate := range observer.ledgers {
+			if candidate.reconciled && decoded.ID == candidate.probe.turnID {
+				ledger = candidate
+				break
+			}
+		}
+		if ledger == nil {
 			return observer.reject(failedObservation("invalid_settled_edit_thread", "live: settled edit thread identity not established"))
 		}
 		if err := observer.accept(ledger, sdkEditObservation{ThreadID: threadID, Turn: decoded, method: "turn/completed"}); err != nil {
@@ -346,7 +358,7 @@ func (observer *sdkEditObserver) validateSettled(threadID string, turns []protoc
 }
 
 func (ledger *sdkEditLedger) proof() error {
-	observation := ledger.observation
+	observation := &ledger.observation
 	if !ledger.reconciled || !observation.completed {
 		return failedObservation("edit_terminal_missing", "live: edit terminal evidence missing")
 	}
@@ -360,9 +372,11 @@ func (ledger *sdkEditLedger) proof() error {
 			return failedObservation("edit_evidence_unpaired", "live: edit call, output or file-change evidence missing")
 		}
 	}
-	if observation.replyBytes == 0 {
+	reply, err := finalProductReply(productTurn{Items: observation.replies})
+	if err != nil {
 		return failedObservation("edit_reply_missing", "live: edit final reply unavailable")
 	}
+	observation.replyBytes = len(reply)
 	return nil
 }
 

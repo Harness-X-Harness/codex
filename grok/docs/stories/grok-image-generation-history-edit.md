@@ -6,6 +6,13 @@ product behavior, and real Codex with controlled HTTP tests the pinned-model
 composition. A packaged real-xAI result requires a separately identified Live
 run; none of those controlled tests establishes it.
 
+The current `image-primary` and `image-pinned` Live runners use the selected
+binary with an isolated image-capable profile and generated model catalog, not
+the unchanged shipped Grok profile. Their result can establish generation and
+history edit in that isolated context. The shipped-profile precondition below
+is a retained product acceptance goal and is not proved by these two routes,
+even when their isolated observations pass.
+
 ## User story
 
 As a Grok user, I can generate an image and later edit that generated image in
@@ -107,7 +114,11 @@ Codex with a controlled Responses/Images backend: generation, edit, exact image
 and history hashes, and same-thread lineage. [Rust image preparation](../../../codex-rs/core/src/image_preparation.rs)
 and [public image integration](../../../codex-rs/app-server/tests/suite/v2/imagegen_extension.rs)
 own the product transformation/lifecycle. [`TestLive/image-primary` and
-`image-pinned`](../../tests/live/live_test.go) own real-backend execution.
+`image-pinned`](../../tests/live/live_test.go) own real-backend execution under
+the isolated image profile created by [`writeFixture`](../../live/fixture.go).
+They do not establish unchanged shipped-profile/catalog composition. A result
+must keep that distinction explicit rather than credit the full shipped-profile
+acceptance goal from the isolated gate.
 The deterministic public-stdio scripts exercise the runner with an independent
 image-capable model fixture. They cannot establish the shipped model catalog,
 actual Grok HTTP egress, backend visual correctness, or packaged Story success.
@@ -119,10 +130,16 @@ may resize or re-encode history images; it does not invalidate those artifact
 requirements. The [image observer](../../live/image.go) and [artifact checks](../../live/image_artifact.go)
 own correlation, codec, preparation, recovery and resource checks.
 
-The consumed fixture enables only the image tool. A packaged profile may use
-a view-image-before-edit route; that equivalent path remains within this Story
-and unproven by the isolated controlled fixture. Equivalent notifications and
-valid internal recovery do not consume another proof-run invocation.
+The consumed fixture enables image generation and the existing view-image tool,
+with other tools disabled. An optional view must identify an already observed
+artifact and return its known image bytes or prepared rendition. Viewing it is
+not generation credit and does not itself prove an edit. Offline controls cover
+view-before-edit and view-after-edit without requiring that auxiliary route.
+The controlled binary fixture still exercises direct generation/edit; it is not
+evidence that the general packaged profile executed every possible view route.
+Target Turns are found by unique identity, not by history length or position.
+Equivalent notifications and valid internal recovery do not consume another
+proof-run invocation.
 
 ## Product image boundary
 

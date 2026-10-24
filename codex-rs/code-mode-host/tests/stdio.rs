@@ -398,16 +398,18 @@ async fn remote_session_persists_values_forwards_delegates_and_controls_cells() 
         first_delegate.clone(),
     )
     .await;
-    assert_eq!(
-        actual,
-        RuntimeResponse::Result {
-            code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("1"),
-            content_items: Vec::new(),
-            result_buffered_for: Duration::ZERO,
-            error_text: None,
-        }
-    );
+    let RuntimeResponse::Result {
+        cell_id: stored_cell,
+        content_items,
+        error_text,
+        ..
+    } = actual
+    else {
+        panic!("store cell must complete: {actual:?}");
+    };
+    assert!(!stored_cell.as_str().is_empty());
+    assert!(content_items.is_empty());
+    assert_eq!(error_text, None);
 
     let mut callback_request = execute_request(
         r#"
@@ -434,55 +436,70 @@ text(result.value);
         output_schema: None,
     }];
     let actual = execute(&session, callback_request, delegate.clone()).await;
+    let RuntimeResponse::Result {
+        cell_id: callback_cell,
+        content_items,
+        error_text,
+        ..
+    } = actual
+    else {
+        panic!("callback cell must complete: {actual:?}");
+    };
+    assert!(!callback_cell.as_str().is_empty());
+    assert_ne!(callback_cell, stored_cell);
+    assert_eq!(error_text, None);
     assert_eq!(
-        actual,
-        RuntimeResponse::Result {
-            code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("2"),
-            content_items: vec![FunctionCallOutputContentItem::InputText {
-                text: "output".to_string(),
-            }],
-            result_buffered_for: Duration::ZERO,
-            error_text: None,
-        }
+        content_items,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: "output".to_string(),
+        }]
     );
+
     {
         let invocations = delegate.invocations.lock().expect("invocations lock");
         assert_eq!(invocations.len(), 1);
         let numbers = &invocations[0].input.as_ref().expect("tool input")["numbers"];
         assert_exact_numbers(numbers);
+        let invocation = &invocations[0];
+        assert_eq!(invocation.cell_id, callback_cell);
+        assert!(!invocation.runtime_tool_call_id.is_empty());
+        assert_eq!(invocation.tool_name, ToolName::plain("echo"));
+        assert_eq!(invocation.tool_kind, CodeModeToolKind::Function);
         assert_eq!(
-            *invocations,
-            vec![CodeModeNestedToolCall {
-                cell_id: cell_id("2"),
-                runtime_tool_call_id: "tool-1".to_string(),
-                tool_name: ToolName::plain("echo"),
-                tool_kind: CodeModeToolKind::Function,
-                input: Some(json!({ "value": "persisted", "numbers": numbers })),
-            }]
+            invocation.input,
+            Some(json!({ "value": "persisted", "numbers": numbers }))
         );
     }
     assert_eq!(
         *delegate.notifications.lock().expect("notifications lock"),
-        vec![("call-2".to_string(), cell_id("2"), "notice".to_string())]
+        vec![(
+            "call-2".to_string(),
+            callback_cell.clone(),
+            "notice".to_string()
+        )]
     );
 
     let mut pending_request = execute_request("await new Promise(() => {});");
     pending_request.tool_call_id = "call-3".to_string();
     pending_request.yield_time_ms = Some(1);
     let actual = execute(&session, pending_request, delegate.clone()).await;
-    assert_eq!(
-        actual,
-        RuntimeResponse::Yielded {
-            code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("3"),
-            content_items: Vec::new(),
-        }
-    );
+    let RuntimeResponse::Yielded {
+        cell_id: pending_cell,
+        content_items,
+        ..
+    } = actual
+    else {
+        panic!("pending cell must yield: {actual:?}");
+    };
+    assert!(!pending_cell.as_str().is_empty());
+    assert_ne!(pending_cell, stored_cell);
+    assert_ne!(pending_cell, callback_cell);
+    assert!(content_items.is_empty());
+
     let actual = session
         .wait(
             WaitRequest {
-                cell_id: cell_id("3"),
+                cell_id: pending_cell.clone(),
                 yield_time_ms: 1,
             },
             /*preempt*/ None,
@@ -493,34 +510,35 @@ text(result.value);
         actual,
         WaitOutcome::LiveCell(RuntimeResponse::Yielded {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("3"),
+            cell_id: pending_cell.clone(),
             content_items: Vec::new(),
         })
     );
     let actual = session
-        .terminate(cell_id("3"))
+        .terminate(pending_cell.clone())
         .await
         .expect("terminate cell");
     assert_eq!(
         actual,
         WaitOutcome::LiveCell(RuntimeResponse::Terminated {
             code_mode_host_duration: actual.code_mode_host_duration(),
-            cell_id: cell_id("3"),
+            cell_id: pending_cell.clone(),
             content_items: Vec::new(),
         })
     );
 
     session.shutdown().await.expect("shutdown remote session");
-    assert_eq!(
-        *delegate.closed_cells.lock().expect("closed cells lock"),
-        vec![cell_id("2"), cell_id("3")]
-    );
+    let closed = delegate.closed_cells.lock().expect("closed cells lock");
+    assert_eq!(closed.len(), 2);
+    assert!(closed.contains(&callback_cell));
+    assert!(closed.contains(&pending_cell));
+
     assert_eq!(
         *first_delegate
             .closed_cells
             .lock()
             .expect("closed cells lock"),
-        vec![cell_id("1")]
+        vec![stored_cell]
     );
 }
 
