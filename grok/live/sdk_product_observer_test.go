@@ -3,7 +3,10 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ronhuafeng/llm-go/codexsdk"
@@ -62,5 +65,22 @@ func TestProductSDKNotificationRetainsTypedEvidenceAndByteBudget(t *testing.T) {
 	}
 	if observer.cause == nil || len(observer.queued()) != 0 {
 		t.Fatal("oversized typed evidence was retained")
+	}
+}
+
+func TestProductInProgressDiagnosticIsNotFailure(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDiagnostics(dir)
+	recordProductDiagnosticTurn(d, "start", "thread", productTurn{ID: "turn", Status: "inProgress"})
+	d.Close()
+	data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "turn_unsuccessful") || strings.Contains(string(data), "\"failure\"") {
+		t.Fatalf("normal progress classified as failure: %s", data)
+	}
+	if !strings.Contains(string(data), "inProgress") {
+		t.Fatal("progress status lost")
 	}
 }

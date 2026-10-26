@@ -161,7 +161,9 @@ Catalog-only submits zero inference turns. Diagnostic execution requires an
 explicit name. Image generation/edit uses four semantic turns across three
 fresh Threads: generation, independent recognition of its actual pixels,
 same-original-Thread edit, and independent recognition of the edited pixels.
-The recognition prompts do not disclose the requested content. Synthetic PNGs
+The independent judge sees the criterion question and actual pixels, not the
+producer conversation. Formal `{"type":"boolean"}` output is validated locally;
+only `true` establishes each proposition. Synthetic PNGs
 and scripted recognition in controlled tests prove transport and orchestration,
 not actual visual recognition. See the
 [Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)

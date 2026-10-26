@@ -78,8 +78,9 @@ func fakeImageServer() {
 			result = map[string]any{"model": p.Model, "modelProvider": "grok", "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": map[string]any{"type": "readOnly"}, "thread": imageBoundThread(id, cwd, model, nil)}
 		case "turn/start":
 			var p struct {
-				ThreadID string
-				Input    []struct{ Type, Text, URL string }
+				ThreadID     string
+				OutputSchema json.RawMessage
+				Input        []struct{ Type, Text, URL string }
 			}
 			_ = json.Unmarshal(req.Params, &p)
 			turns++
@@ -91,7 +92,7 @@ func fakeImageServer() {
 				if generated > 2 {
 					return
 				}
-				if len(p.Input) != 1 || p.Input[0].Type != "text" {
+				if len(p.Input) != 1 || p.Input[0].Type != "text" || len(p.OutputSchema) != 0 && string(p.OutputSchema) != "null" {
 					return
 				}
 				if generated == 1 && !strings.Contains(p.Input[0].Text, "dog") {
@@ -129,23 +130,31 @@ func fakeImageServer() {
 					status = "failed"
 				}
 			} else {
-				if len(p.Input) != 2 || p.Input[0].Type != "image" || p.Input[0].URL != "data:image/png;base64,"+imageData || strings.Contains(strings.ToLower(p.Input[1].Text), "dog") || strings.Contains(strings.ToLower(p.Input[1].Text), "red") || strings.Contains(strings.ToLower(p.Input[1].Text), "hat") {
+				question := "Is there a dog in the photo? Return only true or false."
+				if generated == 2 {
+					question = "Is there a dog wearing a red hat in the photo? Return only true or false."
+				}
+				if len(p.Input) != 2 || p.Input[0].Type != "image" || p.Input[0].URL != "data:image/png;base64,"+imageData || p.Input[1].Text != question {
+					return
+				}
+				var schema map[string]any
+				if json.Unmarshal(p.OutputSchema, &schema) != nil || len(schema) != 1 || schema["type"] != "boolean" {
 					return
 				}
 				log("independent_pixels_verified")
-				reply := "The picture shows a dog."
-				if generated == 2 {
-					reply = "A dog is wearing a bright red hat."
+				log("boolean_schema_verified")
+				reply := "true"
+				if mode == "judge_failed" {
+					status = "failed"
 				}
-				if mode == "wrong_first" && generated == 1 {
-					reply = "A cat."
+				if mode == "wrong_first" && generated == 1 || mode == "wrong_edit" && generated == 2 || mode == "negated" {
+					reply = "false"
 				}
-				if mode == "wrong_edit" && generated == 2 {
-					reply = "A dog wearing a blue hat."
+				malformed := map[string]string{"judge_null": "null", "judge_string": `"true"`, "judge_number": "1", "judge_object": `{"answer":true}`, "judge_extra": "true because dog", "judge_malformed": "tru"}
+				if value, ok := malformed[mode]; ok {
+					reply = value
 				}
-				if mode == "negated" {
-					reply = "There is no dog."
-				}
+
 				items = append(items, map[string]any{"type": "agentMessage", "id": "answer", "text": reply, "phase": "final_answer"})
 			}
 			if mode == "reused_turn" && p.ThreadID == "thread-1" && generated == 2 {

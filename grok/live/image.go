@@ -19,7 +19,8 @@ type ImageEvidence struct {
 }
 
 // ImageGenerationEdit generates a dog, edits it in the same conversation, and
-// asks separate fresh conversations to describe each actual output image.
+// asks separate fresh conversations to judge each actual output image using
+// a schema-constrained boolean, not lexical matching of image descriptions.
 func ImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence, error) {
 	options.imageFixture = true
 	return sdkImageGenerationEdit(ctx, options)
@@ -56,28 +57,18 @@ func completedImage(turn productTurn, root string) (observedImage, error) {
 	return result, nil
 }
 
-// A deliberately small English fixture oracle. Wording and sentence structure
-// are free; the expected visual facts must occur as words, not prompt echoes or
-// substrings. Explicit negative/uncertain answers do not establish recognition.
-func imageRecognized(reply string, edited bool) bool {
-	if visualRefusal(reply) {
-		return false
+// The judge returns one JSON boolean under an explicit output schema. This
+// parser checks only the response contract; visual meaning belongs to the judge.
+func imageJudgeAnswer(reply string) (bool, error) {
+	var value any
+	if err := json.Unmarshal([]byte(reply), &value); err != nil {
+		return false, failedObservation("image_judge_response_invalid", "live: image judge did not return one JSON boolean")
 	}
-	required := map[string]bool{"dog": true}
-	if edited {
-		required["red"], required["hat"] = true, true
+	accepted, ok := value.(bool)
+	if !ok {
+		return false, failedObservation("image_judge_response_invalid", "live: image judge did not return one JSON boolean")
 	}
-	seen := map[string]bool{}
-	for _, clause := range visualClauses(reply) {
-		words := attachedImageWords(clause)
-		if visualFactsDenied(words, required) {
-			return false
-		}
-		for _, word := range words {
-			seen[word] = true
-		}
-	}
-	return seen["dog"] && (!edited || seen["red"] && seen["hat"])
+	return accepted, nil
 }
 
 // Explicit inability to inspect the picture is not a visual answer even when

@@ -28,7 +28,7 @@ func TestGrokImageGenerationEdit(t *testing.T) {
 				t.Fatalf("missing visual proof: %+v", got)
 			}
 			trace := editTrace(t, options)
-			for operation, count := range map[string]int{"process": 1, "thread/start": 3, "turn/start": 4, "independent_pixels_verified": 2} {
+			for operation, count := range map[string]int{"process": 1, "thread/start": 3, "turn/start": 4, "independent_pixels_verified": 2, "boolean_schema_verified": 2} {
 				if strings.Count(trace, operation+"\n") != count {
 					t.Fatalf("unexpected %s invocation count", operation)
 				}
@@ -41,7 +41,7 @@ func TestGrokImageGenerationEdit(t *testing.T) {
 	}
 }
 func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
-	for _, mode := range []string{"missing_image", "bad_payload", "missing_artifact", "failed_turn", "edit_failed", "wrong_first", "wrong_edit", "negated", "wrong_thread", "mismatched_artifact", "completed_error", "late_failed", "reused_turn"} {
+	for _, mode := range []string{"missing_image", "bad_payload", "missing_artifact", "failed_turn", "edit_failed", "wrong_first", "wrong_edit", "negated", "judge_null", "judge_string", "judge_number", "judge_object", "judge_extra", "judge_malformed", "judge_failed", "wrong_thread", "mismatched_artifact", "completed_error", "late_failed", "reused_turn"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "image:"+mode)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -58,6 +58,15 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 			if count < 1 || count > 4 {
 				t.Fatal("scenario retried")
 			}
+			if (strings.HasPrefix(mode, "judge_") || mode == "wrong_first" || mode == "negated") && count != 2 {
+				t.Fatal("invalid judge response retried or edit submitted")
+			}
+			if strings.HasPrefix(mode, "judge_") && mode != "judge_failed" && live.DescribeFailure(err).Code != "image_judge_response_invalid" {
+				t.Fatalf("malformed judge response misclassified: %v", err)
+			}
+			if (mode == "wrong_first" || mode == "wrong_edit" || mode == "negated") && live.DescribeFailure(err).Code != "image_visual_result_mismatch" {
+				t.Fatalf("false judge result misclassified: %v", err)
+			}
 			if mode == "wrong_edit" && (!got.GenerationRecognized || got.EditRecognized) {
 				t.Fatal("partial visual evidence lost or manufactured")
 			}
@@ -66,7 +75,7 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 }
 
 func TestImageDiagnosticContentSurvivesVerdict(t *testing.T) {
-	for _, mode := range []string{"success", "wrong_first", "wrong_edit", "recovery"} {
+	for _, mode := range []string{"success", "wrong_first", "wrong_edit", "recovery", "judge_null"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "image:"+mode)
 			dir := t.TempDir()
@@ -83,14 +92,17 @@ func TestImageDiagnosticContentSurvivesVerdict(t *testing.T) {
 				t.Fatal(readErr)
 			}
 			text := string(events)
-			expected := "The picture shows a dog."
+			expected := `"reply":"true"`
 			if mode == "wrong_first" {
-				expected = "A cat."
+				expected = `"reply":"false"`
 			}
 			if mode == "wrong_edit" {
-				expected = "A dog wearing a blue hat."
+				expected = `"reply":"false"`
 			}
-			if !strings.Contains(text, expected) || !strings.Contains(text, "image_recognition") || !strings.Contains(text, "image_verdict") {
+			if mode == "judge_null" {
+				expected = `"reply":"null"`
+			}
+			if !strings.Contains(text, expected) || !strings.Contains(text, "image_recognition") || !strings.Contains(text, "image_verdict") || !strings.Contains(text, `"output_schema":{"type":"boolean"}`) {
 				t.Fatal("missing received answer and verdict diagnostics")
 			}
 			retained := false

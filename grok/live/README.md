@@ -65,10 +65,11 @@ be wire-rejected; the observer still needs every positive result criterion.
   The declined control still requires a matching denial and no committed effect;
   raw call pairing and file-change counts are not the Live oracle.
 - [Images](image.go) require a completed public image and matching, fully decoded
-  saved PNG. Fresh recognition Threads receive the actual pixels and a neutral
-  question, not the generation/edit request or expected answer. A dog must be
-  recognized before the same-conversation edit, then a dog wearing a red hat
-  afterward. Raw extension calls, prepared history, artifact inventories and
+  saved PNG. Fresh judge Threads receive actual pixels and an explicit proposition:
+  a dog, then a dog wearing a red hat after the same-conversation edit. The SDK
+  sends the formal `{"type":"boolean"}` output schema; only a completed JSON
+  boolean `true` establishes the proposition. No producer history, word matching,
+  breed dictionary or extra judge call is used. Raw extension calls, prepared history, artifact inventories and
   unequal hashes are not semantic proof or additional acceptance conditions.
   [Artifact checks](image_artifact.go) retain bounded decoding, safe saved-path
   access and public-payload/saved-byte agreement.
