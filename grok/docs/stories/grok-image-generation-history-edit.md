@@ -19,20 +19,25 @@ Given a fresh isolated environment and the identified binary/model:
 
 1. A natural request asks for a dog on a plain background. Its Turn completes
    and supplies a completed public image with a user-accessible, decodable PNG.
-2. A fresh recognition Thread receives those actual image pixels plus a neutral
-   English question about the animal and what it is wearing. It receives neither
-   the generation prompt nor the expected answer. Its completed final response
-   identifies a dog.
+2. A fresh judge Thread receives those actual image pixels and the question
+   "Is there a dog in the photo?" It receives no producer conversation/history.
+   The turn uses the SDK's formal output schema `{"type":"boolean"}`; its
+   completed final response must be the JSON boolean `true`.
 3. The original generation Thread receives a natural request to add a red hat
    while keeping the dog and background. Its Turn completes with a public image
    and matching saved PNG.
-4. Another fresh recognition Thread receives the edited pixels and the same
-   neutral question. Its completed final response identifies dog, red and hat.
+4. Another fresh judge Thread receives the edited pixels and the question
+   "Is there a dog wearing a red hat in the photo?" The same boolean output
+   schema applies, and its completed final response must be `true`.
 
-Recognition uses whole-word fixture checks rather than an exact sentence.
-Explicit denial/uncertainty does not establish the expected visual result.
-These finite English checks are not a general natural-language judge or a
-pixel-perfect measure of all aspects of an edit.
+The LLM judges the visual proposition from actual pixels; the harness only
+validates the boolean result. The criterion is intentionally known to the judge,
+not the producer's claimed answer or history. `false`, missing/malformed output,
+null, strings, numbers or objects do not establish the proposition. There is no
+breed dictionary, lexical description matcher, repair call or fallback judge.
+Schema conformance is not itself visual correctness: judge mistakes remain
+possible, and retained PNGs and public replies permit inspection. A pass is not
+a pixel-perfect measure of every aspect of an edit.
 
 The saved file must match the public image payload and remain safely readable
 inside the owned image directory. Decoding and byte/pixel budgets are resource
@@ -84,7 +89,10 @@ instructions do not authorize one.
 Evidence contains safe subject metadata, completion/recognition booleans,
 counts, artifact digests and bounded failure classification under the
 [failure-evidence contract](../../TESTING.md#live-failure-evidence). It does not
-export prompts, replies, raw events, images, private paths or credentials.
+put prompts/replies/images in the verdict summary. The separate bounded diagnostic
+bundle retains this synthetic task's actual prompts, schema, public judge reply,
+parsed decision and PNGs before cleanup, including on rejection. Credentials,
+private reasoning and full raw transport remain excluded.
 Offline/control passes are not executed real-backend evidence and do not
 certify another source, target, model, arbitrary images, multi-image editing,
 transparent output, performance or absence of internal attempts.

@@ -65,9 +65,9 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			base.Bound = true
 			return started.Thread.ID, nil
 		}
-		run := func(id string, input []protocolv2.UserInput) (productTurn, error) {
+		run := func(id string, input []protocolv2.UserInput, schemas ...*protocolv2.OutputSchema) (productTurn, error) {
 			base.Completed = false
-			_, turn, err := observeProductCompletedTurn(server, id, base, "", input)
+			_, turn, err := observeProductCompletedTurn(server, id, base, "", input, schemas...)
 			if turn.ID != "" {
 				for _, prior := range submitted {
 					if prior == (identity{id, turn.ID}) {
@@ -77,6 +77,10 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 				submitted = append(submitted, identity{id, turn.ID})
 			}
 			return turn, err
+		}
+		judgeSchema, err := protocolv2.OutputSchemaFromJSON([]byte(`{"type":"boolean"}`))
+		if err != nil {
+			return failedObservation("image_judge_schema_invalid", "live: image judge schema unavailable")
 		}
 		generationThread, err := start()
 		if err != nil {
@@ -108,8 +112,8 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			} else {
 				evidence.EditedImageSHA256 = result.digest
 			}
-			// The recognition conversation sees only the actual pixels and a neutral
-			// question. Neither the generation request nor the expected answer is sent.
+			// The independent judge sees actual pixels and the criterion question,
+			// never the producer prompt, history, or a supplied positive answer.
 			recognitionThread, err := start()
 			if err != nil {
 				return err
@@ -117,9 +121,9 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			if recognitionThread == generationThread {
 				return failedObservation("image_recognition_not_independent", "live: image recognition conversation is not independent")
 			}
-			recognitionPrompt := "Describe the animal and anything it is wearing in this picture. Answer in English."
-			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "submitted", "prompt": recognitionPrompt, "input_sha256": result.digest})
-			recognized, err := run(recognitionThread, []protocolv2.UserInput{imageInput(result), protocolv2.NewUserInputText(protocolv2.UserInputText{Text: recognitionPrompt})})
+			recognitionPrompt := []string{"Is there a dog in the photo? Return only true or false.", "Is there a dog wearing a red hat in the photo? Return only true or false."}[index]
+			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "submitted", "prompt": recognitionPrompt, "input_sha256": result.digest, "output_schema": map[string]any{"type": "boolean"}})
+			recognized, err := run(recognitionThread, []protocolv2.UserInput{imageInput(result), protocolv2.NewUserInputText(protocolv2.UserInputText{Text: recognitionPrompt})}, &judgeSchema)
 			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "returned", "completed": err == nil})
 			if err != nil {
 				return err
@@ -131,8 +135,11 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 				return err
 			}
 			base.ReplyBytes = len(reply)
-			accepted := imageRecognized(reply, index == 1)
-			options.Diagnostics.Record("image_verdict", map[string]any{"phase": phase, "accepted": accepted})
+			accepted, judgeErr := imageJudgeAnswer(reply)
+			options.Diagnostics.Record("image_verdict", map[string]any{"phase": phase, "accepted": accepted, "valid": judgeErr == nil})
+			if judgeErr != nil {
+				return judgeErr
+			}
 			if !accepted {
 				return failedObservation("image_visual_result_mismatch", "live: requested image content not established")
 			}

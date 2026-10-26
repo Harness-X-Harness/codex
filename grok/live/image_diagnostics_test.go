@@ -2,43 +2,23 @@ package live
 
 import "testing"
 
-func TestImageRecognitionScopesUnrelatedQualifiers(t *testing.T) {
-	for _, text := range []string{
-		"A dog, possibly a retriever.",
-		"No hat. A dog is shown.",
-		"A dog. I cannot determine its breed.",
-		"A dog, with maybe a collar.",
-	} {
-		if !imageRecognized(text, false) {
-			t.Errorf("unrelated qualifier rejected: %q", text)
+func TestImageJudgeRequiresOneJSONBoolean(t *testing.T) {
+	for _, text := range []string{"true", " \ntrue\t"} {
+		accepted, err := imageJudgeAnswer(text)
+		if err != nil || !accepted {
+			t.Errorf("true rejected: %q, %v", text, err)
 		}
 	}
-	for _, text := range []string{
-		"A dog wearing a red hat, possibly a retriever.",
-		"A dog of unknown breed wearing a red hat.",
-		"No collar. A dog is wearing a red hat.",
-		"A dog wearing a red hat. I am unsure about the background.",
-	} {
-		if !imageRecognized(text, true) {
-			t.Errorf("valid edited scene rejected: %q", text)
+	for _, text := range []string{"false", " false \n"} {
+		accepted, err := imageJudgeAnswer(text)
+		if err != nil || accepted {
+			t.Errorf("false mishandled: %q, %v", text, err)
 		}
 	}
-	for _, text := range []string{
-		"Possibly a dog.", "It is unknown whether the picture shows a dog.", "I cannot tell whether the animal is a dog.",
-		"I cannot see the image; a dog.", "I can’t view the image; a dog.",
-		"No dog is shown.", "There is not a dog in this picture.",
-	} {
-		if imageRecognized(text, false) {
-			t.Errorf("absent/uncertain dog accepted: %q", text)
-		}
-	}
-	for _, text := range []string{
-		"A dog without a red hat.", "A dog, possibly wearing a red hat.",
-		"It is unknown whether the dog wears a red hat.",
-		"A dog wearing a hat, but not red.", "A dog wearing a blue hat.",
-	} {
-		if imageRecognized(text, true) {
-			t.Errorf("absent/uncertain red hat accepted: %q", text)
+	for _, text := range []string{"", "null", `"true"`, "1", `{"answer":true}`, "[true]", "True", "TRUE", "true false", "true because a dog is visible", "```json\ntrue\n```", "tru"} {
+		accepted, err := imageJudgeAnswer(text)
+		if err == nil || accepted {
+			t.Errorf("invalid boolean response accepted: %q", text)
 		}
 	}
 }

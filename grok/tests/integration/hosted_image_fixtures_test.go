@@ -152,6 +152,7 @@ type imageNativeHTTP struct {
 	model, failure, first, second, toolHit      string
 	responses, generations, edits, recognitions int
 	toolNames                                   []string
+	judgeReplies                                []string
 }
 
 func imageToolName(tools []json.RawMessage) (string, []string) {
@@ -221,16 +222,19 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		Store  *bool             `json:"store"`
 		Tools  []json.RawMessage `json:"tools"`
 		Input  []json.RawMessage `json:"input"`
+		Text   json.RawMessage   `json:"text"`
 	}
 	if json.Unmarshal(data, &body) != nil || body.Model != fixture.model || !body.Stream || (body.Store != nil && *body.Store) {
 		fixture.reject(writer, "request_contract")
 		return
 	}
 	// Fresh recognition turns contain the image itself, with no generation
-	// conversation or answer-bearing prompt. This is controlled transport proof,
+	// conversation. The question states the criterion, not its answer. This is controlled transport proof,
 	// not a claim that these synthetic pixels depict a dog.
 	var attached string
 	var question string
+	images := 0
+	priorOutput := false
 	for _, raw := range body.Input {
 		var item struct {
 			Type, Role string
@@ -239,12 +243,19 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 				ImageURL   string `json:"image_url"`
 			}
 		}
-		if json.Unmarshal(raw, &item) != nil || item.Role != "user" {
+		if json.Unmarshal(raw, &item) != nil {
+			continue
+		}
+		if item.Role == "assistant" || item.Type == "function_call" || item.Type == "function_call_output" {
+			priorOutput = true
+		}
+		if item.Role != "user" {
 			continue
 		}
 		for _, part := range item.Content {
 			if part.Type == "input_image" {
 				attached = part.ImageURL
+				images++
 			}
 			if part.Type == "input_text" {
 				question += part.Text
@@ -252,19 +263,38 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		}
 	}
 	if attached != "" {
-		if strings.Contains(strings.ToLower(question), "dog") || strings.Contains(strings.ToLower(question), "red hat") || inputHasFunctionCall(body.Input) {
-			fixture.reject(writer, "recognition_prompt_leaked")
+		if images != 1 || priorOutput || strings.Contains(question, "Draw a clear picture of a dog on a plain background.") || strings.Contains(question, "Add a red hat to the dog in the image you just generated") {
+			fixture.reject(writer, "recognition_history_leaked")
 			return
 		}
-		reply := ""
+		var text struct {
+			Format struct {
+				Type   string         `json:"type"`
+				Strict bool           `json:"strict"`
+				Schema map[string]any `json:"schema"`
+			} `json:"format"`
+		}
+		if json.Unmarshal(body.Text, &text) != nil || text.Format.Type != "json_schema" || !text.Format.Strict || len(text.Format.Schema) != 1 || text.Format.Schema["type"] != "boolean" {
+			fixture.reject(writer, "recognition_output_schema")
+			return
+		}
+		expectedQuestion := ""
 		switch attached {
 		case "data:image/png;base64," + fixture.first:
-			reply = "The image shows a dog."
+			expectedQuestion = "Is there a dog in the photo? Return only true or false."
 		case "data:image/png;base64," + fixture.second:
-			reply = "The dog is wearing a red hat."
+			expectedQuestion = "Is there a dog wearing a red hat in the photo? Return only true or false."
 		default:
 			fixture.reject(writer, "recognition_image_mismatch")
 			return
+		}
+		if !strings.Contains(question, expectedQuestion) {
+			fixture.reject(writer, "recognition_question")
+			return
+		}
+		reply := "true"
+		if fixture.recognitions < len(fixture.judgeReplies) {
+			reply = fixture.judgeReplies[fixture.recognitions]
 		}
 		fixture.responses++
 		fixture.recognitions++
@@ -275,6 +305,13 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 			fixture.reject(writer, "write")
 		}
 		return
+	}
+	if len(body.Text) != 0 && string(body.Text) != "null" {
+		var text map[string]json.RawMessage
+		if json.Unmarshal(body.Text, &text) != nil || len(text["format"]) != 0 {
+			fixture.reject(writer, "generation_output_schema")
+			return
+		}
 	}
 	name, names := imageToolName(body.Tools)
 	if fixture.toolNames == nil {

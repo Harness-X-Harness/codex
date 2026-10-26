@@ -444,16 +444,20 @@ func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Ev
 }
 
 // A completed image result need not also contain an assistant text message.
-func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput) (productThread, productTurn, error) {
+func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput, outputSchema ...*protocolv2.OutputSchema) (productThread, productTurn, error) {
 	var texts []string
 	for _, part := range input {
 		if text, ok := part.AsText(); ok {
 			texts = append(texts, text.Text)
 		}
 	}
-	server.diagnostics.Record("product_turn_request", map[string]any{"thread_id": id, "effort": effort, "text": texts, "input_count": len(input)})
+	var schema *protocolv2.OutputSchema
+	if len(outputSchema) > 0 {
+		schema = outputSchema[0]
+	}
+	server.diagnostics.Record("product_turn_request", map[string]any{"thread_id": id, "effort": effort, "text": texts, "input_count": len(input), "output_schema": schema})
 	evidence.Turns++
-	request := protocolv2.TurnStartParams{ThreadID: id, Input: input}
+	request := protocolv2.TurnStartParams{ThreadID: id, Input: input, OutputSchema: schema}
 	if effort != "" {
 		request.Effort = protocolv2.Value(protocolv2.ReasoningEffort(effort))
 	}
@@ -524,8 +528,10 @@ func recordProductDiagnosticTurn(diagnostics *Diagnostics, source, threadID stri
 	if len(turn.Error) != 0 {
 		fields["error"] = turn.Error
 	}
-	if err := completedProductTurn(turn); err != nil {
-		fields["failure"] = DescribeFailure(err)
+	if turn.Status == "failed" || turn.Status == "interrupted" {
+		if err := completedProductTurn(turn); err != nil {
+			fields["failure"] = DescribeFailure(err)
+		}
 	}
 	diagnostics.Record(source, fields)
 	for _, item := range turn.Items {
