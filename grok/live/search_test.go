@@ -68,10 +68,29 @@ func fakeSearchServer() {
 		case "turn/start":
 			index := len(turns) + 1
 			id := fmt.Sprintf("turn%d", index)
-			reply := map[string]any{"type": "agentMessage", "id": "reply", "phase": "final_answer", "text": "PRIVATE_HEADLINE https://www.reuters.com/world/fixture"}
+			schema, _ := request.Params["outputSchema"].(map[string]any)
+			props, _ := schema["properties"].(map[string]any)
+			if schema["type"] != "object" || schema["additionalProperties"] != false || props["summary"] == nil || (index == 1) != (props["articles"] != nil) {
+				return
+			}
+			_, _ = io.WriteString(trace, "output_schema_verified\n")
+			answer := `{"articles":[{"headline":"PRIVATE_HEADLINE","url":"https://news.example.test/story"}],"summary":null}`
+			if index == 2 {
+				answer = `{"summary":"PRIVATE_HEADLINE summary."}`
+			}
+			malformed := map[string]string{"schema_null": "null", "schema_missing": `{"articles":[]}`, "schema_empty": `{"articles":[],"summary":null}`, "schema_nested_missing": `{"articles":[{"headline":"h"}],"summary":null}`, "schema_nested_null": `{"articles":[{"headline":null,"url":"https://example.test"}],"summary":null}`, "schema_duplicate": `{"articles":[],"articles":[],"summary":null}`, "schema_extra": `{"articles":[],"summary":null,"other":true}`, "schema_prose": "headline https://example.test", "schema_bad_url": `{"articles":[{"headline":"h","url":"javascript:alert(1)"}],"summary":null}`}
+			if bad, ok := malformed[mode]; ok {
+				answer = bad
+			}
+			if mode == "schema_followup_null" && index == 2 {
+				answer = `{"summary":null}`
+			}
+			reply := map[string]any{"type": "agentMessage", "id": "reply", "phase": "final_answer", "text": answer}
 			items := []any{reply}
 			if mode == "split_final" {
-				items = append(items, map[string]any{"type": "agentMessage", "id": "tail", "phase": "final_answer", "text": "Additional context."})
+				split := strings.Index(answer, ":") + 1
+				reply["text"] = answer[:split]
+				items = append(items, map[string]any{"type": "agentMessage", "id": "tail", "phase": "final_answer", "text": answer[split:]})
 			}
 			if mode == "commentary_after_final" {
 				items = append(items, map[string]any{"type": "agentMessage", "id": "commentary", "phase": "commentary", "text": "Planning."})
@@ -237,6 +256,25 @@ func TestHostedSearchRetiredXDoesNotLaunch(t *testing.T) {
 			if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Processes != 0 || got.Turns != 0 || got.Completed {
 				t.Fatalf("retirement failed: %+v %v", got, err)
 			}
+		})
+	}
+}
+
+func TestHostedSearchStructuredAnswersRejectWithoutRetry(t *testing.T) {
+	for _, mode := range []string{"schema_null", "schema_missing", "schema_empty", "schema_nested_missing", "schema_nested_null", "schema_duplicate", "schema_extra", "schema_prose", "schema_bad_url", "schema_followup_null"} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, "search:"+mode+":web")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			got, err := live.HostedSearch(ctx, options, "web")
+			if err == nil || got.Completed || (live.DescribeFailure(err).Code != "search_answer_invalid" && live.DescribeFailure(err).Code != "structured_reply_invalid") {
+				t.Fatalf("invalid result accepted: %+v %v", got, err)
+			}
+			want := 1
+			if mode == "schema_followup_null" {
+				want = 2
+			}
+			assertSearchInvocationCount(t, options, want)
 		})
 	}
 }

@@ -32,8 +32,12 @@ come from the [Go catalog](../../internal/scenarios/catalog.go).
 As a Grok user, I can request supported hosted **Web** search, receive a complete
 final answer, and continue on the same Provider-bound thread. Positive acceptance
 requires one first turn and one follow-up, each submitted once, matching identities,
-completed public Web activity, successful terminals, nonempty settled final
-answers and a completed same-thread continuation. Raw extension envelopes and
+completed public Web activity, successful terminals, settled structured articles
+with headline/URL fields and a completed same-thread structured summary. Both
+existing turns receive an explicit formal output schema; no extra judge call is
+added. Required fields and exact types are validated on one complete JSON value;
+null or empty required results cannot prove success. Schema validity does not
+independently establish article accuracy, recency or source grounding. Raw extension envelopes and
 byte-identical internal replay are not additional Live acceptance conditions.
 Final text is collected from eligible final-answer items,
 ignoring commentary and accepting multiple final fragments. Target history is

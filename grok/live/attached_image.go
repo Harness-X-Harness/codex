@@ -16,8 +16,8 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-const attachedImageFirstPrompt = "Look at the attached picture. Describe the color and shape of the object on the left in English."
-const attachedImageNextPrompt = "From the picture attached earlier in this same conversation, describe the color and shape of the object on the right in English."
+const attachedImageFirstPrompt = "Look at the attached picture. Describe the color and shape of the object on the left in English. Return a JSON object with color as a simple English name and shape as a simple English noun (not an adjective), or null for any property you cannot determine."
+const attachedImageNextPrompt = "From the picture attached earlier in this same conversation, describe the color and shape of the object on the right in English. Return a JSON object with color as a simple English name and shape as a simple English noun (not an adjective), or null for any property you cannot determine."
 
 // attachedImageURL carries the answers only in pixels, not a filename or prompt.
 // The second fact is deliberately absent from the first accepted reply.
@@ -39,45 +39,30 @@ func attachedImageURL() (string, error) {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data.Bytes()), nil
 }
 
-// This fixture asks for two simple visual properties, not a particular sentence.
-// Ordinary descriptive words and sentence structure do not decide acceptance.
-// The finite checks reject explicit denial, uncertainty and conflicting fixture
-// properties; they are not a general natural-language judge.
-func attachedImageWords(text string) []string {
-	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) })
+const attachedImageSchemaJSON = `{"type":"object","properties":{"color":{"type":["string","null"]},"shape":{"type":["string","null"]}},"required":["color","shape"],"additionalProperties":false}`
+
+type attachedImageProperties struct {
+	Color *string `json:"color"`
+	Shape *string `json:"shape"`
 }
 
-func attachedImageAnswer(text, expectedColor, expectedShape, side string) bool {
-	if strings.Contains(text, "?") || visualRefusal(text) {
+// These are actual fixture facts, not a prose classifier. Null remains unknown.
+func (answer attachedImageProperties) matches(color, shape string) bool {
+	if answer.Color == nil || answer.Shape == nil {
 		return false
 	}
-	color, shape := false, false
-	for _, clause := range visualClauses(text) {
-		words := attachedImageWords(clause)
-		for index, word := range words {
-			if word == "circular" {
-				words[index] = "circle"
-			}
-		}
-		if visualFactsDenied(words, map[string]bool{expectedColor: true, expectedShape: true}) {
-			return false
-		}
-		for _, word := range words {
-			switch word {
-			case expectedColor:
-				color = true
-			case expectedShape:
-				shape = true
-			case "red", "blue", "circle", "square":
-				return false
-			case "left", "right":
-				if word != side {
-					return false
-				}
-			}
-		}
+	observedShape := strings.ToLower(strings.TrimSpace(*answer.Shape))
+	// Preserve the existing fixture's circle/circular equivalence without a
+	// general synonym classifier or an answer-disclosing schema enum.
+	if observedShape == "circular" {
+		observedShape = "circle"
 	}
-	return color && shape
+	return strings.ToLower(strings.TrimSpace(*answer.Color)) == color && observedShape == shape
+}
+
+// Inspect every public message for disclosure of the continuation's target.
+func attachedImageWords(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) })
 }
 
 // AttachedImageHistory observes real user input, not the image-generation tool.
@@ -89,6 +74,10 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 8 << 20}}
 	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		server.client = client
+		schema, err := protocolv2.OutputSchemaFromJSON([]byte(attachedImageSchemaJSON))
+		if err != nil {
+			return failedObservation("visual_schema_invalid", "live: visual reply schema unavailable")
+		}
 		fallback := false
 		started, err := client.Threads().Start(ctx, protocolv2.ThreadStartParams{Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd), AllowProviderModelFallback: &fallback})
 		if err != nil {
@@ -114,7 +103,7 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 			{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: attachedImageFirstPrompt}), protocolv2.NewUserInputImage(protocolv2.UserInputImage{URL: &pictureValue})},
 			{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: attachedImageNextPrompt})},
 		}
-		expected := [][3]string{{"red", "circle", "left"}, {"blue", "square", "right"}}
+		expected := [][2]string{{"red", "circle"}, {"blue", "square"}}
 		var turns []string
 		var terminalMu sync.Mutex
 		var terminals []frame
@@ -145,9 +134,9 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 			return nil
 		}
 		for index, input := range inputs {
-			options.Diagnostics.Record("attached_image_phase", map[string]any{"turn": index + 1, "status": "submitted", "prompt": []string{attachedImageFirstPrompt, attachedImageNextPrompt}[index]})
+			options.Diagnostics.Record("attached_image_phase", map[string]any{"turn": index + 1, "status": "submitted", "prompt": []string{attachedImageFirstPrompt, attachedImageNextPrompt}[index], "output_schema": schema})
 			evidence.Completed = false
-			thread, turn, err := observeProductInputTurn(server, started.Thread.ID, evidence, "", input)
+			thread, turn, err := observeProductInputTurn(server, started.Thread.ID, evidence, "", input, &schema)
 			options.Diagnostics.Record("attached_image_phase", map[string]any{"turn": index + 1, "status": "returned", "completed": err == nil})
 			diagnosticReply, diagnosticErr := finalProductReply(turn)
 			options.Diagnostics.Record("attached_image_reply", map[string]any{"turn": index + 1, "reply": diagnosticReply, "aggregate_available": diagnosticErr == nil})
@@ -184,8 +173,13 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 			if err != nil {
 				return err
 			}
-			accepted := attachedImageAnswer(reply, expected[index][0], expected[index][1], expected[index][2])
-			options.Diagnostics.Record("attached_image_verdict", map[string]any{"turn": index + 1, "accepted": accepted})
+			var answer attachedImageProperties
+			parseErr := parseStructuredReply(reply, &answer, "color", "shape")
+			accepted := parseErr == nil && answer.matches(expected[index][0], expected[index][1])
+			options.Diagnostics.Record("attached_image_verdict", map[string]any{"turn": index + 1, "valid": parseErr == nil, "accepted": accepted, "properties": answer})
+			if parseErr != nil {
+				return failedObservation("visual_answer_invalid", "live: visual reply did not match the required JSON object")
+			}
 			if !accepted {
 				return failedObservation("visual_answer_mismatch", "live: visual answer not established")
 			}

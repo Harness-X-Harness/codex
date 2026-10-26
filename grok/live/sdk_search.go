@@ -13,7 +13,12 @@ import (
 // sdkHostedSearch implements supported Web observation.
 func sdkHostedSearch(ctx context.Context, options Options, scenario string, config map[string]any, prompt string) (SearchEvidence, error) {
 	result := SearchEvidence{Scenario: scenario}
-	options.Diagnostics.Record("search_request", map[string]any{"scenario": scenario, "config": config, "prompt": prompt, "model": options.Model})
+	schema, err := searchOutputSchema(false)
+	if err != nil {
+		return result, err
+	}
+	prompt += " Return the found articles as headline and URL entries in articles, with an optional summary (null if unavailable)."
+	options.Diagnostics.Record("search_request", map[string]any{"scenario": scenario, "config": config, "prompt": prompt, "model": options.Model, "output_schema": schema})
 	transport := &sdkProductObserver{diagnostics: options.Diagnostics, ctx: ctx, changed: make(chan struct{}, 1)}
 	handlers := sdkFixtureHandlers{
 		requests: transport.request, notifications: transport.typedNotification, afterClose: transport.afterClose,
@@ -36,7 +41,7 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 				ApprovalPolicy: protocolv2.Value(protocolv2.NewAskForApprovalNever()),
 				Config:         protocolv2.Value(decoded),
 			},
-			Turn: protocolv2.TurnStartParams{Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}},
+			Turn: protocolv2.TurnStartParams{OutputSchema: &schema, Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}},
 			AdmitTurn: func(started protocolv2.ThreadStartResponse, _ protocolv2.TurnStartParams) error {
 				if started.Model != options.Model || started.ModelProvider != "grok" || started.Thread.ModelProvider != "grok" ||
 					started.Thread.ID == "" || started.CWD != cwd || started.Thread.CWD != cwd {

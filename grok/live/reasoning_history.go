@@ -9,6 +9,8 @@ import (
 
 const historyTool = "grok_history_probe"
 
+const historyOutputSchema = `{"type":"object","properties":{"token":{"type":["string","null"]}},"required":["token"],"additionalProperties":false}`
+
 // This bounds replay evidence, not product tool calls or retries.
 const historyAssistantLimit = 4096
 
@@ -51,13 +53,16 @@ type historyTurn struct {
 
 type historyReply struct {
 	bytes                                       int
+	text                                        string
+	formatValid                                 bool
 	completed, recall, authoritative, ambiguous bool
 	explicitFinal                               bool
 	identities                                  map[[sha256.Size]byte]historyReplyOutcome
 }
 
 type historyReplyOutcome struct {
-	finalEligible, explicitFinal, hasContent, recall bool
+	finalEligible, explicitFinal, hasContent bool
+	textSHA                                  [sha256.Size]byte
 }
 
 func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) error {
@@ -69,6 +74,7 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 	// commentary/partial text. An authoritative summary combines all explicit
 	// final answers, with phase-unknown legacy fallback only when no final exists.
 	summaryAssistant := false
+	summaryIdentities := make(map[[sha256.Size]byte]historyReplyOutcome)
 	for _, item := range turn.Items {
 		if item.Type == "agentMessage" {
 			if item.ID == "" {
@@ -79,10 +85,24 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 				// it has no eligible result; it cannot borrow an older answer.
 				probe.diagnostics.Record("oracle_reply_reset", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "source": "terminal_items"})
 				reply.bytes, reply.recall, reply.explicitFinal = 0, false, false
+				reply.text, reply.formatValid = "", false
 				reply.authoritative, reply.ambiguous = true, false
 				reply.identities = nil
 				summaryAssistant = true
 			}
+			identity := sha256.Sum256([]byte(item.ID))
+			outcome := historyItemOutcome(item)
+			if previous, seen := summaryIdentities[identity]; seen {
+				if previous != outcome {
+					reply.ambiguous = true
+					return failedObservation("assistant_identity_conflict", "live: authoritative reply identity conflicted")
+				}
+				continue
+			}
+			if len(summaryIdentities) == historyAssistantLimit {
+				return failedObservation("assistant_identity_budget_exceeded", "live: assistant identity evidence budget exceeded")
+			}
+			summaryIdentities[identity] = outcome
 			if strings.TrimSpace(item.Text) == "" {
 				continue
 			}
@@ -105,12 +125,7 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 			return nil
 		}
 		identity := sha256.Sum256([]byte(item.ID))
-		outcome := historyReplyOutcome{
-			finalEligible: item.Phase == "" || item.Phase == "final_answer",
-			explicitFinal: item.Phase == "final_answer",
-			hasContent:    strings.TrimSpace(item.Text) != "",
-			recall:        probe.token != "" && strings.Contains(item.Text, probe.token),
-		}
+		outcome := historyItemOutcome(item)
 		if previous, seen := reply.identities[identity]; seen {
 			if previous != outcome {
 				reply.ambiguous = true
@@ -149,14 +164,34 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 	return nil
 }
 
-// An assistant can deliver a final answer in several messages. A later explanation
-// must not erase a token already present in another eligible final message.
+// All eligible final fragments form one structured result; never pick a valid
+// object from a larger malformed answer. Final phase still outranks legacy text.
 func (probe *historyProbe) addReplyFragment(item historyItem, reply *historyReply) {
 	probe.diagnostics.Record("oracle_reply_fragment", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "item_id": item.ID, "phase": item.Phase, "text": item.Text, "reset_legacy": item.Phase == "final_answer" && !reply.explicitFinal, "authoritative": reply.authoritative})
 	if item.Phase == "final_answer" && !reply.explicitFinal {
-		reply.bytes, reply.recall = 0, false
+		reply.bytes, reply.recall, reply.text, reply.formatValid = 0, false, "", false
 	}
 	reply.bytes += len(item.Text)
-	reply.recall = reply.recall || probe.token != "" && strings.Contains(item.Text, probe.token)
+	if len(reply.text) <= 4096 {
+		if reply.text != "" {
+			reply.text += "\n"
+		}
+		remaining := 4097 - len(reply.text)
+		if len(item.Text) > remaining {
+			reply.text += item.Text[:remaining]
+		} else {
+			reply.text += item.Text
+		}
+	}
+	var result struct {
+		Token *string `json:"token"`
+	}
+	err := parseStructuredReply(reply.text, &result, "token")
+	reply.formatValid = err == nil
+	reply.recall = err == nil && result.Token != nil && probe.token != "" && *result.Token == probe.token
 	reply.explicitFinal = item.Phase == "final_answer"
+}
+
+func historyItemOutcome(item historyItem) historyReplyOutcome {
+	return historyReplyOutcome{finalEligible: item.Phase == "" || item.Phase == "final_answer", explicitFinal: item.Phase == "final_answer", hasContent: strings.TrimSpace(item.Text) != "", textSHA: sha256.Sum256([]byte(item.Text))}
 }

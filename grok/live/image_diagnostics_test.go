@@ -22,24 +22,3 @@ func TestImageJudgeRequiresOneJSONBoolean(t *testing.T) {
 		}
 	}
 }
-
-func TestAttachedImageScopesUnrelatedQualifiers(t *testing.T) {
-	for _, text := range []string{
-		"A red circle, possibly made of paper.",
-		"An object of unknown material shaped as a red circle.",
-		"No border. A red circle is on the left.",
-		"The left object is a red circle. I cannot identify its material.",
-	} {
-		if !attachedImageAnswer(text, "red", "circle", "left") {
-			t.Errorf("valid shape rejected: %q", text)
-		}
-	}
-	for _, text := range []string{
-		"Possibly a red circle.", "I cannot tell whether it is a red circle.",
-		"Not a red circle.", "A blue square.", "A red circle on the right.",
-	} {
-		if attachedImageAnswer(text, "red", "circle", "left") {
-			t.Errorf("wrong shape accepted: %q", text)
-		}
-	}
-}

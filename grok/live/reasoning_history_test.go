@@ -130,7 +130,9 @@ func fakeHistoryServer() {
 			mark("turn/start")
 			phase++
 			_, effortPresent := p.Params["effort"]
-			effortValid := !effortPresent && len(p.Params) == 2
+			schema, _ := p.Params["outputSchema"].(map[string]any)
+			encodedSchema, _ := json.Marshal(schema)
+			effortValid := !effortPresent && len(p.Params) == 3 && string(encodedSchema) == `{"additionalProperties":false,"properties":{"token":{"type":["string","null"]}},"required":["token"],"type":"object"}`
 			if phase > 2 || p.Params["threadId"] != "PRIVATE_THREAD" || !effortValid || p.Params["summary"] != nil || p.Params["environments"] != nil {
 				return
 			}
@@ -359,7 +361,7 @@ func fakeHistoryServer() {
 			if scenario == "wrong_output" {
 				toolItem["contentItems"] = []any{map[string]any{"type": "inputText", "text": historyCanary}}
 			}
-			agent := map[string]any{"type": "agentMessage", "id": "PRIVATE_REPLY", "phase": "final_answer", "text": token}
+			agent := map[string]any{"type": "agentMessage", "id": "PRIVATE_REPLY", "phase": "final_answer", "text": historyReplyJSON(token)}
 			if scenario == "legacy" || scenario == "legacy_superseded" || scenario == "legacy_replaced" || scenario == "legacy_commentary" {
 				delete(agent, "phase")
 			}
@@ -403,7 +405,7 @@ func fakeHistoryServer() {
 			if strings.HasPrefix(scenario, "legacy_") || scenario == "summary_replay" {
 				last := map[string]any{"type": "agentMessage", "id": "PRIVATE_LAST_REPLY", "text": historyCanary}
 				if scenario == "legacy_replaced" {
-					last["text"] = token
+					last["text"] = historyReplyJSON(token)
 				}
 				if scenario == "legacy_commentary" {
 					last["phase"] = "commentary"
@@ -424,7 +426,7 @@ func fakeHistoryServer() {
 				}
 				terminalItems = []any{}
 				assistant := func(id, phase, text string) map[string]any {
-					item := map[string]any{"type": "agentMessage", "id": id, "text": text}
+					item := map[string]any{"type": "agentMessage", "id": id, "text": historyReplyJSON(text)}
 					if phase != "" {
 						item["phase"] = phase
 					}
@@ -506,9 +508,9 @@ func fakeHistoryServer() {
 					if phase == 1 {
 						emit("item/completed", assistant(a, "final_answer", token))
 					} else {
-						// Reusing A with a changed result requires a fresh per-turn identity map.
-						// Empty summaries cannot mask a missing production reset.
-						emit("item/completed", assistant(a, "final_answer", historyCanary))
+						// Reusing A with a changed phase requires a fresh per-turn identity map.
+						// Commentary must not corrupt B's structured final answer.
+						emit("item/completed", assistant(a, "commentary", historyCanary))
 						emit("item/completed", assistant(b, "final_answer", token))
 					}
 				case "identity_summary_composition":
@@ -529,7 +531,7 @@ func fakeHistoryServer() {
 			}
 			if scenario == "inline" || scenario == "inline_conflict" || scenario == "inline_missing_item" {
 				if scenario == "inline_missing_item" {
-					emit("item/completed", map[string]any{"type": "agentMessage", "id": "", "phase": "final_answer", "text": token})
+					emit("item/completed", map[string]any{"type": "agentMessage", "id": "", "phase": "final_answer", "text": historyReplyJSON(token)})
 				}
 				if scenario == "inline_conflict" {
 					send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": map[string]any{"id": turn, "status": "failed", "error": map[string]any{"message": historyCanary}, "items": []any{}}}})
@@ -561,11 +563,11 @@ func fakeHistoryServer() {
 
 func historySuccess(mode string) bool {
 	switch strings.TrimPrefix(mode, "next_") {
-	case "legacy_superseded", "identity_replay", "identity_replay_final", "final_then_commentary", "final_then_partial", "final_then_commentary_items", "legacy_commentary", "identity_delayed_final", "identity_duplicate", "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_last_recall", "identity_authority_last_no_recall", "identity_summary_composition", "identity_turn_reset":
+	case "final_then_commentary", "final_then_partial", "final_then_commentary_items", "legacy_commentary", "identity_delayed_final", "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_summary_composition":
 		return true
 	}
 	switch mode {
-	case "shipped", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "tool_identity_limit", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
+	case "identity_turn_reset", "shipped", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "tool_identity_limit", "legacy", "next_denial", "next_item", "next_inline", "next_late", "next_legacy":
 		return true
 	}
 	return false
@@ -680,7 +682,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 						t.Fatal("mistaken provisional tool turn was not reconciled before proof or deadline")
 					}
 				}
-				if strings.HasPrefix(mode, "next_") && (!got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 64 || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1) {
+				if strings.HasPrefix(mode, "next_") && (!got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 76 || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1) {
 					t.Fatal("continuation failure corrupted the completed first-turn proof")
 				}
 				if mode == "no_terminal" || mode == "next_no_terminal" {
@@ -690,14 +692,14 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 					}
 					// The fixture emits one raw and one typed reasoning occurrence
 					// and one completed tool. Failure recovery must not add replays.
-					if live.DescribeFailure(err).Code != "deadline_exceeded" || got.ReasoningItems != 2 || got.EncryptedItems != 1 || got.CompletedTools != 1 || got.ToolCalls != 1 || completed || !recall || replyBytes != 64 {
+					if live.DescribeFailure(err).Code != "deadline_exceeded" || got.ReasoningItems != 2 || got.EncryptedItems != 1 || got.CompletedTools != 1 || got.ToolCalls != 1 || completed || !recall || replyBytes != 76 {
 						t.Fatal("failure recovery duplicated or lost real partial evidence")
 					}
 				}
 				if mode == "cipher_missing_identity" || mode == "cipher_empty_identity" {
 					// Raw reasoning permits an absent ID on the wire, but cannot
 					// establish encrypted-history authority without that identity.
-					if live.DescribeFailure(err).Code != "deadline_exceeded" || ctx.Err() == nil || got.EncryptedItems != 0 || got.ReasoningItems != 1 || got.ToolCalls != 1 || got.CompletedTools != 1 || counts["token_valid"] != 1 || !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 64 || got.Completed || got.Recalled || got.ReplyBytes != 0 || got.Stage == "first_turn_proven" {
+					if live.DescribeFailure(err).Code != "deadline_exceeded" || ctx.Err() == nil || got.EncryptedItems != 0 || got.ReasoningItems != 1 || got.ToolCalls != 1 || got.CompletedTools != 1 || counts["token_valid"] != 1 || !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 76 || got.Completed || got.Recalled || got.ReplyBytes != 0 || got.Stage == "first_turn_proven" {
 						t.Fatalf("raw reasoning without identity falsely established encrypted history: evidence=%+v failure=%+v", got, live.DescribeFailure(err))
 					}
 				}
@@ -737,7 +739,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 						recalled := got.FirstRecall
 						if strings.HasPrefix(mode, "next_") {
 							recalled = got.Recalled
-							if !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 64 {
+							if !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 76 {
 								t.Fatal("continuation failure corrupted first-turn proof")
 							}
 						}
@@ -765,16 +767,13 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 					if mode == "next_denial" {
 						denied = 1
 					}
-					firstBytes, replyBytes := 64, 64
+					firstBytes, replyBytes := 76, 76
 					if scenario := strings.TrimPrefix(mode, "next_"); strings.HasPrefix(scenario, "identity_authority_last_") || scenario == "identity_replay" || scenario == "identity_replay_final" || scenario == "legacy_superseded" || scenario == "legacy_replaced" {
 						if strings.HasPrefix(mode, "next_") {
 							replyBytes += len(historyCanary)
 						} else {
 							firstBytes += len(historyCanary)
 						}
-					}
-					if mode == "identity_turn_reset" {
-						replyBytes += len(historyCanary)
 					}
 					if got.Stage != "history_recalled" || !got.Bound || !got.FirstCompleted || !got.FirstRecall || !got.Completed || !got.Recalled || got.FirstReplyBytes != firstBytes || got.ReplyBytes != replyBytes || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.ToolCalls != calls || got.CompletedTools < 1 || got.DeniedToolCalls != denied || counts["token_valid"] != calls || counts["denial_valid"] != denied {
 						t.Fatal("missing complete history proof or causal tool validation")
@@ -785,4 +784,9 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 			})
 		}
 	}
+}
+
+func historyReplyJSON(token string) string {
+	data, _ := json.Marshal(map[string]string{"token": token})
+	return string(data)
 }

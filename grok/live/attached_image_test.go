@@ -44,15 +44,26 @@ func TestAttachedImagePixelsAndUnleakedPrompts(t *testing.T) {
 	}
 }
 
-func TestAttachedImageAnswerRejectsFalseAcceptance(t *testing.T) {
-	for _, text := range []string{"red circle", "Red Circle.", "RED, CIRCLE", "red, circular", "a red circle", "The circle is red.", "The object on the left is a red circle.", "I see a bright red circle against a white background.", "The left object is a red circle, with no border.", "A red circle without a border or shadow.", "On the left, there appears a clearly visible red circular object.", "The picture shows a red circle. It has a smooth outline."} {
-		if !attachedImageAnswer(text, "red", "circle", "left") {
-			t.Fatal("equivalent semantic answer rejected")
+func TestAttachedImageStructuredFacts(t *testing.T) {
+	for _, text := range []string{`{"color":"red","shape":"circle"}`, `{"shape":"circle","color":"RED"}`, `{"color":"red","shape":"circular"}`, ` {"color":" red ","shape":"circle"} `} {
+		var answer attachedImageProperties
+		if err := parseStructuredReply(text, &answer, "color", "shape"); err != nil || !answer.matches("red", "circle") {
+			t.Fatalf("valid visual facts rejected: %s: %v", text, err)
 		}
 	}
-	for _, text := range []string{"", "not red circle", "not a red circle", "a red object without a circular shape", "red circle blue square", "blue square", "not red circular", "blue circular", "red circular on the right", "I cannot see the image; red circle", "I can't see the image; red circle", "I can’t see the image; red circle", "maybe a red circle", "red circle?", "a red circle or a blue square", "the object on the right is a red circle"} {
-		if attachedImageAnswer(text, "red", "circle", "left") {
-			t.Fatal("false visual proof accepted")
+	for _, text := range []string{`{"color":null,"shape":"circle"}`, `{"color":"red","shape":null}`, `{"color":"green","shape":"triangle"}`, `{"color":"not red","shape":"circle"}`, `{"color":"red","shape":"not circle"}`} {
+		var answer attachedImageProperties
+		if err := parseStructuredReply(text, &answer, "color", "shape"); err != nil {
+			t.Fatalf("schema-valid nonmatch failed parsing: %v", err)
+		}
+		if answer.matches("red", "circle") {
+			t.Fatalf("unknown or wrong visual facts accepted: %s", text)
+		}
+	}
+	for _, text := range []string{`{"color":"red"}`, `{"color":"red","shape":"circle","other":"value"}`, `{"color":"red","color":"blue","shape":"circle"}`, `{"color":true,"shape":"circle"}`, `{"color":"red","shape":["circle"]}`, `null`, `true`, `"red circle"`, `{"color":"red","shape":"circle"} extra`} {
+		var answer attachedImageProperties
+		if err := parseStructuredReply(text, &answer, "color", "shape"); err == nil {
+			t.Fatalf("invalid structured visual reply accepted: %s", text)
 		}
 	}
 }

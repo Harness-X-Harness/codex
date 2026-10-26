@@ -28,7 +28,7 @@ A digest proves bytes, not independently verified release provenance.
 - `AttachedImageHistory` submits an actual user image, checks a visual answer,
   then asks a different image-only fact in a text-only same-thread continuation.
 - `ImageGenerationEdit` generates an image and edits it in the same Thread;
-  fresh conversations independently describe each actual result image through
+  fresh conversations independently judge each actual result image through
   the isolated image-capable fixture.
 - `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and
   `ShippedChildCollaboration` consume unchanged embedded [shipped assets](../dist).
@@ -56,7 +56,7 @@ be wire-rejected; the observer still needs every positive result criterion.
 
 - [Reasoning](reasoning_history.go) requires a completed authorized named tool,
   fresh result, opaque completed reasoning and recall in both whole eligible
-  final responses. A later final fragment does not erase earlier final content;
+  final responses using a required nullable `token` string matched to the actual tool result. A later final fragment does not erase earlier final content;
   commentary cannot substitute for final recall. The controlled Integration
   owner separately verifies unchanged encrypted replay.
 - [Editing](sdk_edit_observer.go) checks successful terminal/final responses and
@@ -75,14 +75,29 @@ be wire-rejected; the observer still needs every positive result criterion.
   access and public-payload/saved-byte agreement.
 - [Child collaboration](shipped_child.go) requires inherited-marker recall,
   complete observed own-input coverage, a fresh child result, matching lineage
-  and parent consumption. Missing/opaque coverage is unproven. Natural prose,
-  additional UUIDs and intermediate tool activity are not failures by themselves;
+  and parent consumption through a required nullable `child_nonce` string. The
+  parent result schema is not inherited by child turns. Missing/opaque coverage
+  is unproven. Natural child prose, additional child UUIDs and intermediate tool
+  activity are not failures by themselves;
   supplied or inherited results cannot count as fresh child work.
 - [Web](search.go) requires completed public Web activity, successful terminals,
-  nonempty eligible final answers and same-thread continuation. Raw extension
+  structured articles (headline/URL) and a same-thread structured summary. These
+  fields do not independently prove source accuracy, freshness or policy enforcement. Raw extension
   envelopes are not the business oracle. Native request/replay and controlled
   policy tests separately own protocol composition; prose alone is not hosted
   execution proof.
+
+Task result schemas are supplied explicitly on each applicable turn. Attached-image
+results contain nullable `color`/`shape` fields; reasoning uses nullable `token`;
+the child parent uses nullable `child_nonce`; Web uses an article array and nullable
+summary, followed by a summary object. These are task-neutral shapes, not schemas
+containing expected fixture answers. One complete bounded JSON value is required;
+duplicate/unknown/missing keys, wrong types, trailing values and text fallback are
+rejected. Null records unknown information and cannot establish a required fact.
+Business facts still come from actual images, tool results, child work and public
+search activity. Basic, startup, catalog and filesystem edit checks retain their
+direct oracles rather than gaining artificial structured answers. Diagnostics
+retain the requested schema, public response and parse/semantic verdict separately.
 
 Each semantic input is submitted once. Product-internal retries/recovery remain
 product policy. Missing evidence does not authorize runner resubmission.

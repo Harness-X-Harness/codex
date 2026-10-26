@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -21,14 +22,14 @@ import (
 )
 
 func TestAttachedImageHistory(t *testing.T) {
-	for _, mode := range []string{"success", "inline", "natural_answer", "descriptive_answer", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior"} {
+	for _, mode := range []string{"success", "inline", "field_order", "padded_values", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior", "null_color", "null_shape", "missing_field", "extra_field", "duplicate_key", "wrong_type", "unstructured"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "attached:"+mode)
 			options.Model = providerfixture.PinnedModel
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			got, err := live.AttachedImageHistory(ctx, options)
-			success := mode == "success" || mode == "inline" || mode == "natural_answer" || mode == "descriptive_answer" || mode == "harmless_commentary" || mode == "missing_image_history"
+			success := mode == "success" || mode == "inline" || mode == "field_order" || mode == "padded_values" || mode == "harmless_commentary" || mode == "missing_image_history"
 			if success && (err != nil || !got.Completed || !got.FirstCompleted || !got.FirstRecall || !got.Recalled || got.Turns != 2 || got.Threads != 1) {
 				t.Fatalf("missing image history proof: %+v %v", got, err)
 			}
@@ -38,6 +39,21 @@ func TestAttachedImageHistory(t *testing.T) {
 			trace := editTrace(t, options)
 			if !strings.Contains(trace, "image_input_verified\n") {
 				t.Fatal("actual input image was not verified")
+			}
+			if success && strings.Count(trace, "structured_schema_verified\n") != 2 {
+				t.Fatal("formal schema missing from actual request")
+			}
+			if mode == "null_color" || mode == "null_shape" || mode == "missing_field" || mode == "extra_field" || mode == "duplicate_key" || mode == "wrong_type" || mode == "unstructured" {
+				if strings.Count(trace, "turn/start\n") != 1 {
+					t.Fatal("invalid or unknown visual reply triggered extra turn")
+				}
+				code := "visual_answer_invalid"
+				if mode == "null_color" || mode == "null_shape" {
+					code = "visual_answer_mismatch"
+				}
+				if live.DescribeFailure(err).Code != code {
+					t.Fatalf("wrong visual reply failure: %v", err)
+				}
 			}
 			if success && !strings.Contains(trace, "text_only_followup\n") {
 				t.Fatal("followup resupplied image or changed thread")
@@ -84,12 +100,19 @@ func fakeAttachedImageServer() {
 			result = map[string]any{"model": providerfixture.PinnedModel, "modelProvider": "grok", "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": map[string]any{"type": "readOnly"}, "thread": shippedProtocolThread(map[string]any{"id": "attached-thread", "model": providerfixture.PinnedModel})}
 		case "turn/start":
 			var params struct {
-				ThreadID string `json:"threadId"`
-				Input    []map[string]any
+				ThreadID     string `json:"threadId"`
+				Input        []map[string]any
+				OutputSchema json.RawMessage
 			}
 			if json.Unmarshal(request.Params, &params) != nil || params.ThreadID != "attached-thread" {
 				return
 			}
+			var schema, expectedSchema any
+			_ = json.Unmarshal([]byte(`{"type":"object","properties":{"color":{"type":["string","null"]},"shape":{"type":["string","null"]}},"required":["color","shape"],"additionalProperties":false}`), &expectedSchema)
+			if json.Unmarshal(params.OutputSchema, &schema) != nil || !reflect.DeepEqual(schema, expectedSchema) {
+				return
+			}
+			log("structured_schema_verified")
 			index := len(turns)
 			if index == 0 {
 				if len(params.Input) != 2 || params.Input[0]["type"] != "text" || params.Input[1]["type"] != "image" {
@@ -116,28 +139,41 @@ func fakeAttachedImageServer() {
 				}
 				log("text_only_followup")
 			}
-			answer := "red circle"
+			answer := `{"color":"red","shape":"circle"}`
 			if index == 1 {
-				answer = "blue square"
+				answer = `{"color":"blue","shape":"square"}`
 			}
 			if mode == "wrong_first" && index == 0 || mode == "wrong_second" && index == 1 {
-				answer = "green triangle"
+				answer = `{"color":"green","shape":"triangle"}`
 			}
 			if mode == "leaked_second" && index == 0 {
-				answer = "red circle blue square"
+				answer = `{"color":"red","shape":"circle","other":"blue square"}`
 			}
-			if mode == "natural_answer" {
-				answer = "The circle is red."
+			if mode == "field_order" {
+				answer = `{"shape":"circle","color":"red"}`
 				if index == 1 {
-					answer = "The blue object is a square."
+					answer = `{"shape":"square","color":"blue"}`
 				}
 			}
-			if mode == "descriptive_answer" {
-				answer = "I see a bright red circle against the white background."
+			if mode == "padded_values" {
+				answer = ` {"color":" RED ","shape":"Circle"} `
 				if index == 1 {
-					answer = "On the right there is a clearly visible blue square with straight edges."
+					answer = ` {"color":" BLUE ","shape":"Square"} `
 				}
 			}
+			invalid := map[string]string{
+				"null_color":    `{"color":null,"shape":"circle"}`,
+				"null_shape":    `{"color":"red","shape":null}`,
+				"missing_field": `{"color":"red"}`,
+				"extra_field":   `{"color":"red","shape":"circle","extra":"unknown"}`,
+				"duplicate_key": `{"color":"red","color":"green","shape":"circle"}`,
+				"wrong_type":    `{"color":true,"shape":"circle"}`,
+				"unstructured":  "a red circle",
+			}
+			if value, ok := invalid[mode]; ok {
+				answer = value
+			}
+
 			id := fmt.Sprintf("turn-%d", index)
 			if mode == "duplicate_turn" {
 				id = "turn-0"
@@ -194,7 +230,7 @@ func fakeAttachedImageServer() {
 }
 
 func TestAttachedImageDiagnosticsSurviveSemanticFailure(t *testing.T) {
-	for _, mode := range []string{"success", "wrong_first", "wrong_second", "commentary_leak"} {
+	for _, mode := range []string{"success", "wrong_first", "wrong_second", "commentary_leak", "null_color", "extra_field"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "attached:"+mode)
 			options.Model = providerfixture.PinnedModel
@@ -212,18 +248,27 @@ func TestAttachedImageDiagnosticsSurviveSemanticFailure(t *testing.T) {
 				t.Fatal(readErr)
 			}
 			text := string(events)
-			expected := "red circle"
+			expected := `\"color\":\"red\"`
 			if mode == "wrong_first" || mode == "wrong_second" {
-				expected = "green triangle"
+				expected = `\"color\":\"green\"`
 			}
 			if mode == "commentary_leak" {
 				expected = "blue square"
+			}
+			if mode == "null_color" {
+				expected = `\"color\":null`
 			}
 			if !strings.Contains(text, expected) || !strings.Contains(text, "attached_image_reply") {
 				t.Fatal("missing public output explaining rejection")
 			}
 			if _, err := os.ReadFile(filepath.Join(dir, "attached-input.png")); err != nil {
 				t.Fatal("actual input pixels missing", err)
+			}
+			if !strings.Contains(text, "output_schema") {
+				t.Fatal("formal schema diagnostics missing")
+			}
+			if mode != "commentary_leak" && !strings.Contains(text, "attached_image_verdict") {
+				t.Fatal("parse/semantic diagnostic missing")
 			}
 			if !strings.Contains(text, "Look at the attached picture.") {
 				t.Fatal("actual prompt missing")

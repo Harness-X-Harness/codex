@@ -75,7 +75,7 @@ func testShippedChildInheritedHistory(t *testing.T) {
 	}
 }
 
-func childHistoryFixtureRequest(t *testing.T, fixture *shippedChildHTTP, thread, effort string, input []map[string]any) *httptest.ResponseRecorder {
+func childHistoryFixtureRequest(t *testing.T, fixture *shippedChildHTTP, thread, effort string, input []map[string]any, schemaOverride ...json.RawMessage) *httptest.ResponseRecorder {
 	t.Helper()
 	tools := []any{
 		map[string]any{"type": "function", "name": "fixture_spawn", "description": "Call this function directly to invoke `collaboration.spawn_agent`.",
@@ -85,8 +85,19 @@ func childHistoryFixtureRequest(t *testing.T, fixture *shippedChildHTTP, thread,
 			"parameters": map[string]any{"type": "object", "additionalProperties": false,
 				"properties": map[string]any{"timeout_ms": map[string]any{"type": "number"}}}},
 	}
-	body, err := json.Marshal(map[string]any{"model": fixture.model, "tools": tools, "input": input,
-		"stream": true, "store": false, "reasoning": map[string]any{"effort": effort}})
+	payload := map[string]any{"model": fixture.model, "tools": tools, "input": input,
+		"stream": true, "store": false, "reasoning": map[string]any{"effort": effort}}
+	var schema json.RawMessage
+	if fixture.parentID != "" && thread == fixture.parentID {
+		schema = json.RawMessage(childHTTPParentSchema)
+	}
+	if len(schemaOverride) != 0 {
+		schema = schemaOverride[0]
+	}
+	if schema != nil {
+		payload["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "child_result", "strict": true, "schema": schema}}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +129,27 @@ func testShippedChildDeliveredResult(t *testing.T) {
 			integrationObservation(t)
 			if childHTTPDelivered(tc.text, "/root/live_child", marker, nonce) != tc.want {
 				t.Fatal("child result identity/value boundary changed")
+			}
+		})
+	}
+}
+
+// Exercise the wire format boundary independently of optional binary execution.
+func testShippedChildOutputSchemaScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, thread, want string
+		schema             json.RawMessage
+	}{
+		{"missing_parent", "parent", "parent_result_schema", nil},
+		{"wrong_parent", "parent", "parent_result_schema", json.RawMessage(`{"type":"boolean"}`)},
+		{"inherited_by_child", "child", "unexpected_child_or_seed_schema", json.RawMessage(childHTTPParentSchema)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			integrationObservation(t)
+			fixture := &shippedChildHTTP{model: "fixture-model", parentID: "parent", seedEffort: "high"}
+			response := childHistoryFixtureRequest(t, fixture, tc.thread, "xhigh", nil, tc.schema)
+			if response.Code != http.StatusBadRequest || fixture.failure != tc.want {
+				t.Fatalf("schema boundary: status=%d failure=%s", response.Code, fixture.failure)
 			}
 		})
 	}

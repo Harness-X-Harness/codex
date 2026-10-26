@@ -2,6 +2,7 @@ package live
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ import (
 func TestHistoryReplyPhaseSelection(t *testing.T) {
 	const token = "controlled-history-result"
 	item := func(id, phase, text string) historyItem {
-		return historyItem{Type: "agentMessage", ID: id, Phase: phase, Text: text}
+		return historyItem{Type: "agentMessage", ID: id, Phase: phase, Text: historyTestJSON(text)}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -25,8 +26,8 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 		{"final_then_commentary", []historyItem{item("final", "final_answer", token), item("tail", "commentary", "progress")}, true},
 		{"final_then_partial", []historyItem{item("final", "final_answer", token), item("tail", "partial_answer", "partial")}, true},
 		{"final_before_legacy", []historyItem{item("final", "final_answer", token), item("legacy", "", "wrong")}, true},
-		{"final_then_explanation", []historyItem{item("first", "final_answer", token), item("last", "final_answer", "This is the recalled result.")}, true},
-		{"legacy_then_explanation", []historyItem{item("first", "", token), item("last", "", "This is the recalled result.")}, true},
+		{"final_then_explanation", []historyItem{item("first", "final_answer", token), item("last", "final_answer", "This is the recalled result.")}, false},
+		{"legacy_then_explanation", []historyItem{item("first", "", token), item("last", "", "This is the recalled result.")}, false},
 		{"legacy_cannot_replace_explicit_final", []historyItem{item("legacy", "", token), item("final", "final_answer", "not recalled")}, false},
 		{"legacy_then_commentary", []historyItem{item("legacy", "", token), item("tail", "commentary", "progress")}, true},
 		{"only_commentary", []historyItem{item("tail", "commentary", token)}, false},
@@ -85,8 +86,8 @@ func TestHistoryReplyPhaseIdentityConflict(t *testing.T) {
 	probe := historyProbe{token: token}
 	reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 	for _, item := range []historyItem{
-		{Type: "agentMessage", ID: "a", Phase: "final_answer", Text: token},
-		{Type: "agentMessage", ID: "a", Text: token},
+		{Type: "agentMessage", ID: "a", Phase: "final_answer", Text: historyTestJSON(token)},
+		{Type: "agentMessage", ID: "a", Text: historyTestJSON(token)},
 		{Type: "agentMessage", ID: "b", Text: "wrong"},
 	} {
 		if err := probe.completedItem(item, &reply); err != nil {
@@ -97,7 +98,7 @@ func TestHistoryReplyPhaseIdentityConflict(t *testing.T) {
 		t.Fatal("same-ID explicit-final/legacy conflict was treated as replay")
 	}
 	if err := probe.completedTurn(historyTurn{Status: "completed", Items: []historyItem{
-		{Type: "agentMessage", ID: "authoritative", Phase: "final_answer", Text: token},
+		{Type: "agentMessage", ID: "authoritative", Phase: "final_answer", Text: historyTestJSON(token)},
 	}}, &reply); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestHistoryEmptyReplyIdentity(t *testing.T) {
 			} else {
 				changed.Phase = ""
 			}
-			for _, item := range []historyItem{empty, changed, {Type: "agentMessage", ID: "valid", Phase: "final_answer", Text: token}} {
+			for _, item := range []historyItem{empty, changed, {Type: "agentMessage", ID: "valid", Phase: "final_answer", Text: historyTestJSON(token)}} {
 				if err := probe.completedItem(item, &reply); err != nil {
 					t.Fatal(err)
 				}
@@ -149,4 +150,12 @@ func TestHistoryEmptyReplyIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func historyTestJSON(token string) string {
+	if token == "" || token == " \n " {
+		return token
+	}
+	data, _ := json.Marshal(map[string]string{"token": token})
+	return string(data)
 }

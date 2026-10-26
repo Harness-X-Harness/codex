@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -44,10 +45,23 @@ func TestAttachedImagePinnedFixture(t *testing.T) {
 					ImageURL   string `json:"image_url"`
 				}
 			}
+			Text   json.RawMessage
 			Tools  []json.RawMessage
 			Stream bool
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&body) != nil || r.Method != "POST" || r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer fixture-key" || body.Model != providerfixture.PinnedModel || !body.Stream || len(body.Tools) != 0 || requests > 2 {
+			invalid = true
+		}
+		var text struct {
+			Format struct {
+				Type   string
+				Strict bool
+				Schema any
+			}
+		}
+		var expectedSchema any
+		_ = json.Unmarshal([]byte(`{"type":"object","properties":{"color":{"type":["string","null"]},"shape":{"type":["string","null"]}},"required":["color","shape"],"additionalProperties":false}`), &expectedSchema)
+		if json.Unmarshal(body.Text, &text) != nil || text.Format.Type != "json_schema" || !text.Format.Strict || !reflect.DeepEqual(text.Format.Schema, expectedSchema) {
 			invalid = true
 		}
 		images := 0
@@ -82,9 +96,9 @@ func TestAttachedImagePinnedFixture(t *testing.T) {
 			_, _ = io.WriteString(w, `{"error":{"message":"controlled fixture mismatch"}}`)
 			return
 		}
-		answer := "red circle"
+		answer := `{"color":"red","shape":"circle"}`
 		if requests == 2 {
-			answer = "blue square"
+			answer = `{"color":"blue","shape":"square"}`
 		}
 		events := []any{map[string]any{"type": "response.created", "response": map[string]any{"id": fmt.Sprintf("attached-%d", requests)}}}
 		events = append(events, assistantEvents(0, fmt.Sprintf("attached-answer-%d", requests), answer)...)

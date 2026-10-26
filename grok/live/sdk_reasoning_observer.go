@@ -20,8 +20,9 @@ type sdkHistoryObservation struct {
 	Item                     historyItem
 }
 
-// SDK callbacks own private bounded observations. Only run boundaries copy
-// them into public evidence; no token, identifier or raw envelope is exported.
+// SDK callbacks own bounded observations. Run boundaries copy only proof facts
+// into the safe summary; optional diagnostics retain public task results, never
+// private reasoning or raw envelopes.
 type sdkHistoryObserver struct {
 	mu                   sync.Mutex
 	probe                historyProbe
@@ -354,7 +355,7 @@ func (observer *sdkHistoryObserver) finishTurn() {
 	defer observer.mu.Unlock()
 	observer.active = false
 	recall := observer.reply.recall && !observer.reply.ambiguous
-	observer.probe.diagnostics.Record("oracle_result", map[string]any{"scenario": "reasoning", "turn_id": observer.probe.turnID, "completed": observer.reply.completed, "recall": recall, "ambiguous": observer.reply.ambiguous, "reply_bytes": observer.reply.bytes, "authoritative": observer.reply.authoritative, "explicit_final": observer.reply.explicitFinal})
+	observer.probe.diagnostics.Record("oracle_result", map[string]any{"scenario": "reasoning", "turn_id": observer.probe.turnID, "completed": observer.reply.completed, "recall": recall, "ambiguous": observer.reply.ambiguous, "reply_bytes": observer.reply.bytes, "authoritative": observer.reply.authoritative, "explicit_final": observer.reply.explicitFinal, "reply": observer.reply.text, "format_valid": observer.reply.formatValid})
 	if observer.probe.previousID == "" {
 		observer.observations.FirstCompleted, observer.observations.FirstRecall, observer.observations.FirstReplyBytes = observer.reply.completed, recall, observer.reply.bytes
 		if observer.reply.completed {

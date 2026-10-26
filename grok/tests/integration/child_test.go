@@ -77,6 +77,8 @@ func childHTTPReply(writer http.ResponseWriter, id, text string) {
 	childHTTPEvent(writer, map[string]any{"type": "response.completed", "response": map[string]any{"id": id}})
 }
 
+const childHTTPParentSchema = `{"type":"object","properties":{"child_nonce":{"type":["string","null"]}},"required":["child_nonce"],"additionalProperties":false}`
+
 const childHTTPSeedReply = "seed accepted"
 
 const childHTTPTask = "Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value."
@@ -95,11 +97,18 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		http.Error(writer, reason, http.StatusBadRequest)
 	}
 	var body struct {
-		Model     string
-		Tools     []json.RawMessage
-		Input     []json.RawMessage
-		Stream    bool
-		Store     *bool
+		Model  string
+		Tools  []json.RawMessage
+		Input  []json.RawMessage
+		Stream bool
+		Store  *bool
+		Text   struct {
+			Format struct {
+				Type   string
+				Strict bool
+				Schema json.RawMessage
+			}
+		}
 		Reasoning struct{ Effort string }
 	}
 	data, err := io.ReadAll(io.LimitReader(request.Body, (1<<20)+1))
@@ -109,6 +118,19 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		request.Header.Get("Authorization") != "Bearer fixture-key" || threadID == "" ||
 		body.Model != fixture.model || !body.Stream || body.Store == nil || *body.Store || len(body.Input) > 128 || fixture.requests > 5 {
 		fail("request_contract")
+		return
+	}
+	if fixture.parentID != "" && threadID == fixture.parentID {
+		var gotSchema, wantSchema any
+		if json.Unmarshal(body.Text.Format.Schema, &gotSchema) != nil || json.Unmarshal([]byte(childHTTPParentSchema), &wantSchema) != nil ||
+			body.Text.Format.Type != "json_schema" || !body.Text.Format.Strict || !reflect.DeepEqual(gotSchema, wantSchema) {
+			fail("parent_result_schema")
+			return
+		}
+	} else if body.Text.Format.Type == "json_schema" || len(body.Text.Format.Schema) != 0 {
+		// The seed and child are natural tasks; the parent-only final format
+		// must not silently become a child output constraint.
+		fail("unexpected_child_or_seed_schema")
 		return
 	}
 	// Ultra is the stock local alias for xhigh on the wire.
@@ -315,7 +337,8 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		return
 	}
 	fixture.continued = true
-	childHTTPReply(writer, "parent", fixture.nonce)
+	parentResult, _ := json.Marshal(map[string]any{"child_nonce": fixture.nonce})
+	childHTTPReply(writer, "parent", string(parentResult))
 }
 
 // The public agent-message projection owns these routing fields
@@ -349,6 +372,7 @@ func TestShippedChildFixture(t *testing.T) {
 	t.Run("parent_supplied_result_rejected", func(t *testing.T) { testNativeShippedChildFixture(t, true) })
 	t.Run("inherited_spawn_history", testShippedChildInheritedHistory)
 	t.Run("delivered_result", testShippedChildDeliveredResult)
+	t.Run("output_schema_scope", testShippedChildOutputSchemaScope)
 }
 
 type shippedChildHTTP struct {

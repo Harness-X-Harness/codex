@@ -122,10 +122,19 @@ That controlled prerequisite does not replace real child recall and parent resul
 consumption.
 
 The runner accepts a bounded fresh UUID from a correctly bound, completed child
-turn when the parent's terminal reply contains it. UUID casing, additional UUIDs
-and surrounding prose are not exact-output constraints. Parent prose, additional
-orchestration and incidental failed/running children or spawns do not supply
-credit or invalidate an otherwise qualifying result. It can recognize a causal
+turn when the parent's terminal structured reply selects it in `child_nonce`.
+Only the parent's delegation/result turn uses a native object schema with required
+`child_nonce: string | null` and no additional properties; it contains no expected
+UUID constant. The setup confirmation and child's own output remain natural
+tasks without that schema. Null is valid output but does not prove result delivery.
+Malformed JSON, missing/duplicate/unknown fields, wrong types, and extra JSON are
+rejected, not repaired. Child UUID casing, additional child UUIDs and surrounding
+child prose are not exact-output constraints. Additional orchestration and incidental
+failed/running children or spawns do not supply credit or invalidate an otherwise
+qualifying selected result. Schema conformance alone never substitutes for child
+lineage, inherited marker recall, fresh UUID, consumed-input or result-use proof.
+Diagnostics retain the schema, public parent reply and parsed nonce, plus bounded
+available child snapshots even if the parent's structured answer is invalid. It can recognize a causal
 result before a child's later follow-up. Missing or incorrect recalled markers,
 markers supplied through later child inputs, inherited
 results, mismatched Provider/model/ownership and result values already in parent

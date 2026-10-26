@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/searchfixture"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -44,9 +47,13 @@ type searchProbe struct {
 }
 
 func (p *searchProbe) observe(prompt string) error {
-	p.server.diagnostics.Record("search_followup_request", map[string]any{"thread_id": p.threadID, "prompt": prompt})
+	schema, err := searchOutputSchema(true)
+	if err != nil {
+		return err
+	}
+	p.server.diagnostics.Record("search_followup_request", map[string]any{"thread_id": p.threadID, "prompt": prompt, "output_schema": schema})
 	p.evidence.Turns++
-	response, err := p.server.client.Turns().Start(p.server.ctx, protocolv2.TurnStartParams{ThreadID: p.threadID,
+	response, err := p.server.client.Turns().Start(p.server.ctx, protocolv2.TurnStartParams{ThreadID: p.threadID, OutputSchema: &schema,
 		Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}})
 	if err != nil {
 		return shippedTransport(p.server.ctx, err)
@@ -161,6 +168,11 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 		return err
 	}
 	p.server.diagnostics.Record("search_answer", map[string]any{"thread_id": p.threadID, "turn_id": p.turnID, "text": reply})
+	answerErr := validateSearchAnswer(reply, p.previousID != "")
+	p.server.diagnostics.Record("search_answer_validation", map[string]any{"thread_id": p.threadID, "turn_id": p.turnID, "followup": p.previousID != "", "accepted": answerErr == nil, "failure": DescribeFailure(answerErr), "json_valid": json.Valid([]byte(reply)), "parsed": DescribeFailure(answerErr).Code != "structured_reply_invalid"})
+	if answerErr != nil {
+		return answerErr
+	}
 	p.evidence.ReplyBytes = len(reply)
 	p.settled = true
 	p.result.SettledTurns++
@@ -249,6 +261,65 @@ func (p *searchProbe) publicSearch(turnID string, item protocolv2.ThreadItem) er
 func validateSearchTerminal(value turn) error {
 	if value.Status != "completed" || len(value.Error) != 0 && string(value.Error) != "null" {
 		return failedTurn(value.Status, value.Error, "live: search turn did not complete")
+	}
+	return nil
+}
+
+const searchArticlesSchema = `{"type":"object","properties":{"articles":{"type":"array","maxItems":8,"items":{"type":"object","properties":{"headline":{"type":"string","maxLength":512},"url":{"type":"string","maxLength":2048}},"required":["headline","url"],"additionalProperties":false}},"summary":{"type":["string","null"],"maxLength":2048}},"required":["articles","summary"],"additionalProperties":false}`
+const searchSummarySchema = `{"type":"object","properties":{"summary":{"type":["string","null"],"maxLength":2048}},"required":["summary"],"additionalProperties":false}`
+
+func searchOutputSchema(followup bool) (protocolv2.OutputSchema, error) {
+	schema := searchArticlesSchema
+	if followup {
+		schema = searchSummarySchema
+	}
+	return protocolv2.OutputSchemaFromJSON([]byte(schema))
+}
+
+func validateSearchAnswer(reply string, followup bool) error {
+	invalid := func() error {
+		return failedObservation("search_answer_invalid", "live: search answer does not satisfy its structured result contract")
+	}
+	if followup {
+		var answer struct {
+			Summary *string `json:"summary"`
+		}
+		if err := parseStructuredReply(reply, &answer, "summary"); err != nil {
+			return err
+		}
+		if answer.Summary == nil || strings.TrimSpace(*answer.Summary) == "" || utf8.RuneCountInString(*answer.Summary) > 2048 {
+			return invalid()
+		}
+		return nil
+	}
+	var answer struct {
+		Articles []json.RawMessage `json:"articles"`
+		Summary  *string           `json:"summary"`
+	}
+	if err := parseStructuredReply(reply, &answer, "articles", "summary"); err != nil {
+		return err
+	}
+	if len(answer.Articles) == 0 || len(answer.Articles) > 8 {
+		return invalid()
+	}
+	if answer.Summary != nil && utf8.RuneCountInString(*answer.Summary) > 2048 {
+		return invalid()
+	}
+	for _, raw := range answer.Articles {
+		var article struct {
+			Headline *string `json:"headline"`
+			URL      *string `json:"url"`
+		}
+		if err := parseStructuredReply(string(raw), &article, "headline", "url"); err != nil {
+			return err
+		}
+		if article.Headline == nil || strings.TrimSpace(*article.Headline) == "" || utf8.RuneCountInString(*article.Headline) > 512 || article.URL == nil || utf8.RuneCountInString(*article.URL) > 2048 {
+			return invalid()
+		}
+		u, err := url.Parse(*article.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+			return invalid()
+		}
 	}
 	return nil
 }
