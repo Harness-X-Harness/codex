@@ -27,10 +27,6 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 	handlers := sdkFixtureHandlers{
 		requests: observer.request, notifications: observer.typedNotification, failures: observer.failures,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 4096, MaxBytes: 8 << 20},
-		raw: &codexsdk.RawNotificationSubscription{
-			Methods:                        []string{codexsdk.RawResponseItemCompletedExtension},
-			EnableRawResponseItemExtension: true, Handler: observer.notification,
-		},
 		afterClose: func(_ string, base *Evidence, cause error) error {
 			snapshot, observationErr := observer.snapshot()
 			base.Turns, base.FirstCompleted, base.FirstReplyBytes = snapshot.Turns, snapshot.FirstCompleted, snapshot.FirstReplyBytes
@@ -39,7 +35,7 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 				base.Stage = snapshot.Stage
 			}
 			evidence.TurnCompleted = snapshot.TurnCompleted
-			evidence.Calls, evidence.PairedOutputs, evidence.FileChanges, evidence.Approvals = snapshot.Calls, snapshot.PairedOutputs, snapshot.FileChanges, snapshot.Approvals
+			evidence.FileChanges, evidence.Approvals = snapshot.FileChanges, snapshot.Approvals
 			if observationErr != nil {
 				cause = observationErr
 			}
@@ -74,11 +70,11 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 		if fixture.decline {
 			policy = protocolv2.NewAskForApprovalUntrusted()
 		}
-		experimental, fallback := true, false
+		fallback := false
 		base.Threads = 1
 		started, err := client.Threads().Start(ctx, protocolv2.ThreadStartParams{
 			Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
-			ExperimentalRawEvents: &experimental, AllowProviderModelFallback: &fallback, ApprovalPolicy: protocolv2.Value(policy),
+			AllowProviderModelFallback: &fallback, ApprovalPolicy: protocolv2.Value(policy),
 		})
 		if err != nil {
 			return sdkEditCause(ctx, observer, err)
@@ -100,13 +96,13 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 			return err
 		}
 		base.Bound, base.Stage = true, "thread_bound"
-		prompt := fmt.Sprintf("Call structured_edit exactly once to replace the exact text %s with %s in %s. Do not use any other tool. If declined, stop without retrying.", editOld, editNew, editFile)
+		prompt := fmt.Sprintf("In %s, replace %s with %s, preserving all other file content. If approval is declined, leave the file unchanged.", editFile, editOld, editNew)
 		if fixture.replaceAll {
-			prompt += " Set replace_all to the JSON boolean true and replace both occurrences."
+			prompt += " Replace both occurrences."
 		}
 		prompts := []string{prompt}
 		if fixture.continuation {
-			prompts = append(prompts, "Confirm the previous edit is complete. Do not call any tool or edit the file again.")
+			prompts = append(prompts, "Check that the requested edit is complete and confirm the result. Leave the file content unchanged.")
 		}
 		for _, prompt := range prompts {
 			evidence.BytesMatch, evidence.AfterSHA256 = false, ""
@@ -163,7 +159,7 @@ func waitSDKEditTurn(ctx context.Context, observer *sdkEditObserver) error {
 		cause := observer.cause
 		ledger := observer.ledgers[len(observer.ledgers)-1]
 		// A callback terminal is the serial notification prefix. An inline
-		// start terminal still has to wait for its raw and public evidence.
+		// start terminal still has to wait for its public reply and any denial evidence.
 		ready := ledger.callbackTerminal || ledger.inlineTerminal && ledger.proof() == nil
 		clientDone := observer.clientDone
 		observer.mu.Unlock()

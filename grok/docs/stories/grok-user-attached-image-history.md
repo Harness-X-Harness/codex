@@ -17,21 +17,24 @@ color and shape. The second Turn contains only text and asks for the right
 object's color and shape from the earlier picture.
 
 Both distinct Turns must have matching successful terminal evidence and
-successful bound history readback. The first accepted final answer contains
-only the left fact. Public assistant commentary may describe the work without
-repeating that answer; this bounded observer rejects either explicit protected
-second-fact token in that commentary. The original inline
-attachment remains in the first user message in public Thread history after
-both Turns. The bounded English answer check extracts the requested color and
-shape, allowing articles, copulas and property order changes. Negation, guesses,
-conflicting properties and unexplained words are not visual proof. It does not
-compare an exact answer phrase or use substring matching. Prompts and filenames do
-not disclose either answer; the picture pixels carry the facts.
+successful bound history readback. The first accepted final answer supplies
+the left fact without disclosing the second fact. Public assistant commentary
+may describe the work; explicit disclosure of either protected second-fact
+property would let the continuation repeat prose instead of using image context
+and cannot establish this proof.
 
-Partial success, wrong-thread terminals, failed terminals, absent attachments,
-missing retained image, duplicate Turn identity, a nonvisual generic answer,
-and an explicitly detected second-fact disclosure in the first answer do not
-complete this Story.
+The bounded English answer check requires the requested color and shape as
+whole words, permitting ordinary descriptive words and natural sentence
+structure. It rejects explicit denial, uncertainty and conflicting fixture
+properties rather than admitting only a fixed vocabulary. Prompts and filenames
+do not disclose either answer; the picture pixels carry the facts.
+
+The actual image is supplied once through UserInput.Image. Correct answers in
+the same conversation establish usable image context; no exact data URL or
+internal image representation in history is an additional acceptance condition.
+Missing the initial image input, a wrong visual answer, failed or wrong-thread
+terminals, duplicate Turn identity, and explicit second-fact disclosure in the
+first reply do not complete this Story.
 An unavailable answer is not replaced by another invocation. Product-internal
 retry policy and the existing scenario deadline remain unchanged.
 
@@ -59,7 +62,8 @@ retry policy and the existing scenario deadline remain unchanged.
   This Story does not prove arbitrary images, other models, generation/edit,
   cold restart, compaction, latency or absence of product-internal attempts.
 
-The finite English checks are not a general natural-language judge: the public
+The finite English checks are not a general natural-language judge and do not
+cover every possible negation, paraphrase or qualification: the public
 commentary check rejects either second-fact token, but does not establish the
 absence of every possible paraphrase or coded disclosure. A pass must not be
 reported as proof of universal non-leakage or pixel-only recall. The controlled

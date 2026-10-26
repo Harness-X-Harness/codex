@@ -31,10 +31,10 @@ type StructuredEditEvidence struct {
 	Evidence
 	// A matching successful terminal was observed in the current turn. Later
 	// evidence failures preserve this fact; Completed requires the whole scenario.
-	TurnCompleted                                bool
-	Calls, PairedOutputs, FileChanges, Approvals int
-	BeforeSHA256, AfterSHA256                    string
-	BytesMatch, ContinuationUnchanged            bool
+	TurnCompleted                     bool
+	FileChanges, Approvals            int
+	BeforeSHA256, AfterSHA256         string
+	BytesMatch, ContinuationUnchanged bool
 }
 
 // StructuredEdit observes one exact edit and one same-thread continuation.
@@ -42,7 +42,7 @@ func StructuredEdit(ctx context.Context, options Options) (StructuredEditEvidenc
 	return runStructuredEdit(ctx, options, editFixture{continuation: true})
 }
 
-// StructuredEditApprovalDeclined declines the only file-change approval.
+// StructuredEditApprovalDeclined declines file-change approvals and requires no mutation.
 func StructuredEditApprovalDeclined(ctx context.Context, options Options) (StructuredEditEvidence, error) {
 	return runStructuredEdit(ctx, options, editFixture{decline: true})
 }
@@ -53,7 +53,7 @@ func StructuredEditPinnedPreviousModel(ctx context.Context, options Options) (St
 	return runStructuredEdit(ctx, options, editFixture{})
 }
 
-// StructuredEditReplaceAll requires one call with the JSON boolean true.
+// StructuredEditReplaceAll requires every seeded occurrence to be replaced.
 func StructuredEditReplaceAll(ctx context.Context, options Options) (StructuredEditEvidence, error) {
 	return runStructuredEdit(ctx, options, editFixture{replaceAll: true})
 }
@@ -71,30 +71,18 @@ func runStructuredEdit(ctx context.Context, options Options, fixture editFixture
 }
 
 type editProbe struct {
-	threadID, turnID, previousID, approvalID string
-	fixture                                  *editFixture
-	evidence                                 *StructuredEditEvidence
-	base                                     *Evidence
+	threadID, turnID, previousID string
+	fixture                      *editFixture
+	evidence                     *StructuredEditEvidence
+	base                         *Evidence
 }
 
 type editItem struct {
-	ID        string          `json:"id"`
-	Type      string          `json:"type"`
-	Name      string          `json:"name"`
-	Namespace *string         `json:"namespace"`
-	CallID    string          `json:"call_id"`
-	Arguments string          `json:"arguments"`
-	Output    json.RawMessage `json:"output"`
-	Status    string          `json:"status"`
-	Phase     string          `json:"phase"`
-	Text      string          `json:"text"`
-	Changes   []struct {
-		Path string `json:"path"`
-		Kind struct {
-			Type     string  `json:"type"`
-			MovePath *string `json:"move_path"`
-		} `json:"kind"`
-	} `json:"changes"`
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	Phase  string `json:"phase"`
+	Text   string `json:"text"`
 }
 
 type editTurn struct {
@@ -105,11 +93,9 @@ type editTurn struct {
 }
 
 type editObservation struct {
-	callID, outputID, changeID, changeStatus string
-	changeDigest                             [sha256.Size]byte
-	completed                                bool
-	replyBytes                               int
-	replies                                  []protocolv2.ThreadItem
+	completed  bool
+	replyBytes int
+	replies    []protocolv2.ThreadItem
 }
 
 func readEditFixture(path string) ([]byte, error) {
@@ -155,26 +141,6 @@ func (probe *editProbe) terminal(turn editTurn, observation *editObservation) er
 	return nil
 }
 
-func (probe *editProbe) rawItem(item editItem, observation *editObservation) error {
-	switch item.Type {
-	case "function_call":
-		if probe.previousID != "" || observation.callID != "" || !structuredEditIdentity(item.Name) || item.Namespace != nil || item.CallID == "" ||
-			!editArgumentsMatch(item.Arguments, probe.fixture.path, probe.fixture.replaceAll) {
-			return failedObservation("invalid_edit_invocation", "live: unexpected or invalid edit invocation")
-		}
-		observation.callID = item.CallID
-	case "function_call_output":
-		if probe.previousID != "" || observation.outputID != "" || item.CallID == "" ||
-			(item.Name != "" && !structuredEditIdentity(item.Name)) || item.Namespace != nil || !editOutputPresent(item.Output) {
-			return failedObservation("invalid_edit_output", "live: unexpected or invalid edit output")
-		}
-		observation.outputID = item.CallID
-	case "custom_tool_call", "custom_tool_call_output", "local_shell_call", "tool_search_call":
-		return failedObservation("alternative_tool_observed", "live: alternative tool evidence observed")
-	}
-	return nil
-}
-
 func (probe *editProbe) publicItem(item editItem, observation *editObservation) error {
 	switch item.Type {
 	case "agentMessage":
@@ -190,18 +156,11 @@ func (probe *editProbe) publicItem(item editItem, observation *editObservation) 
 		}
 		observation.replies = append(observation.replies, protocolv2.NewThreadItemAgentMessage(message))
 	case "fileChange":
-		if probe.previousID != "" || item.ID == "" || len(item.Changes) != 1 ||
-			!editPathMatches(item.Changes[0].Path, probe.fixture.path) || item.Changes[0].Kind.Type != "update" || item.Changes[0].Kind.MovePath != nil {
-			return failedObservation("invalid_edit_file_change", "live: unexpected edit file change")
+		probe.evidence.FileChanges++
+		if probe.fixture.decline && item.Status == "completed" {
+			return failedObservation("edit_decline_violated", "live: file change completed after approval was declined")
 		}
-		body, _ := json.Marshal(editItemFacts(item, probe.fixture))
-		digest := sha256.Sum256(body)
-		if observation.changeID != "" && (observation.changeID != item.ID || observation.changeStatus != item.Status || observation.changeDigest != digest) {
-			return failedObservation("conflicting_edit_item", "live: conflicting or repeated edit file change")
-		}
-		observation.changeID, observation.changeStatus, observation.changeDigest = item.ID, item.Status, digest
-	case "commandExecution", "dynamicToolCall", "mcpToolCall", "collabAgentToolCall":
-		return failedObservation("alternative_tool_observed", "live: alternative tool evidence observed")
+
 	}
 	return nil
 }

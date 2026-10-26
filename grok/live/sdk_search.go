@@ -20,10 +20,6 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 		// The business counter rejects the 4097th frame. The SDK default queue
 		// of 64 closes the client before that frame is delivered.
 		queue: 8192,
-		raw: &codexsdk.RawNotificationSubscription{
-			Methods:                        []string{codexsdk.RawResponseItemCompletedExtension},
-			EnableRawResponseItemExtension: true, Handler: transport.rawNotification,
-		},
 	}
 	base, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		transport.client = client
@@ -32,13 +28,12 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 		if err != nil || json.Unmarshal(encoded, &decoded) != nil {
 			return errors.New("live: invalid hosted search fixture")
 		}
-		experimental := true
 		evidence.Threads = 1
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
 				Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
-				ExperimentalRawEvents: &experimental, ApprovalPolicy: protocolv2.Value(protocolv2.NewAskForApprovalNever()),
-				Config: protocolv2.Value(decoded),
+				ApprovalPolicy: protocolv2.Value(protocolv2.NewAskForApprovalNever()),
+				Config:         protocolv2.Value(decoded),
 			},
 			Turn: protocolv2.TurnStartParams{Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}},
 			AdmitTurn: func(started protocolv2.ThreadStartResponse, _ protocolv2.TurnStartParams) error {
@@ -115,8 +110,8 @@ func searchRunTransportFailure(err error, threadID, turnID string) error {
 }
 
 // revalidate checks observed queue and SDK-retained typed contradictions without
-// manufacturing proof. The SDK has no retained raw-notification accessor after
-// fatal decode, so a failed run cannot attest complete raw delivery.
+// manufacturing proof. Raw compatibility is tested separately from this public
+// product observation.
 func (probe *searchProbe) revalidate(notifications []protocolv2.ServerNotification) error {
 	check, savedResult, savedEvidence := *probe, *probe.result, *probe.evidence
 	check.result, check.evidence = &savedResult, &savedEvidence
@@ -124,6 +119,7 @@ func (probe *searchProbe) revalidate(notifications []protocolv2.ServerNotificati
 	for id, calls := range check.calls {
 		check.calls[id] = maps.Clone(calls)
 	}
+
 	retained := check
 	retained.frames, retained.bytes = 0, 0
 	for _, notification := range notifications {

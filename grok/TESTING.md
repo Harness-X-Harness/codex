@@ -104,8 +104,9 @@ do not replace actual-binary Integration acceptance for
 [#404](https://github.com/Harness-X-Harness/codex/issues/404).
 
 The original App Server stdout reaches the pinned SDK unchanged. Supported Web
-requires a canonical hosted call, completed answer, persisted typed history and
-a completed same-thread follow-up. See the
+requires completed public Web activity, a final answer and a completed
+same-thread follow-up. Raw extension and internal replay compatibility remain
+separate deterministic checks, not extra Live outcome gates. See the
 [Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
 for the product exclusion, old-history disposition and the separate
 Rust emitted-stream/schema and offline SDK diagnostic owners.
@@ -157,7 +158,13 @@ The discovery command is credential-free and prints a JSON name array. The
 catalog owns selected cases and per-case semantic-turn limits; derive those
 limits from its current entries instead of copying counts into documentation.
 Catalog-only submits zero inference turns. Diagnostic execution requires an
-explicit name. See the [Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
+explicit name. Image generation/edit uses four semantic turns across three
+fresh Threads: generation, independent recognition of its actual pixels,
+same-original-Thread edit, and independent recognition of the edited pixels.
+The recognition prompts do not disclose the requested content. Synthetic PNGs
+and scripted recognition in controlled tests prove transport and orchestration,
+not actual visual recognition. See the
+[Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
 for unavailable product cases and separate direct-backend Facts. Invocation
 bounds are not measured API billing or limits on legitimate product-internal
 transport/tool activity. No paid-cost improvement is claimed.

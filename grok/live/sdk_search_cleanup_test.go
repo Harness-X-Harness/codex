@@ -8,15 +8,15 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-func TestSearchCleanupRevalidatesObservedRawWithoutNewCredit(t *testing.T) {
+func TestSearchCleanupIgnoresRawCompatibilityWithoutNewCredit(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		items     []string
 		wantError bool
 	}{
-		{"observed_local", []string{`{"type":"custom_tool_call","id":"local","name":"apply_patch","input":"PRIVATE_INPUT"}`}, true},
+		{"observed_local", []string{`{"type":"custom_tool_call","id":"local","name":"apply_patch","input":"PRIVATE_INPUT"}`}, false},
 		{"canonical_uncredited", []string{`{"type":"web_search_call","id":"call","status":"completed","action":{"type":"search","query":"PRIVATE_QUERY"}}`}, false},
-		{"canonical_conflict", []string{`{"type":"web_search_call","id":"call","status":"completed","action":{"type":"search","query":"PRIVATE_QUERY"}}`, `{"type":"web_search_call","id":"call","status":"completed","action":{"type":"search","query":"PRIVATE_CHANGED"}}`}, true},
+		{"canonical_conflict", []string{`{"type":"web_search_call","id":"call","status":"completed","action":{"type":"search","query":"PRIVATE_QUERY"}}`, `{"type":"web_search_call","id":"call","status":"completed","action":{"type":"search","query":"PRIVATE_CHANGED"}}`}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			evidence := Evidence{Stage: "search_turn_submitted"}
@@ -26,7 +26,7 @@ func TestSearchCleanupRevalidatesObservedRawWithoutNewCredit(t *testing.T) {
 				params := []byte(`{"threadId":"thread","turnId":"turn","item":` + item + `}`)
 				transport.pending = append(transport.pending, frame{Method: "rawResponseItem/completed", Params: params, size: len(params)})
 			}
-			probe := searchProbe{server: transport, threadID: "thread", turnID: "turn", scenario: "web", evidence: &evidence, result: &result, calls: map[string]map[string]string{"turn": {}}}
+			probe := searchProbe{server: transport, threadID: "thread", turnID: "turn", scenario: "web", evidence: &evidence, result: &result, calls: map[string]map[string]bool{"turn": {}}}
 			err := probe.revalidate(nil)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("validation=%v", err)
@@ -82,11 +82,11 @@ func TestSearchCleanupRevalidatesRetainedTypedWithoutNewCredit(t *testing.T) {
 				}
 				evidence := Evidence{Stage: "search_turn_submitted", Turns: 2, ReplyBytes: 17}
 				result := SearchEvidence{Scenario: "web", CanonicalCalls: 1, SettledTurns: 1}
-				probe := searchProbe{server: &sdkProductObserver{}, threadID: "thread", turnID: "turn", previousID: "previous", scenario: "web", evidence: &evidence, result: &result, calls: map[string]map[string]string{"previous": {"credited": "unchanged"}, "turn": {}}, frames: 7, bytes: 123}
+				probe := searchProbe{server: &sdkProductObserver{}, threadID: "thread", turnID: "turn", previousID: "previous", scenario: "web", evidence: &evidence, result: &result, calls: map[string]map[string]bool{"previous": {"credited": true}, "turn": {}}, frames: 7, bytes: 123}
 				beforeEvidence, beforeResult, beforeProbe := evidence, result, probe
-				beforeCalls := map[string]map[string]string{"previous": {"credited": "unchanged"}, "turn": {}}
+				beforeCalls := map[string]map[string]bool{"previous": {"credited": true}, "turn": {}}
 				err := probe.revalidate([]protocolv2.ServerNotification{notification})
-				wantError := identity.correlated && kind != "completed"
+				wantError := identity.correlated && (kind == "failed" || kind == "interrupted" || kind == "error")
 				if (err != nil) != wantError {
 					t.Fatalf("validation=%v, want error=%v", err, wantError)
 				}

@@ -3,555 +3,99 @@ package live
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
-	"sync"
+	"unicode"
+
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-// ImageEvidence contains bounded observations of the explicit-binary scenario.
-// It does not attest to backend visual semantics, packaging or Responses egress.
+// ImageEvidence reports public image results and independent visual answers.
+// Digests identify observed bytes; they do not prove their visual meaning.
 type ImageEvidence struct {
 	Evidence
-	TurnCompleted, HistorySelected          bool
-	Images, Artifacts                       int
-	FirstImageSHA256, EditedImageSHA256     string
-	FirstHistorySHA256, EditedHistorySHA256 string
+	TurnCompleted, GenerationRecognized, EditRecognized bool
+	Images, Artifacts                                   int
+	FirstImageSHA256, EditedImageSHA256                 string
 }
 
-// ImageGenerationEdit submits one generation and one same-thread history edit.
-// Neither semantic turn is retried, including when only partial evidence exists.
+// ImageGenerationEdit generates a dog, edits it in the same conversation, and
+// asks separate fresh conversations to describe each actual output image.
 func ImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence, error) {
 	options.imageFixture = true
 	return sdkImageGenerationEdit(ctx, options)
 }
 
-type imageItem struct {
-	ID        string          `json:"id"`
-	Type      string          `json:"type"`
-	Name      string          `json:"name"`
-	Namespace *string         `json:"namespace"`
-	CallID    string          `json:"call_id"`
-	Arguments string          `json:"arguments"`
-	Output    json.RawMessage `json:"output"`
-	Content   json.RawMessage `json:"content"`
-	Status    string          `json:"status"`
-	Result    string          `json:"result"`
-	SavedPath string          `json:"savedPath"`
-	Failure   json.RawMessage `json:"failure"`
-	HasImage  bool            `json:"-"`
-}
-type imageTurn struct {
-	ID     string          `json:"id"`
-	Status string          `json:"status"`
-	Error  json.RawMessage `json:"error"`
-	Items  []imageItem     `json:"items"`
-}
+type observedImage struct{ payload, path, digest string }
 
-// output is the canonical prepared-rendition digest; digest is the public image
-// payload digest. Stock history preparation may resize/re-encode between them.
-type imageCall struct {
-	turnID, arguments, digest, output, path, terminal, failure string
-	ineligible                                                 error
-	fromPrior, called, started, public, settled, verified      bool
-	viewSource                                                 *imageCall
-}
-type imageProbe struct {
-	mu                                      sync.Mutex
-	ctx                                     context.Context
-	threadID, turnID, previousID, root, cwd string
-	base                                    *Evidence
-	evidence                                *ImageEvidence
-	calls                                   map[string]*imageCall
-	newest, prior, historySource            *imageCall
-	existing                                map[string]bool
-	completed                               bool
-	frames, bytes                           int
-	changed                                 chan struct{}
-	clientDone                              <-chan struct{}
-	cause                                   error
-	pending                                 []frame
-	// closed reports why the SDK client stopped. It is nil until the fixture
-	// owns a client. The returned error is classified locally and never forwarded.
-	closed func() error
-}
-
-func (probe *imageProbe) prepare() error {
-	var err error
-	probe.existing, err = imagePaths(probe.root)
-	if err != nil {
-		return err
-	}
-	probe.base.Turns++
-	probe.evidence.TurnCompleted, probe.completed = false, false
-	probe.frames, probe.bytes, probe.turnID = 0, 0, ""
-	probe.pending = nil
-	return nil
-}
-
-func (probe *imageProbe) acceptStarted(turn imageTurn) error {
-	if turn.ID == "" || turn.ID == probe.previousID {
-		return failedObservation("image_turn_identity_unavailable", "live: image turn identity unavailable")
-	}
-	probe.turnID, probe.base.Stage = turn.ID, "image_turn_submitted"
-	if turn.Status != "inProgress" {
-		if err := probe.terminal(turn, false); err != nil {
-			return err
-		}
-	}
-	probe.drain()
-	return probe.cause
-}
-
-func (probe *imageProbe) drain() {
-	pending := probe.pending
-	probe.pending = nil
-	for _, message := range pending {
-		probe.ingest(message)
-	}
-}
-
-func (probe *imageProbe) ingest(message frame) {
-	if probe.cause != nil {
-		return
-	}
-	if err := probe.notification(message); err != nil {
-		probe.cause = err
-	}
-	select {
-	case probe.changed <- struct{}{}:
-	default:
-	}
-}
-
-func (probe *imageProbe) settle(readThreadID string, turns []imageTurn) error {
-	if probe.cause != nil {
-		return probe.cause
-	}
-	if readThreadID != probe.threadID || len(turns) > 32 {
-		return failedObservation("settled_image_thread_identity_unavailable", "live: settled image thread identity unavailable")
-	}
-	seen := make(map[string]bool)
-	for _, turn := range turns {
-		if turn.ID != probe.turnID && (probe.previousID == "" || turn.ID != probe.previousID) {
-			for _, item := range turn.Items {
-				if item.Type == "imageGeneration" || item.Type == "imageView" || item.HasImage {
-					return failedObservation("unattributed_image_history", "live: unattributed image history")
-				}
-			}
-			continue
-		}
-		if seen[turn.ID] {
-			return failedObservation("settled_image_turn_incomplete", "live: settled image turn did not complete")
-		}
-		if turn.Status != "completed" || !nullJSON(turn.Error) {
-			return failedTurn(turn.Status, turn.Error, "live: settled image turn did not complete")
-		}
-		seen[turn.ID] = true
-		if turn.ID == probe.turnID {
-			if err := probe.terminal(turn, true); err != nil {
-				return err
-			}
-		} else {
-			found := false
-			for _, item := range turn.Items {
-				if item.Type == "imageGeneration" && item.ID != "" {
-					call := probe.calls[item.ID]
-					if call == nil || call.turnID != turn.ID || !sameImageItem(call, item) {
-						return failedObservation("prior_image_history_changed", "live: prior image history changed")
-					}
-					found = found || call == probe.prior
-				}
-			}
-			if !found {
-				return failedObservation("prior_image_history_unavailable", "live: prior image history unavailable")
-			}
-		}
-	}
-	if !seen[probe.turnID] || probe.previousID != "" && !seen[probe.previousID] {
-		return failedObservation("settled_image_turn_incomplete", "live: settled image turn did not complete")
-	}
-	found := false
-	for _, call := range probe.calls {
-		if probe.ctx.Err() != nil {
-			return failedObservation("image_observation_context_done", "live: image observation deadline exceeded")
-		}
-		if call.turnID != probe.turnID {
-			continue
-		}
-		if !call.called || call.output == "" {
-			return failedObservation("image_evidence_missing", "live: image call, output or terminal evidence missing")
-		}
-		if call.viewSource != nil {
-			// Viewing a bound artifact neither generates another image nor proves
-			// an edit. Its output was checked against that artifact's rendition.
-			continue
-		}
-		// Argument/reference validation fails before the extension emits any
-		// image item. A correlated text error is diagnostic, never an image.
-		if !call.started && !call.public && strings.HasPrefix(call.output, "text:") {
-			continue
-		}
-		if !call.public || !call.settled {
-			return failedObservation("image_evidence_missing", "live: image call, output or terminal evidence missing")
-		}
-		if call.ineligible != nil {
-			return call.ineligible
-		}
-		if call.terminal == "failed" && strings.HasPrefix(call.output, "text:") {
-			continue
-		}
-		if call.terminal != "completed" || strings.HasPrefix(call.output, "text:") {
-			return failedObservation("image_evidence_missing", "live: image call, output or terminal evidence missing")
-		}
-		if probe.existing[call.path] {
-			return failedObservation("image_artifact_predates_turn", "live: image artifact predates turn")
-		}
-		if _, err := inspectImage(probe.root, call.path, call.digest); err != nil {
-			return err
-		}
-		if !call.verified {
-			probe.evidence.Artifacts++
-			call.verified = true
-		}
-		found = true
-	}
-	if !found || probe.newest == nil || probe.newest.turnID != probe.turnID || !probe.newest.verified {
-		return failedObservation("canonical_image_unavailable", "live: completed canonical image unavailable")
-	}
-	probe.base.Stage = "image_generation_verified"
-	return nil
-}
-
-func (probe *imageProbe) notification(message frame) error {
-	if probe.ctx.Err() != nil {
-		return failedObservation("image_observation_context_done", "live: image observation deadline exceeded")
-	}
-	probe.frames++
-	probe.bytes += message.size
-	if probe.frames > 4096 || probe.bytes > 64<<20 {
-		return failedObservation("image_evidence_budget_exceeded", "live: image evidence budget exceeded")
-	}
-	if message.Method != "rawResponseItem/completed" && message.Method != "item/completed" && message.Method != "item/started" && message.Method != "turn/completed" {
-		return nil
-	}
-	var event struct {
-		ThreadID string    `json:"threadId"`
-		TurnID   string    `json:"turnId"`
-		Turn     imageTurn `json:"turn"`
-		Item     imageItem `json:"item"`
-	}
-	var err error
-	if message.Method == "rawResponseItem/completed" {
-		err = json.Unmarshal(message.Params, &event)
-	} else if value, ok := message.Notification.AsTurnCompleted(); ok {
-		event.ThreadID = value.Params.ThreadID
-		event.Turn, err = imageTurnFromSDK(value.Params.Turn)
-	} else if value, ok := message.Notification.AsItemCompleted(); ok {
-		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
-		event.Item, err = imageItemFromSDK(value.Params.Item)
-	} else if value, ok := message.Notification.AsItemStarted(); ok {
-		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
-		event.Item, err = imageItemFromSDK(value.Params.Item)
-	} else {
-		err = failedObservation("invalid_image_evidence", "live: invalid image evidence")
-	}
-	if err != nil {
-		return failedObservation("invalid_image_evidence", "live: invalid image evidence")
-	}
-	if event.ThreadID != probe.threadID {
-		return nil
-	}
-	if message.Method == "turn/completed" {
-		if event.Turn.ID == probe.turnID {
-			return probe.terminal(event.Turn, false)
-		}
-		if probe.previousID != "" && event.Turn.ID == probe.previousID {
-			if event.Turn.Status != "completed" || !nullJSON(event.Turn.Error) {
-				return failedTurn(event.Turn.Status, event.Turn.Error, "live: prior image turn did not complete successfully")
-			}
-			for _, item := range event.Turn.Items {
-				if item.Type == "imageGeneration" {
-					call := probe.calls[item.ID]
-					if call == nil || call.turnID != probe.previousID || !sameImageItem(call, item) {
-						return failedObservation("prior_image_history_changed", "live: prior image history changed")
-					}
-				}
-			}
-		}
-		return nil
-	}
-	if event.TurnID != probe.turnID {
-		// A late item for an already credited call can arrive after the next
-		// turn starts. It is still that call's evidence, not a new turn.
-		if message.Method == "item/completed" && event.Item.Type == "imageGeneration" {
-			if call := probe.calls[event.Item.ID]; call != nil && call.turnID == event.TurnID {
-				return probe.public(event.Item, false)
-			}
-		}
-		return nil
-	}
-	if message.Method == "rawResponseItem/completed" {
-		return probe.raw(event.Item)
-	}
-	if message.Method == "item/started" {
-		if event.Item.Type == "imageGeneration" {
-			call, err := probe.record(event.Item.ID)
-			if err != nil {
-				return err
-			}
-			call.started = true
-		}
-		return nil
-	}
-	return probe.public(event.Item, false)
-}
-
-func (probe *imageProbe) terminal(turn imageTurn, settled bool) error {
-	if turn.ID != probe.turnID {
-		return failedObservation("image_turn_identity_mismatch", "live: image turn did not complete successfully")
-	}
-	if turn.Status != "completed" || !nullJSON(turn.Error) {
-		return failedTurn(turn.Status, turn.Error, "live: image turn did not complete successfully")
-	}
-	probe.completed, probe.evidence.TurnCompleted = true, true
-	if probe.previousID == "" {
-		probe.base.FirstCompleted = true
-	}
-	probe.base.Stage = "image_turn_completed"
+// The last completed public image is the user-visible result of this turn.
+// Intermediate errors, tool choices and prepared history representations are
+// not the outcome. No raw protocol extension is needed to credit that result.
+func completedImage(turn productTurn, root string) (observedImage, error) {
+	var result observedImage
 	for _, item := range turn.Items {
-		if err := probe.public(item, settled); err != nil {
-			return err
+		image, ok := item.AsImageGeneration()
+		if !ok || image.Status != "completed" {
+			continue
 		}
+		if image.Failure != nil && image.Failure.Value != nil {
+			continue
+		}
+		result = observedImage{payload: image.Result, path: sdkString(image.SavedPath)}
 	}
-	return nil
+	if result.payload == "" {
+		return result, failedObservation("image_result_missing", "live: completed image result unavailable")
+	}
+	data, err := imagePayload(result.payload)
+	if err != nil {
+		return result, err
+	}
+	result.digest = editDigest(data)
+	if _, err := inspectImage(root, result.path, result.digest); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
-func (probe *imageProbe) record(id string) (*imageCall, error) {
-	if id == "" || len(id) > 1024 {
-		return nil, failedObservation("image_call_identity_unavailable", "live: image call identity unavailable")
+// A deliberately small English fixture oracle. Wording and sentence structure
+// are free; the expected visual facts must occur as words, not prompt echoes or
+// substrings. Explicit negative/uncertain answers do not establish recognition.
+func imageRecognized(reply string, edited bool) bool {
+	words := strings.FieldsFunc(strings.ToLower(reply), func(r rune) bool { return !unicode.IsLetter(r) })
+	seen := map[string]bool{}
+	required := map[string]bool{"dog": true}
+	if edited {
+		required["red"], required["hat"] = true, true
 	}
-	call := probe.calls[id]
-	if call == nil {
-		if len(probe.calls) >= 64 {
-			return nil, failedObservation("image_call_budget_exceeded", "live: image call budget exceeded")
-		}
-		call = &imageCall{turnID: probe.turnID}
-		probe.calls[id] = call
-	}
-	if call.turnID != probe.turnID {
-		return nil, failedObservation("stale_image_call_identity", "live: stale image call identity")
-	}
-	return call, nil
-}
-
-func (probe *imageProbe) raw(item imageItem) error {
-	switch item.Type {
-	case "function_call":
-		if item.Name == "view_image" && (item.Namespace == nil || *item.Namespace == "") {
-			return probe.view(item)
-		}
-		if item.Name != "imagegen" || item.Namespace == nil || *item.Namespace != "image_gen" {
-			return failedObservation("unexpected_image_tool_identity", "live: unexpected image tool identity")
-		}
-		call, err := probe.record(item.CallID)
-		if err != nil {
-			return err
-		}
-		if len(item.Arguments) > 4096 {
-			return failedObservation("invalid_image_arguments", "live: invalid image arguments")
-		}
-		hash := editDigest([]byte(item.Arguments))
-		if call.called {
-			if call.viewSource != nil || call.arguments != hash {
-				return failedObservation("conflicting_image_call", "live: conflicting image call")
+	for index, word := range words {
+		seen[word] = true
+		switch word {
+		case "cannot", "cant", "unsure", "maybe", "possibly":
+			return false
+		case "no", "not", "without":
+			// Reject absent requested facts, not unrelated negatives such as
+			// "a dog with no accessories" or "red hat, no other clothing".
+			end := index + 5
+			if end > len(words) {
+				end = len(words)
 			}
-			return nil
-		}
-		call.called, call.arguments = true, hash
-		probe.base.ToolCalls++
-		args, err := parseImageArguments(item.Arguments)
-		if err != nil {
-			call.ineligible = err
-			return nil
-		}
-		if probe.previousID == "" {
-			if args.Count != nil || len(args.Paths) != 0 {
-				call.ineligible = failedObservation("unexpected_generation_reference", "live: unexpected generation reference")
-				return nil
-			}
-		} else {
-			selected := probe.historySource
-			if len(args.Paths) == 1 && args.Count == nil && args.Paths[0] == probe.prior.path {
-				selected = probe.prior
-			} else if len(args.Paths) != 0 || args.Count == nil || *args.Count != 1 {
-				call.ineligible = failedObservation("image_history_selector_unavailable", "live: exact image history selector unavailable")
-				return nil
-			}
-			if selected == nil || (selected != probe.prior && !selected.fromPrior) || !selected.verified && selected != probe.newest {
-				call.ineligible = failedObservation("selected_prior_image_unavailable", "live: selected prior image unavailable")
-				return nil
-			}
-		}
-	case "function_call_output":
-		call, err := probe.record(item.CallID)
-		if err != nil {
-			return err
-		}
-		hash, err := imageOutputDigest(item.Output)
-		if err != nil {
-			return err
-		}
-		if call.output != "" {
-			if call.output != hash {
-				return failedObservation("conflicting_image_output", "live: conflicting image output")
-			}
-			return nil
-		}
-		if !call.called {
-			return failedObservation("image_output_precedes_call", "live: image output precedes canonical call")
-		}
-		if call.viewSource != nil {
-			if !strings.HasPrefix(hash, "text:") {
-				if hash != call.viewSource.output && hash != call.viewSource.digest {
-					return failedObservation("image_view_artifact_mismatch", "live: viewed image does not match bound artifact")
+			for _, next := range words[index+1 : end] {
+				if next == "but" {
+					break
 				}
-				probe.historySource = call.viewSource
-			}
-			call.output = hash
-			return nil
-		}
-		if call.ineligible != nil && !strings.HasPrefix(hash, "text:") {
-			return call.ineligible
-		}
-		call.output = hash
-		if !strings.HasPrefix(hash, "text:") {
-			call.fromPrior = probe.previousID != ""
-			probe.evidence.HistorySelected = probe.evidence.HistorySelected || call.fromPrior
-			probe.newest, probe.historySource = call, call
-		}
-	case "message":
-		var content []json.RawMessage
-		if len(item.Content) != 0 && json.Unmarshal(item.Content, &content) != nil {
-			return failedObservation("invalid_image_history", "live: invalid canonical image history")
-		}
-		for _, entry := range content {
-			var kind struct{ Type string }
-			if json.Unmarshal(entry, &kind) != nil {
-				return failedObservation("invalid_image_history", "live: invalid canonical image history")
-			}
-			if kind.Type == "input_image" {
-				hash, err := imageOutputDigest(append(append([]byte{'['}, entry...), ']'))
-				if err != nil || probe.historySource == nil || hash != probe.historySource.output && hash != probe.historySource.digest {
-					return failedObservation("unrelated_image_history", "live: unrelated canonical history image")
+				if required[next] {
+					return false
 				}
 			}
 		}
-	case "image_generation_call", "custom_tool_call", "custom_tool_call_output", "local_shell_call":
-		// These are not capabilities of this isolated fixture and cannot
-		// substitute for its canonical image tool. Neutral history metadata is
-		// not rejected merely for its type or position.
-		return failedObservation("unsupported_image_fixture_tool", "live: unsupported image fixture tool")
 	}
-	return nil
+	return seen["dog"] && (!edited || seen["red"] && seen["hat"])
 }
 
-// A view is an optional inspection of an already observed generated artifact.
-// Binding its path and output prevents it from substituting an unrelated image
-// into num_last_images_to_include, while preserving the ordinary edit flow.
-func (probe *imageProbe) view(item imageItem) error {
-	var args struct{ Path string }
-	if len(item.Arguments) > 4096 || json.Unmarshal([]byte(item.Arguments), &args) != nil || args.Path == "" {
-		return failedObservation("invalid_image_view_arguments", "live: invalid image view arguments")
-	}
-	path := args.Path
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(probe.cwd, path)
-	}
-	path = filepath.Clean(path)
-	call, err := probe.record(item.CallID)
-	if err != nil {
-		return err
-	}
-	if call.public || call.started {
-		return failedObservation("image_view_not_generation", "live: image view cannot establish generation")
-	}
-	hash := editDigest([]byte(item.Arguments))
-	if call.called {
-		if call.viewSource == nil || call.arguments != hash {
-			return failedObservation("conflicting_image_call", "live: conflicting image call")
-		}
-		return nil
-	}
-	for _, source := range probe.calls {
-		if source.viewSource == nil && source.path == path && source.public && source.terminal == "completed" && source.output != "" && !strings.HasPrefix(source.output, "text:") {
-			if _, err := inspectImage(probe.root, path, source.digest); err != nil {
-				return err
-			}
-			call.called, call.arguments, call.viewSource = true, hash, source
-			return nil
-		}
-	}
-	return failedObservation("image_view_artifact_unbound", "live: viewed image is not a bound artifact")
-}
-
-func (probe *imageProbe) public(item imageItem, settled bool) error {
-	if probe.ctx.Err() != nil {
-		return failedObservation("image_observation_context_done", "live: image observation deadline exceeded")
-	}
-	if item.Type != "imageGeneration" {
-		return nil
-	}
-	call, err := probe.record(item.ID)
-	if err != nil {
-		return err
-	}
-	if call.viewSource != nil {
-		return failedObservation("image_view_not_generation", "live: image view cannot establish generation")
-	}
-	if call.ineligible != nil {
-		return call.ineligible
-	}
-	if call.public {
-		if !sameImageItem(call, item) {
-			return failedObservation("conflicting_image_terminal", "live: conflicting image terminal")
-		}
-	} else {
-		if item.Status == "failed" && item.Result == "" && item.SavedPath == "" {
-			call.terminal, call.public, call.settled = "failed", true, settled
-			call.failure = imageFailureDigest(item.Failure)
-			return nil
-		}
-		if item.Status != "completed" || !nullJSON(item.Failure) || item.SavedPath == "" {
-			return failedObservation("image_unsuccessful", "live: image did not complete successfully")
-		}
-		payload, err := imagePayload(item.Result)
-		if err != nil {
-			return err
-		}
-		call.digest, call.path, call.terminal, call.public = editDigest(payload), item.SavedPath, item.Status, true
-		probe.evidence.Images++
-	}
-	call.settled = call.settled || settled
-	return nil
-}
-
-func sameImageItem(call *imageCall, item imageItem) bool {
-	if call.terminal == "failed" {
-		return item.Status == "failed" && item.Result == "" && item.SavedPath == "" && call.failure == imageFailureDigest(item.Failure)
-	}
-	data, err := imagePayload(item.Result)
-	return err == nil && item.Status == call.terminal && item.SavedPath == call.path && nullJSON(item.Failure) && editDigest(data) == call.digest
-}
 func nullJSON(value json.RawMessage) bool {
 	return len(value) == 0 || strings.TrimSpace(string(value)) == "null"
 }
 
-func imageFailureDigest(raw json.RawMessage) string {
-	if nullJSON(raw) {
-		return ""
-	}
-	var value any
-	_ = json.Unmarshal(raw, &value)
-	canonical, _ := json.Marshal(value)
-	return editDigest(canonical)
+func imageInput(image observedImage) protocolv2.UserInput {
+	url := protocolv2.JSONString("data:image/png;base64," + image.payload)
+	return protocolv2.NewUserInputImage(protocolv2.UserInputImage{URL: &url})
 }

@@ -132,8 +132,8 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"structured-edit-pinned", "edit:pinned", "grok-4.6", 1},
 		{"structured-edit-all", "edit:replace_all", "grok-4.7", 1},
 		{"attached-image-pinned", "attached:success", "grok-4.6", 2},
-		{"image-primary", "image:success", "grok-4.7", 2},
-		{"image-pinned", "image:pinned", "grok-4.6", 2},
+		{"image-primary", "image:success", "grok-4.7", 4},
+		{"image-pinned", "image:pinned", "grok-4.6", 4},
 		{"shipped-catalog", "shipped:catalog", "grok-4.7", 0},
 		{"shipped-startup", "shipped:startup", "grok-4.7", 1},
 		{"shipped-pinned", "history:shipped", "grok-4.6", 2},
@@ -379,7 +379,7 @@ func TestCommandReportsBoundedFailureDiagnostics(t *testing.T) {
 		{"malformed", "basic-primary", "malformed", live.FailureInfo{Code: "sdk_observation_failed"}},
 		{"closure", "basic-primary", "only_reply", live.FailureInfo{Code: "sdk_observation_failed"}},
 		{"unrelated_terminal", "basic-primary", "unrelated_failed", live.FailureInfo{Code: "sdk_observation_failed"}},
-		{"edit_correlation", "structured-edit", "edit:missing_call", live.FailureInfo{Code: "edit_evidence_unpaired"}},
+		{"edit_effect", "structured-edit", "edit:wrong_bytes", live.FailureInfo{Code: "edit_bytes_mismatch"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

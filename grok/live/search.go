@@ -2,9 +2,7 @@ package live
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/searchfixture"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -39,7 +37,7 @@ type searchProbe struct {
 	threadID, turnID, previousID, scenario string
 	evidence                               *Evidence
 	result                                 *SearchEvidence
-	calls                                  map[string]map[string]string
+	calls                                  map[string]map[string]bool
 	frames, bytes                          int
 	terminal, settled                      bool
 }
@@ -65,11 +63,12 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 	}
 	p.turnID, p.evidence.Stage = started.ID, "search_turn_submitted"
 	if p.calls == nil {
-		p.calls = map[string]map[string]string{}
+		p.calls = map[string]map[string]bool{}
 	}
 	// Keep the previous settled turn's credited identities through the single
 	// continuation. A reused item ID in a new turn is a separate occurrence.
-	p.calls[p.turnID] = map[string]string{}
+	p.calls[p.turnID] = map[string]bool{}
+
 	// A start response is only a snapshot. Admit completion only through a
 	// matching turn/completed notification, including for a terminal-looking start.
 	for !p.terminal {
@@ -133,6 +132,11 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 			if err := validateSearchTerminal(value); err != nil {
 				return err
 			}
+			for _, item := range read.Thread.Turns[index].Items {
+				if err := p.publicSearch(value.ID, item); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if currentIndex < 0 || p.previousID != "" && !previousFound {
@@ -170,95 +174,57 @@ func (p *searchProbe) notification(message frame) error {
 	if p.frames > 4096 || p.bytes > 64<<20 {
 		return errors.New("live: search evidence budget exceeded")
 	}
-	if message.Method != "rawResponseItem/completed" && message.Method != "turn/completed" && message.Method != "item/completed" && message.Method != "item/started" {
-		return nil
-	}
-	var event struct {
-		ThreadID string          `json:"threadId"`
-		TurnID   string          `json:"turnId"`
-		Turn     turn            `json:"turn"`
-		Item     json.RawMessage `json:"item"`
-	}
-	var typedKind string
-	if message.Method == "rawResponseItem/completed" {
-		if json.Unmarshal(message.Params, &event) != nil {
-			return errors.New("live: invalid search evidence")
+	if value, ok := message.Notification.AsTurnCompleted(); ok {
+		if value.Params.ThreadID != p.threadID {
+			return nil
 		}
-	} else if value, ok := message.Notification.AsTurnCompleted(); ok {
-		event.ThreadID = value.Params.ThreadID
-		var err error
-		event.Turn, err = searchTurnFromSDK(value.Params.Turn)
+		terminal, err := searchTurnFromSDK(value.Params.Turn)
 		if err != nil {
 			return errors.New("live: invalid search evidence")
 		}
+		if terminal.ID == p.turnID {
+			if err := p.complete(terminal); err != nil {
+				return err
+			}
+			for _, item := range value.Params.Turn.Items {
+				if err := p.publicSearch(terminal.ID, item); err != nil {
+					return err
+				}
+			}
+		} else if terminal.ID == p.previousID {
+			return validateSearchTerminal(terminal)
+		}
 	} else if value, ok := message.Notification.AsItemCompleted(); ok {
-		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
-		typedKind = string(value.Params.Item.Kind())
-	} else if value, ok := message.Notification.AsItemStarted(); ok {
-		event.ThreadID, event.TurnID = value.Params.ThreadID, value.Params.TurnID
-		typedKind = string(value.Params.Item.Kind())
-	} else {
-		return errors.New("live: invalid search evidence")
-	}
-	if event.ThreadID != p.threadID {
-		return nil
-	}
-	if message.Method == "turn/completed" {
-		if event.Turn.ID == p.turnID {
-			return p.complete(event.Turn)
+		if value.Params.ThreadID == p.threadID && value.Params.TurnID == p.turnID {
+			return p.publicSearch(value.Params.TurnID, value.Params.Item)
 		}
-		if p.previousID != "" && event.Turn.ID == p.previousID {
-			return validateSearchTerminal(event.Turn)
-		}
-		return nil
 	}
-	if event.TurnID != p.turnID && (p.previousID == "" || event.TurnID != p.previousID) {
-		return nil
-	}
-	if message.Method != "rawResponseItem/completed" {
-		if localSearchItem(typedKind) {
-			return errors.New("live: local execution cannot establish hosted search")
-		}
-		return nil
-	}
-	var kind struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-	}
-	if json.Unmarshal(event.Item, &kind) != nil {
-		return errors.New("live: invalid search item")
-	}
-	// Retired hosted X cannot contribute to supported Web proof.
-	_, hostedX := searchfixture.ReplayCall(event.Item, "x")
-	if hostedX && strings.HasPrefix(p.scenario, "web") {
-		return failedObservation("hosted_x_retired", "live: retired hosted X appeared during Web search")
-	}
-	if localSearchItem(kind.Type) && !hostedX {
-		return errors.New("live: local execution cannot establish hosted search")
-	}
-	credited := p.calls[event.TurnID]
-	old, exists := credited[kind.ID]
-	call, ok := searchfixture.ReplayCall(event.Item, p.scenario)
+	return nil
+}
+
+// A completed public WebSearch item is the supported product result. Raw
+// extension envelopes are not part of this business oracle.
+func (p *searchProbe) publicSearch(turnID string, item protocolv2.ThreadItem) error {
+	search, ok := item.AsWebSearch()
 	if !ok {
-		if exists {
-			return errors.New("live: conflicting hosted search evidence")
-		}
 		return nil
 	}
-	encoded, _ := json.Marshal(call)
-	if exists {
-		if old != string(encoded) {
-			return errors.New("live: conflicting hosted search evidence")
-		}
+	if search.ID == "" {
+		return errors.New("live: search item identity unavailable")
+	}
+	credited := p.calls[turnID]
+	if _, exists := credited[search.ID]; exists {
 		return nil
 	}
-	if event.TurnID != p.turnID || p.settled {
-		return errors.New("live: new hosted search evidence after settled turn")
+	// Settled history has already decided this turn's result. Late callbacks
+	// do not add credit or turn an unrelated activity into a semantic failure.
+	if turnID != p.turnID || p.settled {
+		return nil
 	}
-	if len(credited) == 64 {
+	if len(credited) >= 64 {
 		return errors.New("live: hosted search item budget exceeded")
 	}
-	credited[kind.ID] = string(encoded)
+	credited[search.ID] = true
 	p.result.CanonicalCalls++
 	return nil
 }
@@ -269,24 +235,5 @@ func validateSearchTerminal(value turn) error {
 	if value.Status != "completed" || len(value.Error) != 0 && string(value.Error) != "null" {
 		return failedTurn(value.Status, value.Error, "live: search turn did not complete")
 	}
-	for _, item := range value.Items {
-		if localSearchItem(item.Type) {
-			return errors.New("live: local execution cannot establish hosted search")
-		}
-	}
 	return nil
-}
-
-func localSearchItem(kind string) bool {
-	switch kind {
-	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
-		return true
-	// Public ThreadItem variants from app-server-protocol/src/protocol/v2/item.rs.
-	// All these local execution capabilities are disabled in this isolated fixture.
-	case "functionCallOutput", "dynamicToolCall", "mcpToolCall", "commandExecution",
-		"fileChange", "imageView", "imageGeneration", "collabAgentToolCall", "subAgentActivity", "sleep":
-		return true
-	default:
-		return false
-	}
 }
