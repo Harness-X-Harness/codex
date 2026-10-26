@@ -28,13 +28,16 @@ class SelectionFailure(ValueError):
 def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str,
            *, same_run_source_sha: str | None = None,
            expected_artifact_id: int | None = None,
-           expected_run_attempt: int | None = None) -> dict:
+           expected_run_attempt: int | None = None,
+           pull_request: dict | None = None) -> dict:
     """No API calls, fallback selection, download or execution happens here."""
     if not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
         raise SelectionFailure("identity", "invalid harness revision")
     sha = run.get("head_sha", "")
     attempt = run.get("run_attempt")
     same_run = any(value is not None for value in (same_run_source_sha, expected_artifact_id, expected_run_attempt))
+    if same_run and pull_request is not None:
+        raise SelectionFailure("identity", "PR diagnostics cannot use same-run selection")
     if same_run:
         if (same_run_source_sha != harness_sha or sha != same_run_source_sha
                 or type(expected_artifact_id) is not int or expected_artifact_id <= 0
@@ -51,14 +54,15 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
     if (
         type(run_id) is not int or run_id <= 0 or run.get("id") != run_id
         or type(attempt) is not int or attempt <= 0
-        or run.get("event") != "push"
+        or run.get("event") != ("pull_request" if pull_request is not None else "push")
         or run.get("path") != ".github/workflows/grok.yml"
-        or not run.get("head_branch", "").startswith("grok/rust-v")
+        or (pull_request is None and not run.get("head_branch", "").startswith("grok/rust-v"))
         or not re.fullmatch(r"[0-9a-f]{40}", sha)
         or run.get("repository", {}).get("full_name") != REPOSITORY
         or run.get("head_repository", {}).get("full_name") != REPOSITORY
     ):
         raise SelectionFailure("identity", "inappropriate or unsettled package run")
+    source_sha = pr_source(run, pull_request, harness_sha) if pull_request is not None else sha
     job_list = jobs.get("jobs")
     artifact_list = artifacts.get("artifacts")
     if not isinstance(job_list, list) or jobs.get("total_count") != len(job_list):
@@ -75,7 +79,7 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
         or producer.get("status") != "completed" or producer.get("conclusion") != "success"
     ):
         raise SelectionFailure("producer", "the selected attempt's package build did not succeed")
-    name = f"grok-{sha}-{TARGET}-{run_id}-{attempt}"
+    name = f"grok-{source_sha}-{TARGET}-{run_id}-{attempt}"
     matches = [artifact for artifact in artifact_list if artifact.get("name") == name]
     if len(matches) != 1:
         raise SelectionFailure("artifact", "missing or ambiguous package artifact")
@@ -91,18 +95,61 @@ def select(run: dict, jobs: dict, artifacts: dict, run_id: int, harness_sha: str
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
     ):
         raise SelectionFailure("artifact", "unavailable or misidentified package artifact")
-    return {
+    selected = {
         "repository": REPOSITORY, "run_id": run_id, "run_attempt": attempt,
-        "source_sha": sha, "target": TARGET, "harness_sha": harness_sha,
+        "source_sha": source_sha, "target": TARGET, "harness_sha": harness_sha,
         "artifact_id": artifact["id"], "artifact_name": name,
         "artifact_digest": digest, "artifact_size": artifact["size_in_bytes"],
         "producer_job_id": producer["id"],
-        "selection_mode": "same_run" if same_run else "diagnostic",
+        "selection_mode": "pr_diagnostic" if pull_request is not None else ("same_run" if same_run else "diagnostic"),
         "run_status": run["status"],
         # A failed sibling job or previous Live remains visible. It cannot
         # retroactively negate this completed build or become a Live pass here.
         "run_conclusion": run.get("conclusion"),
     }
+
+    if pull_request is not None:
+        selected.update(pull_request_number=pull_request["number"], pr_head_sha=sha)
+    return selected
+
+
+def linked_pull_request_number(run: dict) -> int:
+    links = run.get("pull_requests")
+    if (run.get("event") != "pull_request" or not isinstance(links, list) or len(links) != 1
+            or not isinstance(links[0], dict) or type(links[0].get("number")) is not int
+            or links[0]["number"] <= 0):
+        raise SelectionFailure("identity", "one explicit same-repository PR is required")
+    return links[0]["number"]
+
+
+def pr_source(run: dict, pull_request: dict, harness_sha: str) -> str:
+    """Bind the current PR head to its tested merge-source package, not another run."""
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        raise SelectionFailure("run_state", "PR diagnostic requires successful settled CI")
+    number = linked_pull_request_number(run)
+    try:
+        linked = run["pull_requests"][0]
+        head, base = pull_request["head"], pull_request["base"]
+        source = pull_request["merge_commit_sha"]
+        valid = (
+            pull_request.get("number") == number and pull_request.get("state") == "open"
+            and pull_request.get("merged") is False
+            and head["repo"]["full_name"] == base["repo"]["full_name"] == REPOSITORY
+            and head["sha"] == harness_sha == run["head_sha"]
+            and head["ref"] == run["head_branch"]
+            and base["ref"].startswith("grok/rust-v")
+            and re.fullmatch(r"[0-9a-f]{40}", base["sha"])
+            and re.fullmatch(r"[0-9a-f]{40}", source)
+            and all(linked[side][field] == pull_request[side][field]
+                    for side in ("head", "base") for field in ("sha", "ref"))
+            and all(linked[side]["repo"]["id"] == pull_request[side]["repo"]["id"]
+                    for side in ("head", "base"))
+        )
+    except (KeyError, TypeError, AttributeError):
+        valid = False
+    if not valid:
+        raise SelectionFailure("identity", "PR package does not match the current diagnostic subject")
+    return source
 
 
 def read_metadata(path: Path) -> dict:
@@ -120,6 +167,7 @@ def main() -> int:
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--harness-sha", required=True)
     parser.add_argument("--same-run-source-sha")
+    parser.add_argument("--pull-request-json", type=Path)
     parser.add_argument("--expected-artifact-id", type=int)
     parser.add_argument("--expected-run-attempt", type=int)
     for name in ("run", "jobs", "artifacts"):
@@ -130,7 +178,8 @@ def main() -> int:
                           read_metadata(args.artifacts_json), args.run_id, args.harness_sha,
                           same_run_source_sha=args.same_run_source_sha,
                           expected_artifact_id=args.expected_artifact_id,
-                          expected_run_attempt=args.expected_run_attempt)
+                          expected_run_attempt=args.expected_run_attempt,
+                          pull_request=read_metadata(args.pull_request_json) if args.pull_request_json else None)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print("No eligible explicit package artifact was selected.", file=sys.stderr)
         return 1
@@ -140,3 +189,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

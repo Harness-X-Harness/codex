@@ -23,7 +23,7 @@ import zlib
 
 from extract_artifact import MAX_PACKAGE_BYTES, extract
 from select_artifact import (REPOSITORY, SELECTION_FAILURE_REASONS, SelectionFailure,
-                             read_metadata, select)
+                             linked_pull_request_number, read_metadata, select)
 
 
 MAX_METADATA_BYTES = 16 * 1024 * 1024
@@ -39,6 +39,7 @@ FAILURE_CODES = frozenset({
     "input", "workspace", "run_request", "run_metadata", "jobs_request",
     "artifacts_request", "jobs_metadata", "artifacts_metadata", "selection",
     "archive_request", "archive_verification", "publication", "unknown",
+    "pull_request_request", "pull_request_metadata",
 })
 
 
@@ -176,12 +177,15 @@ def gh_api(endpoint: str, destination: Path, byte_limit: int) -> None:
 def fetch(run_id: int, harness_sha: str, output: Path, *,
           same_run_source_sha: str | None = None,
           expected_artifact_id: int | None = None,
-          expected_run_attempt: int | None = None) -> dict:
+          expected_run_attempt: int | None = None,
+          pr_diagnostic: bool = False) -> dict:
     with acquisition_stage("input"):
         if type(run_id) is not int or run_id <= 0 or not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
             raise ValueError("invalid explicit run or harness revision")
         same_run = any(value is not None for value in (
             same_run_source_sha, expected_artifact_id, expected_run_attempt))
+        if type(pr_diagnostic) is not bool or (pr_diagnostic and same_run):
+            raise ValueError("PR diagnostics cannot use same-run selection")
         if same_run and (
             same_run_source_sha != harness_sha
             or type(expected_artifact_id) is not int or expected_artifact_id <= 0
@@ -202,6 +206,14 @@ def fetch(run_id: int, harness_sha: str, output: Path, *,
             attempt = run.get("run_attempt")
             if type(attempt) is not int or attempt <= 0:
                 raise ValueError("invalid run attempt")
+        pull_request = None
+        if pr_diagnostic:
+            with acquisition_stage("selection"):
+                number = linked_pull_request_number(run)
+            with acquisition_stage("pull_request_request"):
+                gh_api(f"/repos/{REPOSITORY}/pulls/{number}", root / "pull-request.json", MAX_METADATA_BYTES)
+            with acquisition_stage("pull_request_metadata"):
+                pull_request = read_metadata(root / "pull-request.json")
         with acquisition_stage("jobs_request"):
             gh_api(f"{prefix}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=1",
                    root / "jobs.json", MAX_METADATA_BYTES)
@@ -216,7 +228,8 @@ def fetch(run_id: int, harness_sha: str, output: Path, *,
             selected = select(run, jobs, artifacts, run_id, harness_sha,
                               same_run_source_sha=same_run_source_sha,
                               expected_artifact_id=expected_artifact_id,
-                              expected_run_attempt=expected_run_attempt)
+                              expected_run_attempt=expected_run_attempt,
+                              pull_request=pull_request)
             if selected["artifact_size"] > MAX_PACKAGE_BYTES:
                 raise ValueError("selected artifact exceeds the package byte budget")
         with acquisition_stage("archive_request"):
@@ -245,6 +258,7 @@ def main() -> int:
     parser.add_argument("--harness-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--same-run-source-sha")
+    parser.add_argument("--pr-diagnostic", action="store_true")
     parser.add_argument("--expected-artifact-id", type=int)
     parser.add_argument("--expected-run-attempt", type=int)
     args = parser.parse_args()
@@ -252,7 +266,8 @@ def main() -> int:
         result = fetch(args.run_id, args.harness_sha, args.output,
                        same_run_source_sha=args.same_run_source_sha,
                        expected_artifact_id=args.expected_artifact_id,
-                       expected_run_attempt=args.expected_run_attempt)
+                       expected_run_attempt=args.expected_run_attempt,
+                       pr_diagnostic=args.pr_diagnostic)
     except ACQUISITION_ERRORS as error:
         code = error.code if isinstance(error, AcquisitionFailure) else "unknown"
         if type(code) is not str or code not in FAILURE_CODES:
@@ -272,3 +287,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

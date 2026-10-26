@@ -28,7 +28,69 @@ def fixture():
     return run, jobs, artifacts
 
 
+def pr_fixture():
+    run, jobs, artifacts = fixture()
+    repo = {"id": 123, "full_name": REPOSITORY}
+    pr = {"number": 444, "state": "open", "merged": False, "merge_commit_sha": SHA,
+          "head": {"sha": HARNESS, "ref": "fix/image", "repo": dict(repo)},
+          "base": {"sha": "d" * 40, "ref": "grok/rust-v0.164.0", "repo": dict(repo)}}
+    run.update(event="pull_request", head_sha=HARNESS, head_branch="fix/image",
+               pull_requests=[copy.deepcopy(pr)])
+    artifacts["artifacts"][0]["workflow_run"]["head_sha"] = HARNESS
+    return run, jobs, artifacts, pr
+
+
 class ArtifactTests(unittest.TestCase):
+    def test_pr_diagnostic_binds_head_and_distinct_tested_merge_source(self):
+        run, jobs, artifacts, pr = pr_fixture()
+        got = select(run, jobs, artifacts, 37, HARNESS, pull_request=pr)
+        self.assertEqual(got["source_sha"], SHA)
+        self.assertEqual(got["pr_head_sha"], HARNESS)
+        self.assertEqual(got["harness_sha"], HARNESS)
+        self.assertEqual(got["pull_request_number"], 444)
+        self.assertEqual(got["selection_mode"], "pr_diagnostic")
+        self.assertEqual(got["artifact_name"], NAME)
+        with self.assertRaises(ValueError):
+            select(run, jobs, artifacts, 37, HARNESS)
+        with self.assertRaises(ValueError):
+            select(run, jobs, artifacts, 37, HARNESS, pull_request=pr,
+                   same_run_source_sha=HARNESS, expected_artifact_id=501, expected_run_attempt=2)
+
+    def test_pr_diagnostic_rejects_stale_fork_unlinked_or_wrong_subject(self):
+        for mode in ("fork", "base_fork", "wrong_number", "closed", "merged", "stale_head",
+                     "stale_base", "stale_base_ref", "stale_merge", "missing_merge", "wrong_harness",
+                     "wrong_ref", "not_version_line", "no_link", "two_links", "wrong_link",
+                     "wrong_link_repo", "failed_ci", "wrong_run_repo", "wrong_workflow",
+                     "artifact_head_is_merge", "expired", "failed_build"):
+            with self.subTest(mode=mode):
+                run, jobs, artifacts, pr = pr_fixture()
+                harness = HARNESS
+                if mode == "fork": pr["head"]["repo"]["full_name"] = "fork/codex"
+                elif mode == "base_fork": pr["base"]["repo"]["full_name"] = "other/codex"
+                elif mode == "wrong_number": pr["number"] = 445
+                elif mode == "closed": pr["state"] = "closed"
+                elif mode == "merged": pr["merged"] = True
+                elif mode == "stale_head": pr["head"]["sha"] = "e" * 40
+                elif mode == "stale_base": pr["base"]["sha"] = "e" * 40
+                elif mode == "stale_base_ref": pr["base"]["ref"] = "grok/rust-v0.165.0"
+                elif mode == "stale_merge": pr["merge_commit_sha"] = "e" * 40
+                elif mode == "missing_merge": pr["merge_commit_sha"] = None
+                elif mode == "wrong_harness": harness = "e" * 40
+                elif mode == "wrong_ref": run["head_branch"] = "unrelated"
+                elif mode == "not_version_line": pr["base"]["ref"] = "main"
+                elif mode == "no_link": run["pull_requests"] = []
+                elif mode == "two_links": run["pull_requests"] *= 2
+                elif mode == "wrong_link": run["pull_requests"][0]["head"]["sha"] = "e" * 40
+                elif mode == "wrong_link_repo": run["pull_requests"][0]["head"]["repo"]["id"] = 456
+                elif mode == "failed_ci": run["conclusion"] = "failure"
+                elif mode == "wrong_run_repo": run["head_repository"]["full_name"] = "fork/codex"
+                elif mode == "wrong_workflow": run["path"] = "other.yml"
+                elif mode == "artifact_head_is_merge": artifacts["artifacts"][0]["workflow_run"]["head_sha"] = SHA
+                elif mode == "expired": artifacts["artifacts"][0]["expired"] = True
+                elif mode == "failed_build": jobs["jobs"][0]["conclusion"] = "failure"
+                with self.assertRaises(ValueError):
+                    select(run, jobs, artifacts, 37, harness, pull_request=pr)
+
     def test_exact_attempt_identity_and_sibling_failure_are_retained(self):
         run, jobs, artifacts = fixture()
         run["conclusion"] = "failure"
@@ -337,3 +399,4 @@ class ArtifactTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
