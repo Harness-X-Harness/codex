@@ -672,10 +672,13 @@ class FailureCodeTests(unittest.TestCase):
 
 
 class PRWorkflowTests(unittest.TestCase):
-    def test_pr_dispatch_guard_and_fetch_flag_precede_backend_secret(self):
+    def test_source_admission_is_separate_from_catalog_selection(self):
         workflow = Path(__file__).resolve().parents[2] / ".github/workflows/grok-live.yml"
         text = workflow.read_text()
-        self.assertIn("inputs.suite == 'diagnostic' && inputs.scenario == 'image-primary'", text)
+        self.assertIn("if: ${{ github.repository == 'Harness-X-Harness/codex' }}", text)
+        self.assertNotIn("image-primary", text)
+        self.assertLess(text.index("Validate the explicit Go-owned selection before backend use"),
+                        text.index("GROK_API_KEY:"))
         self.assertLess(text.index("Fetch and verify the explicit diagnostic package"),
                         text.index("GROK_API_KEY:"))
         self.assertEqual(text.count("GROK_API_KEY:"), 2)
@@ -694,27 +697,20 @@ class PRWorkflowTests(unittest.TestCase):
             (root / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE\"\n")
             for name in ("git", "python3"):
                 (root / name).chmod(0o755)
-            for branch, suite, scenario, allowed in (
-                ("fix/image", "diagnostic", "image-primary", True),
-                ("fix/image", "full", "image-primary", False),
-                ("fix/image", "smoke", "image-primary", False),
-                ("fix/image", "diagnostic", "basic-primary", False),
-                ("grok/rust-v0.164.0", "full", "basic-primary", True),
-            ):
-                with self.subTest(branch=branch, suite=suite, scenario=scenario):
+            for branch in ("fix/task", "grok/rust-v0.164.0"):
+                with self.subTest(branch=branch):
                     capture = root / "capture"
                     capture.unlink(missing_ok=True)
                     env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                                GITHUB_REF="refs/heads/" + branch, GITHUB_SHA=HARNESS,
-                               GITHUB_WORKFLOW_SHA=HARNESS, SUITE=suite, SCENARIO=scenario,
+                               GITHUB_WORKFLOW_SHA=HARNESS,
                                BINARY_RUN_ID="37", RUNNER_TEMP=str(root), CAPTURE=str(capture))
                     result = subprocess.run(["bash", "-c", bind + "\n" + fetch], env=env,
                                             capture_output=True, text=True, timeout=5)
-                    self.assertEqual(result.returncode == 0, allowed, result.stderr)
-                    self.assertEqual(capture.exists(), allowed)
-                    if allowed:
-                        self.assertEqual("--pr-diagnostic" in capture.read_text().splitlines(),
-                                         not branch.startswith("grok/rust-v"))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue(capture.exists())
+                    self.assertEqual("--pr-diagnostic" in capture.read_text().splitlines(),
+                                     not branch.startswith("grok/rust-v"))
 
 
 if __name__ == "__main__":

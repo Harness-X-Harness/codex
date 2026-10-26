@@ -32,7 +32,7 @@ concurrency:
 jobs:
   diagnostic:
     name: Diagnostic Live
-    if: ${{ github.repository == 'Harness-X-Harness/codex' && (startsWith(github.ref, 'refs/heads/grok/rust-v') || (inputs.suite == 'diagnostic' && inputs.scenario == 'image-primary')) }}
+    if: ${{ github.repository == 'Harness-X-Harness/codex' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
@@ -47,18 +47,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Bind the diagnostic harness subject
-        env:
-          SUITE: ${{ inputs.suite }}
-          SCENARIO: ${{ inputs.scenario }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          # PR code receives the backend secret only for the explicitly selected
-          # image diagnostic, after current PR/build provenance is verified below.
-          if [[ "$GITHUB_REF" != refs/heads/grok/rust-v* ]]; then
-            test "$SUITE" = diagnostic
-            test "$SCENARIO" = image-primary
-          fi
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok-live.yml
       - name: Fetch and verify the explicit diagnostic package
         env:
