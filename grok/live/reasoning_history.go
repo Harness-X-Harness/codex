@@ -65,8 +65,8 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 	}
 	reply.completed = true
 	// The public MessagePhase owner distinguishes terminal answers from
-	// commentary/partial text. An authoritative summary uses its last explicit
-	// final answer, with phase-unknown legacy fallback only when no final exists.
+	// commentary/partial text. An authoritative summary combines all explicit
+	// final answers, with phase-unknown legacy fallback only when no final exists.
 	summaryAssistant := false
 	for _, item := range turn.Items {
 		if item.Type == "agentMessage" {
@@ -85,8 +85,7 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 				continue
 			}
 			if item.Phase == "final_answer" || item.Phase == "" && !reply.explicitFinal {
-				reply.bytes, reply.recall = len(item.Text), probe.token != "" && strings.Contains(item.Text, probe.token)
-				reply.explicitFinal = item.Phase == "final_answer"
+				probe.addReplyFragment(item, reply)
 			}
 		} else if err := probe.completedItem(item, reply); err != nil {
 			return err
@@ -124,12 +123,11 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 		if !outcome.hasContent {
 			return nil
 		}
-		// Only an unseen eligible item can replace the candidate. Explicit
-		// final answers outrank legacy text; commentary/partial cannot become
-		// final merely by arriving later. Replay and conflicts stay above.
+		// Combine unseen eligible fragments from the entire final response.
+		// Explicit finals outrank legacy text; commentary never earns recall.
+		// Replay and conflicting identities stay above.
 		if item.Phase == "final_answer" || item.Phase == "" && !reply.explicitFinal {
-			reply.bytes, reply.recall = len(item.Text), outcome.recall
-			reply.explicitFinal = item.Phase == "final_answer"
+			probe.addReplyFragment(item, reply)
 		}
 	}
 	if probe.previousID != "" {
@@ -147,4 +145,15 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 		}
 	}
 	return nil
+}
+
+// An assistant can deliver a final answer in several messages. A later explanation
+// must not erase a token already present in another eligible final message.
+func (probe *historyProbe) addReplyFragment(item historyItem, reply *historyReply) {
+	if item.Phase == "final_answer" && !reply.explicitFinal {
+		reply.bytes, reply.recall = 0, false
+	}
+	reply.bytes += len(item.Text)
+	reply.recall = reply.recall || probe.token != "" && strings.Contains(item.Text, probe.token)
+	reply.explicitFinal = item.Phase == "final_answer"
 }

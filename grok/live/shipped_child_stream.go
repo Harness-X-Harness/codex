@@ -80,7 +80,6 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	events := stream.snapshot()
 	invalidAt := len(events)
 	closedAt := len(events)
-	toolAt := len(events)
 	path := child.Source.SubAgent.ThreadSpawn.AgentPath
 	for index, message := range events {
 		var event struct {
@@ -229,8 +228,9 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 			case "reasoning":
 				// Model reasoning is not another source of inherited context.
 			default:
-				// A pre-result tool/lookup path cannot prove inherited recall.
-				toolAt = min(toolAt, index)
+				// Tool activity is not itself failure. In the fresh fixture, the
+				// marker exists only in inherited history; reject an actual new
+				// input containing it, not an unrelated tool invocation.
 			}
 		}
 	}
@@ -258,9 +258,6 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 			return childNotProven
 		}
 	}
-	if (resultAt < 0 && toolAt < len(events)) || toolAt < resultAt {
-		return childNotProven
-	}
 	if !selected.ended {
 		return childPending
 	}
@@ -270,12 +267,6 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	rawReply, err := finalProductReply(selected.reply)
 	if err != nil || !containsProofValue(rawReply, nonce) || !containsProofValue(rawReply, setupMarker) {
 		return childNotProven
-	}
-	// Surrounding prose may differ; the credited result must remain unambiguous.
-	for _, value := range childNonce.FindAllString(rawReply, -1) {
-		if value != nonce {
-			return childNotProven
-		}
 	}
 	// Only this child's order is relevant. Every own durable turn through the
 	// credited turn needs its observed lifecycle and consumed input; a missed

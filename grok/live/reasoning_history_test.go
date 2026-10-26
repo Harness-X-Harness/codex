@@ -440,7 +440,7 @@ func fakeHistoryServer() {
 					emit("item/completed", assistant(a, phase, token))
 					emit("item/completed", assistant(b, phase, historyCanary))
 					// Leave the child connected after this post-terminal replay so
-					// cleanup errors cannot mask incorrectly accepted stale recall.
+					// the replay cannot double-count the earlier eligible result.
 					afterTerminal = assistant(a, phase, token)
 				case "identity_delayed_final":
 					emit("item/completed", assistant(a, "commentary", token))
@@ -561,7 +561,7 @@ func fakeHistoryServer() {
 
 func historySuccess(mode string) bool {
 	switch strings.TrimPrefix(mode, "next_") {
-	case "final_then_commentary", "final_then_partial", "final_then_commentary_items", "legacy_commentary", "identity_delayed_final", "identity_duplicate", "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_last_recall", "identity_summary_composition", "identity_turn_reset":
+	case "legacy_superseded", "identity_replay", "identity_replay_final", "final_then_commentary", "final_then_partial", "final_then_commentary_items", "legacy_commentary", "identity_delayed_final", "identity_duplicate", "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_last_recall", "identity_authority_last_no_recall", "identity_summary_composition", "identity_turn_reset":
 		return true
 	}
 	switch mode {
@@ -717,11 +717,11 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 					}
 					wantCode := ""
 					switch {
-					case strings.HasPrefix(scenario, "identity_replay"), strings.HasPrefix(scenario, "identity_conflict_"):
+					case strings.HasPrefix(scenario, "identity_conflict_"):
 						// Keep the child alive: lack of proof must reach the caller's
 						// bounded deadline rather than an unrelated EOF cleanup error.
 						wantCode = "deadline_exceeded"
-					case strings.HasSuffix(scenario, "no_recall"):
+					case strings.HasSuffix(scenario, "no_recall") && scenario != "identity_authority_last_no_recall":
 						wantCode = "history_reply_not_recalled"
 					case strings.HasPrefix(scenario, "identity_missing_"):
 						// Generated DTOs reject omitted required IDs before delivery.
@@ -765,7 +765,18 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 					if mode == "next_denial" {
 						denied = 1
 					}
-					if got.Stage != "history_recalled" || !got.Bound || !got.FirstCompleted || !got.FirstRecall || !got.Completed || !got.Recalled || got.FirstReplyBytes != 64 || got.ReplyBytes != 64 || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.ToolCalls != calls || got.CompletedTools < 1 || got.DeniedToolCalls != denied || counts["token_valid"] != calls || counts["denial_valid"] != denied {
+					firstBytes, replyBytes := 64, 64
+					if scenario := strings.TrimPrefix(mode, "next_"); strings.HasPrefix(scenario, "identity_authority_last_") || scenario == "identity_replay" || scenario == "identity_replay_final" || scenario == "legacy_superseded" || scenario == "legacy_replaced" {
+						if strings.HasPrefix(mode, "next_") {
+							replyBytes += len(historyCanary)
+						} else {
+							firstBytes += len(historyCanary)
+						}
+					}
+					if mode == "identity_turn_reset" {
+						replyBytes += len(historyCanary)
+					}
+					if got.Stage != "history_recalled" || !got.Bound || !got.FirstCompleted || !got.FirstRecall || !got.Completed || !got.Recalled || got.FirstReplyBytes != firstBytes || got.ReplyBytes != replyBytes || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.ToolCalls != calls || got.CompletedTools < 1 || got.DeniedToolCalls != denied || counts["token_valid"] != calls || counts["denial_valid"] != denied {
 						t.Fatal("missing complete history proof or causal tool validation")
 					}
 				} else if got.Stage == "history_recalled" {

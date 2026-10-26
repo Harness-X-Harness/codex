@@ -268,7 +268,7 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 		got.Target != subject.Target || got.Environment != subject.Environment || got.Model != model ||
 		got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != wantTurns ||
 		got.ReplyBytes <= 0 || got.FirstReplyBytes <= 0 || !got.Bound || !got.Completed || !got.FirstCompleted || !got.TurnCompleted ||
-		got.Calls != 1 || got.PairedOutputs != 1 || got.FileChanges != 1 || got.Approvals != wantApprovals ||
+		got.Approvals != wantApprovals ||
 		got.BeforeSHA256 != digest(seed) || got.AfterSHA256 != digest(expected) || !got.BytesMatch || got.ContinuationUnchanged != wantContinuation {
 		t.Fatalf("native structured-edit evidence mismatch: %+v", got)
 	}

@@ -20,14 +20,14 @@ import (
 )
 
 func TestAttachedImageHistory(t *testing.T) {
-	for _, mode := range []string{"success", "inline", "natural_answer", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior"} {
+	for _, mode := range []string{"success", "inline", "natural_answer", "descriptive_answer", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "attached:"+mode)
 			options.Model = providerfixture.PinnedModel
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			got, err := live.AttachedImageHistory(ctx, options)
-			success := mode == "success" || mode == "inline" || mode == "natural_answer" || mode == "harmless_commentary"
+			success := mode == "success" || mode == "inline" || mode == "natural_answer" || mode == "descriptive_answer" || mode == "harmless_commentary" || mode == "missing_image_history"
 			if success && (err != nil || !got.Completed || !got.FirstCompleted || !got.FirstRecall || !got.Recalled || got.Turns != 2 || got.Threads != 1) {
 				t.Fatalf("missing image history proof: %+v %v", got, err)
 			}
@@ -129,6 +129,12 @@ func fakeAttachedImageServer() {
 				answer = "The circle is red."
 				if index == 1 {
 					answer = "The blue object is a square."
+				}
+			}
+			if mode == "descriptive_answer" {
+				answer = "I see a bright red circle against the white background."
+				if index == 1 {
+					answer = "On the right there is a clearly visible blue square with straight edges."
 				}
 			}
 			id := fmt.Sprintf("turn-%d", index)

@@ -148,10 +148,10 @@ func imageHistory(input []json.RawMessage) (outputs int, open, ok bool) {
 }
 
 type imageNativeHTTP struct {
-	mu                                     sync.Mutex
-	model, failure, first, second, toolHit string
-	responses, generations, edits          int
-	toolNames                              []string
+	mu                                          sync.Mutex
+	model, failure, first, second, toolHit      string
+	responses, generations, edits, recognitions int
+	toolNames                                   []string
 }
 
 func imageToolName(tools []json.RawMessage) (string, []string) {
@@ -226,6 +226,56 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		fixture.reject(writer, "request_contract")
 		return
 	}
+	// Fresh recognition turns contain the image itself, with no generation
+	// conversation or answer-bearing prompt. This is controlled transport proof,
+	// not a claim that these synthetic pixels depict a dog.
+	var attached string
+	var question string
+	for _, raw := range body.Input {
+		var item struct {
+			Type, Role string
+			Content    []struct {
+				Type, Text string
+				ImageURL   string `json:"image_url"`
+			}
+		}
+		if json.Unmarshal(raw, &item) != nil || item.Role != "user" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "input_image" {
+				attached = part.ImageURL
+			}
+			if part.Type == "input_text" {
+				question += part.Text
+			}
+		}
+	}
+	if attached != "" {
+		if strings.Contains(strings.ToLower(question), "dog") || strings.Contains(strings.ToLower(question), "red hat") || inputHasFunctionCall(body.Input) {
+			fixture.reject(writer, "recognition_prompt_leaked")
+			return
+		}
+		reply := ""
+		switch attached {
+		case "data:image/png;base64," + fixture.first:
+			reply = "The image shows a dog."
+		case "data:image/png;base64," + fixture.second:
+			reply = "The dog is wearing a red hat."
+		default:
+			fixture.reject(writer, "recognition_image_mismatch")
+			return
+		}
+		fixture.responses++
+		fixture.recognitions++
+		events := []any{map[string]any{"type": "response.created", "response": map[string]any{"id": "recognition"}}}
+		events = append(events, assistantEvents(0, "recognition-reply", reply)...)
+		events = append(events, map[string]any{"type": "response.completed", "response": map[string]any{"id": "recognition"}})
+		if err := writeSSE(writer, events); err != nil {
+			fixture.reject(writer, "write")
+		}
+		return
+	}
 	name, names := imageToolName(body.Tools)
 	if fixture.toolNames == nil {
 		fixture.toolNames = names
@@ -250,7 +300,7 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		return
 	}
 	fixture.responses++
-	if fixture.responses > 4 {
+	if fixture.responses > 6 {
 		fixture.reject(writer, "response_budget")
 		return
 	}
@@ -419,4 +469,14 @@ func writeSSE(writer http.ResponseWriter, events []any) error {
 		}
 	}
 	return nil
+}
+
+func inputHasFunctionCall(input []json.RawMessage) bool {
+	for _, raw := range input {
+		var item struct{ Type string }
+		if json.Unmarshal(raw, &item) == nil && item.Type == "function_call" {
+			return true
+		}
+	}
+	return false
 }

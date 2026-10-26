@@ -21,8 +21,10 @@ from its prompt, then N completes with that result in its final assistant reply.
 When N+1 is submitted once on the same thread without the runner supplying that
 result, then N+1 completes with the same result in its final reply. Explicit
 `final_answer` items take priority over commentary/partial text; without an
-explicit final, phase-unknown replies retain legacy compatibility. A later
-eligible final can replace an earlier answer, but replayed item identities cannot.
+explicit final, phase-unknown replies retain legacy compatibility. The whole
+eligible final response is the oracle: a later final explanation does
+not erase a result in an earlier final fragment. Replayed item identities do not
+add content; commentary or partial text cannot supply missing final recall.
 
 Require actual completed reasoning, an opaque encrypted reasoning item from N,
 and a completed named tool call. Native projection/composition proof establishes

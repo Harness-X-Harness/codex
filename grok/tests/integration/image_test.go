@@ -37,10 +37,10 @@ func TestImagePinnedFixture(t *testing.T) {
 	defer fixture.mu.Unlock()
 	encoded, _ := json.Marshal(got)
 	t.Logf("controlled image-pinned: evidence=%s responses=%d generations=%d edits=%d failure=%s tools=%s", encoded, fixture.responses, fixture.generations, fixture.edits, fixture.failure, strings.Join(fixture.toolNames, ","))
-	if err != nil || fixture.failure != "" || fixture.responses != 4 || fixture.generations != 1 || fixture.edits != 1 || strings.Contains(string(encoded), "PRIVATE_") {
+	if err != nil || fixture.failure != "" || fixture.responses != 6 || fixture.recognitions != 2 || fixture.generations != 1 || fixture.edits != 1 || strings.Contains(string(encoded), "PRIVATE_") {
 		t.Fatalf("native image edit: %+v; %v", got, err)
 	}
-	if !got.Completed || !got.FirstCompleted || !got.TurnCompleted || !got.Bound || !got.HistorySelected || got.Images != 2 || got.Artifacts != 2 || got.ToolCalls != 2 || got.FirstImageSHA256 == "" || got.EditedImageSHA256 == "" || got.FirstImageSHA256 == got.EditedImageSHA256 || got.FirstHistorySHA256 == "" || got.EditedHistorySHA256 == "" || got.Model != options.Model {
+	if !got.Completed || !got.FirstCompleted || !got.TurnCompleted || !got.Bound || !got.GenerationRecognized || !got.EditRecognized || got.Images != 2 || got.Artifacts != 2 || got.FirstImageSHA256 == "" || got.EditedImageSHA256 == "" || got.FirstImageSHA256 == got.EditedImageSHA256 || got.Model != options.Model {
 		t.Fatal("native image edit evidence was not proven")
 	}
 }

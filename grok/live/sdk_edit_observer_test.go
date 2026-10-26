@@ -23,25 +23,6 @@ func editSDKObserver(t *testing.T, fixture editFixture) *sdkEditObserver {
 	return observer
 }
 
-func editSDKRaw(t *testing.T, observer *sdkEditObserver, turn string, item editItem) error {
-	t.Helper()
-	raw, err := json.Marshal(map[string]any{"method": codexsdk.RawResponseItemCompletedExtension, "params": map[string]any{"threadId": "PRIVATE_CANARY_thread", "turnId": turn, "item": item}})
-	var envelope protocolv2.JSONValue
-	if err != nil || json.Unmarshal(raw, &envelope) != nil {
-		t.Fatal("raw extension fixture could not be encoded")
-	}
-	return observer.notification(context.Background(), codexsdk.RawNotification{Method: codexsdk.RawResponseItemCompletedExtension, Envelope: envelope})
-}
-
-func editSDKCall(t *testing.T, observer *sdkEditObserver) editItem {
-	t.Helper()
-	args, err := json.Marshal(map[string]any{"file_path": observer.fixture.path, "old_string": editOld, "new_string": editNew, "replace_all": observer.fixture.replaceAll})
-	if err != nil {
-		t.Fatal("edit argument fixture could not be encoded")
-	}
-	return editItem{Type: "function_call", CallID: "PRIVATE_CANARY_call", Name: "structured_edit", Arguments: string(args)}
-}
-
 func editSDKTurn(turn string, declined bool) protocolv2.Turn {
 	status := protocolv2.PatchApplyStatusCompleted
 	if declined {
@@ -70,13 +51,10 @@ func editSDKApproval(observer *sdkEditObserver, turn, item, thread string) (code
 
 func editSDKStory(t *testing.T, observer *sdkEditObserver) {
 	t.Helper()
-	output := editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"PRIVATE_CANARY_result"`)}
-	// Output-before-call is harmless: eventual pairing, not callback order,
-	// establishes tool-result authority.
-	if editSDKRaw(t, observer, "first", output) != nil || editSDKRaw(t, observer, "first", editSDKCall(t, observer)) != nil ||
-		editSDKTerminal(observer, editSDKTurn("first", observer.fixture.decline)) != nil || observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil ||
+	if editSDKTerminal(observer, editSDKTurn("first", observer.fixture.decline)) != nil ||
+		observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil ||
 		observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{editSDKTurn("first", observer.fixture.decline)}) != nil || observer.requireTurnProof() != nil {
-		t.Fatal("authorized first-turn causal story failed")
+		t.Fatalf("completed public turn lost its proof: %v", observer.cause)
 	}
 }
 
@@ -85,23 +63,154 @@ func TestSDKEditObserverPositiveStory(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			observer := editSDKObserver(t, fixture)
 			editSDKStory(t, observer)
-			want := StructuredEditEvidence{Evidence: Evidence{Turns: 1, Stage: "edit_turn_completed", FirstCompleted: true, FirstReplyBytes: 14, ReplyBytes: 14}, TurnCompleted: true, Calls: 1, PairedOutputs: 1, FileChanges: 1}
 			if fixture.continuation {
-				if observer.beginTurn() != nil || editSDKTerminal(observer, editSDKTurn("second", false)) != nil {
-					t.Fatal("valid continuation not admitted")
+				if observer.beginTurn() != nil || observer.reconcile(editSDKTurn("second", false)) != nil || observer.requireTurnProof() != nil {
+					t.Fatal("same-thread continuation failed")
 				}
-				early, _ := observer.snapshot()
-				if early.TurnCompleted || !early.FirstCompleted {
-					t.Fatal("early continuation credited completion before reconciliation")
-				}
-				if observer.reconcile(protocolv2.Turn{ID: "second", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil || observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{editSDKTurn("first", false), editSDKTurn("second", false)}) != nil || observer.requireTurnProof() != nil {
-					t.Fatal("same-thread continuation lost first-turn evidence")
-				}
-				want.Turns, want.Stage = 2, "edit_continuation_completed"
 			}
 			got, err := observer.snapshot()
-			if err != nil || !reflect.DeepEqual(got, want) {
-				t.Fatalf("causal evidence mismatch: got %+v; want %+v", got, want)
+			if err != nil || !got.FirstCompleted || !got.TurnCompleted || got.FileChanges != 1 || got.ReplyBytes == 0 || got.Completed {
+				t.Fatalf("incorrect partial evidence: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverAllowsEquivalentExecution(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	turn := editSDKTurn("first", false)
+	// Distinct completed changes and an auxiliary command are not a failure.
+	change, _ := turn.Items[1].AsFileChange()
+	change.ID = "second-edit"
+	turn.Items = append(turn.Items, protocolv2.NewThreadItemFileChange(change),
+		protocolv2.NewThreadItemCommandExecution(protocolv2.ThreadItemCommandExecution{ID: "inspect", Command: "inspect fixture", CommandActions: []protocolv2.CommandAction{}, CWD: observer.fixture.path, Status: protocolv2.CommandExecutionStatusCompleted}))
+	if observer.reconcile(turn) != nil || observer.requireTurnProof() != nil {
+		t.Fatal("equivalent execution path was rejected")
+	}
+	// This is only terminal proof; sdkStructuredEdit must still read exact bytes.
+	got, _ := observer.snapshot()
+	if got.FileChanges != 2 || got.Completed || got.BytesMatch {
+		t.Fatal("intermediate activity manufactured filesystem proof")
+	}
+}
+
+func TestSDKEditObserverDeclineBoundary(t *testing.T) {
+	for _, mode := range []string{"no_change_item", "multiple_declines", "completed_write", "missing_approval", "unrelated_approval"} {
+		t.Run(mode, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{decline: true})
+			if mode != "missing_approval" {
+				turnID := "first"
+				if mode == "unrelated_approval" {
+					turnID = "other"
+				}
+				if _, err := editSDKApproval(observer, turnID, "attempt-a", "PRIVATE_CANARY_thread"); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "multiple_declines" {
+					if _, err := editSDKApproval(observer, turnID, "attempt-b", "PRIVATE_CANARY_thread"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			turn := editSDKTurn("first", mode != "completed_write")
+			if mode == "no_change_item" {
+				turn.Items = turn.Items[:1]
+			}
+			err := observer.reconcile(turn)
+			if err == nil {
+				err = observer.requireTurnProof()
+			}
+			wantFailure := mode == "completed_write" || mode == "missing_approval" || mode == "unrelated_approval"
+			if (err != nil) != wantFailure {
+				t.Fatalf("incorrect denial proof: %v", err)
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverIncompleteProof(t *testing.T) {
+	for _, missing := range []string{"reply", "terminal"} {
+		t.Run(missing, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			if observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil {
+				t.Fatal("start failed")
+			}
+			turn := editSDKTurn("first", false)
+			if missing == "reply" {
+				turn.Items = turn.Items[1:]
+				_ = editSDKTerminal(observer, turn)
+			}
+			if observer.requireTurnProof() == nil {
+				t.Fatal("missing terminal or final answer passed")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverIdentityAndContinuation(t *testing.T) {
+	for _, mode := range []string{"wrong_thread", "wrong_turn", "reused_turn", "late_failed_terminal"} {
+		t.Run(mode, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{continuation: true})
+			editSDKStory(t, observer)
+			if observer.beginTurn() != nil {
+				t.Fatal("continuation failed")
+			}
+			id := "second"
+			if mode == "reused_turn" {
+				id = "first"
+			}
+			err := observer.reconcile(protocolv2.Turn{ID: id, Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
+			if err == nil {
+				switch mode {
+				case "wrong_thread":
+					err = observer.typedNotification(context.Background(), protocolv2.NewServerNotificationTurnCompleted(protocolv2.ServerNotificationTurnCompleted{Params: protocolv2.TurnCompletedNotification{ThreadID: "other", Turn: editSDKTurn("second", false)}}))
+				case "wrong_turn":
+					err = editSDKTerminal(observer, editSDKTurn("other", false))
+				case "late_failed_terminal":
+					turn := editSDKTurn("first", false)
+					turn.Status = protocolv2.TurnStatusFailed
+					err = editSDKTerminal(observer, turn)
+				}
+			}
+			if err == nil || observer.requireTurnProof() == nil {
+				t.Fatal("unrelated or failed turn passed")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverBudgetsAndSafeEvidence(t *testing.T) {
+	for _, mode := range []string{"count", "bytes", "inline_items", "settled_items"} {
+		t.Run(mode, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			var err error
+			switch mode {
+			case "count", "bytes":
+				size := 1
+				if mode == "bytes" {
+					size = sdkEditByteLimit + 1
+				}
+				for i := 0; i <= sdkEditObservationLimit && err == nil; i++ {
+					err = observer.budget(size)
+				}
+			default:
+				turn := editSDKTurn("first", false)
+				turn.Items = make([]protocolv2.ThreadItem, sdkEditObservationLimit)
+				for i := range turn.Items {
+					turn.Items[i] = editSDKTurn("second", false).Items[0]
+				}
+				if mode == "inline_items" {
+					err = observer.reconcile(turn)
+				} else {
+					_ = observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
+					err = observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{turn})
+				}
+			}
+			got, sticky := observer.snapshot()
+			failure := observer.failure(fmt.Errorf("PRIVATE_CANARY"))
+			safe, _ := json.Marshal([]any{got, DescribeFailure(failure), failure.Error()})
+			if err == nil || sticky == nil || got.Completed || strings.Contains(string(safe), "PRIVATE_CANARY") {
+				t.Fatal("budget or privacy boundary failed")
 			}
 		})
 	}
@@ -144,179 +253,11 @@ func TestSDKEditObserverEarlyDeclineReconciliation(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || editSDKRaw(t, observer, "first", editSDKCall(t, observer)) != nil || editSDKRaw(t, observer, "first", editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"declined"`)}) != nil || observer.requireTurnProof() != nil {
-				t.Fatal("reconciled decline lost exact call/change/approval correlation")
+			if err != nil || observer.requireTurnProof() != nil {
+				t.Fatal("reconciled decline lost matching-turn approval evidence")
 			}
 			if got, err := observer.snapshot(); err != nil || got.Approvals != 1 {
 				t.Fatal("actual matching decline was not credited once")
-			}
-		})
-	}
-}
-
-func TestSDKEditObserverDuplicateAndConflict(t *testing.T) {
-	for _, kind := range []string{"same_call", "changed_args", "second_call", "same_output", "changed_output", "second_output", "same_item", "same_item_different_diff", "changed_status", "same_terminal", "failed_terminal"} {
-		t.Run(kind, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{})
-			editSDKStory(t, observer)
-			var err error
-			switch {
-			case strings.Contains(kind, "call") || kind == "changed_args":
-				item := editSDKCall(t, observer)
-				if kind == "changed_args" {
-					item.Arguments = strings.ReplaceAll(item.Arguments, editOld, "PRIVATE_CANARY")
-				}
-				if kind == "second_call" {
-					item.CallID = "different"
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			case strings.Contains(kind, "output"):
-				item := editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"PRIVATE_CANARY_result"`)}
-				if kind == "changed_output" {
-					item.Output = json.RawMessage(`"different"`)
-				}
-				if kind == "second_output" {
-					item.CallID = "different"
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			default:
-				turn := editSDKTurn("first", false)
-				if kind == "failed_terminal" {
-					turn.Status = protocolv2.TurnStatusFailed
-				}
-				if kind == "changed_status" {
-					turn = editSDKTurn("first", true)
-				}
-				if kind == "same_item_different_diff" {
-					change, _ := turn.Items[1].AsFileChange()
-					change.Changes[0].Diff = "another private rendering"
-					turn.Items[1] = protocolv2.NewThreadItemFileChange(change)
-				}
-				if strings.Contains(kind, "item") || kind == "changed_status" {
-					err = observer.typedNotification(context.Background(), protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: protocolv2.ItemCompletedNotification{ThreadID: "PRIVATE_CANARY_thread", TurnID: "first", Item: turn.Items[1], CompletedAtMS: 1}}))
-				} else {
-					err = editSDKTerminal(observer, turn)
-				}
-			}
-			if strings.HasPrefix(kind, "same_") {
-				if err != nil || observer.requireTurnProof() != nil {
-					t.Fatal("identical duplicate invalidated causal story")
-				}
-			} else if err == nil || observer.requireTurnProof() == nil {
-				t.Fatal("material conflicting evidence accepted")
-			}
-		})
-	}
-}
-
-func TestSDKEditObserverRetainedFirstTurn(t *testing.T) {
-	for _, source := range []string{"raw_call", "raw_output", "terminal", "settled"} {
-		t.Run(source, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{continuation: true})
-			editSDKStory(t, observer)
-			if observer.beginTurn() != nil || observer.reconcile(protocolv2.Turn{ID: "second", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil {
-				t.Fatal("continuation admission failed")
-			}
-			bad := editSDKTurn("first", false)
-			bad.Status = protocolv2.TurnStatusFailed
-			var err error
-			switch source {
-			case "raw_call":
-				item := editSDKCall(t, observer)
-				item.CallID = "late_other"
-				err = editSDKRaw(t, observer, "first", item)
-			case "raw_output":
-				err = editSDKRaw(t, observer, "first", editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"late different"`)})
-			case "terminal":
-				err = editSDKTerminal(observer, bad)
-			case "settled":
-				err = observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{bad, editSDKTurn("second", false)})
-			}
-			_ = editSDKTerminal(observer, editSDKTurn("second", false))
-			got, sticky := observer.snapshot()
-			if err == nil || sticky == nil || !got.FirstCompleted || got.Completed || observer.requireTurnProof() == nil {
-				t.Fatal("second turn erased material first-turn contradiction")
-			}
-		})
-	}
-}
-
-func TestSDKEditObserverBudgetsAndSafeEvidence(t *testing.T) {
-	for _, control := range []string{"count", "bytes", "arguments", "output", "early_arguments", "early_output", "inline_items", "settled_items"} {
-		t.Run(control, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{})
-			var err error
-			switch control {
-			case "count", "bytes":
-				item := editItem{Type: "reasoning", Text: "PRIVATE_CANARY"}
-				if control == "bytes" {
-					item.Text = strings.Repeat("PRIVATE_CANARY", 1<<16)
-				}
-				for index := 0; index <= sdkEditObservationLimit && err == nil; index++ {
-					err = editSDKRaw(t, observer, "first", item)
-				}
-			case "arguments", "output", "early_arguments", "early_output":
-				item := editSDKCall(t, observer)
-				if strings.HasSuffix(control, "arguments") {
-					item.Arguments = strings.Repeat("PRIVATE_CANARY", 4096)
-				} else {
-					item = editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(fmt.Sprintf("%q", strings.Repeat("PRIVATE_CANARY", 64<<10)))}
-				}
-				if !strings.HasPrefix(control, "early_") {
-					_ = observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			case "inline_items", "settled_items":
-				turn := editSDKTurn("first", false)
-				turn.Items = make([]protocolv2.ThreadItem, sdkEditObservationLimit)
-				for index := range turn.Items {
-					turn.Items[index] = editSDKTurn("second", false).Items[0]
-				}
-				if control == "inline_items" {
-					err = observer.reconcile(turn)
-				} else {
-					_ = observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
-					err = observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{turn})
-				}
-			}
-			got, sticky := observer.snapshot()
-			failure := observer.failure(fmt.Errorf("PRIVATE_CANARY SDK error"))
-			safe, marshalErr := json.Marshal([]any{got, DescribeFailure(failure), failure.Error()})
-			if err == nil || sticky == nil || got.Completed || marshalErr != nil || strings.Contains(string(safe), "PRIVATE_CANARY") {
-				t.Fatal("bounded failure lost sticky cause or exported private content")
-			}
-		})
-	}
-}
-
-func TestSDKEditObserverIdentityAndContinuation(t *testing.T) {
-	for _, control := range []string{"wrong_thread", "wrong_turn", "second_edit", "reused_turn"} {
-		t.Run(control, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{continuation: true})
-			editSDKStory(t, observer)
-			if observer.beginTurn() != nil {
-				t.Fatal("continuation admission failed")
-			}
-			turn := "second"
-			if control == "reused_turn" {
-				turn = "first"
-			}
-			err := observer.reconcile(protocolv2.Turn{ID: turn, Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
-			if control != "reused_turn" {
-				if err != nil {
-					t.Fatal("distinct continuation identity rejected")
-				}
-				switch control {
-				case "wrong_thread":
-					err = observer.typedNotification(context.Background(), protocolv2.NewServerNotificationTurnCompleted(protocolv2.ServerNotificationTurnCompleted{Params: protocolv2.TurnCompletedNotification{ThreadID: "unrelated", Turn: editSDKTurn("second", false)}}))
-				case "wrong_turn":
-					err = editSDKTerminal(observer, editSDKTurn("unrelated", false))
-				case "second_edit":
-					err = editSDKRaw(t, observer, "second", editSDKCall(t, observer))
-				}
-			}
-			if err == nil || observer.requireTurnProof() == nil {
-				t.Fatal("unattributed or unauthorized continuation accepted")
 			}
 		})
 	}
@@ -344,76 +285,6 @@ func TestSDKEditObserverConcurrentSnapshots(t *testing.T) {
 	got, err := observer.snapshot()
 	if err != nil || !got.FirstCompleted || !got.TurnCompleted || got.Completed {
 		t.Fatal("concurrent callbacks exported inconsistent completion facts")
-	}
-}
-
-func TestSDKEditObserverIncompleteProof(t *testing.T) {
-	for _, missing := range []string{"call", "output", "change", "reply", "terminal", "approval"} {
-		t.Run(missing, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{decline: missing == "approval"})
-			if missing == "approval" {
-				if _, err := editSDKApproval(observer, "unrelated_turn", "PRIVATE_CANARY_call", "PRIVATE_CANARY_thread"); err != nil {
-					t.Fatal("unrelated approval was not safely denied")
-				}
-			}
-			if observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil {
-				t.Fatal("turn admission failed")
-			}
-			if missing != "call" {
-				_ = editSDKRaw(t, observer, "first", editSDKCall(t, observer))
-			}
-			if missing != "output" {
-				_ = editSDKRaw(t, observer, "first", editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"result"`)})
-			}
-			turn := editSDKTurn("first", missing == "approval")
-			if missing == "change" {
-				turn.Items = turn.Items[:1]
-			}
-			if missing == "reply" {
-				turn.Items = turn.Items[1:]
-			}
-			if missing != "terminal" {
-				_ = editSDKTerminal(observer, turn)
-			}
-			if observer.requireTurnProof() == nil {
-				t.Fatal("missing causal business evidence proved completion")
-			}
-		})
-	}
-}
-
-func TestSDKEditObserverSemanticReplay(t *testing.T) {
-	for _, kind := range []string{"arguments", "output_form", "output_optional_name", "file_path", "irrelevant_call_fields"} {
-		t.Run(kind, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{})
-			editSDKStory(t, observer)
-			var err error
-			switch kind {
-			case "arguments", "irrelevant_call_fields":
-				item := editSDKCall(t, observer)
-				if kind == "arguments" {
-					item.Arguments = fmt.Sprintf(` { "new_string":%q, "file_path":"./structured_edit_fixture.txt", "old_string":%q } `, editNew, editOld)
-				} else {
-					item.ID, item.Status = "transport-item-id", "completed"
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			case "output_form", "output_optional_name":
-				item := editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`[{"type":"input_text","text":"PRIVATE_CANARY_result"}]`)}
-				if kind == "output_optional_name" {
-					item.Name = "structured_edit"
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			case "file_path":
-				turn := editSDKTurn("first", false)
-				change, _ := turn.Items[1].AsFileChange()
-				change.Changes[0].Path = "./" + editFile
-				turn.Items[1] = protocolv2.NewThreadItemFileChange(change)
-				err = editSDKTerminal(observer, turn)
-			}
-			if err != nil || observer.requireTurnProof() != nil {
-				t.Fatal("equivalent operation facts rejected")
-			}
-		})
 	}
 }
 
@@ -449,48 +320,6 @@ func TestSDKEditObserverSettledTurnIdentity(t *testing.T) {
 		if (err != nil) != duplicate {
 			t.Fatal("settled proof used array position instead of unique submitted turn identities")
 		}
-	}
-}
-
-func TestSDKEditObserverSemanticReplayRejectsInvalidAuthority(t *testing.T) {
-	for _, kind := range []string{"output_array_of_strings", "output_name", "output_namespace", "call_namespace", "call_name", "file_other_root"} {
-		t.Run(kind, func(t *testing.T) {
-			observer := editSDKObserver(t, editFixture{})
-			editSDKStory(t, observer)
-			var err error
-			switch kind {
-			case "file_other_root":
-				turn := editSDKTurn("first", false)
-				change, _ := turn.Items[1].AsFileChange()
-				change.Changes[0].Path = filepath.Join(string(filepath.Separator), "OTHER", editFile)
-				turn.Items[1] = protocolv2.NewThreadItemFileChange(change)
-				err = editSDKTerminal(observer, turn)
-			case "call_namespace", "call_name":
-				item := editSDKCall(t, observer)
-				if kind == "call_name" {
-					item.Name = "local__structured_edit__deadbeefcafe"
-				} else {
-					namespace := "other"
-					item.Namespace = &namespace
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			default:
-				item := editItem{Type: "function_call_output", CallID: "PRIVATE_CANARY_call", Output: json.RawMessage(`"PRIVATE_CANARY_result"`)}
-				switch kind {
-				case "output_array_of_strings":
-					item.Output = json.RawMessage(`["PRIVATE_CANARY_result"]`)
-				case "output_name":
-					item.Name = "other"
-				case "output_namespace":
-					namespace := "other"
-					item.Namespace = &namespace
-				}
-				err = editSDKRaw(t, observer, "first", item)
-			}
-			if err == nil || observer.requireTurnProof() == nil {
-				t.Fatal("semantic normalization erased invalid authority or target")
-			}
-		})
 	}
 }
 

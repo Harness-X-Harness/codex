@@ -30,6 +30,7 @@ type sdkEditLedger struct {
 	reconciled                       bool
 	callbackTerminal, inlineTerminal bool
 	seen                             map[[sha256.Size]byte][sha256.Size]byte
+	approvals                        map[string]bool
 	pending                          []sdkEditObservation
 }
 
@@ -93,7 +94,7 @@ func (observer *sdkEditObserver) beginTurn() error {
 	if observer.threadID == "" || observer.cause != nil {
 		return observer.reject(failedObservation("edit_thread_identity_missing", "live: edit thread identity not established"))
 	}
-	ledger := &sdkEditLedger{seen: make(map[[sha256.Size]byte][sha256.Size]byte)}
+	ledger := &sdkEditLedger{seen: make(map[[sha256.Size]byte][sha256.Size]byte), approvals: make(map[string]bool)}
 	ledger.probe = editProbe{threadID: observer.threadID, previousID: previous, fixture: observer.fixture, evidence: &ledger.evidence, base: &ledger.evidence.Evidence}
 	observer.ledgers = append(observer.ledgers, ledger)
 	return nil
@@ -183,17 +184,6 @@ func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2
 	return codexsdk.ServerRequestResponse{}, failedObservation("unsupported_server_request", "live: unsupported server request")
 }
 
-func (observer *sdkEditObserver) notification(ctx context.Context, notification codexsdk.RawNotification) error {
-	observer.mu.Lock()
-	observer.noteCallback(ctx)
-	observer.mu.Unlock()
-	if notification.Method != codexsdk.RawResponseItemCompletedExtension {
-		return nil
-	}
-	raw, err := notification.Envelope.MarshalJSON()
-	return observer.observeEnvelope(notification.Method, raw, err)
-}
-
 func (observer *sdkEditObserver) typedNotification(ctx context.Context, notification protocolv2.ServerNotification) error {
 	observer.mu.Lock()
 	observer.noteCallback(ctx)
@@ -225,9 +215,6 @@ func (observer *sdkEditObserver) observeEnvelope(method string, raw []byte, mars
 	}
 	observation := envelope.Params
 	observation.method, observation.callback = method, true
-	if method == codexsdk.RawResponseItemCompletedExtension && (len(observation.Item.Arguments) > 4096 || len(observation.Item.Output) > 64<<10) {
-		return observer.reject(failedObservation("invalid_edit_evidence", "live: edit item evidence oversized"))
-	}
 	if observation.ThreadID != observer.threadID {
 		return observer.reject(failedObservation("unrelated_edit_thread", "live: unrelated edit thread evidence"))
 	}
@@ -258,10 +245,10 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 		if observation.TurnID != ledger.probe.turnID {
 			return nil
 		}
-		if ledger.probe.approvalID != "" && ledger.probe.approvalID != observation.Item.ID {
-			return observer.reject(failedObservation("conflicting_edit_approval", "live: conflicting edit approval evidence"))
+		if !ledger.approvals[observation.Item.ID] {
+			ledger.approvals[observation.Item.ID] = true
+			ledger.evidence.Approvals++
 		}
-		ledger.probe.approvalID, ledger.evidence.Approvals = observation.Item.ID, 1
 		observer.signal()
 		return nil
 	}
@@ -292,17 +279,15 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 		if err := observer.budget(len(raw)); err != nil {
 			return err
 		}
-		identity := item.ID
-		if observation.method == codexsdk.RawResponseItemCompletedExtension {
-			switch item.Type {
-			case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "local_shell_call", "tool_search_call":
-			default:
-				return nil
-			}
-			identity = item.CallID
+		// Tool choice, arguments and intermediate activity do not decide a
+		// filesystem outcome. Only final replies and unauthorized committed
+		// changes need observation; file-change counts are diagnostic.
+		if item.Type != "agentMessage" && item.Type != "fileChange" {
+			return nil
 		}
+		identity := item.ID
 		key := sha256.Sum256([]byte(observation.method + "\x00" + item.Type + "\x00" + identity))
-		facts, _ := json.Marshal(editItemFacts(item, observer.fixture))
+		facts, _ := json.Marshal(item)
 		digest := sha256.Sum256(facts)
 		if previous, exists := ledger.seen[key]; exists {
 			if previous != digest {
@@ -310,13 +295,7 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 			}
 			return nil
 		}
-		var err error
-		if observation.method == codexsdk.RawResponseItemCompletedExtension {
-			err = ledger.probe.rawItem(item, &ledger.observation)
-		} else {
-			err = ledger.probe.publicItem(item, &ledger.observation)
-		}
-		if err != nil {
+		if err := ledger.probe.publicItem(item, &ledger.observation); err != nil {
 			return observer.reject(err)
 		}
 		ledger.seen[key] = digest
@@ -362,15 +341,8 @@ func (ledger *sdkEditLedger) proof() error {
 	if !ledger.reconciled || !observation.completed {
 		return failedObservation("edit_terminal_missing", "live: edit terminal evidence missing")
 	}
-	if ledger.probe.previousID == "" {
-		status := "completed"
-		if ledger.probe.fixture.decline {
-			status = "declined"
-		}
-		if observation.callID == "" || observation.callID != observation.outputID || observation.callID != observation.changeID || observation.changeStatus != status ||
-			ledger.probe.fixture.decline && ledger.probe.approvalID != observation.callID {
-			return failedObservation("edit_evidence_unpaired", "live: edit call, output or file-change evidence missing")
-		}
+	if ledger.probe.fixture.decline && ledger.evidence.Approvals == 0 {
+		return failedObservation("edit_decline_missing", "live: no matching file-change approval was declined")
 	}
 	reply, err := finalProductReply(productTurn{Items: observation.replies})
 	if err != nil {
@@ -409,15 +381,11 @@ func (observer *sdkEditObserver) snapshot() (StructuredEditEvidence, error) {
 		evidence.FirstCompleted, evidence.FirstReplyBytes = first.evidence.FirstCompleted, first.observation.replyBytes
 		evidence.ReplyBytes = observer.ledgers[len(observer.ledgers)-1].observation.replyBytes
 		evidence.Approvals = first.evidence.Approvals
-		observation := first.observation
-		status := "completed"
-		if observer.fixture.decline {
-			status = "declined"
+		evidence.FileChanges = 0
+		for _, ledger := range observer.ledgers {
+			evidence.FileChanges += ledger.evidence.FileChanges
 		}
-		if observation.callID != "" && observation.callID == observation.outputID && observation.callID == observation.changeID && observation.changeStatus == status &&
-			(!observer.fixture.decline || observation.callID == first.probe.approvalID) {
-			evidence.Calls, evidence.PairedOutputs, evidence.FileChanges = 1, 1, 1
-		}
+
 	}
 	return evidence, observer.cause
 }

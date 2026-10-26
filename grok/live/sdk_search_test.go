@@ -91,3 +91,35 @@ func TestSearchRunTerminalClassificationSurvivesEitherSignalOrder(t *testing.T) 
 		})
 	}
 }
+
+func TestSearchPublicItemsAreBoundedAndDuplicatesDoNotAddCredit(t *testing.T) {
+	result := SearchEvidence{}
+	probe := searchProbe{turnID: "turn", result: &result, calls: map[string]map[string]bool{"turn": {}}}
+	for i := 0; i < 64; i++ {
+		var item protocolv2.ThreadItem
+		raw := fmt.Sprintf(`{"type":"webSearch","id":"call-%d","query":"private query","action":{"type":"search"}}`, i)
+		if err := json.Unmarshal([]byte(raw), &item); err != nil {
+			t.Fatal(err)
+		}
+		if err := probe.publicSearch("turn", item); err != nil {
+			t.Fatal(err)
+		}
+		if err := probe.publicSearch("turn", item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var extra protocolv2.ThreadItem
+	if err := json.Unmarshal([]byte(`{"type":"webSearch","id":"overflow","query":"private query","action":{"type":"search"}}`), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.publicSearch("turn", extra); err == nil {
+		t.Fatal("unbounded public evidence")
+	}
+	if result.CanonicalCalls != 64 {
+		t.Fatal("duplicates earned credit")
+	}
+	probe.settled = true
+	if err := probe.publicSearch("turn", extra); err != nil || result.CanonicalCalls != 64 {
+		t.Fatal("late observation changed settled result")
+	}
+}

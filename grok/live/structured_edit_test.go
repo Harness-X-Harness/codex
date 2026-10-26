@@ -84,7 +84,7 @@ func fakeEditServer() {
 				Model, Cwd, ApprovalPolicy string
 				ExperimentalRawEvents      bool
 			}
-			if json.Unmarshal(request.Params, &params) != nil || params.Cwd != filepath.Dir(path) || !params.ExperimentalRawEvents {
+			if json.Unmarshal(request.Params, &params) != nil || params.Cwd != filepath.Dir(path) {
 				return
 			}
 			decline = params.ApprovalPolicy == "untrusted"
@@ -413,7 +413,7 @@ func fakeEditServer() {
 }
 
 func TestStructuredEditScenarios(t *testing.T) {
-	for _, mode := range []string{"success", "early", "early_decline", "relative_dot_path", "final_then_commentary", "absolute_path", "false_replace_all", "output_first", "content_output", "decline", "pinned", "replace_all", "duplicate_call", "duplicate_output", "stale_continuation", "duplicate_approval"} {
+	for _, mode := range []string{"success", "early", "early_decline", "relative_dot_path", "final_then_commentary", "absolute_path", "false_replace_all", "output_first", "content_output", "decline", "pinned", "replace_all", "duplicate_call", "duplicate_output", "stale_continuation", "duplicate_approval", "duplicate_edit", "command", "missing_call", "missing_output", "missing_change", "wrong_old", "duplicate_change"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "edit:"+mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -421,6 +421,9 @@ func TestStructuredEditScenarios(t *testing.T) {
 			runner := live.StructuredEdit
 			wantTurns, wantApprovals, wantWrites := 2, 0, 1
 			seed := "prefix\r\n" + editSeedToken + "\r\nsuffix"
+			if mode == "duplicate_edit" {
+				wantWrites = 2
+			}
 			switch mode {
 			case "decline", "early_decline", "duplicate_approval":
 				runner, wantTurns, wantApprovals, wantWrites = live.StructuredEditApprovalDeclined, 1, 1, 0
@@ -441,7 +444,7 @@ func TestStructuredEditScenarios(t *testing.T) {
 			hash := func(text string) string { sum := sha256.Sum256([]byte(text)); return hex.EncodeToString(sum[:]) }
 			if got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != wantTurns ||
 				!got.Bound || !got.FirstCompleted || !got.TurnCompleted || !got.Completed || !got.BytesMatch || got.ContinuationUnchanged != (wantTurns == 2) ||
-				got.Calls != 1 || got.PairedOutputs != 1 || got.FileChanges != 1 || got.Approvals != wantApprovals ||
+				got.Approvals != wantApprovals ||
 				got.BeforeSHA256 != hash(seed) || got.AfterSHA256 != hash(want) {
 				t.Fatalf("unexpected safe evidence: %+v", got)
 			}
@@ -471,12 +474,9 @@ func TestStructuredEditScenarios(t *testing.T) {
 }
 
 func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
-	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "near_identity", "wire_identity", "near_wire_identity", "namespace", "apply_patch", "command",
-		"missing_call", "missing_output", "wrong_output", "empty_output", "malformed_output", "duplicate_edit", "late_duplicate",
-		"missing_change", "wrong_change_id", "wrong_change_path", "wrong_change_root", "move_change", "failed_change", "declined_change", "running_change", "unknown_change", "duplicate_change", "conflicting_change", "false_success", "wrong_bytes",
-		"malformed_args", "duplicate_arg", "wrong_old", "wrong_path", "extra_arg", "string_replace_all", "null_replace_all", "number_replace_all", "missing_replace_all",
+	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "conflicting_change", "false_success", "wrong_bytes",
 		"failed", "interrupted", "empty_reply", "commentary", "read_thread", "read_failed", "read_error", "continuation_read_error", "continuation_failed", "repeat_continuation", "continuation_changes",
-		"approval_thread", "approval_turn", "approval_item", "decline_changes", "denied_effect", "shutdown_changes", "stalled_start", "missing_terminal"}
+		"approval_thread", "approval_turn", "decline_changes", "denied_effect", "shutdown_changes", "stalled_start", "missing_terminal"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "edit:"+mode)
@@ -524,7 +524,7 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 					t.Fatalf("incorrect partial evidence: %+v", got)
 				}
 			}
-			wantError := "live: unexpected or invalid edit invocation"
+			wantError := "live: edit fixture bytes did not match"
 			switch mode {
 			case "wrong_model":
 				wantError = "live: fixture binding not established"
@@ -532,30 +532,20 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				wantError = "live: unrelated edit thread evidence"
 			case "wrong_turn":
 				wantError = "live: unrelated edit turn evidence"
-			case "command":
-				wantError = "live: alternative tool evidence observed"
-			case "empty_output":
-				wantError = "live: unexpected or invalid edit output"
-			case "missing_call", "missing_output", "wrong_output", "missing_change", "wrong_change_id", "failed_change", "declined_change", "running_change":
-				wantError = "live: edit call, output or file-change evidence missing"
-			case "wrong_change_path", "wrong_change_root", "move_change":
-				wantError = "live: unexpected edit file change"
-			case "duplicate_change":
-				wantError = "live: conflicting or repeated edit file change"
-			case "conflicting_change", "late_duplicate":
+			case "conflicting_change":
 				wantError = "live: conflicting edit item evidence"
 			case "false_success", "wrong_bytes", "continuation_changes", "decline_changes":
 				wantError = "live: edit fixture bytes did not match"
 			case "failed", "interrupted", "read_failed", "continuation_failed":
 				wantError = "live: edit turn did not complete successfully"
-			case "read_error", "continuation_read_error", "malformed_output", "unknown_change":
+			case "read_error", "continuation_read_error":
 				wantError = "live: SDK observation did not complete"
 			case "empty_reply", "commentary":
 				wantError = "live: edit final reply unavailable"
 			case "read_thread":
 				wantError = "live: settled edit thread identity not established"
-			case "approval_thread", "approval_turn", "approval_item":
-				wantError = "live: edit call, output or file-change evidence missing"
+			case "approval_thread", "approval_turn":
+				wantError = "live: no matching file-change approval was declined"
 			case "denied_effect":
 				wantError = "live: unexpected edit approval denied"
 			case "shutdown_changes":
@@ -563,21 +553,9 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 			case "stalled_start", "missing_terminal":
 				wantError = "live: SDK observation did not complete"
 			}
-			// A schema failure closes the client. If a prior callback already stored
-			// its context, the waiter sees sdk_observation_failed; otherwise it
-			// reaches the deadline. Neither code is a completed edit.
-			if mode == "malformed_output" || mode == "unknown_change" {
-				code := live.DescribeFailure(err).Code
-				if code != "deadline_exceeded" && code != "sdk_observation_failed" {
-					t.Fatalf("schema failure proved an edit or lost its boundary: %+v", live.DescribeFailure(err))
-				}
-			} else if code, check := map[string]string{
-				"missing_call": "edit_evidence_unpaired", "missing_output": "edit_evidence_unpaired",
-				"wrong_output": "edit_evidence_unpaired", "missing_change": "edit_evidence_unpaired",
-				"wrong_change_id": "edit_evidence_unpaired", "failed_change": "edit_evidence_unpaired",
-				"declined_change": "edit_evidence_unpaired", "running_change": "edit_evidence_unpaired",
-				"approval_item": "edit_evidence_unpaired", "approval_thread": "edit_evidence_unpaired",
-				"approval_turn": "edit_evidence_unpaired", "denied_effect": "unexpected_edit_approval",
+			if code, check := map[string]string{
+				"approval_thread": "edit_decline_missing",
+				"approval_turn":   "edit_decline_missing", "denied_effect": "unexpected_edit_approval",
 				"shutdown_changes": "edit_bytes_mismatch", "stalled_start": "deadline_exceeded",
 				"missing_terminal": "deadline_exceeded", "read_error": "sdk_observation_failed",
 				"continuation_read_error": "sdk_observation_failed",

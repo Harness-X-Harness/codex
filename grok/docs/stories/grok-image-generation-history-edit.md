@@ -1,145 +1,93 @@
-# Grok image generation and same-Thread history edit
+# Grok image generation and same-Thread edit
 
-The implemented image tool supports generation and same-thread history edit.
-Offline Go tests validate its observer, Rust tests own image preparation and
-product behavior, and real Codex with controlled HTTP tests the pinned-model
-composition. A packaged real-xAI result requires a separately identified Live
-run; none of those controlled tests establishes it.
+## User story and boundary
 
-The current `image-primary` and `image-pinned` Live runners use the selected
-binary with an isolated image-capable profile and generated model catalog, not
-the unchanged shipped Grok profile. Their result can establish generation and
-history edit in that isolated context. The shipped-profile precondition below
-is a retained product acceptance goal and is not proved by these two routes,
-even when their isolated observations pass.
+As a Grok user, I can request a recognizable picture and later edit that picture
+in the same conversation. The exact selected Codex binary and bound Grok model
+own generation, history and image handling. Acceptance observes the public
+result and its visible content, not a scripted sequence of internal tool calls.
 
-## User story
-
-As a Grok user, I can generate an image and later edit that generated image in
-the same Thread through the stock Codex image tool.
-
-## Real path
-
-```text
-exact packaged Grok artifact
-  -> Thread bound to the supported Grok Provider profile
-  -> stock Codex image generation
-  -> completed, user-accessible, decodable image result
-  -> later Turn in the same Thread
-  -> stock history supplies the generated image to the stock Codex image edit
-  -> completed, user-accessible, decodable edited image result and Turn
-```
-
-This Story covers Grok Provider image generation and history edit. It does not
-prove Mini authorization, routing, grants, transport, or accounting. It does
-not cover Grok Build.
+The current `image-primary` and `image-pinned` runners use an isolated
+image-capable profile and generated catalog. They do not consume unchanged
+shipped Grok profile/catalog assets. A pass is scoped to that isolated product
+path; unchanged shipped-profile composition remains a separate, unproven goal.
+This Story does not prove Mini routing/accounting or Grok Build.
 
 ## Acceptance
 
-**Given** a packaged Grok artifact with the shipped Grok Provider profile,
+Given a fresh isolated environment and the identified binary/model:
 
-**when** the acceptance runner submits one natural image-generation Turn and,
-after it completes, one natural edit Turn in the same Thread,
+1. A natural request asks for a dog on a plain background. Its Turn completes
+   and supplies a completed public image with a user-accessible, decodable PNG.
+2. A fresh recognition Thread receives those actual image pixels plus a neutral
+   English question about the animal and what it is wearing. It receives neither
+   the generation prompt nor the expected answer. Its completed final response
+   identifies a dog.
+3. The original generation Thread receives a natural request to add a red hat
+   while keeping the dog and background. Its Turn completes with a public image
+   and matching saved PNG.
+4. Another fresh recognition Thread receives the edited pixels and the same
+   neutral question. Its completed final response identifies dog, red and hat.
 
-**then** the stock Codex image-tool path completes both operations, the later
-edit uses the prior generated image from canonical Thread history, each result
-has a verified image MIME and matching codec, each result is available to the
-user, and both Turns reach a completed terminal state.
+Recognition uses whole-word fixture checks rather than an exact sentence.
+Explicit denial/uncertainty does not establish the expected visual result.
+These finite English checks are not a general natural-language judge or a
+pixel-perfect measure of all aspects of an edit.
 
-## Partial success is not completion
+The saved file must match the public image payload and remain safely readable
+inside the owned image directory. Decoding and byte/pixel budgets are resource
+bounds, not visual correctness. Generation and edited digests identify evidence;
+unequal hashes, a particular history rendition, an exact selector argument,
+raw extension events and an inventory of pre-existing images are not extra
+acceptance conditions. Intermediate errors and optional tool activity do not
+invalidate a subsequent complete, correct result within the same invocation.
 
-- The Provider emits a function request but no canonical image result
-  completes.
-- An image endpoint returns data but no matching image result is available to
-  the user.
-- Generation completes but the later edit does not use the same Thread's
-  canonical image history.
-- An image result exists but its Turn does not complete.
-- Deterministic contracts pass without the packaged external result.
+## Partial success and failure boundaries
 
-## Material failure boundaries
+An image endpoint response without a completed public image, an unreadable or
+invalid PNG, an unsuccessful Turn, missing or incorrect independent recognition,
+or generation without the requested edited result does not complete the Story.
+A generation prompt echoed as an answer cannot replace recognition in a fresh
+conversation. Wrong-thread evidence cannot complete the submitted operation.
 
-- The runner does not resubmit a failed or incomplete generation or edit Turn.
-- No fallback to another Provider, image tool, image lifecycle, history store,
-  or media store can complete this Story.
-- Provider response count, function-call count, image-item multiplicity,
-  ordering, timing, and retry shape are diagnostics unless an owning interface
-  makes them user-visible.
+Each semantic input is submitted once. The runner does not retry or replace an
+incomplete generation, edit or recognition Turn. Product-internal attempts and
+optional viewing remain product behavior, not a runner script. No fallback to
+another Provider or unrelated image may stand in for the requested result.
 
-## What this does not prove
+## Proof plan and evidence
 
-This Story does not prove another Grok source or target, future xAI behavior,
-multi-image edit cardinalities, transparent output, a latency objective,
-Grok Build, Mini accounting, or the absence of valid Provider-internal
-attempts.
+The proof has four semantic Turn submissions across three fresh Threads, in one
+owned process and isolated environment. The generation and edit share the first
+Thread; each recognition uses its own new Thread. The scenario catalog owns the
+executable budget. A separately authorized real-backend run is required; these
+instructions do not authorize one.
 
-## Proof plan
+- [`ImageGenerationEdit`](../../live/image.go), the
+  [SDK runner](../../live/sdk_image.go) and
+  [artifact reader](../../live/image_artifact.go) own the result oracle.
+- [`TestGrokImageGenerationEdit` and negative controls](../../live/image_test.go)
+  use a fake public App Server and validate submission, independent recognition,
+  completion and rejection of wrong/incomplete results.
+- [`TestImagePinnedFixture`](../../tests/integration/image_test.go) executes the
+  selected real Codex against controlled Responses/Images HTTP. Its synthetic
+  PNGs and scripted visual answers validate transport, actual image input,
+  same-thread edit and independent recognition orchestration, not real vision.
+- [Rust image preparation](../../../codex-rs/core/src/image_preparation.rs),
+  [public image integration](../../../codex-rs/app-server/tests/suite/v2/imagegen_extension.rs)
+  and stock `ImagesClient` regressions separately own exact tool/ABI, codec,
+  preparation, lifecycle and request/response compatibility. Their internal
+  assertions do not dictate the natural Live execution path.
+- [`TestLive/image-primary` and `image-pinned`](../../tests/live/live_test.go)
+  exercise the isolated real-backend path only when authorized.
 
-### Preconditions
-
-- Native Grok image, catalog, projection, codec, MIME, stock history-edit, App
-  Server lifecycle, and stock Provider-control tests passed for that source.
-- The release-bundled image-capable model and the supported Grok Provider
-  profile.
-- The selected invocation fits the runner's [observation budgets](../../live/README.md).
-  Exceeding a budget leaves the Story unproven; it does not establish a product
-  defect or narrow supported product output sizes.
-
-### Proof-run invocation budget
-
-One generation Turn and one later edit Turn in the same Thread. The runner
-does not retry or replace either semantic Turn.
-
-### Secret-safe evidence
-
-The [current failure-evidence contract](../../TESTING.md#live-failure-evidence)
-owns the bounded, secret-safe observations returned by this runner. Partial
-observations do not claim Story completion or assign defect ownership.
-
-## Stock compatibility control
-
-The exact deterministic gate runs the pre-existing stock `ImagesClient`
-generation and edit request/response regressions at the changed shared client
-seam. Provider catalog, capability, flat projection, image dialect, and
-effective edit budget checks remain Grok-specific. The `image_gen.imagegen`
-tool identity and App Server item-shape compatibility remain a separate
-deterministic child proof; they are not the unique Live image-result oracle.
-
-## Executable contract
-
-[`ImageGenerationEdit(ctx, Options)`](../../live/image.go) and
-[`TestGrokImageGenerationEdit`](../../live/image_test.go) own the offline observer.
-[`TestImagePinnedFixture`](../../tests/integration/image_test.go) executes real
-Codex with a controlled Responses/Images backend: generation, edit, exact image
-and history hashes, and same-thread lineage. [Rust image preparation](../../../codex-rs/core/src/image_preparation.rs)
-and [public image integration](../../../codex-rs/app-server/tests/suite/v2/imagegen_extension.rs)
-own the product transformation/lifecycle. [`TestLive/image-primary` and
-`image-pinned`](../../tests/live/live_test.go) own real-backend execution under
-the isolated image profile created by [`writeFixture`](../../live/fixture.go).
-They do not establish unchanged shipped-profile/catalog composition. A result
-must keep that distinction explicit rather than credit the full shipped-profile
-acceptance goal from the isolated gate.
-The deterministic public-stdio scripts exercise the runner with an independent
-image-capable model fixture. They cannot establish the shipped model catalog,
-actual Grok HTTP egress, backend visual correctness, or packaged Story success.
-
-The observer requires decodable image results, exact public payload/saved-byte
-agreement, fresh user-accessible artifacts, a distinct edited result, and
-correlated canonical same-Thread history selection. Stock media preparation
-may resize or re-encode history images; it does not invalidate those artifact
-requirements. The [image observer](../../live/image.go) and [artifact checks](../../live/image_artifact.go)
-own correlation, codec, preparation, recovery and resource checks.
-
-The consumed fixture enables image generation and the existing view-image tool,
-with other tools disabled. An optional view must identify an already observed
-artifact and return its known image bytes or prepared rendition. Viewing it is
-not generation credit and does not itself prove an edit. Offline controls cover
-view-before-edit and view-after-edit without requiring that auxiliary route.
-The controlled binary fixture still exercises direct generation/edit; it is not
-evidence that the general packaged profile executed every possible view route.
-Target Turns are found by unique identity, not by history length or position.
-Equivalent notifications and valid internal recovery do not consume another
-proof-run invocation.
+Evidence contains safe subject metadata, completion/recognition booleans,
+counts, artifact digests and bounded failure classification under the
+[failure-evidence contract](../../TESTING.md#live-failure-evidence). It does not
+export prompts, replies, raw events, images, private paths or credentials.
+Offline/control passes are not executed real-backend evidence and do not
+certify another source, target, model, arbitrary images, multi-image editing,
+transparent output, performance or absence of internal attempts.
 
 ## Product image boundary
 

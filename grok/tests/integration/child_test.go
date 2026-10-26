@@ -79,7 +79,7 @@ func childHTTPReply(writer http.ResponseWriter, id, text string) {
 
 const childHTTPSeedReply = "seed accepted"
 
-const childHTTPTask = "Without running commands or tools, recall the setup marker from your inherited history and write a fresh UUID v4 yourself. Reply with the setup marker and the canonical lowercase UUID. Do not ask the parent to supply the marker."
+const childHTTPTask = "Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value."
 
 const childHTTPNewTask = "Message Type: NEW_TASK\nTask name: /root/live_child\nSender: /root\nPayload:\n" + childHTTPTask
 

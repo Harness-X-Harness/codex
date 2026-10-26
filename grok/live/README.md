@@ -24,11 +24,12 @@ A digest proves bytes, not independently verified release provenance.
   reasoning and a token-free same-thread continuation.
 - `StructuredEdit`, `StructuredEditApprovalDeclined`,
   `StructuredEditPinnedPreviousModel` and `StructuredEditReplaceAll` observe
-  exact authorized filesystem effects and paired history.
+  exact authorized filesystem effects and effective approval denial.
 - `AttachedImageHistory` submits an actual user image, checks a visual answer,
   then asks a different image-only fact in a text-only same-thread continuation.
-- `ImageGenerationEdit` observes generation, canonical history selection and
-  a distinct same-thread edit through an isolated image-only fixture.
+- `ImageGenerationEdit` generates an image and edits it in the same Thread;
+  fresh conversations independently describe each actual result image through
+  the isolated image-capable fixture.
 - `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and
   `ShippedChildCollaboration` consume unchanged embedded [shipped assets](../dist).
   Catalog-only makes no inference request. Startup preserves profile defaults;
@@ -54,27 +55,33 @@ Valid unauthorized requests are denied without effect. Malformed requests may
 be wire-rejected; the observer still needs every positive result criterion.
 
 - [Reasoning](reasoning_history.go) requires a completed authorized named tool,
-  fresh result, opaque completed reasoning and eligible final recall in both
-  turns. Raw reasoning text is not encrypted evidence. The controlled
-  Integration owner independently verifies unchanged encrypted replay.
-- [Editing](sdk_edit_observer.go) correlates approval, function/result and file
-  change, checks exact bytes/hash after each turn and after joined cleanup, and
-  rejects an unauthorized effect even if a later terminal succeeds.
-- [Images](image.go) reconcile canonical raw call/output, completed public image
-  and settled history. [Artifact checks](image_artifact.go) require fully decoded
-  PNG, exact public payload/saved-byte equality, fresh nonsymlink regular files,
-  readability and distinct edited output. Prepared history may be resized or
-  re-encoded, so it has its own digest; exact call identity and selection bind
-  that rendition to the public artifact and later edit. A pre-lifecycle validation
-  error cannot prove an image, and a started image still needs its terminal.
+  fresh result, opaque completed reasoning and recall in both whole eligible
+  final responses. A later final fragment does not erase earlier final content;
+  commentary cannot substitute for final recall. The controlled Integration
+  owner separately verifies unchanged encrypted replay.
+- [Editing](sdk_edit_observer.go) checks successful terminal/final responses and
+  actual file bytes after each turn and joined cleanup. Alternate replacement
+  boundaries, multiple edits and auxiliary tools do not fail a correct result.
+  The declined control still requires a matching denial and no committed effect;
+  raw call pairing and file-change counts are not the Live oracle.
+- [Images](image.go) require a completed public image and matching, fully decoded
+  saved PNG. Fresh recognition Threads receive the actual pixels and a neutral
+  question, not the generation/edit request or expected answer. A dog must be
+  recognized before the same-conversation edit, then a dog wearing a red hat
+  afterward. Raw extension calls, prepared history, artifact inventories and
+  unequal hashes are not semantic proof or additional acceptance conditions.
+  [Artifact checks](image_artifact.go) retain bounded decoding, safe saved-path
+  access and public-payload/saved-byte agreement.
 - [Child collaboration](shipped_child.go) requires inherited-marker recall,
   complete observed own-input coverage, a fresh child result, matching lineage
-  and parent consumption. Missing/opaque coverage is unproven. Parent-supplied
-  or inherited results, tool-assisted marker lookup and exact credited-terminal
-  conflicts cannot earn credit; unrelated later orchestration is not failure.
-- [Web](search.go) requires canonical hosted calls, successful terminals,
-  nonempty settled answers and unchanged same-thread replay. Local redispatch,
-  synthetic output or prose alone cannot prove hosted execution.
+  and parent consumption. Missing/opaque coverage is unproven. Natural prose,
+  additional UUIDs and intermediate tool activity are not failures by themselves;
+  supplied or inherited results cannot count as fresh child work.
+- [Web](search.go) requires completed public Web activity, successful terminals,
+  nonempty eligible final answers and same-thread continuation. Raw extension
+  envelopes are not the business oracle. Native request/replay and controlled
+  policy tests separately own protocol composition; prose alone is not hosted
+  execution proof.
 
 Each semantic input is submitted once. Product-internal retries/recovery remain
 product policy. Missing evidence does not authorize runner resubmission.
@@ -84,12 +91,12 @@ product policy. Missing evidence does not authorize runner resubmission.
 Source constants and tests own exact observation budgets. SDK frames cap at
 16 MiB. Scenario-specific bounds remain independent: Basic completion callbacks
 are bounded; reasoning bounds accepted identities and provisional replies;
-editing bounds arguments, outputs and correlation; image observation bounds
-frames, calls, artifact inventory and decoded bytes/pixels; child input coverage
-bounds events and bytes; hosted search bounds calls and replay identities.
+editing bounds public observations and correlation; image observation bounds
+terminal evidence and decoded bytes/pixels; child input coverage bounds events
+and bytes; hosted search bounds public items and turn identities.
 A budget overflow leaves the result unproven, not evidence of a product/service
-limit. Image-only fixtures do not prove a general packaged view-image-before-edit
-route. Controlled fixtures do not establish real-backend relevance or policy
+limit. Isolated image fixtures do not prove unchanged shipped-profile composition
+or require a particular optional view-image route. Controlled fixtures do not establish real-backend relevance or policy
 enforcement.
 
 Cleanup uses SDK `CloseContext` with a separate deadline. `CleanupPending` means

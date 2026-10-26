@@ -34,14 +34,14 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		}
 		setupMarker := hex.EncodeToString(marker[:])
 		evidence.SetupTurns = 1
-		seeded, seed, err := observeShippedTurn(server, parentID, evidence, "", "Remember this bounded setup marker: "+setupMarker+". Reply with a short confirmation without using tools.")
+		seeded, seed, err := observeShippedTurn(server, parentID, evidence, "", "Remember this bounded setup marker: "+setupMarker+". Reply with a short confirmation.")
 		if err != nil {
 			return err
 		}
 		evidence.SetupCompleted, evidence.Completed, evidence.ReplyBytes = true, false, 0
 		evidence.Stage, evidence.TaskTurns = "setup_turn_proven", 1
 		parent, current, err := observeShippedTurn(server, parentID, evidence, "ultra",
-			"Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Without running commands or tools, recall the setup marker from your inherited history and write a fresh UUID v4 yourself. Reply with the setup marker and the canonical lowercase UUID. Do not ask the parent to supply the marker. Wait for that child to complete, then include the UUID returned by the child in your final reply.")
+			"Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value. Wait for that child to complete, then include the UUID returned by the child in your final reply.")
 		if err != nil {
 			return err
 		}
@@ -153,32 +153,32 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					}
 					reply, replyErr := finalProductReply(turn)
 					unique := make(map[string]bool)
-					for _, value := range childNonce.FindAllString(reply, -1) {
+					for _, value := range childNonce.FindAllString(strings.ToLower(reply), -1) {
 						unique[value] = true
 					}
-					if replyErr != nil || len(unique) != 1 || !containsProofValue(reply, setupMarker) {
+					if replyErr != nil || len(unique) == 0 || !containsProofValue(reply, setupMarker) {
 						continue
 					}
-					var nonce string
-					for value := range unique {
-						nonce = value
+					// Credit a fresh child result actually used by the parent. Other
+					// UUIDs and surrounding prose do not invalidate that result.
+					for nonce := range unique {
+						if !containsProofValue(parentReply, nonce) || containsProofValue(parentKnown[child.ID], nonce) {
+							continue
+						}
+						switch stream.proof(child, parent, turn, nonce, setupMarker) {
+						case childNotProven:
+							continue
+						case childPending:
+							pending = true
+							continue
+						case childProven:
+						}
+						evidence.ChildBound, evidence.ChildCompleted = true, true
+						credited = append(credited, func() bool {
+							return stream.proof(child, parent, turn, nonce, setupMarker) == childProven
+						})
+						matched = true
 					}
-					if !containsProofValue(parentReply, nonce) || containsProofValue(parentKnown[child.ID], nonce) {
-						continue
-					}
-					switch stream.proof(child, parent, turn, nonce, setupMarker) {
-					case childNotProven:
-						continue
-					case childPending:
-						pending = true
-						continue
-					case childProven:
-					}
-					evidence.ChildBound, evidence.ChildCompleted = true, true
-					credited = append(credited, func() bool {
-						return stream.proof(child, parent, turn, nonce, setupMarker) == childProven
-					})
-					matched = true
 				}
 			}
 			if matched {
@@ -411,6 +411,20 @@ func observeShippedTurn(server *sdkProductObserver, id string, evidence *Evidenc
 }
 
 func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput) (productThread, productTurn, error) {
+	thread, terminal, err := observeProductCompletedTurn(server, id, evidence, effort, input)
+	if err != nil {
+		return thread, terminal, err
+	}
+	text, err := finalProductReply(terminal)
+	if err != nil {
+		return thread, terminal, err
+	}
+	evidence.Completed, evidence.ReplyBytes, evidence.Stage = true, len(text), "product_turn_proven"
+	return thread, terminal, nil
+}
+
+// A completed image result need not also contain an assistant text message.
+func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput) (productThread, productTurn, error) {
 	evidence.Turns++
 	request := protocolv2.TurnStartParams{ThreadID: id, Input: input}
 	if effort != "" {
@@ -468,10 +482,5 @@ func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Ev
 	if err := completedProductTurn(terminal); err != nil {
 		return thread, terminal, err
 	}
-	text, err := finalProductReply(terminal)
-	if err != nil {
-		return thread, terminal, err
-	}
-	evidence.Completed, evidence.ReplyBytes, evidence.Stage = true, len(text), "product_turn_proven"
 	return thread, terminal, nil
 }
