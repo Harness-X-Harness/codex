@@ -282,7 +282,8 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 				fail("nonce_unavailable")
 				return
 			}
-			childHTTPCall(writer, "child_spawn", fixture.spawn, map[string]any{"task_name": "live_child", "message": childHTTPTask}, fixture.nonce)
+			knownResult, _ := json.Marshal(map[string]any{"child_nonce": fixture.nonce})
+			childHTTPCall(writer, "child_spawn", fixture.spawn, map[string]any{"task_name": "live_child", "message": childHTTPTask}, string(knownResult))
 		} else {
 			childHTTPCall(writer, "child_spawn", fixture.spawn, map[string]any{"task_name": "live_child", "message": childHTTPTask})
 		}
@@ -338,6 +339,13 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 	}
 	fixture.continued = true
 	parentResult, _ := json.Marshal(map[string]any{"child_nonce": fixture.nonce})
+	if fixture.parentSupplied {
+		// This negative already emitted its structured final answer before spawn,
+		// so the child really inherited the result. Do not append a second JSON
+		// object: the oracle must reach freshness rejection, not format rejection.
+		// Commentary is not retained by the stock child fork.
+		parentResult = nil
+	}
 	childHTTPReply(writer, "parent", string(parentResult))
 }
 
@@ -373,6 +381,7 @@ func TestShippedChildFixture(t *testing.T) {
 	t.Run("inherited_spawn_history", testShippedChildInheritedHistory)
 	t.Run("delivered_result", testShippedChildDeliveredResult)
 	t.Run("output_schema_scope", testShippedChildOutputSchemaScope)
+	t.Run("inherited_result_structured_negative", testShippedChildStructuredNegative)
 }
 
 type shippedChildHTTP struct {

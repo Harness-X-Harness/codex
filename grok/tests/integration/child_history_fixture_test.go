@@ -5,6 +5,7 @@ package integration_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,5 +153,88 @@ func testShippedChildOutputSchemaScope(t *testing.T) {
 				t.Fatalf("schema boundary: status=%d failure=%s", response.Code, fixture.failure)
 			}
 		})
+	}
+}
+
+// Drive the actual negative fixture branch: the pre-spawn final answer must
+// remain inherited, while the complete parent turn is still one schema object.
+func testShippedChildStructuredNegative(t *testing.T) {
+	integrationObservation(t)
+	message := func(role, text string) map[string]any {
+		return map[string]any{"type": "message", "role": role, "content": []any{map[string]any{"type": "input_text", "text": text}}}
+	}
+	fixture := &shippedChildHTTP{model: "fixture-model", seedEffort: "high", parentSupplied: true}
+	input := []map[string]any{
+		message("user", "Remember this bounded setup marker: "+strings.Repeat("01", 16)+". Reply briefly."),
+		message("assistant", childHTTPSeedReply),
+		message("user", "Delegate one bounded task to a child named live_child using inherited history."),
+	}
+	if response := childHistoryFixtureRequest(t, fixture, "parent", "high", input[:1]); response.Code != http.StatusOK {
+		t.Fatal("seed rejected")
+	}
+	spawn := childHistoryFixtureRequest(t, fixture, "parent", "xhigh", input)
+	if spawn.Code != http.StatusOK || fixture.nonce == "" {
+		t.Fatal("negative spawn rejected")
+	}
+	finalTexts := func(response *httptest.ResponseRecorder) []string {
+		var texts []string
+		for _, line := range strings.Split(response.Body.String(), "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			var event struct {
+				Type string
+				Item struct {
+					Type, Phase string
+					Content     []struct{ Text string }
+				}
+			}
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event) != nil {
+				t.Fatal("invalid event")
+			}
+			if event.Type != "response.output_item.done" || event.Item.Type != "message" {
+				continue
+			}
+			if event.Item.Phase != "final_answer" {
+				t.Fatal("inherited negative changed message phase")
+			}
+			for _, part := range event.Item.Content {
+				if strings.TrimSpace(part.Text) != "" {
+					texts = append(texts, part.Text)
+				}
+			}
+		}
+		return texts
+	}
+	texts := finalTexts(spawn)
+	if len(texts) != 1 || !strings.Contains(texts[0], fixture.nonce) {
+		t.Fatal("pre-spawn final result missing")
+	}
+	inherited := append(append([]map[string]any{}, input...), message("assistant", texts[0]))
+	childInput := append(append([]map[string]any{}, inherited...), message("user", childHTTPNewTask))
+	if response := childHistoryFixtureRequest(t, fixture, "child", "xhigh", childInput); response.Code != http.StatusOK || fixture.childID != "child" {
+		t.Fatalf("actual inherited result rejected: %s", fixture.failure)
+	}
+	args, _ := json.Marshal(map[string]any{"task_name": "live_child", "message": childHTTPTask})
+	spawnResult := `{"task_name":"/root/live_child"}`
+	continuation := append(inherited,
+		map[string]any{"type": "function_call", "call_id": "child_spawn", "name": "fixture_spawn", "arguments": string(args)},
+		map[string]any{"type": "function_call_output", "call_id": "child_spawn", "output": spawnResult},
+		message("user", "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/live_child\nPayload:\n"+fixture.setupMarker+" "+fixture.nonce))
+	completion := childHistoryFixtureRequest(t, fixture, "parent", "xhigh", continuation)
+	if completion.Code != http.StatusOK || !fixture.continued || fixture.failure != "" {
+		t.Fatalf("negative completion rejected: %s", fixture.failure)
+	}
+	texts = append(texts, finalTexts(completion)...)
+	var result struct {
+		Nonce *string `json:"child_nonce"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(strings.Join(texts, "\n")))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&result) != nil || result.Nonce == nil || *result.Nonce != fixture.nonce {
+		t.Fatal("negative no longer produces formal parent result")
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("negative emits extra parent result instead of reaching freshness oracle")
 	}
 }
