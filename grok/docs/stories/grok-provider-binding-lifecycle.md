@@ -108,8 +108,8 @@ delegation task. The parent's setup must retain its successful turn identity and
 ordered user/assistant content; reconstructed item IDs and diagnostic metadata
 are not part of that conversation contract. A qualifying child must report the setup marker in its completed result, with
 complete observed own-input coverage proving that the marker was not supplied
-again before that result. Pre-result child tool execution cannot supply the
-marker through another lookup path. Lineage alone is insufficient.
+again before that result. Auxiliary tool activity is not itself disqualifying;
+lineage alone is still insufficient.
 
 Stock paginated subagent history intentionally omits inherited model records
 from the child's public turns. Exact public child seed item identities, content
@@ -122,11 +122,12 @@ That controlled prerequisite does not replace real child recall and parent resul
 consumption.
 
 The runner accepts a bounded fresh UUID from a correctly bound, completed child
-turn when the parent's terminal reply contains it. Parent prose, additional
+turn when the parent's terminal reply contains it. UUID casing, additional UUIDs
+and surrounding prose are not exact-output constraints. Parent prose, additional
 orchestration and incidental failed/running children or spawns do not supply
 credit or invalidate an otherwise qualifying result. It can recognize a causal
 result before a child's later follow-up. Missing or incorrect recalled markers,
-markers supplied through later child inputs or alternate lookups, inherited
+markers supplied through later child inputs, inherited
 results, mismatched Provider/model/ownership and result values already in parent
 text before that child's Started activity or supplied to the child are rejected.
 This includes the current delegation turn: a full fork can inherit a parent's
