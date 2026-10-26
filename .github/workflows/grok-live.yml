@@ -36,6 +36,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
+      - name: Initialize Live evidence before setup
+        run: |
+          mkdir -p "$RUNNER_TEMP/live-evidence"
+          printf '{"harness_sha":"%s","run_id":"%s","attempt":"%s","state":"started"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/live-evidence/workflow.json"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
@@ -84,14 +88,16 @@ jobs:
             test -n "$SCENARIO"
             args+=(--scenario "$SCENARIO")
           fi
-          mkdir "$RUNNER_TEMP/live-evidence"
+          mkdir -p "$RUNNER_TEMP/live-evidence"
           go run ./cmd/grok-scenarios "${args[@]}" > "$RUNNER_TEMP/live-evidence/selected.json"
       - name: Prepare the hosted Linux sandbox for Live
         run: bash grok/package/prepare_linux_sandbox_ci.sh
       - name: Execute the explicit Go Live selection once
+        id: live_execution
         working-directory: grok
         env:
           GROK_LIVE: "1"
+          GROK_LIVE_DIAGNOSTICS_DIR: ${{ runner.temp }}/live-evidence/scenarios
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
           GROK_CODEX_BIN: ${{ runner.temp }}/live-package/package/bin/grok-bin
           SUITE: ${{ inputs.suite }}
@@ -115,11 +121,29 @@ jobs:
             "${selection[@]}" -grok-live-verified-subject -grok-live-binary-sha256 "$digest" \
             -grok-live-source-sha "$source" -grok-live-harness-sha "$GITHUB_SHA" \
             -grok-live-target x86_64-unknown-linux-musl -grok-live-environment github-actions-diagnostic \
-            > "$RUNNER_TEMP/live-evidence/tests.json" || status=$?
+            > "$RUNNER_TEMP/live-evidence/tests.json" 2> "$RUNNER_TEMP/live-runner-stderr" || status=$?
           go run ./cmd/grok-test-results --input "$RUNNER_TEMP/live-evidence/tests.json" \
             "${required[@]}" > "$RUNNER_TEMP/live-evidence/summary.json" || status=1
           cat "$RUNNER_TEMP/live-evidence/summary.json"
           exit "$status"
+      - name: Preserve bounded runner errors after execution
+        if: ${{ always() && contains(fromJSON('["success","failure","cancelled"]'), steps.live_execution.outcome) }}
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+        run: |
+          if test -f "$RUNNER_TEMP/live-runner-stderr"; then
+            python3 grok/package/live_diagnostics.py --stderr "$RUNNER_TEMP/live-runner-stderr" --output "$RUNNER_TEMP/live-evidence/runner-stderr.json"
+          fi
+      - name: Finalize available Live evidence
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/live-evidence"
+          printf '{"harness_sha":"%s","run_id":"%s","attempt":"%s","state":"%s"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$JOB_STATUS" > "$RUNNER_TEMP/live-evidence/workflow.json"
+          for name in selection.json verified.json; do
+            if test -f "$RUNNER_TEMP/live-package/$name"; then cp "$RUNNER_TEMP/live-package/$name" "$RUNNER_TEMP/live-evidence/"; fi
+          done
       - name: Retain the bounded diagnostic result
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -13,7 +13,7 @@ import (
 
 func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence, error) {
 	evidence := ImageEvidence{}
-	server := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}
+	server := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1), diagnostics: options.Diagnostics}
 	handlers := sdkFixtureHandlers{requests: server.request, notifications: server.typedNotification, afterClose: server.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 256 << 20}, queue: 8192}
 	base, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, base *Evidence) error {
@@ -84,8 +84,12 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 		}
 		prompts := []string{"Draw a clear picture of a dog on a plain background.", "Add a red hat to the dog in the image you just generated, keeping the dog and background."}
 		for index, prompt := range prompts {
+			phase := []string{"generation", "edit"}[index]
+			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase, "status": "submitted", "prompt": prompt})
 			evidence.TurnCompleted = false
 			turn, err := run(generationThread, []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})})
+			recordImageTurn(options.Diagnostics, phase, turn)
+			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase, "status": "returned", "completed": err == nil})
 			if err != nil {
 				return err
 			}
@@ -113,15 +117,23 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			if recognitionThread == generationThread {
 				return failedObservation("image_recognition_not_independent", "live: image recognition conversation is not independent")
 			}
-			recognized, err := run(recognitionThread, []protocolv2.UserInput{imageInput(result), protocolv2.NewUserInputText(protocolv2.UserInputText{Text: "Describe the animal and anything it is wearing in this picture. Answer in English."})})
+			recognitionPrompt := "Describe the animal and anything it is wearing in this picture. Answer in English."
+			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "submitted", "prompt": recognitionPrompt, "input_sha256": result.digest})
+			recognized, err := run(recognitionThread, []protocolv2.UserInput{imageInput(result), protocolv2.NewUserInputText(protocolv2.UserInputText{Text: recognitionPrompt})})
+			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "returned", "completed": err == nil})
 			if err != nil {
 				return err
 			}
+			base.Stage = "image_" + phase + "_recognition_completed"
 			reply, err := finalProductReply(recognized)
+			options.Diagnostics.Record("image_recognition", map[string]any{"phase": phase, "reply": reply, "aggregate_available": err == nil})
 			if err != nil {
 				return err
 			}
-			if !imageRecognized(reply, index == 1) {
+			base.ReplyBytes = len(reply)
+			accepted := imageRecognized(reply, index == 1)
+			options.Diagnostics.Record("image_verdict", map[string]any{"phase": phase, "accepted": accepted})
+			if !accepted {
 				return failedObservation("image_visual_result_mismatch", "live: requested image content not established")
 			}
 			if index == 0 {

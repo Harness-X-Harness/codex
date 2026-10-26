@@ -3,6 +3,8 @@ package livecommand
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,5 +32,36 @@ func TestReportHardBoundRejectsOversizedEvidence(t *testing.T) {
 	}
 	if Write(&output, Report{SchemaVersion: 1, Outcome: "not_run"}) != nil || output.Len() == 0 {
 		t.Fatal("bounded report was lost")
+	}
+}
+
+func TestDiagnosticCaptureFailureIsSeparateFromNotRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(path, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, code := Execute(context.Background(), Config{Scenario: "basic-primary", Timeout: time.Minute, DiagnosticsDir: path}, func(string) string { return "" })
+	if code != 3 || report.Outcome != "not_run" {
+		t.Fatalf("diagnostics changed outcome: %+v", report)
+	}
+	if report.Diagnostics == nil || len(report.Diagnostics.CaptureErrors) == 0 {
+		t.Fatalf("capture failure hidden: %+v", report)
+	}
+}
+
+func TestDiagnosticEarlyReturnPersistsInvocation(t *testing.T) {
+	dir := t.TempDir()
+	report, code := Execute(context.Background(), Config{Scenario: "basic-primary", Timeout: time.Minute, DiagnosticsDir: dir}, func(string) string { return "" })
+	if code != 3 || report.Diagnostics == nil {
+		t.Fatal("not-run outcome changed")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"invocation_started", "invocation_finished", "explicit_opt_in_required"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("missing %s", want)
+		}
 	}
 }

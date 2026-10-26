@@ -10,10 +10,13 @@ import (
 
 // ShippedCatalog starts the explicit subject with unchanged shipped assets and
 // verifies the complete public catalog. It performs no inference.
-func ShippedCatalog(ctx context.Context, subject Subject, key string) (Evidence, error) {
+func ShippedCatalog(ctx context.Context, subject Subject, key string, sinks ...*Diagnostics) (Evidence, error) {
 	options, err := shippedOptions(subject, key, "")
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
+	}
+	if len(sinks) != 0 {
+		options.Diagnostics = sinks[0]
 	}
 	options.catalogOnly = true
 	return sdkShippedCatalog(ctx, options)
@@ -21,10 +24,13 @@ func ShippedCatalog(ctx context.Context, subject Subject, key string) (Evidence,
 
 // ShippedStartup observes one turn from the unchanged shipped profile. Native
 // tool composition is a C7 prerequisite; scripted proof alone is not Live success.
-func ShippedStartup(ctx context.Context, subject Subject, key string) (Evidence, error) {
+func ShippedStartup(ctx context.Context, subject Subject, key string, sinks ...*Diagnostics) (Evidence, error) {
 	options, err := shippedOptions(subject, key, "")
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
+	}
+	if len(sinks) != 0 {
+		options.Diagnostics = sinks[0]
 	}
 	return sdkShippedSession(ctx, options, func(server *sdkProductObserver, id string, evidence *Evidence) error {
 		_, turn, err := observeShippedTurn(server, id, evidence, "", "Reply with a short confirmation that this turn completed.")
@@ -44,7 +50,7 @@ func ShippedStartup(ctx context.Context, subject Subject, key string) (Evidence,
 
 // ShippedPinned keeps the shipped previous-model route through the retained
 // two-turn encrypted/tool-history scenario. It does not suppress shipped tools.
-func ShippedPinned(ctx context.Context, subject Subject, key string) (Evidence, error) {
+func ShippedPinned(ctx context.Context, subject Subject, key string, sinks ...*Diagnostics) (Evidence, error) {
 	slugs, err := dist.ModelSlugs()
 	if err != nil || len(slugs) != 2 {
 		return Evidence{Stage: "preflight"}, errors.New("live: pinned shipped route unavailable")
@@ -52,6 +58,9 @@ func ShippedPinned(ctx context.Context, subject Subject, key string) (Evidence, 
 	options, err := shippedOptions(subject, key, slugs[1])
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
+	}
+	if len(sinks) != 0 {
+		options.Diagnostics = sinks[0]
 	}
 	return ReasoningHistory(ctx, options)
 }

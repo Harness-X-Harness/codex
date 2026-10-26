@@ -678,7 +678,11 @@ class PRWorkflowTests(unittest.TestCase):
         self.assertIn("inputs.suite == 'diagnostic' && inputs.scenario == 'image-primary'", text)
         self.assertLess(text.index("Fetch and verify the explicit diagnostic package"),
                         text.index("GROK_API_KEY:"))
-        self.assertEqual(text.count("GROK_API_KEY:"), 1)
+        self.assertEqual(text.count("GROK_API_KEY:"), 2)
+        finalizer = text.split("      - name: Preserve bounded runner errors after execution\n", 1)[1].split("      - ", 1)[0]
+        self.assertIn("always() && contains(fromJSON('[\"success\",\"failure\",\"cancelled\"]'), steps.live_execution.outcome)", finalizer)
+        self.assertIn("live_diagnostics.py --stderr", finalizer)
+        self.assertNotIn("go test", finalizer)
         def script(name):
             step = text.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
             return textwrap.dedent(step.split("        run: |\n", 1)[1])

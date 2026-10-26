@@ -37,6 +37,7 @@ type sdkEditLedger struct {
 // Callback-owned ledgers retain both turns until the SDK joins callback work.
 // Snapshots expose only safe business facts, never retained item content.
 type sdkEditObserver struct {
+	diagnostics  *Diagnostics
 	mu           sync.Mutex
 	fixture      *editFixture
 	threadID     string
@@ -159,6 +160,7 @@ func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2
 		// approval step; losing that denial would let a later write look authorized.
 		decline := codexsdk.FileChangeApprovalResponse(protocolv2.FileChangeRequestApprovalResponse{Decision: protocolv2.FileChangeApprovalDecisionDecline})
 		params := approval.Params
+		observer.diagnostics.Record("approval_response", map[string]any{"kind": "file_change", "turn_id": params.TurnID, "item_id": params.ItemID, "decision": "decline"})
 		if observer.fixture != nil && !observer.fixture.decline && params.ThreadID == observer.threadID && params.TurnID != "" && params.ItemID != "" {
 			// The typed denial still goes out. Returning the error here would
 			// replace it with a transport rejection and hide the authorization fact.
@@ -178,7 +180,8 @@ func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2
 		}
 		return decline, nil
 	}
-	if _, ok := request.AsItemCommandExecutionRequestApproval(); ok {
+	if approval, ok := request.AsItemCommandExecutionRequestApproval(); ok {
+		observer.diagnostics.Record("approval_response", map[string]any{"kind": "command", "turn_id": approval.Params.TurnID, "item_id": approval.Params.ItemID, "decision": "decline"})
 		return codexsdk.CommandExecutionApprovalResponse(protocolv2.CommandExecutionRequestApprovalResponse{Decision: protocolv2.NewCommandExecutionApprovalDecisionDecline()}), nil
 	}
 	return codexsdk.ServerRequestResponse{}, failedObservation("unsupported_server_request", "live: unsupported server request")
@@ -376,6 +379,10 @@ func (observer *sdkEditObserver) snapshot() (StructuredEditEvidence, error) {
 	var evidence StructuredEditEvidence
 	if len(observer.ledgers) != 0 {
 		first := observer.ledgers[0]
+		for index, ledger := range observer.ledgers {
+			reply, err := finalProductReply(productTurn{Items: ledger.observation.replies})
+			observer.diagnostics.Record("oracle_reply", map[string]any{"scenario": "edit", "turn": index + 1, "text": reply, "available": err == nil})
+		}
 		evidence = observer.ledgers[len(observer.ledgers)-1].evidence
 		evidence.Turns = len(observer.ledgers)
 		evidence.FirstCompleted, evidence.FirstReplyBytes = first.evidence.FirstCompleted, first.observation.replyBytes

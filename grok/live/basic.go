@@ -27,6 +27,8 @@ type Subject struct {
 
 // Options selects an isolated harness fixture, independent of shipped assets.
 type Options struct {
+	// Diagnostics is a separate task-scoped artifact sink; never an oracle.
+	Diagnostics                        *Diagnostics
 	Subject                            Subject
 	Model, BaseURL, APIKey             string
 	imageFixture, attachedImageFixture bool
@@ -54,6 +56,9 @@ type Evidence struct {
 // withFixture verifies the explicit executable and isolates one workspace.
 // Every scenario uses the pinned SDK; this setup does not speak App Server.
 func withFixture(ctx context.Context, options Options, edit *editFixture, run func(home, cwd string, evidence *Evidence) error) (evidence Evidence, resultErr error) {
+	defer func() {
+		options.Diagnostics.Record("fixture_result", map[string]any{"stage": evidence.Stage, "completed": evidence.Completed, "cleanup_pending": evidence.CleanupPending, "failure": diagnosticFailure(resultErr)})
+	}()
 	evidence = Evidence{Stage: "preflight", ObservedAt: time.Now().UTC().Format(time.RFC3339)}
 	deadline, bounded := ctx.Deadline()
 	subject := options.Subject

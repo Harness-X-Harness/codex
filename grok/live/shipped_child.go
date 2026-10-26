@@ -16,23 +16,27 @@ import (
 // ShippedChildCollaboration proves a bounded seed prefix, then asks the shipped
 // default model for one delegation task with a default/full-history child. C7 owns real model/tool HTTP composition; this callable
 // observer also has deterministic public-protocol proof without backend opt-in.
-func ShippedChildCollaboration(ctx context.Context, subject Subject, key string) (Evidence, error) {
+func ShippedChildCollaboration(ctx context.Context, subject Subject, key string, sinks ...*Diagnostics) (Evidence, error) {
 	options, err := shippedOptions(subject, key, "")
 	if err != nil {
 		return Evidence{Stage: "preflight"}, err
+	}
+	if len(sinks) != 0 {
+		options.Diagnostics = sinks[0]
 	}
 	return runShippedChildCollaboration(ctx, options)
 }
 
 func runShippedChildCollaboration(ctx context.Context, options Options) (Evidence, error) {
 	return sdkShippedSession(ctx, options, func(server *sdkProductObserver, parentID string, evidence *Evidence) error {
-		stream := childStream{}
+		stream := childStream{diagnostics: server.diagnostics}
 		server.setNotification(stream.observe)
 		var marker [16]byte
 		if _, err := rand.Read(marker[:]); err != nil {
 			return errors.New("live: setup marker unavailable")
 		}
 		setupMarker := hex.EncodeToString(marker[:])
+		server.diagnostics.Record("child_setup", map[string]any{"parent_id": parentID, "marker": setupMarker})
 		evidence.SetupTurns = 1
 		seeded, seed, err := observeShippedTurn(server, parentID, evidence, "", "Remember this bounded setup marker: "+setupMarker+". Reply with a short confirmation.")
 		if err != nil {
@@ -108,10 +112,12 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			}
 			id, path := activity.AgentThreadID, activity.AgentPath
 			if id == "" || id == parentID || path == "" || len(path) > 1024 {
+				server.diagnostics.Record("child_candidate_skipped", map[string]any{"child_id": id, "path": path, "reason": "invalid_activity_identity"})
 				continue
 			}
 			if previous, seen := childPaths[id]; seen {
 				if previous != path {
+					server.diagnostics.Record("child_candidate_skipped", map[string]any{"child_id": id, "path": path, "previous_path": previous, "reason": "conflicting_activity"})
 					return errors.New("live: conflicting child activity")
 				}
 				continue
@@ -129,6 +135,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		for _, childID := range childIDs {
 			child, bindingErr := readProductThread(server, childID, evidence.Model)
 			eligible := bindingErr == nil && child.ParentThreadID == parent.ID && child.ForkedFromID == parent.ID && child.Source.SubAgent.ThreadSpawn.AgentPath == childPaths[childID]
+			server.diagnostics.Record("child_candidate", map[string]any{"child_id": childID, "observed_path": childPaths[childID], "parent_id": child.ParentThreadID, "forked_from_id": child.ForkedFromID, "path": child.Source.SubAgent.ThreadSpawn.AgentPath, "eligible": eligible, "read_failed": bindingErr != nil})
 			if !eligible {
 				continue
 			}
@@ -149,23 +156,32 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 						}
 					}
 					if inheritedTurn || completedProductTurn(turn) != nil {
+						server.diagnostics.Record("child_turn_skipped", map[string]any{"child_id": child.ID, "turn_id": turn.ID, "inherited": inheritedTurn, "status": turn.Status})
+						if !inheritedTurn {
+							recordProductDiagnosticTurn(server.diagnostics, "child_incomplete_result", child.ID, turn)
+						}
 						continue
 					}
+					recordProductDiagnosticTurn(server.diagnostics, "child_result", child.ID, turn)
 					reply, replyErr := finalProductReply(turn)
 					unique := make(map[string]bool)
 					for _, value := range childNonce.FindAllString(strings.ToLower(reply), -1) {
 						unique[value] = true
 					}
+					server.diagnostics.Record("child_reply_check", map[string]any{"child_id": child.ID, "turn_id": turn.ID, "reply_available": replyErr == nil, "uuid_count": len(unique), "marker_recalled": containsProofValue(reply, setupMarker)})
 					if replyErr != nil || len(unique) == 0 || !containsProofValue(reply, setupMarker) {
 						continue
 					}
 					// Credit a fresh child result actually used by the parent. Other
 					// UUIDs and surrounding prose do not invalidate that result.
 					for nonce := range unique {
+						server.diagnostics.Record("child_result_use", map[string]any{"child_id": child.ID, "turn_id": turn.ID, "uuid": nonce, "used_by_parent": containsProofValue(parentReply, nonce), "known_before_spawn": containsProofValue(parentKnown[child.ID], nonce)})
 						if !containsProofValue(parentReply, nonce) || containsProofValue(parentKnown[child.ID], nonce) {
 							continue
 						}
-						switch stream.proof(child, parent, turn, nonce, setupMarker) {
+						proof := stream.proof(child, parent, turn, nonce, setupMarker)
+						server.diagnostics.Record("child_stream_check", map[string]any{"child_id": child.ID, "turn_id": turn.ID, "proof": proof})
+						switch proof {
 						case childNotProven:
 							continue
 						case childPending:
@@ -376,6 +392,10 @@ func readProductThread(server *sdkProductObserver, id, model string) (productThr
 	if err != nil {
 		return productThread{}, shippedTransport(server.ctx, err)
 	}
+	server.diagnostics.Record("product_read_snapshot", map[string]any{"thread_id": response.Thread.ID, "expected_thread_id": id, "model": response.Thread.Model, "provider": response.Thread.ModelProvider, "turn_count": len(response.Thread.Turns), "omitted_turns": max(0, len(response.Thread.Turns)-32)})
+	for _, value := range response.Thread.Turns[:min(32, len(response.Thread.Turns))] {
+		recordSDKDiagnosticTurn(server.diagnostics, "product_read_turn", response.Thread.ID, value)
+	}
 	thread, err := productThreadFromSDK(response.Thread)
 	if err != nil {
 		return thread, errors.New("live: invalid product completion")
@@ -425,6 +445,13 @@ func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Ev
 
 // A completed image result need not also contain an assistant text message.
 func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput) (productThread, productTurn, error) {
+	var texts []string
+	for _, part := range input {
+		if text, ok := part.AsText(); ok {
+			texts = append(texts, text.Text)
+		}
+	}
+	server.diagnostics.Record("product_turn_request", map[string]any{"thread_id": id, "effort": effort, "text": texts, "input_count": len(input)})
 	evidence.Turns++
 	request := protocolv2.TurnStartParams{ThreadID: id, Input: input}
 	if effort != "" {
@@ -434,10 +461,12 @@ func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence
 	if err != nil {
 		return productThread{}, productTurn{}, shippedTransport(server.ctx, err)
 	}
+	recordSDKDiagnosticTurn(server.diagnostics, "product_inline_snapshot", id, response.Turn)
 	terminal, err := productTurnFromSDK(response.Turn)
 	if err != nil {
 		return productThread{}, terminal, errors.New("live: invalid product completion")
 	}
+	recordProductDiagnosticTurn(server.diagnostics, "product_turn_start", id, terminal)
 	if terminal.ID == "" {
 		return productThread{}, terminal, errors.New("live: product turn identity absent")
 	}
@@ -472,6 +501,7 @@ func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence
 	found := 0
 	for _, turn := range thread.Turns {
 		if turn.ID == terminal.ID {
+			recordProductDiagnosticTurn(server.diagnostics, "product_turn_settled", id, turn)
 			terminal = turn
 			found++
 		}
@@ -483,4 +513,40 @@ func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence
 		return thread, terminal, err
 	}
 	return thread, terminal, nil
+}
+
+// Preserve public task output before validating it; never serialize raw history or reasoning.
+func recordProductDiagnosticTurn(diagnostics *Diagnostics, source, threadID string, turn productTurn) {
+	if diagnostics == nil {
+		return
+	}
+	fields := map[string]any{"thread_id": threadID, "turn_id": turn.ID, "status": turn.Status}
+	if len(turn.Error) != 0 {
+		fields["error"] = turn.Error
+	}
+	if err := completedProductTurn(turn); err != nil {
+		fields["failure"] = DescribeFailure(err)
+	}
+	diagnostics.Record(source, fields)
+	for _, item := range turn.Items {
+		if _, reasoning := item.AsReasoning(); reasoning {
+			continue
+		}
+		raw, err := json.Marshal(item)
+		if err == nil {
+			diagnostics.Item(source, raw)
+		}
+	}
+}
+
+// Observe decoded public snapshots before oracle validation can reject them.
+func recordSDKDiagnosticTurn(diagnostics *Diagnostics, source, threadID string, value protocolv2.Turn) {
+	if diagnostics == nil {
+		return
+	}
+	turn := productTurn{ID: value.ID, Status: string(value.Status), Items: value.Items}
+	if value.Error != nil && value.Error.Value != nil {
+		turn.Error, _ = json.Marshal(*value.Error.Value)
+	}
+	recordProductDiagnosticTurn(diagnostics, source, threadID, turn)
 }

@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -26,10 +25,26 @@ type Test struct {
 	Name    string
 }
 
-// Summary counts observed test passes and packages with invoked tests.
+// Summary preserves observed lifecycle counts, including on failure. Tests and
+// Packages retain their legacy meaning: passed tests and passed packages that
+// invoked tests. InputComplete means the entire input was parsed, not that all
+// observed lifecycles completed successfully. Invalid input counts only its
+// trusted prefix; no raw test names, output or reader errors are exported.
 type Summary struct {
-	Tests    int `json:"tests"`
-	Packages int `json:"packages"`
+	Tests              int    `json:"tests"`
+	Packages           int    `json:"packages"`
+	TestsStarted       int    `json:"tests_started"`
+	TestsPassed        int    `json:"tests_passed"`
+	TestsFailed        int    `json:"tests_failed"`
+	TestsSkipped       int    `json:"tests_skipped"`
+	TestsIncomplete    int    `json:"tests_incomplete"`
+	PackagesStarted    int    `json:"packages_started"`
+	PackagesPassed     int    `json:"packages_passed"`
+	PackagesFailed     int    `json:"packages_failed"`
+	PackagesSkipped    int    `json:"packages_skipped"`
+	PackagesIncomplete int    `json:"packages_incomplete"`
+	InputComplete      bool   `json:"input_complete"`
+	FailureReason      string `json:"failure_reason,omitempty"`
 }
 
 // IntegrationTests is the mandatory inventory of real-Codex fixture owners.
@@ -116,109 +131,164 @@ type packageState struct {
 // Check rejects skips of invoked tests, failures, duplicate or incomplete
 // lifecycles, empty selections and absent required owners. Go's package-only
 // "[no test files]" skip is allowed only for a started package with no test run.
-func Check(input io.Reader, required []Test) (Summary, error) {
-	var summary Summary
+func Check(input io.Reader, required []Test) (summary Summary, err error) {
+	packages := map[string]*packageState{}
+	tests := map[Test]string{}
+	var failureReason string
+	// Finalize counts on every exit, including malformed or truncated streams.
+	defer func() {
+		summary.FailureReason = failureReason
+		summary.TestsStarted = len(tests)
+		for _, state := range tests {
+			switch state {
+			case "pass":
+				summary.TestsPassed++
+			case "fail":
+				summary.TestsFailed++
+			case "skip":
+				summary.TestsSkipped++
+			default:
+				summary.TestsIncomplete++
+			}
+		}
+		summary.PackagesStarted = len(packages)
+		for _, pkg := range packages {
+			switch pkg.terminal {
+			case "pass":
+				summary.PackagesPassed++
+				if pkg.tests > 0 {
+					summary.Packages++
+				}
+			case "fail":
+				summary.PackagesFailed++
+			case "skip":
+				summary.PackagesSkipped++
+			default:
+				summary.PackagesIncomplete++
+			}
+		}
+		summary.Tests = summary.TestsPassed
+	}()
+	reject := func(reason string) error {
+		failureReason = reason
+		return errors.New("testresults: " + reason)
+	}
 	wanted := make(map[Test]bool, len(required))
 	for _, test := range required {
 		if test.Package == "" || test.Name == "" || wanted[test] {
-			return summary, errors.New("testresults: invalid or duplicate required test")
+			return summary, reject("invalid_required_test")
 		}
 		wanted[test] = true
 	}
-	packages := map[string]*packageState{}
-	tests := map[Test]string{}
 	limited := &io.LimitedReader{R: input, N: maxInputBytes + 1}
 	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes)
 	events := 0
+	failed, skipped := false, false
 	for scanner.Scan() {
 		events++
 		if events > maxEvents || limited.N <= 0 {
-			return summary, errors.New("testresults: event budget exceeded")
+			return summary, reject("event_budget_exceeded")
 		}
 		var e event
 		if json.Unmarshal(scanner.Bytes(), &e) != nil || e.Package == "" || len(e.Package) > 8192 || len(e.Test) > 8192 {
-			return summary, errors.New("testresults: invalid Go test event")
+			return summary, reject("invalid_event")
 		}
 		pkg := packages[e.Package]
 		if e.Action == "start" {
 			if e.Test != "" || pkg != nil {
-				return summary, errors.New("testresults: duplicate or invalid package start")
+				return summary, reject("invalid_package_start")
 			}
 			packages[e.Package] = &packageState{}
 			continue
 		}
 		if pkg == nil || pkg.terminal != "" {
-			return summary, errors.New("testresults: event outside package lifecycle")
+			return summary, reject("outside_package_lifecycle")
 		}
 		key := Test{e.Package, e.Test}
 		state := tests[key]
 		switch e.Action {
 		case "run":
 			if e.Test == "" || state != "" || len(tests) >= maxTests {
-				return summary, errors.New("testresults: duplicate or invalid test run")
+				return summary, reject("invalid_test_run")
 			}
 			tests[key], pkg.tests = "run", pkg.tests+1
 		case "pause":
 			if e.Test == "" || state != "run" {
-				return summary, errors.New("testresults: invalid test pause")
+				return summary, reject("invalid_test_pause")
 			}
 			tests[key] = "pause"
 		case "cont":
 			if e.Test == "" || state != "pause" {
-				return summary, errors.New("testresults: invalid test continuation")
+				return summary, reject("invalid_test_continuation")
 			}
 			tests[key] = "run"
-		case "pass":
+		case "pass", "fail", "skip", "build-fail":
+			terminal := e.Action
+			if terminal == "build-fail" {
+				if e.Test != "" {
+					return summary, reject("invalid_test_terminal")
+				}
+				terminal = "fail"
+			}
 			if e.Test == "" {
-				pkg.terminal = "pass"
+				pkg.terminal = terminal
+				if terminal == "skip" && (pkg.tests != 0 || !pkg.noTests) {
+					skipped = true
+				}
 			} else {
 				if state != "run" {
-					return summary, errors.New("testresults: duplicate, incomplete or unstarted test terminal")
+					return summary, reject("invalid_test_terminal")
 				}
-				tests[key] = "pass"
-				summary.Tests++
+				tests[key] = terminal
+				if terminal == "skip" {
+					skipped = true
+				}
 			}
-		case "skip":
-			if e.Test != "" || pkg.tests != 0 || !pkg.noTests {
-				return summary, errors.New("testresults: skipped required execution")
+			if terminal == "fail" {
+				failed = true
 			}
-			pkg.terminal = "skip"
-		case "fail", "build-fail":
-			return summary, errors.New("testresults: failed execution")
 		case "output":
 			if e.Test != "" && state == "" {
-				return summary, errors.New("testresults: output without test run")
+				return summary, reject("output_without_test_run")
 			}
 			if e.Test == "" && strings.Contains(e.Output, "[no test files]") {
 				pkg.noTests = true
 			}
 		default:
-			return summary, errors.New("testresults: unknown event action")
+			return summary, reject("unknown_event_action")
 		}
 	}
 	if scanner.Err() != nil || limited.N <= 0 {
-		return summary, errors.New("testresults: unreadable or oversized Go test results")
+		return summary, reject("unreadable_or_oversized_results")
 	}
-	if summary.Tests == 0 {
-		return summary, errors.New("testresults: no tests passed")
+	summary.InputComplete = true
+	// Failures and skips are observations, not parse errors. Consume all valid
+	// events before rejecting the aggregate so later outcomes are not discarded.
+	if failed {
+		return summary, reject("failed_execution")
 	}
-	for name, pkg := range packages {
-		if pkg.terminal == "" || (pkg.tests > 0 && pkg.terminal != "pass") {
-			return summary, fmt.Errorf("testresults: incomplete package %s", name)
-		}
-		if pkg.tests > 0 {
-			summary.Packages++
-		}
+	if skipped {
+		return summary, reject("skipped_execution")
 	}
-	for test, state := range tests {
+	passed := 0
+	for _, state := range tests {
 		if state != "pass" {
-			return summary, fmt.Errorf("testresults: incomplete test %s:%s", test.Package, test.Name)
+			return summary, reject("incomplete_test")
 		}
+		passed++
+	}
+	for _, pkg := range packages {
+		if pkg.terminal == "" {
+			return summary, reject("incomplete_package")
+		}
+	}
+	if passed == 0 {
+		return summary, reject("no_tests_passed")
 	}
 	for _, test := range required {
 		if tests[test] != "pass" {
-			return summary, fmt.Errorf("testresults: required test absent: %s:%s", test.Package, test.Name)
+			return summary, reject("required_test_absent")
 		}
 	}
 	return summary, nil

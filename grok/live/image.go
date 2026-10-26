@@ -3,8 +3,8 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
@@ -60,35 +60,99 @@ func completedImage(turn productTurn, root string) (observedImage, error) {
 // are free; the expected visual facts must occur as words, not prompt echoes or
 // substrings. Explicit negative/uncertain answers do not establish recognition.
 func imageRecognized(reply string, edited bool) bool {
-	words := strings.FieldsFunc(strings.ToLower(reply), func(r rune) bool { return !unicode.IsLetter(r) })
-	seen := map[string]bool{}
+	if visualRefusal(reply) {
+		return false
+	}
 	required := map[string]bool{"dog": true}
 	if edited {
 		required["red"], required["hat"] = true, true
 	}
-	for index, word := range words {
-		seen[word] = true
-		switch word {
-		case "cannot", "cant", "unsure", "maybe", "possibly":
+	seen := map[string]bool{}
+	for _, clause := range visualClauses(reply) {
+		words := attachedImageWords(clause)
+		if visualFactsDenied(words, required) {
 			return false
-		case "no", "not", "without":
-			// Reject absent requested facts, not unrelated negatives such as
-			// "a dog with no accessories" or "red hat, no other clothing".
-			end := index + 5
-			if end > len(words) {
-				end = len(words)
+		}
+		for _, word := range words {
+			seen[word] = true
+		}
+	}
+	return seen["dog"] && (!edited || seen["red"] && seen["hat"])
+}
+
+// Explicit inability to inspect the picture is not a visual answer even when
+// another clause repeats the expected words. Uncertainty about breed is different.
+func visualRefusal(text string) bool {
+	text = strings.NewReplacer("can’t", "cannot", "can't", "cannot").Replace(strings.ToLower(text))
+	for _, refusal := range []string{"cannot see the image", "cannot see this image", "cannot see the picture", "cannot view the image", "cannot view this image", "cannot view the picture", "unable to see the image", "unable to view the image"} {
+		if strings.Contains(text, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
+// Scope qualifiers to their clause and nearby following facts. Breed/background
+// uncertainty is not uncertainty about the requested animal or clothing.
+func visualClauses(text string) []string {
+	text = strings.NewReplacer("can’t", "cannot", "can't", "cannot").Replace(strings.ToLower(text))
+	return strings.FieldsFunc(text, func(r rune) bool {
+		return r == '.' || r == ',' || r == ';' || r == ':' || r == '!' || r == '?' || r == '\n'
+	})
+}
+
+func visualFactsDenied(words []string, required map[string]bool) bool {
+	for index, word := range words {
+		switch word {
+		case "unknown":
+			// Adjectival "unknown" can concern identity or an unrelated property
+			// ("unknown breed wearing a red hat"). Only a following whether/if
+			// complement expresses uncertainty about the requested visual facts.
+			if index+1 < len(words) && (words[index+1] == "whether" || words[index+1] == "if") {
+				for _, next := range words[index+2:] {
+					if required[next] {
+						return true
+					}
+				}
 			}
+		case "cannot", "cant", "unsure", "maybe", "possibly", "perhaps", "might", "no", "not", "without":
+			end := len(words)
 			for _, next := range words[index+1 : end] {
 				if next == "but" {
 					break
 				}
 				if required[next] {
-					return false
+					return true
 				}
 			}
 		}
 	}
-	return seen["dog"] && (!edited || seen["red"] && seen["hat"])
+	return false
+}
+
+// Diagnostics retain every public image attempt, not just the final image
+// credited by the oracle. Capture never changes acceptance or reads saved paths.
+func recordImageTurn(diagnostics *Diagnostics, phase string, turn productTurn) {
+	for index, item := range turn.Items {
+		image, ok := item.AsImageGeneration()
+		if !ok {
+			continue
+		}
+		fields := map[string]any{"phase": phase, "item": index, "status": image.Status,
+			"failed": image.Failure != nil && image.Failure.Value != nil}
+		if image.Result != "" {
+			data, err := imagePayload(image.Result)
+			if err != nil {
+				fields["capture"] = "invalid_png"
+			} else {
+				fields["artifact"] = diagnostics.Artifact(fmt.Sprintf("%s-%d.png", phase, index), data)
+				fields["sha256"] = editDigest(data)
+			}
+		} else {
+			fields["capture"] = "no_image_payload"
+		}
+		diagnostics.Record("image_attempt", fields)
+	}
 }
 
 func nullJSON(value json.RawMessage) bool {

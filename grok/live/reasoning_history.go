@@ -23,6 +23,7 @@ func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 // Only the token, current turn identities and bounded reply evidence survive frames.
 // Repeated internal calls are counted, never accumulated in a call-ID/event map.
 type historyProbe struct {
+	diagnostics                  *Diagnostics
 	evidence                     *Evidence
 	threadID, turnID, previousID string
 	token                        string
@@ -76,6 +77,7 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 			if !summaryAssistant {
 				// A nonempty assistant summary supersedes notifications even when
 				// it has no eligible result; it cannot borrow an older answer.
+				probe.diagnostics.Record("oracle_reply_reset", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "source": "terminal_items"})
 				reply.bytes, reply.recall, reply.explicitFinal = 0, false, false
 				reply.authoritative, reply.ambiguous = true, false
 				reply.identities = nil
@@ -150,6 +152,7 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 // An assistant can deliver a final answer in several messages. A later explanation
 // must not erase a token already present in another eligible final message.
 func (probe *historyProbe) addReplyFragment(item historyItem, reply *historyReply) {
+	probe.diagnostics.Record("oracle_reply_fragment", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "item_id": item.ID, "phase": item.Phase, "text": item.Text, "reset_legacy": item.Phase == "final_answer" && !reply.explicitFinal, "authoritative": reply.authoritative})
 	if item.Phase == "final_answer" && !reply.explicitFinal {
 		reply.bytes, reply.recall = 0, false
 	}

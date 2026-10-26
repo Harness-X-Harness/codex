@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/searchfixture"
@@ -43,6 +44,7 @@ type searchProbe struct {
 }
 
 func (p *searchProbe) observe(prompt string) error {
+	p.server.diagnostics.Record("search_followup_request", map[string]any{"thread_id": p.threadID, "prompt": prompt})
 	p.evidence.Turns++
 	response, err := p.server.client.Turns().Start(p.server.ctx, protocolv2.TurnStartParams{ThreadID: p.threadID,
 		Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{Text: prompt})}})
@@ -53,6 +55,9 @@ func (p *searchProbe) observe(prompt string) error {
 }
 
 func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
+	if p.server != nil {
+		recordSDKDiagnosticTurn(p.server.diagnostics, "search_start_snapshot", p.threadID, value)
+	}
 	p.frames, p.bytes, p.terminal, p.settled = 0, 0, false, false
 	started, err := searchTurnFromSDK(value)
 	if err != nil {
@@ -92,6 +97,10 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 	read, err := p.server.client.Threads().Read(p.server.ctx, protocolv2.ThreadReadParams{ThreadID: p.threadID, IncludeTurns: &include})
 	if err != nil {
 		return shippedTransport(p.server.ctx, err)
+	}
+	p.server.diagnostics.Record("search_read_snapshot", map[string]any{"thread_id": read.Thread.ID, "expected_thread_id": p.threadID, "turn_count": len(read.Thread.Turns), "omitted_turns": max(0, len(read.Thread.Turns)-32)})
+	for _, value := range read.Thread.Turns[:min(32, len(read.Thread.Turns))] {
+		recordSDKDiagnosticTurn(p.server.diagnostics, "search_read_turn", read.Thread.ID, value)
 	}
 	turns := make([]turn, 0, len(read.Thread.Turns))
 	for _, value := range read.Thread.Turns {
@@ -146,10 +155,12 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 	if err != nil {
 		return errors.New("live: invalid search evidence")
 	}
+	recordProductDiagnosticTurn(p.server.diagnostics, "search_settled", p.threadID, current)
 	reply, err := finalProductReply(current)
 	if err != nil {
 		return err
 	}
+	p.server.diagnostics.Record("search_answer", map[string]any{"thread_id": p.threadID, "turn_id": p.turnID, "text": reply})
 	p.evidence.ReplyBytes = len(reply)
 	p.settled = true
 	p.result.SettledTurns++
@@ -208,6 +219,10 @@ func (p *searchProbe) publicSearch(turnID string, item protocolv2.ThreadItem) er
 	search, ok := item.AsWebSearch()
 	if !ok {
 		return nil
+	}
+	raw, _ := json.Marshal(item)
+	if p.server != nil {
+		p.server.diagnostics.Item("search_public_item", raw)
 	}
 	if search.ID == "" {
 		return errors.New("live: search item identity unavailable")

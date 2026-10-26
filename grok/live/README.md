@@ -104,11 +104,34 @@ a join is unproved; fixtures/snapshots stay available instead of being removed
 under a running process or admitted callback. Constructor failure may provide no
 join handle. Follow TESTING's retained-snapshot instructions before manual cleanup.
 
-Returned evidence contains safe subject metadata, timestamps, fixed stages,
-counts, booleans and approved fixture/artifact hashes. Private text, credentials,
-raw traffic, opaque IDs and image/reasoning payloads remain in memory and are not
-returned. Partial terminal/effect facts must stay truthful after a later failure;
-failure attribution is inconclusive unless independently established. See the
+Returned verdict evidence contains safe subject metadata, timestamps, stages,
+counts, booleans and fixture/artifact hashes. Separate bounded task diagnostics
+retain submitted synthetic inputs, public responses and tool results, phase/error
+observations, and fixture image/file attachments before validation and cleanup.
+They explain the outcome; their contents and capture failures are not new business
+assertions. `Options.Diagnostics` enables this sink; the CLI accepts
+`--diagnostics-dir`, and the tagged runner uses `GROK_LIVE_DIAGNOSTICS_DIR` with one
+subdirectory per selected catalog scenario. Both Live workflows retain the bundle.
+
+The bundle contains incremental `events.jsonl`, an atomically refreshed
+`manifest.json` (closed/completeness, limits and capture errors), and fixed-name
+PNG/text attachments. It excludes credentials/auth/environment dumps, unrelated
+history, private reasoning/ciphertext and full raw wire envelopes. Public reasoning
+configuration/capability metadata is not private reasoning. Task IDs associate
+only the selected operation's public observations. The existing verdict summary
+remains suitable for logs; the attached diagnostic bundle intentionally includes
+synthetic task content and public backend responses and shares Actions artifact
+access/30-day retention. Do not use it for arbitrary private user uploads.
+
+Capture limits are explicit rather than silent: 4096 events, 64 KiB per event,
+32 attachments of at most 32 MiB each, 128 MiB total. Oversized events are marked,
+not treated as complete evidence. Capture failure is reported independently in the
+command report and cannot replace the original business failure. Partial
+terminal/effect facts remain truthful after later failure; attribution stays
+inconclusive unless independently established. Pinned SDK subprocess stderr is
+not exposed by its public API and is explicitly marked unavailable; sanitized,
+bounded Go-runner stderr is retained separately. Hard runner loss can prevent
+upload; an unfinished manifest must not be called complete. See the
 [current failure-evidence contract](../TESTING.md#live-failure-evidence).
 
 Offline fake-process tests prove the observer. Actual-binary controlled HTTP
@@ -116,3 +139,4 @@ Integration proves its exercised product composition. Rust tests own product
 semantics. Only an identified actual-backend invocation can establish the
 corresponding real-backend result. No source entrypoint, old run or green
 unrelated test supplies that evidence.
+

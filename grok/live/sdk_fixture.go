@@ -32,6 +32,24 @@ type sdkFixtureHandlers struct {
 // responsibility for turn admission, correlation and business evidence.
 func withSDKFixture(ctx context.Context, options Options, edit *editFixture, handlers sdkFixtureHandlers, run func(*codexsdk.Client, string, *Evidence) error) (Evidence, error) {
 	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) (runErr error) {
+		options.Diagnostics.Record("sdk_starting", map[string]any{"model": options.Model, "stderr_capture": "unavailable_pinned_sdk_discards_stderr"})
+		notifications := handlers.notifications
+		handlers.notifications = func(ctx context.Context, notification protocolv2.ServerNotification) error {
+			protocolDiagnostic(options.Diagnostics, "notification", notification)
+			if notifications != nil {
+				return notifications(ctx, notification)
+			}
+			return nil
+		}
+		requests := handlers.requests
+		if requests != nil {
+			handlers.requests = func(ctx context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
+				protocolDiagnostic(options.Diagnostics, "server_request", request)
+				response, err := requests(ctx, request)
+				options.Diagnostics.Record("server_request_handled", map[string]any{"kind": request.Kind(), "failed": err != nil, "failure": diagnosticFailure(err)})
+				return response, err
+			}
+		}
 		experimental := true
 		evidence.Stage = "sdk_starting"
 		// NewContext may return before its asynchronous failure teardown, and
@@ -51,6 +69,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			RawNotifications:          handlers.raw,
 		})
 		if err != nil {
+			options.Diagnostics.Record("sdk_start_failed", map[string]any{"failure": DescribeFailure(sdkFailure(err))})
 			return sdkFailure(err)
 		}
 		defer func() {
@@ -58,10 +77,14 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
 			evidence.CleanupPending = !closed.ProcessReaped || closed.CallbackWorkPending != 0
+			options.Diagnostics.Record("sdk_cleanup", map[string]any{"process_reaped": closed.ProcessReaped, "callback_work_pending": closed.CallbackWorkPending, "failed": closeErr != nil, "failure": diagnosticFailure(closeErr)})
 			var callbackErr error
 			select {
 			case callbackErr = <-handlers.failures:
 			default:
+			}
+			if callbackErr != nil {
+				options.Diagnostics.Record("callback_failure", map[string]any{"failure": DescribeFailure(callbackErr)})
 			}
 			if runErr == nil {
 				runErr = callbackErr
@@ -78,6 +101,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			}
 		}()
 		evidence.Processes, evidence.Initializations, evidence.Stage = 1, 1, "initialized"
+		options.Diagnostics.Record("sdk_initialized", map[string]any{"model": options.Model})
 		identity := client.Provenance().RuntimeAppServer
 		actualHome, homeErr := os.Stat(identity.CodexHome)
 		fixtureHome, fixtureErr := os.Stat(home)

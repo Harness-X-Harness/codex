@@ -13,7 +13,8 @@ import (
 // sdkHostedSearch implements supported Web observation.
 func sdkHostedSearch(ctx context.Context, options Options, scenario string, config map[string]any, prompt string) (SearchEvidence, error) {
 	result := SearchEvidence{Scenario: scenario}
-	transport := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}
+	options.Diagnostics.Record("search_request", map[string]any{"scenario": scenario, "config": config, "prompt": prompt, "model": options.Model})
+	transport := &sdkProductObserver{diagnostics: options.Diagnostics, ctx: ctx, changed: make(chan struct{}, 1)}
 	handlers := sdkFixtureHandlers{
 		requests: transport.request, notifications: transport.typedNotification, afterClose: transport.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 256 << 20},

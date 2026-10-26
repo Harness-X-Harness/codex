@@ -65,7 +65,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *inputPath != "" {
 		file, err := os.Open(*inputPath)
 		if err != nil {
-			_ = json.NewEncoder(stdout).Encode(result{})
+			_ = json.NewEncoder(stdout).Encode(result{Summary: testresults.Summary{FailureReason: "results_file_unavailable"}})
 			fmt.Fprintln(stderr, "testresults: results file unavailable")
 			return 1
 		}

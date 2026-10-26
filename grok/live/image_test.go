@@ -2,7 +2,11 @@ package live_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +60,68 @@ func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
 			}
 			if mode == "wrong_edit" && (!got.GenerationRecognized || got.EditRecognized) {
 				t.Fatal("partial visual evidence lost or manufactured")
+			}
+		})
+	}
+}
+
+func TestImageDiagnosticContentSurvivesVerdict(t *testing.T) {
+	for _, mode := range []string{"success", "wrong_first", "wrong_edit", "recovery"} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, "image:"+mode)
+			dir := t.TempDir()
+			options.Diagnostics = live.NewDiagnostics(dir, options.APIKey, "PRIVATE_IMAGE_CANARY")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			got, err := live.ImageGenerationEdit(ctx, options)
+			options.Diagnostics.Close()
+			if (mode == "success" || mode == "recovery") != (err == nil) {
+				t.Fatalf("diagnostics changed verdict: %v", err)
+			}
+			events, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			text := string(events)
+			expected := "The picture shows a dog."
+			if mode == "wrong_first" {
+				expected = "A cat."
+			}
+			if mode == "wrong_edit" {
+				expected = "A dog wearing a blue hat."
+			}
+			if !strings.Contains(text, expected) || !strings.Contains(text, "image_recognition") || !strings.Contains(text, "image_verdict") {
+				t.Fatal("missing received answer and verdict diagnostics")
+			}
+			retained := false
+			for _, line := range strings.Split(text, "\n") {
+				var event struct {
+					Kind   string
+					Fields struct{ Phase, Artifact string }
+				}
+				if json.Unmarshal([]byte(line), &event) != nil || event.Kind != "image_attempt" || event.Fields.Phase != "generation" || event.Fields.Artifact == "" {
+					continue
+				}
+				pixels, readErr := os.ReadFile(filepath.Join(dir, event.Fields.Artifact))
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				sum := sha256.Sum256(pixels)
+				if hex.EncodeToString(sum[:]) == got.FirstImageSHA256 {
+					retained = true
+				}
+			}
+			if !retained {
+				t.Fatal("generated pixels and digest reference were lost on cleanup")
+			}
+			if got.ReplyBytes == 0 {
+				t.Fatal("received visual answer reported as zero bytes")
+			}
+			if mode == "wrong_first" && (got.Stage != "image_generation_recognition_completed" || got.Turns != 2) {
+				t.Fatalf("wrong failed phase or extra turn: %+v", got)
+			}
+			if strings.Contains(text, "PRIVATE_IMAGE_CANARY") || strings.Contains(text, options.APIKey) {
+				t.Fatal("secret leaked in diagnostics")
 			}
 		})
 	}
