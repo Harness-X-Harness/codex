@@ -25,6 +25,9 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 		{"changed_token", "tool_result_replay_changed"},
 		{"changed_cipher", "encrypted_history_changed"},
 		{"wrong_call", "tool_result_binding"},
+		{"schema_omitted", "output_schema_changed"},
+		{"schema_extra", "output_schema_changed"},
+		{"schema_expected_token", "output_schema_changed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			integrationObservation(t)
@@ -36,9 +39,25 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 				t.Helper()
 				body, err := json.Marshal(map[string]any{"model": fixture.model, "stream": true, "store": false,
 					"include": []string{"reasoning.encrypted_content"}, "input": input,
+					"text":  map[string]any{"format": map[string]any{"type": "json_schema", "name": "history", "strict": true, "schema": json.RawMessage(reasoningTokenSchema)}},
 					"tools": []any{map[string]any{"type": "function", "name": "emitted-probe-name", "description": "Call this function directly to invoke `grok_history_probe`. Do not invoke it through another tool.\n\n" + integrationfixture.HistoryProbeDescription}}})
 				if err != nil {
 					t.Fatal(err)
+				}
+				if fixture.requests == 2 && strings.HasPrefix(tc.name, "schema_") {
+					var changed map[string]any
+					_ = json.Unmarshal(body, &changed)
+					if tc.name == "schema_omitted" {
+						delete(changed, "text")
+					} else {
+						schema := changed["text"].(map[string]any)["format"].(map[string]any)["schema"].(map[string]any)
+						if tc.name == "schema_extra" {
+							schema["additionalProperties"] = true
+						} else {
+							schema["properties"].(map[string]any)["token"].(map[string]any)["const"] = strings.Repeat("a", 64)
+						}
+					}
+					body, _ = json.Marshal(changed)
 				}
 				if tc.name == "summary_whitespace" {
 					body = bytes.ReplaceAll(body, []byte(`"summary":[]`), []byte(`"summary": [ ]`))
@@ -62,7 +81,7 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 			if request(input).Code != http.StatusOK {
 				t.Fatal("fixture did not accept paired tool result")
 			}
-			input = append(input, message("assistant", token), message("user", "Recall the exact token returned by the tool in the previous turn without another tool."))
+			input = append(input, message("assistant", reasoningTokenReply(token)), message("user", "Recall the exact token returned by the tool in the previous turn without another tool."))
 			switch tc.name {
 			case "equivalent_json_string":
 				output["output"] = json.RawMessage(`"\u0061` + strings.Repeat("a", 63) + `"`)

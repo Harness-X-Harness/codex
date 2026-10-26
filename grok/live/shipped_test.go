@@ -170,15 +170,37 @@ func fakeShippedServer() {
 			return map[string]any{"thread": map[string]any{"id": "PRIVATE_PARENT", "source": rootSource, "model": "grok-4.7", "modelProvider": "grok", "turns": []any{seed}}}
 		}
 		spawn := map[string]any{"type": "subAgentActivity", "id": "spawn", "kind": "started", "agentThreadId": "PRIVATE_CHILD", "agentPath": "/root/live_child"}
-		reply := agent("reply", nonce)
+		parentResult := func(value string) string {
+			encoded, _ := json.Marshal(map[string]any{"child_nonce": value})
+			return string(encoded)
+		}
+		reply := agent("reply", parentResult(nonce))
 		if mode == "parent_nonce_uppercase" {
-			reply["text"] = strings.ToUpper(nonce)
+			reply["text"] = parentResult(strings.ToUpper(nonce))
 		}
 		if mode == "parent_prose" {
 			reply["text"] = "The delegated result is " + nonce + "."
 		}
 		if mode == "ambiguous_results" || mode == "multiple_results" {
-			reply["text"] = nonce + " and " + other
+			reply["text"] = parentResult(nonce)
+		}
+		switch mode {
+		case "parent_null":
+			reply["text"] = `{"child_nonce":null}`
+		case "parent_missing_field":
+			reply["text"] = `{}`
+		case "parent_extra_field":
+			reply["text"] = `{"child_nonce":"` + nonce + `","extra":true}`
+		case "parent_duplicate_field":
+			reply["text"] = `{"child_nonce":"` + nonce + `","child_nonce":"` + nonce + `"}`
+		case "parent_wrong_type":
+			reply["text"] = `{"child_nonce":42}`
+		case "parent_wrong_nonce":
+			reply["text"] = parentResult(other)
+		case "parent_nonce_embedded":
+			reply["text"] = parentResult("result " + nonce)
+		case "parent_two_json":
+			reply["text"] = parentResult(nonce) + parentResult(nonce)
 		}
 		current := map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "completed", "error": nil, "items": []any{user("task-input", taskPrompt), spawn, reply}}
 		if mode == "reasoning_current" || mode == "reasoning_current_known" {
@@ -564,6 +586,9 @@ func fakeShippedServer() {
 					return
 				}
 				if !strings.HasPrefix(mode, "startup") {
+					if request.Params["outputSchema"] != nil {
+						return
+					}
 					activeID = "PRIVATE_SEED_TURN"
 					setupMarker = strings.TrimPrefix(strings.SplitN(prompt, ". ", 2)[0], "Remember this bounded setup marker: ")
 					if len(setupMarker) != 32 {
@@ -600,6 +625,12 @@ func fakeShippedServer() {
 				}
 			} else {
 				if request.Params["effort"] != "ultra" {
+					return
+				}
+				wantSchema := map[string]any{"type": "object", "properties": map[string]any{"child_nonce": map[string]any{"type": []any{"string", "null"}}}, "required": []any{"child_nonce"}, "additionalProperties": false}
+				gotSchema, _ := json.Marshal(request.Params["outputSchema"])
+				wantSchemaJSON, _ := json.Marshal(wantSchema)
+				if string(gotSchema) != string(wantSchemaJSON) {
 					return
 				}
 				_, _ = io.WriteString(trace, "task/start\n")
@@ -715,7 +746,7 @@ func TestShippedCatalogRequiresCompleteDTOs(t *testing.T) {
 func shippedChildSuccess(mode string) bool {
 	switch mode {
 	// Public inherited-item presentation is not the semantic recall proof.
-	case "child_nonce_uppercase", "auxiliary_tool_before_result", "auxiliary_tool_between_fragments", "ambiguous_results", "empty_reply_fragments", "parent_history_item_id", "raw_prose", "prior_error_mismatch", "reasoning_current", "reasoning_seed", "reasoning_inherited", "marker_reply_uppercase", "parent_nonce_uppercase", "host_user_context", "marker_split_valid", "paginated_history", "child_no_history", "child_partial_history", "child_history_item_id", "child_history_content", "child_history_order", "marker_after_result", "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "known_metadata", "prior_failed", "inherited_diagnostic", "delayed_stream", "inherited_task_history", "closed_after_result", "split_after_result_mention", "direct_stream", "after_result_mention", "later_turn_fresh", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn":
+	case "child_nonce_uppercase", "auxiliary_tool_before_result", "auxiliary_tool_between_fragments", "ambiguous_results", "empty_reply_fragments", "parent_history_item_id", "raw_prose", "prior_error_mismatch", "reasoning_current", "reasoning_seed", "reasoning_inherited", "marker_reply_uppercase", "parent_nonce_uppercase", "host_user_context", "marker_split_valid", "paginated_history", "child_no_history", "child_partial_history", "child_history_item_id", "child_history_content", "child_history_order", "marker_after_result", "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "known_metadata", "prior_failed", "inherited_diagnostic", "delayed_stream", "inherited_task_history", "closed_after_result", "split_after_result_mention", "direct_stream", "after_result_mention", "later_turn_fresh", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn":
 		return true
 	}
 	return false
@@ -724,7 +755,7 @@ func shippedChildSuccess(mode string) bool {
 func TestShippedStartupAndChildRejectIncompleteEvidence(t *testing.T) {
 	// Final-fragment and closure cases keep freshness tied to the actual result,
 	// while the child still needs a consistent completed terminal.
-	modes := []string{"child_nonce_uppercase", "empty_reply_fragments", "parent_history_item_id", "parent_history_content", "parent_history_order", "raw_prose", "prior_error_missing", "reasoning_current", "reasoning_seed", "reasoning_inherited", "reasoning_current_known", "reasoning_seed_known", "marker_reply_uppercase", "parent_nonce_uppercase", "marker_input_uppercase", "nonce_input_uppercase", "nonce_known_uppercase", "paginated_parent_supplied", "paginated_parent_supplied_uppercase", "host_user_context", "direct_user_only", "marker_user_supplied", "marker_split_valid", "marker_split_supplied", "auxiliary_tool_between_fragments", "paginated_history", "missing_marker", "wrong_marker", "marker_input_supplied", "marker_prior_supplied", "marker_followup_supplied", "marker_host_supplied", "auxiliary_tool_before_result", "marker_after_result", "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "root_invalid", "root_number", "root_boolean", "root_array", "child_unit_source", "known_commentary_result", "known_user_result", "known_metadata", "known_legacy_result", "prior_failed", "prior_conflict", "prior_error_mismatch", "inherited_diagnostic", "delayed_stream", "delayed_out_of_order", "delayed_missing_input", "delayed_missing_terminal", "inherited_task_history", "inherited_supplied", "closed_after_result", "split_after_result_mention", "split_before_result_supplied", "direct_stream", "input_after_result", "missing_prior_stream", "stream_byte_budget", "stream_count_budget", "missing_activity", "child_path", "activity_child", "missing_stream", "missing_input", "missing_child_start", "missing_child_terminal", "missing_raw_result", "encrypted_input", "input_recipient", "raw_child", "raw_turn", "raw_text", "closed_child", "followup_supplied", "later_turn_supplied", "later_turn_fresh", "after_result_mention", "child_terminal_failed", "child_terminal_interrupted", "child_terminal_error", "conflict_during_other_read", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "late_conflict", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn", "child_no_history", "child_partial_history", "child_history_id", "child_history_item_id", "child_history_content", "child_history_order", "parent_history_changed", "cross_binding", "known_result", "prompt_supplied", "ambiguous_results", "seed_failed", "wrong_start_provider", "failed", "interrupted", "wrong_thread", "wrong_turn", "missing_terminal", "conflict", "stale", "duplicate_turn", "missing_reply", "wrong_history_provider", "wrong_history_model", "child_provider", "child_model", "child_parent", "child_fresh", "child_failed", "child_interrupted", "child_missing", "child_inherited", "child_mismatch", "spawn_failed", "spawn_sender", "unrelated_recipient"}
+	modes := []string{"parent_null", "parent_missing_field", "parent_extra_field", "parent_duplicate_field", "parent_wrong_type", "parent_wrong_nonce", "parent_nonce_embedded", "parent_two_json", "child_nonce_uppercase", "empty_reply_fragments", "parent_history_item_id", "parent_history_content", "parent_history_order", "raw_prose", "prior_error_missing", "reasoning_current", "reasoning_seed", "reasoning_inherited", "reasoning_current_known", "reasoning_seed_known", "marker_reply_uppercase", "parent_nonce_uppercase", "marker_input_uppercase", "nonce_input_uppercase", "nonce_known_uppercase", "paginated_parent_supplied", "paginated_parent_supplied_uppercase", "host_user_context", "direct_user_only", "marker_user_supplied", "marker_split_valid", "marker_split_supplied", "auxiliary_tool_between_fragments", "paginated_history", "missing_marker", "wrong_marker", "marker_input_supplied", "marker_prior_supplied", "marker_followup_supplied", "marker_host_supplied", "auxiliary_tool_before_result", "marker_after_result", "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "root_invalid", "root_number", "root_boolean", "root_array", "child_unit_source", "known_commentary_result", "known_user_result", "known_metadata", "known_legacy_result", "prior_failed", "prior_conflict", "prior_error_mismatch", "inherited_diagnostic", "delayed_stream", "delayed_out_of_order", "delayed_missing_input", "delayed_missing_terminal", "inherited_task_history", "inherited_supplied", "closed_after_result", "split_after_result_mention", "split_before_result_supplied", "direct_stream", "input_after_result", "missing_prior_stream", "stream_byte_budget", "stream_count_budget", "missing_activity", "child_path", "activity_child", "missing_stream", "missing_input", "missing_child_start", "missing_child_terminal", "missing_raw_result", "encrypted_input", "input_recipient", "raw_child", "raw_turn", "raw_text", "closed_child", "followup_supplied", "later_turn_supplied", "later_turn_fresh", "after_result_mention", "child_terminal_failed", "child_terminal_interrupted", "child_terminal_error", "conflict_during_other_read", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "late_conflict", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn", "child_no_history", "child_partial_history", "child_history_id", "child_history_item_id", "child_history_content", "child_history_order", "parent_history_changed", "cross_binding", "known_result", "prompt_supplied", "ambiguous_results", "seed_failed", "wrong_start_provider", "failed", "interrupted", "wrong_thread", "wrong_turn", "missing_terminal", "conflict", "stale", "duplicate_turn", "missing_reply", "wrong_history_provider", "wrong_history_model", "child_provider", "child_model", "child_parent", "child_fresh", "child_failed", "child_interrupted", "child_missing", "child_inherited", "child_mismatch", "spawn_failed", "spawn_sender", "unrelated_recipient"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
@@ -784,6 +815,61 @@ func TestShippedStartupRevalidatesAdmittedTerminal(t *testing.T) {
 			}
 			if strings.Contains(fmt.Sprint(got, err), "PRIVATE_") {
 				t.Fatal("private terminal evidence escaped")
+			}
+		})
+	}
+}
+
+// Native output constraints make the parent result unambiguous; they never
+// substitute for the actual child's inherited context and consumed-input proof.
+func TestChildStructuredResultDiagnostics(t *testing.T) {
+	for _, mode := range []string{"ok", "parent_null", "parent_duplicate_field", "child_parent", "prompt_supplied"} {
+		t.Run(mode, func(t *testing.T) {
+			opts := fixtureOptions(t, "shipped:"+mode)
+			dir := t.TempDir()
+			diagnostics := live.NewDiagnostics(dir)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, err := live.ShippedChildCollaboration(ctx, opts.Subject, opts.APIKey, diagnostics)
+			diagnostics.Close()
+			if (err == nil) != (mode == "ok") {
+				t.Fatalf("structured result changed actual child oracle: %v", err)
+			}
+			data, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			var requests []map[string]any
+			var result map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var event struct {
+					Kind   string         `json:"kind"`
+					Fields map[string]any `json:"fields"`
+				}
+				if json.Unmarshal([]byte(line), &event) != nil {
+					t.Fatal("invalid diagnostic event")
+				}
+				if event.Kind == "product_turn_request" {
+					requests = append(requests, event.Fields)
+				}
+				if event.Kind == "child_parent_result" {
+					result = event.Fields
+				}
+			}
+			if len(requests) != 2 || requests[0]["output_schema"] != nil || requests[1]["output_schema"] == nil {
+				t.Fatal("setup/task schema phase diagnostics incorrect")
+			}
+			if result == nil || result["reply"] == nil {
+				t.Fatal("public parent result missing from diagnostics")
+			}
+			if mode == "ok" && (result["parsed_nonce"] != "12345678-1234-4234-8234-123456789abc" || !strings.Contains(string(data), "child_stream_check")) {
+				t.Fatal("parsed result and independent child proof missing")
+			}
+			if (mode == "parent_null" || mode == "parent_duplicate_field") && (!strings.Contains(string(data), "child_candidate") || !strings.Contains(string(data), "child_result_uncredited")) {
+				t.Fatal("invalid parent output lost actual child diagnostic evidence")
+			}
+			if mode == "parent_duplicate_field" && result["parse_valid"] != false {
+				t.Fatal("malformed parent schema result was credited")
 			}
 		})
 	}

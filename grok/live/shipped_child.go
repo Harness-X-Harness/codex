@@ -44,8 +44,13 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		}
 		evidence.SetupCompleted, evidence.Completed, evidence.ReplyBytes = true, false, 0
 		evidence.Stage, evidence.TaskTurns = "setup_turn_proven", 1
-		parent, current, err := observeShippedTurn(server, parentID, evidence, "ultra",
-			"Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value. Wait for that child to complete, then include the UUID returned by the child in your final reply.")
+		parentSchema, err := protocolv2.OutputSchemaFromJSON([]byte(childParentOutputSchema))
+		if err != nil {
+			return errors.New("live: child parent schema unavailable")
+		}
+		parent, current, err := observeProductInputTurn(server, parentID, evidence, "ultra", []protocolv2.UserInput{
+			protocolv2.NewUserInputText(protocolv2.UserInputText{Text: "Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value. Wait for that child to complete, then return a JSON object with child_nonce containing the UUID actually returned by the child, or null if no child result is available. The output schema applies only to your final answer, not the child's answer."}),
+		}, &parentSchema)
 		if err != nil {
 			return err
 		}
@@ -80,6 +85,20 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		parentReply, err := finalProductReply(current)
 		if err != nil {
 			return err
+		}
+		var result struct {
+			ChildNonce *string `json:"child_nonce"`
+		}
+		parseErr := parseStructuredReply(parentReply, &result, "child_nonce")
+		server.diagnostics.Record("child_parent_result", map[string]any{"reply": parentReply, "parsed_nonce": result.ChildNonce, "parse_valid": parseErr == nil})
+		var parentResultErr error
+		parentNonce := ""
+		if parseErr != nil {
+			parentResultErr = failedObservation("child_parent_result_invalid", "live: invalid structured child parent result")
+		} else if result.ChildNonce == nil || len(*result.ChildNonce) != 36 || !childNonce.MatchString(strings.ToLower(*result.ChildNonce)) {
+			parentResultErr = failedObservation("child_result_not_proven", "live: qualifying child result absent")
+		} else {
+			parentNonce = strings.ToLower(*result.ChildNonce)
 		}
 		// Incidental orchestration is diagnostic. Only a completed, correctly bound
 		// child that recalls the inherited setup marker can supply accepted evidence.
@@ -141,6 +160,16 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			}
 			children = append(children, child)
 		}
+		if parentResultErr != nil {
+			// Preserve already-available child results and lineage even when the
+			// parent's structured answer fails. No new turn or pending-stream wait.
+			for _, child := range children {
+				for _, turn := range child.Turns {
+					recordProductDiagnosticTurn(server.diagnostics, "child_result_uncredited", child.ID, turn)
+				}
+			}
+			return parentResultErr
+		}
 		if err := stream.failure(); err != nil {
 			return err
 		}
@@ -175,8 +204,8 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 					// Credit a fresh child result actually used by the parent. Other
 					// UUIDs and surrounding prose do not invalidate that result.
 					for nonce := range unique {
-						server.diagnostics.Record("child_result_use", map[string]any{"child_id": child.ID, "turn_id": turn.ID, "uuid": nonce, "used_by_parent": containsProofValue(parentReply, nonce), "known_before_spawn": containsProofValue(parentKnown[child.ID], nonce)})
-						if !containsProofValue(parentReply, nonce) || containsProofValue(parentKnown[child.ID], nonce) {
+						server.diagnostics.Record("child_result_use", map[string]any{"child_id": child.ID, "turn_id": turn.ID, "uuid": nonce, "used_by_parent": parentNonce == nonce, "known_before_spawn": containsProofValue(parentKnown[child.ID], nonce)})
+						if parentNonce != nonce || containsProofValue(parentKnown[child.ID], nonce) {
 							continue
 						}
 						proof := stream.proof(child, parent, turn, nonce, setupMarker)
@@ -292,6 +321,8 @@ func retainsSeedPrefix(thread productThread, seed []productTurn) bool {
 func containsProofValue(text, value string) bool {
 	return strings.Contains(strings.ToLower(text), value)
 }
+
+const childParentOutputSchema = `{"type":"object","properties":{"child_nonce":{"type":["string","null"]}},"required":["child_nonce"],"additionalProperties":false}`
 
 var childNonce = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
@@ -430,8 +461,8 @@ func observeShippedTurn(server *sdkProductObserver, id string, evidence *Evidenc
 	})
 }
 
-func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput) (productThread, productTurn, error) {
-	thread, terminal, err := observeProductCompletedTurn(server, id, evidence, effort, input)
+func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput, outputSchema ...*protocolv2.OutputSchema) (productThread, productTurn, error) {
+	thread, terminal, err := observeProductCompletedTurn(server, id, evidence, effort, input, outputSchema...)
 	if err != nil {
 		return thread, terminal, err
 	}

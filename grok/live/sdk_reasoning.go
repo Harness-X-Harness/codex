@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
@@ -11,6 +12,10 @@ import (
 )
 
 func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
+	schema, schemaErr := protocolv2.OutputSchemaFromJSON([]byte(historyOutputSchema))
+	if schemaErr != nil {
+		return Evidence{}, failedObservation("history_schema_invalid", "live: history output schema unavailable")
+	}
 	observer := newSDKHistoryObserver()
 	observer.probe.diagnostics = options.Diagnostics
 	handlers := sdkFixtureHandlers{
@@ -37,11 +42,12 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 			*evidence = observer.observations
 		}()
 		turn := protocolv2.TurnStartParams{
+			OutputSchema: &schema,
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-				Text: "Call grok_history_probe, reason about its returned token, then include the exact token in your final reply.",
+				Text: "Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable.",
 			})},
 		}
-		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input})
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
 		experimental := true
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
@@ -76,10 +82,11 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 			return err
 		}
 		threadID := observer.beginContinuation()
+		turn.OutputSchema = &schema // Explicit on the resumed turn; never rely on inheritance.
 		turn.Input = []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-			Text: "Recall the exact token returned by the tool in the previous turn from this thread's history. Include it in your final reply without calling a tool.",
+			Text: "Recall the exact token returned by the tool in the previous turn from this thread's history. Return JSON with that exact token as the token field, or null if unavailable, without calling a tool.",
 		})}
-		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 2, "model": options.Model, "input": turn.Input})
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 2, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
 		excludeTurns := true
 		continued, err := client.ThreadRunner().ResumeStream(ctx, codexsdk.ResumeThreadRunRequest{
 			Thread: protocolv2.ThreadResumeParams{ThreadID: threadID, Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd), ExcludeTurns: &excludeTurns},
@@ -166,9 +173,17 @@ func observeSDKHistoryTurn[R any](ctx context.Context, observer *sdkHistoryObser
 		ready := observer.reply.completed && observer.reply.recall && !observer.reply.ambiguous &&
 			(observer.probe.previousID != "" || observer.observations.ReasoningItems > 0 && observer.observations.EncryptedItems > 0 && observer.observations.CompletedTools > 0) &&
 			(fenced || observer.inlineTerminal)
+		settledReply := observer.reply.completed && observer.reply.authoritative && (fenced || observer.inlineTerminal)
+		formatValid, recalled := observer.reply.formatValid, observer.reply.recall
 		observer.mu.Unlock()
 		if cause != nil {
 			return cause
+		}
+		if settledReply && !formatValid {
+			return failedObservation("history_reply_invalid", "live: history reply is not a valid structured result")
+		}
+		if settledReply && !recalled {
+			return failedObservation("history_token_mismatch", "live: history result did not match the actual tool token")
 		}
 		if ready {
 			return nil

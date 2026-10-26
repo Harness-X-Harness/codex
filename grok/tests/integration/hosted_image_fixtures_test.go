@@ -34,6 +34,7 @@ func functionCallEvents(callID, name, arguments string) []any {
 }
 
 type hostedNativeHTTP struct {
+	replies     []string
 	mu          sync.Mutex
 	unexpectedX bool
 	scenario    string
@@ -410,6 +411,7 @@ func (fixture *hostedNativeHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		return
 	}
 	var body struct {
+		Text   json.RawMessage   `json:"text"`
 		Model  string            `json:"model"`
 		Stream bool              `json:"stream"`
 		Store  *bool             `json:"store"`
@@ -422,6 +424,22 @@ func (fixture *hostedNativeHTTP) ServeHTTP(writer http.ResponseWriter, request *
 	}
 	if reason = hostedToolPolicy(fixture.scenario, body.Tools); reason != "" {
 		fixture.reject(writer, reason)
+		return
+	}
+	var text struct {
+		Format struct {
+			Type   string         `json:"type"`
+			Strict bool           `json:"strict"`
+			Schema map[string]any `json:"schema"`
+		} `json:"format"`
+	}
+	if json.Unmarshal(body.Text, &text) != nil || text.Format.Type != "json_schema" || !text.Format.Strict || text.Format.Schema["type"] != "object" || text.Format.Schema["additionalProperties"] != false {
+		fixture.reject(writer, "search_output_schema")
+		return
+	}
+	props, _ := text.Format.Schema["properties"].(map[string]any)
+	if props["summary"] == nil || (fixture.responses == 0) != (props["articles"] != nil) {
+		fixture.reject(writer, "search_output_shape")
 		return
 	}
 	fixture.responses++
@@ -441,7 +459,14 @@ func (fixture *hostedNativeHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		events = append(events, hostedSearchEvents(responseScenario)...)
 		index = 1
 	}
-	events = append(events, assistantEvents(index, responseID+"-reply", hostedNativeReply)...)
+	answer := `{"articles":[{"headline":"Controlled headline","url":"https://news.example.test/story"}],"summary":null}`
+	if fixture.responses == 2 {
+		answer = `{"summary":"Controlled summary of the prior article."}`
+	}
+	if fixture.responses <= len(fixture.replies) {
+		answer = fixture.replies[fixture.responses-1]
+	}
+	events = append(events, assistantEvents(index, responseID+"-reply", answer)...)
 	events = append(events, map[string]any{"type": "response.completed", "response": map[string]any{"id": responseID}})
 	if err := writeSSE(writer, events); err != nil {
 		fixture.reject(writer, "write")

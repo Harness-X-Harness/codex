@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -40,6 +41,13 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 		Reasoning map[string]json.RawMessage
 		Tools     []json.RawMessage
 		Input     []json.RawMessage
+		Text      struct {
+			Format struct {
+				Type   string
+				Strict bool
+				Schema json.RawMessage
+			}
+		}
 	}
 	data, err := io.ReadAll(io.LimitReader(request.Body, (1<<20)+1))
 	threadID := request.Header.Get("thread-id")
@@ -48,6 +56,13 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 		threadID == "" || body.Model != fixture.model || !body.Stream || body.Store == nil || *body.Store ||
 		len(body.Input) > 128 || len(body.Tools) > 16 || fixture.requests > 3 {
 		fail("request_contract")
+		return
+	}
+	var actualSchema, expectedSchema any
+	_ = json.Unmarshal(body.Text.Format.Schema, &actualSchema)
+	_ = json.Unmarshal([]byte(reasoningTokenSchema), &expectedSchema)
+	if body.Text.Format.Type != "json_schema" || !body.Text.Format.Strict || !reflect.DeepEqual(actualSchema, expectedSchema) {
+		fail("output_schema_changed")
 		return
 	}
 	include := false
@@ -130,7 +145,7 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 						return
 					}
 				}
-				if item.Role == "assistant" && fixture.token != "" && part.Text == fixture.token {
+				if item.Role == "assistant" && fixture.token != "" && part.Text == reasoningTokenReply(fixture.token) {
 					firstFinals++
 					finalAt = index
 				}
@@ -177,8 +192,8 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 	} else {
 		message := map[string]any{"type": "message", "id": responseID + "_message", "role": "assistant", "phase": "final_answer", "content": []any{}}
 		emit(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": message})
-		emit(map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": fixture.token})
-		message["status"], message["content"] = "completed", []any{map[string]any{"type": "output_text", "text": fixture.token}}
+		emit(map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": reasoningTokenReply(fixture.token)})
+		message["status"], message["content"] = "completed", []any{map[string]any{"type": "output_text", "text": reasoningTokenReply(fixture.token)}}
 		emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": message})
 	}
 	emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": responseID}})
@@ -231,7 +246,7 @@ func TestReasoningHistoryFixture(t *testing.T) {
 			if err != nil || fixture.failure != "" || fixture.requests != 3 || !fixture.replayed || !fixture.continued {
 				t.Fatal("native reasoning/tool/history composition was not proven")
 			}
-			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 64 || got.ReplyBytes != 64 {
+			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 76 || got.ReplyBytes != 76 {
 				t.Fatal("completed encrypted reasoning, paired tool and final recall evidence missing")
 			}
 			if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 || got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
@@ -245,3 +260,10 @@ func TestReasoningHistoryFixture(t *testing.T) {
 }
 
 var historyNonce = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+const reasoningTokenSchema = `{"type":"object","properties":{"token":{"type":["string","null"]}},"required":["token"],"additionalProperties":false}`
+
+func reasoningTokenReply(token string) string {
+	data, _ := json.Marshal(map[string]string{"token": token})
+	return string(data)
+}

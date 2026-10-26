@@ -41,7 +41,7 @@ func TestSDKHistoryProjectionNullableEvidence(t *testing.T) {
 			})
 			for _, value := range []protocolv2.ThreadItem{
 				protocolv2.NewThreadItemDynamicToolCall(tool),
-				protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_reply", Phase: tc.phase, Text: "回答: " + token}),
+				protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_reply", Phase: tc.phase, Text: historyTestJSON(token)}),
 			} {
 				if err := observer.typedNotification(context.Background(), historyObserverCompleted(value)); err != nil {
 					t.Fatal(err)
@@ -54,7 +54,7 @@ func TestSDKHistoryProjectionNullableEvidence(t *testing.T) {
 			}
 			wantReplyBytes := 0
 			if tc.recall {
-				wantReplyBytes = len("回答: " + token)
+				wantReplyBytes = len(historyTestJSON(token))
 			}
 			if observer.observations.CompletedTools != wantTools || observer.observations.FirstRecall != tc.recall || observer.observations.FirstReplyBytes != wantReplyBytes || observer.observations.FirstCompleted {
 				t.Fatalf("nullable projection changed evidence: %+v", observer.observations)

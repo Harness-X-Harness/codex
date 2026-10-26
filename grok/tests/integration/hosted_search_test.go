@@ -63,3 +63,33 @@ func TestHostedSearchFixture(t *testing.T) {
 		})
 	}
 }
+
+// Backend fixtures reject malformed/empty results without spending another turn.
+func TestHostedSearchStructuredReplyFailures(t *testing.T) {
+	subject := nativeSubject(t)
+	valid := `{"articles":[{"headline":"Fixture headline","url":"https://news.example.test/story"}],"summary":null}`
+	for _, test := range []struct {
+		name    string
+		replies []string
+	}{
+		{"empty_articles", []string{`{"articles":[],"summary":null}`}},
+		{"plain_text", []string{"A headline and URL"}},
+		{"duplicate_nested", []string{`{"articles":[{"headline":"a","headline":"b","url":"https://news.example.test"}],"summary":null}`}},
+		{"null_continuation", []string{valid, `{"summary":null}`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			integrationObservation(t)
+			fixture := &hostedNativeHTTP{scenario: "web", replies: test.replies}
+			backend := httptest.NewServer(fixture)
+			defer backend.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			got, err := live.HostedSearch(ctx, live.Options{Subject: subject, Model: providerfixture.PrimaryModel, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"}, "web")
+			fixture.mu.Lock()
+			defer fixture.mu.Unlock()
+			if err == nil || got.Completed || got.FollowupCompleted || fixture.failure != "" || fixture.responses != len(test.replies) || got.Turns != len(test.replies) {
+				t.Fatalf("invalid result accepted or retried: %+v %v requests=%d failure=%s", got, err, fixture.responses, fixture.failure)
+			}
+		})
+	}
+}

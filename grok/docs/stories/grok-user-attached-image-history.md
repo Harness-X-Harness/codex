@@ -23,11 +23,15 @@ may describe the work; explicit disclosure of either protected second-fact
 property would let the continuation repeat prose instead of using image context
 and cannot establish this proof.
 
-The bounded English answer check requires the requested color and shape as
-whole words, permitting ordinary descriptive words and natural sentence
-structure. It rejects explicit denial, uncertainty and conflicting fixture
-properties rather than admitting only a fixed vocabulary. Prompts and filenames
-do not disclose either answer; the picture pixels carry the facts.
+Each Turn carries a formal SDK output schema: an object with required `color`
+and `shape` properties, each string or null, and no additional properties.
+No expected color/shape is embedded in a schema enum, const, prompt or filename;
+the picture pixels carry the facts. The bounded strict JSON parser rejects
+malformed, duplicate-key, missing-field, extra-field and wrong-type responses.
+Null means unknown and does not pass. String facts are compared to the actual
+fixture after case/whitespace normalization, preserving the existing
+`circular`/`circle` equivalence rather than matching prose. The prompt requests
+a simple shape noun without disclosing any expected shape.
 
 The actual image is supplied once through UserInput.Image. Correct answers in
 the same conversation establish usable image context; no exact data URL or
@@ -47,7 +51,7 @@ retry policy and the existing scenario deadline remain unchanged.
   [the offline observer tests](../../live/attached_image_script_test.go).
 - [The controlled binary fixture](../../tests/integration/attached_image_test.go)
   requires the existing exact selected binary/snapshot, validates inline image
-  provider input on both requests and returns controlled answers. It does not
+  provider input and formal schema on both requests and returns controlled JSON answers. It does not
   prove real-provider visual understanding.
 - The existing same-run shipped-binary prerequisite and full-suite aggregation
   are unchanged; the original seventeen scenarios remain required.
@@ -56,15 +60,18 @@ retry policy and the existing scenario deadline remain unchanged.
   `Recalled` means the distinct requested second fact matched in the same
   image-bearing Thread; it does not identify which internal or public
   representation supplied that answer. No image, prompt, reply, private identifier,
-  credentials or raw traffic is exported.
+  credentials or raw traffic is exported in the aggregate. A separate bounded
+  diagnostic bundle preserves the synthetic input image, prompts/schema, public
+  replies, parse/semantic outcomes and failure evidence; credentials, raw traffic
+  and opaque reasoning remain excluded.
 - A separately authorized identified real-backend run is required to establish
   the user-visible result. Offline checks do not establish Live acceptance.
   This Story does not prove arbitrary images, other models, generation/edit,
   cold restart, compaction, latency or absence of product-internal attempts.
 
-The finite English checks are not a general natural-language judge and do not
-cover every possible negation, paraphrase or qualification: the public
-commentary check rejects either second-fact token, but does not establish the
+The public-message isolation check is not a general natural-language judge:
+it rejects either second-fact token across all public replies and commentary,
+but does not establish the
 absence of every possible paraphrase or coded disclosure. A pass must not be
 reported as proof of universal non-leakage or pixel-only recall. The controlled
 negative cases include a leaked full answer and each separately leaked property.

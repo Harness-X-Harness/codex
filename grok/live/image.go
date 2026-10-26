@@ -71,56 +71,6 @@ func imageJudgeAnswer(reply string) (bool, error) {
 	return accepted, nil
 }
 
-// Explicit inability to inspect the picture is not a visual answer even when
-// another clause repeats the expected words. Uncertainty about breed is different.
-func visualRefusal(text string) bool {
-	text = strings.NewReplacer("can’t", "cannot", "can't", "cannot").Replace(strings.ToLower(text))
-	for _, refusal := range []string{"cannot see the image", "cannot see this image", "cannot see the picture", "cannot view the image", "cannot view this image", "cannot view the picture", "unable to see the image", "unable to view the image"} {
-		if strings.Contains(text, refusal) {
-			return true
-		}
-	}
-	return false
-}
-
-// Scope qualifiers to their clause and nearby following facts. Breed/background
-// uncertainty is not uncertainty about the requested animal or clothing.
-func visualClauses(text string) []string {
-	text = strings.NewReplacer("can’t", "cannot", "can't", "cannot").Replace(strings.ToLower(text))
-	return strings.FieldsFunc(text, func(r rune) bool {
-		return r == '.' || r == ',' || r == ';' || r == ':' || r == '!' || r == '?' || r == '\n'
-	})
-}
-
-func visualFactsDenied(words []string, required map[string]bool) bool {
-	for index, word := range words {
-		switch word {
-		case "unknown":
-			// Adjectival "unknown" can concern identity or an unrelated property
-			// ("unknown breed wearing a red hat"). Only a following whether/if
-			// complement expresses uncertainty about the requested visual facts.
-			if index+1 < len(words) && (words[index+1] == "whether" || words[index+1] == "if") {
-				for _, next := range words[index+2:] {
-					if required[next] {
-						return true
-					}
-				}
-			}
-		case "cannot", "cant", "unsure", "maybe", "possibly", "perhaps", "might", "no", "not", "without":
-			end := len(words)
-			for _, next := range words[index+1 : end] {
-				if next == "but" {
-					break
-				}
-				if required[next] {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
 // Diagnostics retain every public image attempt, not just the final image
 // credited by the oracle. Capture never changes acceptance or reads saved paths.
 func recordImageTurn(diagnostics *Diagnostics, phase string, turn productTurn) {

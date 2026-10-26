@@ -17,14 +17,23 @@ below remains required.
 Given an exact binary with Provider, encrypted-history and relevant tool
 proof, an isolated fixture and a usable default execution environment, when turn
 N calls the named dynamic tool and receives a freshly generated result absent
-from its prompt, then N completes with that result in its final assistant reply.
-When N+1 is submitted once on the same thread without the runner supplying that
-result, then N+1 completes with the same result in its final reply. Explicit
-`final_answer` items take priority over commentary/partial text; without an
-explicit final, phase-unknown replies retain legacy compatibility. The whole
-eligible final response is the oracle: a later final explanation does
-not erase a result in an earlier final fragment. Replayed item identities do not
-add content; commentary or partial text cannot supply missing final recall.
+from its prompt, then N completes with a structured final assistant reply.
+Both N and N+1 explicitly request the same schema on their own turn submission:
+
+```json
+{"type":"object","properties":{"token":{"type":["string","null"]}},"required":["token"],"additionalProperties":false}
+```
+
+The schema never embeds an expected token. The returned `token` must exactly
+match the actual fresh dynamic-tool result; `null` expresses unavailable recall
+and is not success. N+1 is submitted once on the same thread without the runner
+supplying the result. Explicit `final_answer` items take priority over
+commentary/partial text; without an explicit final, phase-unknown replies retain
+legacy compatibility. All eligible final fragments form one bounded JSON result.
+Do not select the first parseable object or accept a token substring in prose.
+Missing/duplicate/unknown fields, extra JSON values, non-string non-null tokens,
+and trailing prose reject the format. Replayed item identities do not add
+content; commentary or partial text cannot supply missing final recall.
 
 Require actual completed reasoning, an opaque encrypted reasoning item from N,
 and a completed named tool call. Native projection/composition proof establishes
@@ -49,9 +58,13 @@ the semantic result is the same. No automatic rerun follows NOT_PROVEN.
   Experimental raw Responses items can establish the encrypted-item fact;
   equivalent causally linked evidence is acceptable when it proves that same
   fact at the product boundary. Reasoning text alone does not prove encryption.
-- Keep identity correlation and fresh tool content only in memory. Retain safe
-  subject metadata, completion/binding/recall booleans, item/invocation counts
-  and last proven stage; no raw items, opaque values, private text or stable IDs.
+- Keep the safe verdict summary separate from bounded task diagnostics. Retain
+  actual submitted prompts/schema, public final fragments and aggregate reply,
+  parse/match outcome, and the synthetic tool request/result needed to compare
+  the returned token. Include run linkage, lifecycle and capture completeness.
+  Do not retain raw wire/history dumps, encrypted reasoning values, private
+  reasoning content, credentials or unrelated environment data. Diagnostic
+  capture failure does not change the business verdict; report it separately.
 - Missing required evidence means NOT_PROVEN. Failure attribution is separate:
   repository, external_environment, or inconclusive only as evidence supports.
 

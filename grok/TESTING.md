@@ -334,3 +334,16 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
 Workflow source and syntax checks are not executed Actions evidence. Current
 measurements and remaining unrun boundaries belong in the review/run record.
 
+
+### Structured Live task results
+
+Applicable existing turns carry formal SDK OutputSchema values: image propositions
+use a boolean; attached images use nullable color/shape; reasoning uses a nullable
+tool token; the delegation parent uses a nullable child nonce; Web uses bounded
+headline/URL articles and summary, then a summary continuation. Their values are
+checked against the existing actual-result authority, not schema validity alone.
+Offline regressions reject malformed/multiple JSON values, duplicate/unknown or
+missing keys, wrong types, null required facts and valid-shaped wrong results.
+Controlled native fixtures verify schema transmission and parent/child isolation.
+No model calls or automatic Live retries are added. Plain conversation, catalog,
+startup and file-edit routes keep their appropriate direct oracles.

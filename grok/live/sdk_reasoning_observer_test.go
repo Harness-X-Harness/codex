@@ -43,7 +43,7 @@ func historyObserverFixture(t *testing.T) (*sdkHistoryObserver, string) {
 func historyObserverTool(callID, token string) protocolv2.ThreadItem {
 	return protocolv2.NewThreadItemDynamicToolCall(protocolv2.ThreadItemDynamicToolCall{
 		ID: callID, Tool: historyTool, Arguments: protocolv2.JSONObject(map[string]protocolv2.JSONValue{}), Status: protocolv2.DynamicToolCallStatusCompleted, Success: protocolv2.Value(true),
-		ContentItems: protocolv2.Value([]protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: token})}),
+		ContentItems: protocolv2.Value([]protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: historyTestJSON(token)})}),
 	})
 }
 
@@ -61,7 +61,7 @@ func TestSDKHistoryObserverProvisionalReconciliation(t *testing.T) {
 			terminal := protocolv2.NewServerNotificationTurnCompleted(protocolv2.ServerNotificationTurnCompleted{Params: protocolv2.TurnCompletedNotification{
 				ThreadID: "private_thread", Turn: protocolv2.Turn{ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
 					protocolv2.NewThreadItemReasoning(protocolv2.ThreadItemReasoning{ID: "private_reasoning"}),
-					protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_reply", Text: token, Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)}),
+					protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_reply", Text: historyTestJSON(token), Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)}),
 				}},
 			}})
 			for _, notification := range []protocolv2.ServerNotification{tool, terminal} {
@@ -78,7 +78,7 @@ func TestSDKHistoryObserverProvisionalReconciliation(t *testing.T) {
 			observer.finishTurn()
 			want := Evidence{ToolCalls: 1}
 			if actualID == "private_turn" {
-				want = Evidence{Stage: "first_turn_completed", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 64}
+				want = Evidence{Stage: "first_turn_completed", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 76}
 			} else if DescribeFailure(err).Code != "turn_identity_missing" {
 				t.Fatal("mismatched actual turn did not reject provisional authority")
 			}
@@ -109,7 +109,7 @@ func TestSDKHistoryObserverFailurePrefixRecovery(t *testing.T) {
 	notifications := []protocolv2.ServerNotification{
 		historyObserverCompleted(protocolv2.NewThreadItemReasoning(protocolv2.ThreadItemReasoning{ID: "private_reasoning"})),
 		historyObserverCompleted(historyObserverTool("private_call_0", token)),
-		historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_reply", Text: token, Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})),
+		historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_reply", Text: historyTestJSON(token), Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})),
 	}
 	if err := observer.typedNotification(context.Background(), notifications[0]); err != nil {
 		t.Fatal("valid delivered prefix was rejected")
@@ -122,7 +122,7 @@ func TestSDKHistoryObserverFailurePrefixRecovery(t *testing.T) {
 	}
 	observer.recoverNotifications(notifications)
 	observer.finishTurn()
-	if !reflect.DeepEqual(observer.observations, Evidence{Stage: "turn_submitted", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstRecall: true, FirstReplyBytes: 64}) {
+	if !reflect.DeepEqual(observer.observations, Evidence{Stage: "turn_submitted", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstRecall: true, FirstReplyBytes: 76}) {
 		t.Fatal("failure recovery duplicated partial evidence or invented terminal completion")
 	}
 }
@@ -157,12 +157,12 @@ func TestSDKHistoryObserverCallCapacity(t *testing.T) {
 
 func TestSDKHistoryRetainedInvalidItemPrecedesInlineCredit(t *testing.T) {
 	observer, token := historyObserverFixture(t)
-	invalid := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: token}))
+	invalid := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: historyTestJSON(token)}))
 	// The read loop retained this item before publishing an inline response;
 	// deliberately do not invoke its callback until after reconciliation.
 	err := observer.reconcile(codexsdk.ThreadRunResult{Notifications: []protocolv2.ServerNotification{invalid}, Turn: protocolv2.Turn{
 		ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
-			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: token}),
+			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: historyTestJSON(token)}),
 		},
 	}})
 	if DescribeFailure(err).Code != "assistant_identity_missing" || observer.reply.completed {
@@ -187,7 +187,7 @@ func TestSDKHistoryFinishedTurnRetainsContradictionChecks(t *testing.T) {
 				observer.probe.previousID, observer.probe.turnID = "private_turn", "private_next"
 			}
 			before := observer.observations
-			err := observer.typedNotification(context.Background(), historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: token})))
+			err := observer.typedNotification(context.Background(), historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: historyTestJSON(token)})))
 			if DescribeFailure(err).Code != "assistant_identity_missing" || !reflect.DeepEqual(before, observer.observations) {
 				t.Fatal("late contradiction lost or positive evidence changed")
 			}
@@ -220,10 +220,10 @@ func TestSDKHistoryFinishedTurnIgnoresUnrelatedInvalidItem(t *testing.T) {
 func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) {
 	observer, token := historyObserverFixture(t)
 	observer.probe.previousID = "private_previous"
-	observer.observations = Evidence{FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 64, Turns: 2}
+	observer.observations = Evidence{FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 76, Turns: 2}
 	if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{
 		ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
-			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: token}),
+			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: historyTestJSON(token)}),
 		},
 	}}); err != nil {
 		t.Fatal(err)
@@ -233,7 +233,7 @@ func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) 
 	copied := observer.observations
 	// Force the exact schedule: inline proof and returned evidence copy precede
 	// a semantically invalid callback admitted before SDK cleanup joins it.
-	late := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: token}))
+	late := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: historyTestJSON(token)}))
 	if err := observer.typedNotification(context.Background(), late); DescribeFailure(err).Code != "assistant_identity_missing" {
 		t.Fatal("late invalid item was not rejected")
 	}
@@ -275,7 +275,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 					t.Fatal(err)
 				}
 				item := func(id, text string) protocolv2.ThreadItem {
-					return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: id, Text: text, Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})
+					return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: id, Text: historyTestJSON(text), Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})
 				}
 				send := func(id, text string) error {
 					return observer.typedNotification(context.Background(), protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: protocolv2.ItemCompletedNotification{
@@ -283,7 +283,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 					}}))
 				}
 				for i := 0; i < historyAssistantLimit; i++ {
-					text := "wrong"
+					text := ""
 					if (mode == "limit_and_duplicate" || mode == "overflow") && i == historyAssistantLimit-1 {
 						text = token
 					}
@@ -295,7 +295,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 					t.Fatal("exact identity capacity was not retained")
 				}
 				if mode == "limit_and_duplicate" || mode == "overflow" {
-					if err := send("private_item_0", "wrong"); err != nil {
+					if err := send("private_item_0", ""); err != nil {
 						t.Fatal(err)
 					}
 					if !observer.reply.recall || observer.reply.ambiguous || len(observer.reply.identities) != historyAssistantLimit {
