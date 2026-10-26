@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       binary_run_id:
-        description: Exact settled version-line push run containing the Linux package.
+        description: Exact settled version-line push or successful same-repository PR build run.
         type: string
         required: true
       suite:
@@ -23,6 +23,7 @@ on:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 
 concurrency:
   group: grok-live-diagnostic-${{ github.run_id }}
@@ -31,7 +32,7 @@ concurrency:
 jobs:
   diagnostic:
     name: Diagnostic Live
-    if: ${{ github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') }}
+    if: ${{ github.repository == 'Harness-X-Harness/codex' && (startsWith(github.ref, 'refs/heads/grok/rust-v') || (inputs.suite == 'diagnostic' && inputs.scenario == 'image-primary')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
@@ -42,9 +43,18 @@ jobs:
         with:
           python-version: "3.12"
       - name: Bind the diagnostic harness subject
+        env:
+          SUITE: ${{ inputs.suite }}
+          SCENARIO: ${{ inputs.scenario }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          # PR code receives the backend secret only for the explicitly selected
+          # image diagnostic, after current PR/build provenance is verified below.
+          if [[ "$GITHUB_REF" != refs/heads/grok/rust-v* ]]; then
+            test "$SUITE" = diagnostic
+            test "$SCENARIO" = image-primary
+          fi
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok-live.yml
       - name: Fetch and verify the explicit diagnostic package
         env:
@@ -52,8 +62,12 @@ jobs:
           BINARY_RUN_ID: ${{ inputs.binary_run_id }}
         run: |
           set -euo pipefail
+          source_args=()
+          if [[ "$GITHUB_REF" != refs/heads/grok/rust-v* ]]; then
+            source_args+=(--pr-diagnostic)
+          fi
           python3 grok/package/fetch_artifact.py --run-id "$BINARY_RUN_ID" \
-            --harness-sha "$GITHUB_SHA" --output "$RUNNER_TEMP/live-package"
+            --harness-sha "$GITHUB_SHA" "${source_args[@]}" --output "$RUNNER_TEMP/live-package"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: grok/go.mod
@@ -114,3 +128,4 @@ jobs:
           path: ${{ runner.temp }}/live-evidence
           if-no-files-found: warn
           retention-days: 30
+

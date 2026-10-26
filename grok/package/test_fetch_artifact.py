@@ -10,6 +10,7 @@ import sys
 import tarfile
 import time
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 import zipfile
@@ -200,6 +201,60 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             path = self.output / "package" / name
             self.assertEqual(path.read_bytes(), data)
             self.assertEqual(path.stat().st_mode & 0o7777, 0o755 if name in EXECUTABLES else 0o600)
+
+    def configure_pr(self):
+        repo = {"id": 123, "full_name": REPOSITORY}
+        pr = {"number": 444, "state": "open", "merged": False, "merge_commit_sha": SHA,
+              "head": {"sha": HARNESS, "ref": "fix/image", "repo": dict(repo)},
+              "base": {"sha": "d" * 40, "ref": "grok/rust-v0.164.0", "repo": dict(repo)}}
+        self.run.update(event="pull_request", head_sha=HARNESS, head_branch="fix/image",
+                        conclusion="success", pull_requests=[copy.deepcopy(pr)])
+        self.artifacts["artifacts"][0]["workflow_run"]["head_sha"] = HARNESS
+        self.expected_calls.insert(1, ["api", "--hostname", "github.com", "--method", "GET",
+                                       f"/repos/{REPOSITORY}/pulls/444"])
+        self.config["files"].insert(1, "pull-request.json")
+        (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
+        return pr
+
+    def test_pr_command_fetches_current_metadata_and_verifies_merge_package(self):
+        self.configure_pr()
+        result = self.invoke(["--pr-diagnostic"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_calls(5)
+        got = json.loads(result.stdout)
+        self.assertEqual(got["selection_mode"], "pr_diagnostic")
+        self.assertEqual(got["source_sha"], SHA)
+        self.assertEqual(got["harness_sha"], HARNESS)
+        self.assertEqual(got["pr_head_sha"], HARNESS)
+        self.assertEqual(got["pull_request_number"], 444)
+        self.assertEqual(got["runtime_sha256"], self.manifest["files"]["bin/grok-bin"]["sha256"])
+
+    def test_pr_command_rejects_package_manifest_with_head_instead_of_merge_source(self):
+        self.configure_pr()
+        self.manifest["source_sha"] = HARNESS
+        self.contents["grok-package.json"] = json.dumps(self.manifest).encode()
+        self.bundle()
+        self.assert_failed(self.invoke(["--pr-diagnostic"]), 5, "archive_verification")
+
+    def test_pr_command_rejects_changed_head_before_archive_download(self):
+        pr = self.configure_pr()
+        pr["head"]["sha"] = "e" * 40
+        (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
+        self.assert_failed(self.invoke(["--pr-diagnostic"]), 4, "selection", selection_reason="identity")
+
+    def test_pr_command_requires_explicit_mode_and_one_link(self):
+        self.run.update(event="pull_request", pull_requests=[])
+        self.assert_failed(self.invoke(["--pr-diagnostic"]), 1, "selection", selection_reason="identity")
+
+    def test_pr_mode_cannot_be_combined_with_same_run(self):
+        result = self.invoke(["--pr-diagnostic", "--same-run-source-sha", HARNESS,
+                              "--expected-artifact-id", "501", "--expected-run-attempt", "2"])
+        self.assert_failed(result, 0, "input")
+
+    def test_pr_metadata_request_failure_is_bounded_and_has_no_archive_fetch(self):
+        self.configure_pr()
+        self.config["fail_index"] = 1
+        self.assert_failed(self.invoke(["--pr-diagnostic"]), 2, "pull_request_request")
 
     def test_same_run_command_binds_source_harness_attempt_and_artifact(self):
         self.run.update(status="in_progress", conclusion=None)
@@ -616,5 +671,48 @@ class FailureCodeTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "archive_request")
 
 
+class PRWorkflowTests(unittest.TestCase):
+    def test_pr_dispatch_guard_and_fetch_flag_precede_backend_secret(self):
+        workflow = Path(__file__).resolve().parents[2] / ".github/workflows/grok-live.yml"
+        text = workflow.read_text()
+        self.assertIn("inputs.suite == 'diagnostic' && inputs.scenario == 'image-primary'", text)
+        self.assertLess(text.index("Fetch and verify the explicit diagnostic package"),
+                        text.index("GROK_API_KEY:"))
+        self.assertEqual(text.count("GROK_API_KEY:"), 1)
+        def script(name):
+            step = text.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
+            return textwrap.dedent(step.split("        run: |\n", 1)[1])
+        bind = script("Bind the diagnostic harness subject")
+        fetch = script("Fetch and verify the explicit diagnostic package")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "git").write_text("#!/bin/sh\nif [ \"$1\" = rev-parse ]; then printf '%s\\n' \"$GITHUB_SHA\"; fi\n")
+            (root / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE\"\n")
+            for name in ("git", "python3"):
+                (root / name).chmod(0o755)
+            for branch, suite, scenario, allowed in (
+                ("fix/image", "diagnostic", "image-primary", True),
+                ("fix/image", "full", "image-primary", False),
+                ("fix/image", "smoke", "image-primary", False),
+                ("fix/image", "diagnostic", "basic-primary", False),
+                ("grok/rust-v0.164.0", "full", "basic-primary", True),
+            ):
+                with self.subTest(branch=branch, suite=suite, scenario=scenario):
+                    capture = root / "capture"
+                    capture.unlink(missing_ok=True)
+                    env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                               GITHUB_REF="refs/heads/" + branch, GITHUB_SHA=HARNESS,
+                               GITHUB_WORKFLOW_SHA=HARNESS, SUITE=suite, SCENARIO=scenario,
+                               BINARY_RUN_ID="37", RUNNER_TEMP=str(root), CAPTURE=str(capture))
+                    result = subprocess.run(["bash", "-c", bind + "\n" + fetch], env=env,
+                                            capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode == 0, allowed, result.stderr)
+                    self.assertEqual(capture.exists(), allowed)
+                    if allowed:
+                        self.assertEqual("--pr-diagnostic" in capture.read_text().splitlines(),
+                                         not branch.startswith("grok/rust-v"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

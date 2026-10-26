@@ -176,6 +176,27 @@ provenance, source/harness revisions, target and executable digest. They pass
 `-grok-live-environment` to the same Go entry point. Merely setting those flags
 locally is not independent proof of package origin.
 
+### PR image diagnostic
+
+The existing `grok-live.yml` manual workflow accepts one explicitly authorized
+PR diagnostic: select the current same-repository PR branch, `suite=diagnostic`,
+`scenario=image-primary`, and the exact successful `grok.yml` PR build run ID.
+The current open PR head must equal the diagnostic harness and build-run head;
+its version-line base and current synthetic merge commit must match the run and
+package source. The package archive, manifest and executable digests retain
+normal verification. Forks, old heads, mismatched merge subjects, incomplete or
+failed PR builds, and other PR selections fail before backend use.
+
+The PR branch path is explicit diagnostic evidence, not formal version-line
+acceptance. It submits the four image semantic turns once in three conversations,
+with no automatic retry or merge. `GROK_API_KEY` stays in the single backend
+execution step; use the existing repository secret, never a pasted key. The
+version-line push and diagnostic paths otherwise retain their existing rules.
+A workflow dispatch needs an authenticated GitHub Actions operator; permission
+to edit the PR is not proof that an assistant can trigger Actions. If dispatched
+by the operator, record the resulting run ID and observe that run rather than
+dispatching again.
+
 ## Facts remain independent
 
 Direct backend observation does not launch Codex or prove a product Story.
@@ -297,3 +318,4 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
 
 Workflow source and syntax checks are not executed Actions evidence. Current
 measurements and remaining unrun boundaries belong in the review/run record.
+
