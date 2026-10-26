@@ -178,24 +178,30 @@ provenance, source/harness revisions, target and executable digest. They pass
 `-grok-live-environment` to the same Go entry point. Merely setting those flags
 locally is not independent proof of package origin.
 
-### PR image diagnostic
+### Manual Live selection and package provenance
 
-The existing `grok-live.yml` manual workflow accepts one explicitly authorized
-PR diagnostic: select the current same-repository PR branch, `suite=diagnostic`,
-`scenario=image-primary`, and the exact successful `grok.yml` PR build run ID.
-The current open PR head must equal the diagnostic harness and build-run head;
-its version-line base and current synthetic merge commit must match the run and
-package source. The package archive, manifest and executable digests retain
-normal verification. Forks, old heads, mismatched merge subjects, incomplete or
-failed PR builds, and other PR selections fail before backend use.
+The existing `grok-live.yml` manual workflow uses the same Go-owned scenario
+catalog for version-line and same-repository PR builds. Select `suite=full` or
+`smoke` for that complete catalog selection, or `suite=diagnostic` with one
+catalog scenario. Workflow conditions do not maintain a second scenario list.
+Selection capability does not itself authorize a backend run: the operator must
+explicitly dispatch the intended selection once.
 
-The PR branch path is explicit diagnostic evidence, not formal version-line
-acceptance. It submits the four image semantic turns once in three conversations,
-with no automatic retry or merge. `GROK_API_KEY` is scoped to the single backend execution step and its conditional
+For a PR package, select its current branch and exact successful `grok.yml` build
+run ID. The current open PR head must equal the harness and build-run head; its
+version-line base and current synthetic merge commit must match the run and
+package source. The archive, manifest and executable digests retain normal
+verification. Forks, old heads, mismatched merge subjects, and incomplete or
+failed PR builds fail before backend use. Invalid catalog selections also fail
+before backend use. PR observations remain diagnostic evidence, not formal
+version-line acceptance; a full selection does not merge or release the PR.
+
+Each selected scenario is submitted once, with no automatic retry or merge.
+`GROK_API_KEY` remains scoped to the backend execution step and its conditional
 post-execution stderr redaction step; redaction performs no backend operation and
 does not run when execution was skipped. Use the existing repository secret,
-never a pasted key. The
-version-line push and diagnostic paths otherwise retain their existing rules.
+never a pasted key. Version-line and PR artifact-source verification retain their
+respective provenance rules, independent of scenario selection.
 A workflow dispatch needs an authenticated GitHub Actions operator; permission
 to edit the PR is not proof that an assistant can trigger Actions. If dispatched
 by the operator, record the resulting run ID and observe that run rather than
