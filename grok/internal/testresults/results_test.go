@@ -95,7 +95,7 @@ func TestIntegrationInventory(t *testing.T) {
 	}
 	for _, owner := range owners {
 		t.Run("missing_"+owner.Name, func(t *testing.T) {
-			if _, err := Check(strings.NewReader(integrationTrace(owner.Name)), owners); err == nil || !strings.Contains(err.Error(), owner.Name) {
+			if summary, err := Check(strings.NewReader(integrationTrace(owner.Name)), owners); err == nil || summary.FailureReason != "required_test_absent" {
 				t.Fatalf("missing owner accepted: %v", err)
 			}
 		})
@@ -202,5 +202,67 @@ func TestReadFailureIsBoundedAndPrivate(t *testing.T) {
 	_, err := Check(io.MultiReader(strings.NewReader(trace("p", "TestOne")), brokenReader{}), nil)
 	if err == nil || strings.Contains(err.Error(), "PRIVATE_CONTENT") {
 		t.Fatal("read failure accepted or leaked")
+	}
+}
+
+func TestSummaryCountsWholeFailedStream(t *testing.T) {
+	failed := encode(event{Action: "start", Package: "bad"},
+		event{Action: "run", Package: "bad", Test: "TestFailure"},
+		event{Action: "fail", Package: "bad", Test: "TestFailure"},
+		event{Action: "fail", Package: "bad"})
+	skipped := encode(event{Action: "start", Package: "skipped"},
+		event{Action: "run", Package: "skipped", Test: "TestSkip"},
+		event{Action: "skip", Package: "skipped", Test: "TestSkip"},
+		event{Action: "pass", Package: "skipped"})
+	incomplete := encode(event{Action: "start", Package: "incomplete"},
+		event{Action: "run", Package: "incomplete", Test: "TestWaiting"})
+	for _, input := range []string{failed + trace("good", "TestPass") + skipped + incomplete,
+		trace("good", "TestPass") + skipped + incomplete + failed} {
+		got, err := Check(strings.NewReader(input), nil)
+		if err == nil || !got.InputComplete || got.FailureReason != "failed_execution" {
+			t.Fatalf("failure missing: %+v %v", got, err)
+		}
+		if got.TestsStarted != 4 || got.TestsPassed != 1 || got.TestsFailed != 1 || got.TestsSkipped != 1 || got.TestsIncomplete != 1 {
+			t.Fatalf("test counts lost after failure: %+v", got)
+		}
+		if got.PackagesStarted != 4 || got.PackagesPassed != 2 || got.PackagesFailed != 1 || got.PackagesIncomplete != 1 || got.PackagesSkipped != 0 {
+			t.Fatalf("package counts lost after failure: %+v", got)
+		}
+		if got.Tests != got.TestsPassed || got.Packages != 2 {
+			t.Fatalf("legacy counters changed: %+v", got)
+		}
+	}
+}
+
+func TestSummaryMalformedInputReportsTrustedPrefix(t *testing.T) {
+	prefix := trace("good", "TestPass") + encode(event{Action: "start", Package: "PRIVATE_PACKAGE"},
+		event{Action: "run", Package: "PRIVATE_PACKAGE", Test: "PRIVATE_TEST"})
+	got, err := Check(strings.NewReader(prefix+"PRIVATE_INVALID_JSON\n"+trace("later", "TestLater")), nil)
+	if err == nil || got.InputComplete || got.FailureReason != "invalid_event" || got.TestsStarted != 2 || got.TestsPassed != 1 || got.TestsIncomplete != 1 || got.PackagesStarted != 2 || got.PackagesIncomplete != 1 {
+		t.Fatalf("invalid stream counts: %+v %v", got, err)
+	}
+	raw, _ := json.Marshal(got)
+	if strings.Contains(string(raw)+err.Error(), "PRIVATE_") {
+		t.Fatal("private source reached summary")
+	}
+}
+
+func TestSummaryIncompleteSkippedAndBuildFailure(t *testing.T) {
+	for _, tc := range []struct {
+		input, reason               string
+		incomplete, skipped, failed int
+	}{
+		{encode(event{Action: "start", Package: "p"}, event{Action: "run", Package: "p", Test: "TestOne"}), "incomplete_test", 1, 0, 0},
+		{encode(event{Action: "start", Package: "p"}, event{Action: "run", Package: "p", Test: "TestOne"}, event{Action: "skip", Package: "p", Test: "TestOne"}, event{Action: "pass", Package: "p"}) + trace("q", "TestTwo"), "skipped_execution", 0, 1, 0},
+		{encode(event{Action: "start", Package: "p"}, event{Action: "build-fail", Package: "p"}) + trace("q", "TestTwo"), "failed_execution", 0, 0, 1},
+	} {
+		got, err := Check(strings.NewReader(tc.input), nil)
+		if err == nil || !got.InputComplete || got.FailureReason != tc.reason || got.TestsIncomplete != tc.incomplete || got.TestsSkipped != tc.skipped || got.PackagesFailed != tc.failed {
+			t.Fatalf("wrong terminal counts: %+v %v", got, err)
+		}
+	}
+	got, err := Check(strings.NewReader(trace("p", "TestOne")+encode(event{Action: "start", Package: "empty"}, event{Action: "output", Package: "empty", Output: "[no test files]"}, event{Action: "skip", Package: "empty"})), nil)
+	if err != nil || got.PackagesStarted != 2 || got.PackagesPassed != 1 || got.PackagesSkipped != 1 || got.TestsStarted != 1 {
+		t.Fatalf("no-test package counts: %+v %v", got, err)
 	}
 }

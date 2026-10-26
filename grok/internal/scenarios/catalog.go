@@ -197,9 +197,9 @@ func image(ctx context.Context, options live.Options) (LiveResult, error) {
 	return LiveResult{Evidence: evidence, Base: evidence.Evidence}, err
 }
 
-func shipped(run func(context.Context, live.Subject, string) (live.Evidence, error)) func(context.Context, live.Options) (LiveResult, error) {
+func shipped(run func(context.Context, live.Subject, string, ...*live.Diagnostics) (live.Evidence, error)) func(context.Context, live.Options) (LiveResult, error) {
 	return plain(func(ctx context.Context, options live.Options) (live.Evidence, error) {
-		return run(ctx, options.Subject, options.APIKey)
+		return run(ctx, options.Subject, options.APIKey, options.Diagnostics)
 	})
 }
 

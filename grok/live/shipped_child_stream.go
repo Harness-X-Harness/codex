@@ -12,10 +12,11 @@ import (
 // carries consumed AgentMessage inputs that durable Thread history omits. Keep
 // them only in bounded memory; none are returned in Evidence or error text.
 type childStream struct {
-	mu     sync.Mutex
-	events []frame
-	bytes  int
-	err    error
+	diagnostics *Diagnostics
+	mu          sync.Mutex
+	events      []frame
+	bytes       int
+	err         error
 }
 
 const childStreamEventLimit = 512
@@ -29,6 +30,7 @@ const (
 )
 
 func (stream *childStream) observe(message frame) error {
+	stream.recordDiagnostic(message)
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if stream.err != nil {
@@ -81,6 +83,10 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	invalidAt := len(events)
 	closedAt := len(events)
 	path := child.Source.SubAgent.ThreadSpawn.AgentPath
+	reject := func(reason string) childProof {
+		stream.diagnostics.Record("child_proof_rejected", map[string]any{"child_id": child.ID, "turn_id": credited.ID, "reason": reason})
+		return childProof(0)
+	}
 	for index, message := range events {
 		var event struct {
 			ThreadID, TurnID string
@@ -102,10 +108,10 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		} else if value, ok := message.Notification.AsThreadClosed(); ok {
 			event.ThreadID = value.Params.ThreadID
 		} else {
-			return childNotProven
+			return reject("unsupported_event")
 		}
 		if err != nil {
-			return childNotProven
+			return reject("invalid_event")
 		}
 		if event.ThreadID != child.ID {
 			continue
@@ -119,7 +125,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 			id = event.Turn.ID
 		}
 		if id == "" {
-			return childNotProven
+			return reject("missing_turn_id")
 		}
 		observed := turns[id]
 		if observed == nil {
@@ -136,7 +142,7 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		case "turn/completed":
 			var terminalError any
 			if len(event.Turn.Error) != 0 && json.Unmarshal(event.Turn.Error, &terminalError) != nil {
-				return childNotProven
+				return reject("invalid_terminal_error")
 			}
 			if !observed.started || (observed.ended && (observed.status != event.Turn.Status || observed.terminalError != (terminalError != nil))) {
 				observed.invalid = true
@@ -237,12 +243,12 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	selected := turns[credited.ID]
 	if selected == nil {
 		if closedAt < len(events) || invalidAt < len(events) {
-			return childNotProven
+			return reject("missing_turn_before_close_or_invalid_input")
 		}
 		return childPending
 	}
 	if selected.invalid || (closedAt < len(events) && (!selected.ended || closedAt < selected.endedAt)) {
-		return childNotProven
+		return reject("invalid_lifecycle")
 	}
 	nonceAt, markerAt := selected.legacyResultAt, selected.legacyMarkerAt
 	if selected.hasFinal {
@@ -250,23 +256,23 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 	}
 	resultAt := max(nonceAt, markerAt)
 	if invalidAt < resultAt || (resultAt < 0 && invalidAt < len(events)) {
-		return childNotProven
+		return reject("invalid_input_before_result")
 	}
 	for _, input := range inputs {
 		if ((nonceAt < 0 || input.at < nonceAt) && containsProofValue(input.text, nonce)) ||
 			((markerAt < 0 || input.at < markerAt) && containsProofValue(input.text, setupMarker)) {
-			return childNotProven
+			return reject("proof_value_supplied_in_input")
 		}
 	}
 	if !selected.ended {
 		return childPending
 	}
 	if selected.status != "completed" || selected.terminalError || nonceAt < 0 || markerAt < 0 || selected.firstInput < 0 || selected.firstInput >= min(nonceAt, markerAt) {
-		return childNotProven
+		return reject("incomplete_result_lifecycle")
 	}
 	rawReply, err := finalProductReply(selected.reply)
 	if err != nil || !containsProofValue(rawReply, nonce) || !containsProofValue(rawReply, setupMarker) {
-		return childNotProven
+		return reject("result_text_mismatch")
 	}
 	// Only this child's order is relevant. Every own durable turn through the
 	// credited turn needs its observed lifecycle and consumed input; a missed
@@ -282,13 +288,13 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 			// Public history also includes diagnostics that are not model input.
 			for _, value := range turn.Items {
 				if item, ok := value.AsAgentMessage(); ok && item.Phase != nil && item.Phase.Value != nil && *item.Phase.Value == protocolv2.MessagePhaseFinalAnswer && containsProofValue(item.Text, nonce) {
-					return childNotProven
+					return reject("result_in_inherited_assistant")
 				}
 				if item, ok := value.AsUserMessage(); ok {
 					for _, part := range item.Content {
 						text, ok := part.AsText()
 						if !ok || containsProofValue(text.Text, nonce) {
-							return childNotProven
+							return reject("result_in_inherited_input")
 						}
 					}
 				}
@@ -298,10 +304,10 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		observed := turns[turn.ID]
 		var durableError any
 		if len(turn.Error) != 0 && json.Unmarshal(turn.Error, &durableError) != nil {
-			return childNotProven
+			return reject("invalid_durable_error")
 		}
 		if own >= len(order) || order[own] != turn.ID || observed == nil || !observed.started || !observed.ended || observed.invalid || observed.inputs == 0 || observed.status != turn.Status || observed.terminalError != (durableError != nil) {
-			return childNotProven
+			return reject("durable_stream_lifecycle_mismatch")
 		}
 		own++
 		if turn.ID == credited.ID {
@@ -309,4 +315,31 @@ func (stream *childStream) proof(child, parent productThread, credited productTu
 		}
 	}
 	return childProven
+}
+
+// Retain only visible task input/result text, never raw response envelopes or reasoning.
+func (stream *childStream) recordDiagnostic(message frame) {
+	if message.Method != "rawResponseItem/completed" {
+		return
+	}
+	var event struct {
+		ThreadID, TurnID string
+		Item             struct {
+			ID, Type, Role, Phase, Author, Recipient string
+			Content                                  []struct{ Type, Text string }
+		}
+	}
+	if json.Unmarshal(message.Params, &event) != nil {
+		return
+	}
+	if event.Item.Type != "agent_message" && event.Item.Type != "message" {
+		return
+	}
+	var text []string
+	for _, part := range event.Item.Content {
+		if part.Type == "input_text" || part.Type == "output_text" {
+			text = append(text, part.Text)
+		}
+	}
+	stream.diagnostics.Record("child_visible_message", map[string]any{"thread_id": event.ThreadID, "turn_id": event.TurnID, "item_id": event.Item.ID, "type": event.Item.Type, "role": event.Item.Role, "phase": event.Item.Phase, "author": event.Item.Author, "recipient": event.Item.Recipient, "text": text})
 }

@@ -12,6 +12,7 @@ import (
 
 func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 	observer := newSDKHistoryObserver()
+	observer.probe.diagnostics = options.Diagnostics
 	handlers := sdkFixtureHandlers{
 		requests: observer.request, notifications: observer.typedNotification, failures: observer.failures,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 65536, MaxBytes: 64 << 20},
@@ -40,6 +41,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 				Text: "Call grok_history_probe, reason about its returned token, then include the exact token in your final reply.",
 			})},
 		}
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input})
 		experimental := true
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
@@ -77,6 +79,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 		turn.Input = []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
 			Text: "Recall the exact token returned by the tool in the previous turn from this thread's history. Include it in your final reply without calling a tool.",
 		})}
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 2, "model": options.Model, "input": turn.Input})
 		excludeTurns := true
 		continued, err := client.ThreadRunner().ResumeStream(ctx, codexsdk.ResumeThreadRunRequest{
 			Thread: protocolv2.ThreadResumeParams{ThreadID: threadID, Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd), ExcludeTurns: &excludeTurns},

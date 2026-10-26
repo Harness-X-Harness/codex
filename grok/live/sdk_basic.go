@@ -69,13 +69,16 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		evidence.Threads = 1
 		observer.evidence = evidence
+		observer.diagnostics = options.Diagnostics
+		const prompt = "Reply with a short confirmation that this turn completed."
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "basic", "model": options.Model, "prompt": prompt})
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
 				Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
 			},
 			Turn: protocolv2.TurnStartParams{
 				Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-					Text: "Reply with a short confirmation that this turn completed.",
+					Text: prompt,
 				})},
 			},
 			AdmitTurn: func(thread protocolv2.ThreadStartResponse, _ protocolv2.TurnStartParams) error {
@@ -190,6 +193,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 // basicObservation owns the same bound proof during the turn and after joined
 // callback cleanup. Cleanup may revoke existing completion, never create it.
 type basicObservation struct {
+	diagnostics      *Diagnostics
 	threadID, turnID string
 	evidence         *Evidence
 	notifications    <-chan protocolv2.ServerNotification
@@ -199,6 +203,7 @@ type basicObservation struct {
 func (observer *basicObservation) reply(entry protocolv2.ThreadItem) {
 	agent, ok := entry.AsAgentMessage()
 	if ok && (agent.Phase == nil || agent.Phase.Value == nil || *agent.Phase.Value == protocolv2.MessagePhaseFinalAnswer) && strings.TrimSpace(agent.Text) != "" {
+		observer.diagnostics.Record("oracle_reply", map[string]any{"scenario": "basic", "thread_id": observer.threadID, "turn_id": observer.turnID, "item_id": agent.ID, "text": agent.Text})
 		observer.evidence.ReplyBytes = len(agent.Text)
 		if !observer.evidence.Completed {
 			observer.evidence.Stage = "reply_observed"

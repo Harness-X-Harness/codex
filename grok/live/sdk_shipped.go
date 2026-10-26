@@ -12,12 +12,12 @@ import (
 
 func sdkShippedCatalog(ctx context.Context, options Options) (Evidence, error) {
 	return withSDKFixture(ctx, options, nil, sdkFixtureHandlers{}, func(client *codexsdk.Client, _ string, evidence *Evidence) error {
-		return requireSDKShippedCatalog(ctx, client, evidence)
+		return requireSDKShippedCatalog(ctx, client, evidence, options.Diagnostics)
 	})
 }
 
 func sdkShippedSession(ctx context.Context, options Options, observe func(*sdkProductObserver, string, *Evidence) error) (Evidence, error) {
-	transport := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}
+	transport := &sdkProductObserver{diagnostics: options.Diagnostics, ctx: ctx, changed: make(chan struct{}, 1)}
 	handlers := sdkFixtureHandlers{
 		requests: transport.request, notifications: transport.typedNotification, afterClose: transport.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 8 << 20},
@@ -28,7 +28,7 @@ func sdkShippedSession(ctx context.Context, options Options, observe func(*sdkPr
 	}
 	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
 		transport.client = client
-		if err := requireSDKShippedCatalog(ctx, client, evidence); err != nil {
+		if err := requireSDKShippedCatalog(ctx, client, evidence, options.Diagnostics); err != nil {
 			return err
 		}
 		if options.catalogOnly {
@@ -52,13 +52,20 @@ func sdkShippedSession(ctx context.Context, options Options, observe func(*sdkPr
 	})
 }
 
-func requireSDKShippedCatalog(ctx context.Context, client *codexsdk.Client, evidence *Evidence) error {
+func requireSDKShippedCatalog(ctx context.Context, client *codexsdk.Client, evidence *Evidence, sinks ...*Diagnostics) error {
+	var diagnostics *Diagnostics
+	if len(sinks) != 0 {
+		diagnostics = sinks[0]
+	}
+	diagnostics.Record("catalog_request", map[string]any{"limit": 100})
 	limit := uint32(100)
 	listed, err := client.Models().List(ctx, protocolv2.ModelListParams{Limit: protocolv2.Value(limit)})
 	if err != nil {
+		diagnostics.Record("catalog_result", map[string]any{"stage": "list_failed", "failure": DescribeFailure(err)})
 		return errors.New("live: complete shipped catalog mismatch")
 	}
 	expected, err := shippedModelList()
+	diagnostics.Record("catalog_result", map[string]any{"actual": listed, "expected": expected, "matches": err == nil && sameShippedCatalog(listed, expected)})
 	if err != nil || !sameShippedCatalog(listed, expected) {
 		return errors.New("live: complete shipped catalog mismatch")
 	}
@@ -149,6 +156,7 @@ func shippedTransport(ctx context.Context, err error) error {
 }
 
 type sdkProductObserver struct {
+	diagnostics  *Diagnostics
 	ctx          context.Context
 	client       *codexsdk.Client
 	mu           sync.Mutex

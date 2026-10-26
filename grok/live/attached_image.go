@@ -48,46 +48,32 @@ func attachedImageWords(text string) []string {
 }
 
 func attachedImageAnswer(text, expectedColor, expectedShape, side string) bool {
-	if strings.Contains(text, "?") {
+	if strings.Contains(text, "?") || visualRefusal(text) {
 		return false
 	}
-	words := attachedImageWords(strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(text), "can’t", "cannot"), "can't", "cannot"))
-	for index, word := range words {
-		if word == "circular" {
-			words[index] = "circle"
-		}
-	}
 	color, shape := false, false
-	for index, word := range words {
-		switch word {
-		case expectedColor:
-			color = true
-		case expectedShape:
-			shape = true
-		case "cannot", "maybe", "perhaps", "might", "unsure", "unknown":
-			return false
-		case "no", "not", "without":
-			// Unrelated negatives such as "a red circle with no border" are
-			// ordinary description, not a denial of the required visual facts.
-			end := index + 5
-			if end > len(words) {
-				end = len(words)
+	for _, clause := range visualClauses(text) {
+		words := attachedImageWords(clause)
+		for index, word := range words {
+			if word == "circular" {
+				words[index] = "circle"
 			}
-			for _, next := range words[index+1 : end] {
-				if next == "but" {
-					break
-				}
-				if next == expectedColor || next == expectedShape {
+		}
+		if visualFactsDenied(words, map[string]bool{expectedColor: true, expectedShape: true}) {
+			return false
+		}
+		for _, word := range words {
+			switch word {
+			case expectedColor:
+				color = true
+			case expectedShape:
+				shape = true
+			case "red", "blue", "circle", "square":
+				return false
+			case "left", "right":
+				if word != side {
 					return false
 				}
-			}
-		case "red", "blue", "circle", "square":
-			// These are the two actual objects in the fixture. Naming both is
-			// ambiguous rather than proof of the requested object's properties.
-			return false
-		case "left", "right":
-			if word != side {
-				return false
 			}
 		}
 	}
@@ -98,7 +84,7 @@ func attachedImageAnswer(text, expectedColor, expectedShape, side string) bool {
 // One image-bearing turn and one text-only turn share one bound SDK thread.
 func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error) {
 	options.attachedImageFixture = true
-	server := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1)}
+	server := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1), diagnostics: options.Diagnostics}
 	handlers := sdkFixtureHandlers{requests: server.request, notifications: server.typedNotification, afterClose: server.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 8 << 20}}
 	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
@@ -115,6 +101,13 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 		picture, err := attachedImageURL()
 		if err != nil {
 			return failedObservation("image_fixture_invalid", "live: input image unavailable")
+		}
+		pictureBytes, decodeErr := base64.StdEncoding.DecodeString(strings.TrimPrefix(picture, "data:image/png;base64,"))
+		if decodeErr == nil {
+			reference := options.Diagnostics.Artifact("attached-input.png", pictureBytes)
+			options.Diagnostics.Record("attached_image_input", map[string]any{"artifact": reference, "sha256": editDigest(pictureBytes)})
+		} else {
+			options.Diagnostics.Record("attached_image_input", map[string]any{"capture": "decode_failed"})
 		}
 		pictureValue := protocolv2.JSONString(picture)
 		inputs := [][]protocolv2.UserInput{
@@ -152,8 +145,12 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 			return nil
 		}
 		for index, input := range inputs {
+			options.Diagnostics.Record("attached_image_phase", map[string]any{"turn": index + 1, "status": "submitted", "prompt": []string{attachedImageFirstPrompt, attachedImageNextPrompt}[index]})
 			evidence.Completed = false
 			thread, turn, err := observeProductInputTurn(server, started.Thread.ID, evidence, "", input)
+			options.Diagnostics.Record("attached_image_phase", map[string]any{"turn": index + 1, "status": "returned", "completed": err == nil})
+			diagnosticReply, diagnosticErr := finalProductReply(turn)
+			options.Diagnostics.Record("attached_image_reply", map[string]any{"turn": index + 1, "reply": diagnosticReply, "aggregate_available": diagnosticErr == nil})
 			evidence.Completed = false
 			if err != nil {
 				return err
@@ -178,14 +175,18 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 					return failedObservation("turn_history_identity_invalid", "live: submitted image turn absent or duplicated")
 				}
 			}
-			if !attachedImageFirstReplyIsolated(thread, turns[0]) {
+			isolated := attachedImageFirstReplyIsolated(thread, turns[0])
+			options.Diagnostics.Record("attached_image_isolation", map[string]any{"turn": index + 1, "isolated": isolated})
+			if !isolated {
 				return failedObservation("visual_answer_leaked", "live: first reply disclosed more than the requested visual fact")
 			}
 			reply, err := finalProductReply(turn)
 			if err != nil {
 				return err
 			}
-			if !attachedImageAnswer(reply, expected[index][0], expected[index][1], expected[index][2]) {
+			accepted := attachedImageAnswer(reply, expected[index][0], expected[index][1], expected[index][2])
+			options.Diagnostics.Record("attached_image_verdict", map[string]any{"turn": index + 1, "accepted": accepted})
+			if !accepted {
 				return failedObservation("visual_answer_mismatch", "live: visual answer not established")
 			}
 			if index == 0 {

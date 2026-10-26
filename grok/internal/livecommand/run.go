@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,15 +23,16 @@ import (
 
 // Report preserves the external grok-live JSON contract.
 type Report struct {
-	ExecutionSnapshotRetained bool              `json:"execution_snapshot_retained,omitempty"`
-	SchemaVersion             int               `json:"schema_version"`
-	Outcome                   string            `json:"outcome"`
-	Reason                    string            `json:"reason,omitempty"`
-	Scenario                  string            `json:"scenario,omitempty"`
-	EndpointSHA256            string            `json:"endpoint_sha256,omitempty"`
-	RecordedAt                string            `json:"recorded_at"`
-	Evidence                  any               `json:"evidence,omitempty"`
-	Failure                   *live.FailureInfo `json:"failure,omitempty"`
+	Diagnostics               *live.DiagnosticsStatus `json:"diagnostics,omitempty"`
+	ExecutionSnapshotRetained bool                    `json:"execution_snapshot_retained,omitempty"`
+	SchemaVersion             int                     `json:"schema_version"`
+	Outcome                   string                  `json:"outcome"`
+	Reason                    string                  `json:"reason,omitempty"`
+	Scenario                  string                  `json:"scenario,omitempty"`
+	EndpointSHA256            string                  `json:"endpoint_sha256,omitempty"`
+	RecordedAt                string                  `json:"recorded_at"`
+	Evidence                  any                     `json:"evidence,omitempty"`
+	Failure                   *live.FailureInfo       `json:"failure,omitempty"`
 }
 
 const Usage = `Usage: grok-live --scenario NAME --binary PATH --binary-sha256 SHA256
@@ -68,6 +70,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, output 
 	target := flags.String("target", "", "supported package target")
 	environment := flags.String("environment", "", "execution environment label")
 	endpoint := flags.String("endpoint", "", "explicit fixture base URL")
+	diagnostics := flags.String("diagnostics-dir", "", "separate bounded task diagnostic directory")
 	deadline := flags.Duration("timeout", 5*time.Minute, "whole scenario deadline, at most 10m")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -82,7 +85,7 @@ func Run(ctx context.Context, args []string, getenv func(string) string, output 
 		(*target != "x86_64-unknown-linux-musl" && *target != "aarch64-apple-darwin") {
 		return finish("configuration_error", "invalid_arguments", 2)
 	}
-	r, code := Execute(ctx, Config{Scenario: *selected, Subject: live.Subject{Binary: *binary, SHA256: *digest, SourceSHA: *source, HarnessSHA: *harness, Target: *target, Environment: *environment}, Endpoint: *endpoint, Timeout: *deadline}, getenv)
+	r, code := Execute(ctx, Config{DiagnosticsDir: *diagnostics, Scenario: *selected, Subject: live.Subject{Binary: *binary, SHA256: *digest, SourceSHA: *source, HarnessSHA: *harness, Target: *target, Environment: *environment}, Endpoint: *endpoint, Timeout: *deadline}, getenv)
 	if Write(output, r) != nil {
 		return 1
 	}
@@ -91,10 +94,11 @@ func Run(ctx context.Context, args []string, getenv func(string) string, output 
 
 // Config binds one catalog scenario to an explicitly selected runtime subject.
 type Config struct {
-	Scenario string
-	Subject  live.Subject
-	Endpoint string
-	Timeout  time.Duration
+	DiagnosticsDir string
+	Scenario       string
+	Subject        live.Subject
+	Endpoint       string
+	Timeout        time.Duration
 }
 
 func newReport() Report {
@@ -117,8 +121,21 @@ func Write(output io.Writer, r Report) error {
 
 // Execute is shared by the compatibility CLI and tagged TestLive subtests.
 // It invokes the selected owned scenario once and never retries semantic work.
-func Execute(ctx context.Context, config Config, getenv func(string) string) (Report, int) {
+func Execute(ctx context.Context, config Config, getenv func(string) string) (report Report, code int) {
 	r := newReport()
+	var diagnostics *live.Diagnostics
+	if config.DiagnosticsDir != "" {
+		diagnostics = live.NewDiagnostics(config.DiagnosticsDir, getenv("GROK_API_KEY"))
+	}
+	diagnostics.Record("invocation_started", map[string]any{"scenario": config.Scenario, "source_sha": config.Subject.SourceSHA, "harness_sha": config.Subject.HarnessSHA, "runtime_sha256": config.Subject.SHA256, "model_selection": "catalog", "target": config.Subject.Target, "environment": config.Subject.Environment})
+	defer func() {
+		diagnostics.Record("invocation_finished", map[string]any{"outcome": report.Outcome, "reason": report.Reason, "failure": report.Failure, "exit_code": code})
+		diagnostics.Close()
+		if diagnostics != nil {
+			status := diagnostics.Status()
+			report.Diagnostics = &status
+		}
+	}()
 	finish := func(outcome, reason string, code int) (Report, int) {
 		r.Outcome, r.Reason = outcome, reason
 		return r, code
@@ -131,6 +148,10 @@ func Execute(ctx context.Context, config Config, getenv func(string) string) (Re
 		return finish("configuration_error", "unknown_or_missing_scenario", 2)
 	}
 	r.Scenario = scenario.Name
+	if diagnostics == nil && getenv("GROK_LIVE_DIAGNOSTICS_DIR") != "" {
+		diagnostics = live.NewDiagnostics(filepath.Join(getenv("GROK_LIVE_DIAGNOSTICS_DIR"), scenario.Name), getenv("GROK_API_KEY"))
+		diagnostics.Record("invocation_started", map[string]any{"scenario": scenario.Name, "model": scenario.Model, "source_sha": config.Subject.SourceSHA, "harness_sha": config.Subject.HarnessSHA, "runtime_sha256": config.Subject.SHA256, "target": config.Subject.Target, "environment": config.Subject.Environment})
+	}
 	if getenv("GROK_LIVE") != "1" {
 		return finish("not_run", "explicit_opt_in_required", 3)
 	}
@@ -177,7 +198,7 @@ func Execute(ctx context.Context, config Config, getenv func(string) string) (Re
 		}
 	}()
 	config.Subject.Binary = binary
-	options := live.Options{Subject: config.Subject, Model: scenario.Model, BaseURL: config.Endpoint, APIKey: key}
+	options := live.Options{Diagnostics: diagnostics, Subject: config.Subject, Model: scenario.Model, BaseURL: config.Endpoint, APIKey: key}
 	result, err := scenario.RunLive(ctx, options)
 	r.Evidence = result.Evidence
 	evidence := result.Base

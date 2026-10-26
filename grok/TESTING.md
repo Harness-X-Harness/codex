@@ -189,8 +189,10 @@ failed PR builds, and other PR selections fail before backend use.
 
 The PR branch path is explicit diagnostic evidence, not formal version-line
 acceptance. It submits the four image semantic turns once in three conversations,
-with no automatic retry or merge. `GROK_API_KEY` stays in the single backend
-execution step; use the existing repository secret, never a pasted key. The
+with no automatic retry or merge. `GROK_API_KEY` is scoped to the single backend execution step and its conditional
+post-execution stderr redaction step; redaction performs no backend operation and
+does not run when execution was skipped. Use the existing repository secret,
+never a pasted key. The
 version-line push and diagnostic paths otherwise retain their existing rules.
 A workflow dispatch needs an authenticated GitHub Actions operator; permission
 to edit the PR is not proof that an assistant can trigger Actions. If dispatched
@@ -236,9 +238,15 @@ requires all named owners and their mandatory proof-bearing scenarios. Repeated
 for a package smoke scope. Repeated `--require package:Test/subtest` supports
 other exact partial package or Live selections. Never infer coverage from a green
 package containing no selected tests. A partial selection does not prove omitted
-cases passed. Per-case Live evidence retains safe counts, subject/digest,
-provenance and failure classifications, without prompts, model text, ciphertext,
-keys, private paths, raw traffic or opaque IDs. The tagged aggregate reports
+cases passed. Per-case Live verdict evidence retains safe counts, subject/digest,
+provenance and failure classifications. Separate bounded diagnostic artifacts
+retain task-specific synthetic prompts, public model/tool outputs and errors,
+image pixels and fixture before/after content. These observations are not extra
+assertions. They exclude credentials, auth/environment dumps, unrelated history,
+private reasoning/ciphertext and raw full transport. See `live/README.md` for
+capture limits, partial-capture semantics and the pinned SDK stderr limitation.
+The result summary separately counts started/passed/failed/skipped/incomplete
+lifecycles; legacy `tests`/`packages` count successful observations, not attempts. The tagged aggregate reports
 `observed` only when every selected supported case passes its positive oracle.
 Its `completed` count counts completed cases; `shipped-catalog` remains an
 explicit zero-inference catalog case. SDK rejection diagnostics never enter the
@@ -253,8 +261,10 @@ terminal status, error kind and a valid HTTP status when the supported typed
 terminal actually supplies it. Scenario evidence supplies stage, safe counts,
 booleans, hashes and source/harness/target provenance. Unknown or unavailable
 facts stay unknown or absent; neither an HTTP status nor a static failure code
-proves the rejection's root cause. Request bodies, rejected-request key-path
-shapes, backend error bodies and session JSONL are not collected by this path.
+proves the rejection's root cause. Raw HTTP bodies, transport dumps and whole
+session JSONL are not collected. The separate diagnostic bundle preserves the
+supported public error details and task-visible input/output projections, with
+credential removal; it does not copy private backend reasoning or authentication.
 A report is capped at 1 MiB including its newline. In-memory identity and content
 correlation does not authorize storing those values in the report.
 
@@ -267,8 +277,11 @@ No missing evidence authorizes semantic resubmission or paid inference.
 
 The existing [formal workflow](../.github/workflows/grok.yml) and
 [diagnostic workflow](../.github/workflows/grok-live.yml) retain Go test events,
-the checked summary and verified package selection/provenance in the existing
-Actions artifact store, including on failure when files exist. Their configured
+the checked summary, verified package selection/provenance, per-scenario bounded
+diagnostics and sanitized runner stderr in the existing Actions artifact store.
+An initial workflow manifest precedes checkout/setup; finalization retains available
+provenance even when package setup fails. Upload runs on failure when files exist;
+runner loss may still prevent upload, and partial manifests remain incomplete. Their configured
 retention is 30 days, under the repository's existing Actions artifact access
 controls; this change grants no new access. Artifact names bind SHA, run and
 attempt (plus scenario for formal runs). Formal package selection is same-run;

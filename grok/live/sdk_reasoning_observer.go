@@ -111,6 +111,7 @@ func (observer *sdkHistoryObserver) request(_ context.Context, request protocolv
 		return codexsdk.ServerRequestResponse{}, cause
 	}
 	params := call.Params
+	observer.probe.diagnostics.Record("history_tool_input", map[string]any{"turn_id": params.TurnID, "call_id": params.CallID, "tool": params.Tool, "arguments": params.Arguments})
 	arguments, object := params.Arguments.AsObject()
 	text, success := "History probe is unavailable during continuation.", false
 	valid := observer.active && params.ThreadID == observer.probe.threadID && params.TurnID != "" && params.TurnID != observer.probe.previousID &&
@@ -140,6 +141,7 @@ func (observer *sdkHistoryObserver) request(_ context.Context, request protocolv
 			text, success = observer.probe.token, true
 		}
 	}
+	observer.probe.diagnostics.Record("history_tool_output", map[string]any{"turn_id": params.TurnID, "call_id": params.CallID, "success": success, "text": text})
 	return codexsdk.DynamicToolResponse(protocolv2.DynamicToolCallResponse{
 		ContentItems: []protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: text})}, Success: success,
 	}), nil
@@ -352,6 +354,7 @@ func (observer *sdkHistoryObserver) finishTurn() {
 	defer observer.mu.Unlock()
 	observer.active = false
 	recall := observer.reply.recall && !observer.reply.ambiguous
+	observer.probe.diagnostics.Record("oracle_result", map[string]any{"scenario": "reasoning", "turn_id": observer.probe.turnID, "completed": observer.reply.completed, "recall": recall, "ambiguous": observer.reply.ambiguous, "reply_bytes": observer.reply.bytes, "authoritative": observer.reply.authoritative, "explicit_final": observer.reply.explicitFinal})
 	if observer.probe.previousID == "" {
 		observer.observations.FirstCompleted, observer.observations.FirstRecall, observer.observations.FirstReplyBytes = observer.reply.completed, recall, observer.reply.bytes
 		if observer.reply.completed {

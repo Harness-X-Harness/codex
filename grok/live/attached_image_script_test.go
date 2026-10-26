@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -189,5 +190,47 @@ func fakeAttachedImageServer() {
 			return
 		}
 		_ = output.Encode(map[string]any{"id": request.ID, "result": result})
+	}
+}
+
+func TestAttachedImageDiagnosticsSurviveSemanticFailure(t *testing.T) {
+	for _, mode := range []string{"success", "wrong_first", "wrong_second", "commentary_leak"} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, "attached:"+mode)
+			options.Model = providerfixture.PinnedModel
+			dir := t.TempDir()
+			options.Diagnostics = live.NewDiagnostics(dir, options.APIKey)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := live.AttachedImageHistory(ctx, options)
+			options.Diagnostics.Close()
+			if (mode == "success") != (err == nil) {
+				t.Fatalf("diagnostics changed verdict: %v", err)
+			}
+			events, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			text := string(events)
+			expected := "red circle"
+			if mode == "wrong_first" || mode == "wrong_second" {
+				expected = "green triangle"
+			}
+			if mode == "commentary_leak" {
+				expected = "blue square"
+			}
+			if !strings.Contains(text, expected) || !strings.Contains(text, "attached_image_reply") {
+				t.Fatal("missing public output explaining rejection")
+			}
+			if _, err := os.ReadFile(filepath.Join(dir, "attached-input.png")); err != nil {
+				t.Fatal("actual input pixels missing", err)
+			}
+			if !strings.Contains(text, "Look at the attached picture.") {
+				t.Fatal("actual prompt missing")
+			}
+			if strings.Contains(text, options.APIKey) {
+				t.Fatal("secret leaked in diagnostics")
+			}
+		})
 	}
 }

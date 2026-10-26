@@ -11,6 +11,7 @@ import (
 
 func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture) (StructuredEditEvidence, error) {
 	observer := newSDKEditObserver(&fixture)
+	observer.diagnostics = options.Diagnostics
 	var evidence StructuredEditEvidence
 	checkBytes := func(expected string) error {
 		data, err := readEditFixture(fixture.path)
@@ -28,6 +29,9 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 		requests: observer.request, notifications: observer.typedNotification, failures: observer.failures,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 4096, MaxBytes: 8 << 20},
 		afterClose: func(_ string, base *Evidence, cause error) error {
+			// Capture the settled fixture even when the business observation failed.
+			// Diagnostic failure never changes the scenario result.
+			captureEditDiagnostic(options.Diagnostics, fixture, "settled")
 			snapshot, observationErr := observer.snapshot()
 			base.Turns, base.FirstCompleted, base.FirstReplyBytes = snapshot.Turns, snapshot.FirstCompleted, snapshot.FirstReplyBytes
 			base.ReplyBytes = snapshot.ReplyBytes
@@ -62,6 +66,7 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 		if err != nil {
 			return err
 		}
+		captureEditDiagnostic(options.Diagnostics, fixture, "before")
 		evidence.BeforeSHA256 = editDigest(seed)
 		if string(seed) != fixture.seed {
 			return failedObservation("edit_bytes_mismatch", "live: edit fixture seed did not match")
@@ -104,7 +109,8 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 		if fixture.continuation {
 			prompts = append(prompts, "Check that the requested edit is complete and confirm the result. Leave the file content unchanged.")
 		}
-		for _, prompt := range prompts {
+		for index, prompt := range prompts {
+			options.Diagnostics.Record("turn_input", map[string]any{"scenario": "edit", "turn": index + 1, "model": options.Model, "prompt": prompt, "decline": fixture.decline})
 			evidence.BytesMatch, evidence.AfterSHA256 = false, ""
 			if err := observer.beginTurn(); err != nil {
 				return err
@@ -136,6 +142,7 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 			if err := observer.requireTurnProof(); err != nil {
 				return err
 			}
+			captureEditDiagnostic(options.Diagnostics, fixture, fmt.Sprintf("turn-%d", index+1))
 			if err := checkBytes(fixture.expected); err != nil {
 				return err
 			}
@@ -177,4 +184,18 @@ func waitSDKEditTurn(ctx context.Context, observer *sdkEditObserver) error {
 			return observer.failure(ctx.Err())
 		}
 	}
+}
+
+// Only the synthetic fixture is retained; never walk the workspace or Codex home.
+func captureEditDiagnostic(diagnostics *Diagnostics, fixture editFixture, phase string) {
+	if diagnostics == nil {
+		return
+	}
+	data, err := readEditFixture(fixture.path)
+	if err != nil {
+		diagnostics.Record("edit_file", map[string]any{"phase": phase, "status": "unavailable", "reason": err.Error()})
+		return
+	}
+	artifact := diagnostics.Artifact("edit-"+phase+".txt", data)
+	diagnostics.Record("edit_file", map[string]any{"phase": phase, "artifact": artifact, "sha256": editDigest(data), "bytes": len(data), "matches_expected": string(data) == fixture.expected, "before": fixture.seed, "after": string(data)})
 }

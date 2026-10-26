@@ -97,3 +97,42 @@ func TestResultCommandInputFile(t *testing.T) {
 		}
 	}
 }
+
+func TestResultCommandFailureSummaryKeepsLaterResults(t *testing.T) {
+	input := `{"Action":"start","Package":"bad"}
+{"Action":"run","Package":"bad","Test":"PRIVATE_TEST"}
+{"Action":"fail","Package":"bad","Test":"PRIVATE_TEST"}
+{"Action":"fail","Package":"bad"}
+` + validResults
+	var out, diagnostic bytes.Buffer
+	if code := run(nil, strings.NewReader(input), &out, &diagnostic); code != 1 {
+		t.Fatalf("failure exit=%d", code)
+	}
+	var got result
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Passed || !got.InputComplete || got.FailureReason != "failed_execution" || got.TestsStarted != 2 || got.TestsPassed != 1 || got.TestsFailed != 1 || got.PackagesStarted != 2 || got.PackagesFailed != 1 || got.PackagesPassed != 1 {
+		t.Fatalf("wrong summary: %+v", got)
+	}
+	if strings.Contains(out.String()+diagnostic.String(), "PRIVATE_TEST") {
+		t.Fatal("raw failure name leaked")
+	}
+}
+
+func TestResultCommandUnavailableInputHasStructuredReason(t *testing.T) {
+	var out, diagnostic bytes.Buffer
+	if code := run([]string{"--input", filepath.Join(t.TempDir(), "PRIVATE_MISSING")}, strings.NewReader(""), &out, &diagnostic); code != 1 {
+		t.Fatalf("missing file exit=%d", code)
+	}
+	var got result
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Passed || got.InputComplete || got.FailureReason != "results_file_unavailable" {
+		t.Fatalf("wrong unavailable summary: %+v", got)
+	}
+	if strings.Contains(out.String()+diagnostic.String(), "PRIVATE_MISSING") {
+		t.Fatal("private path leaked")
+	}
+}
