@@ -7,37 +7,39 @@ an already authorized Actions artifact read context are required.
 
 ```sh
 python3 grok/package/fetch_artifact.py \
-  --run-id EXPLICIT_RUN_ID \
+  --artifact-id EXPLICIT_ARTIFACT_ID \
   --harness-sha "$(git rev-parse HEAD)" \
   --output /existing-parent/new-selection
 ```
 
-Diagnostic selection requires a settled version-line push of this repository's
-`grok.yml`, its current attempt's successful Linux build, and exactly one
-nonexpired source/target/run/attempt artifact. A failed sibling or earlier Live
-result remains a failed run; a valid completed Linux producer may still supply a
-diagnostic artifact. PR builds, forks, missing/ambiguous/expired artifacts and
-incomplete API inventories are rejected. Both jobs and artifact inventories
-require `total_count` to equal the returned row count, in diagnostic and
-same-run selection alike.
-No other run or latest-success fallback is selected. Inventories above 100 jobs
-or artifacts fail closed.
+Selection starts with one immutable GitHub artifact ID. Its metadata and
+controlled name identify the repository, source, target, producer run and original
+producer attempt. The original attempt must contain exactly one successful,
+completed Linux build. The current workflow attempt and unrelated jobs do not
+choose or invalidate that package: Live can consume it while macOS is running,
+after a sibling failure, or when a partial rerun reuses the original build.
 
-The command makes at most four bounded, read-only `gh api` calls: the explicit
-run, its exact attempt's jobs, that run's artifacts, and the selected ZIP. Each
-call has a 180-second limit, metadata is capped at 16 MiB, and the complete
-package is capped at 2 GiB. Raw API responses, signed URLs and authentication
-errors are not retained in published evidence. Errors are summarized without raw
-external output. There is no automatic retry.
+The selector verifies the trusted `grok.yml` version-line push, or the explicit
+same-repository PR diagnostic contract below. Missing, expired or misidentified
+artifacts and incomplete producer-job inventories are rejected. No other
+artifact, run or latest-success fallback is selected. Inventories above 100 jobs
+fail closed.
+
+The command uses bounded, read-only `gh api` calls for the exact artifact,
+its producer run, the original attempt's jobs, and that artifact's ZIP. PR
+selection additionally reads the linked PR. Each call has a 180-second limit,
+metadata is capped at 16 MiB, and the package is capped at 2 GiB. Raw API
+responses, signed URLs and authentication errors are not retained in published
+evidence. There is no automatic retry.
 
 Acquisition failures include one fixed, allowlisted stage code in brackets:
 
 - `input`: explicit arguments or an already-existing output were rejected.
 - `workspace`: private temporary workspace creation or cleanup failed.
-- `run_request`, `jobs_request`, `artifacts_request`: that bounded metadata
+- `artifact_request`, `run_request`, `jobs_request`: that bounded metadata
   request failed, including command startup, timeout, response-size or I/O errors.
-- `run_metadata`, `jobs_metadata`, `artifacts_metadata`: the response could not
-  be read as metadata; `run_metadata` also checks the attempt before using it.
+- `artifact_metadata`, `run_metadata`, `jobs_metadata`: the response could not
+  be read as metadata. Producer identity is checked before using it.
 - `selection`: the existing run/producer/artifact identity or inventory checks,
   or the selected package byte budget, rejected the metadata.
 - `archive_request`: the bounded selected ZIP request failed.
@@ -46,8 +48,8 @@ Acquisition failures include one fixed, allowlisted stage code in brackets:
 - `unknown`: an otherwise handled failure had no recognized stage code.
 
 Selection failures also carry one fixed `selection=` reason: `run_state`,
-`jobs_inventory`, `artifacts_inventory`, `identity`, `producer` or `artifact`.
-These distinguish a rejected parent state from an inconsistent inventory without
+`jobs_inventory`, `identity`, `producer` or `artifact`.
+These distinguish a rejected PR state from an inconsistent inventory without
 publishing metadata. Unclassified selection errors retain only the stage code.
 
 Failed `gh` requests may include a fixed allowlisted `gh=` category and `http=`
@@ -57,14 +59,9 @@ copied to output. These categories describe what `gh` reported, not a proven
 network or service root cause.
 
 Codes identify the failed boundary, not the underlying cause. For example,
-`artifacts_request` alone does not establish a network error, rate limit or
+`artifact_request` alone does not establish a network error, rate limit or
 availability race. Exception text, API bodies, credentials and signed URLs
-never become stage codes or handled acquisition error output. Apart from
-accepting the evidenced `queued` parent state in same-run selection below,
-request order, identity checks, strict inventories, byte/time limits and
-fail-closed behavior are unchanged; no retry, extra wait or Live invocation is
-introduced.
-
+never become stage codes or handled acquisition error output.
 Before granting executable modes, extraction verifies the Actions ZIP size and
 SHA-256, the exact archive name, all required stock-layout members, source and
 target metadata, and every packaged file's size/digest. Links, traversal,
@@ -87,32 +84,19 @@ the existing explicit `GROK_LIVE=1` context and approved `GROK_API_KEY`; neither
 successful retrieval nor compilation constitutes invocation authorization.
 See `../cmd/grok-live/README.md` for outcomes and the retained scenario surface.
 
-## Same-run Actions path
+## Automatic Actions consumption
 
-On every trusted version-line push, the full Live matrix depends directly on
-the successful Linux build and scenario selection. The trusted execution step
-sets `GROK_LIVE=1`; no repository-variable opt-in is required. This automatic
-path makes real API calls and incurs their costs. No workflow step configures a
-credential. Ordinary PR events do not run Live or receive the backend secret.
+On every trusted version-line push, the full Live matrix still depends directly
+on the successful Linux build and scenario selection. The trusted execution step
+sets `GROK_LIVE=1`; this automatic path makes real API calls and incurs their
+costs. Ordinary PR events do not run Live or receive the backend secret.
 
-Each selected scenario binds the current source/harness/run/attempt and the
-Linux producer's returned artifact ID. It verifies and consumes that artifact
-without rebuilding.
-
-Same-run selection accepts only a parent run with status `queued` or
-`in_progress` and a null conclusion. GitHub can report `queued` while some jobs
-are running or already complete, so the parent status alone does not establish
-whether the selected producer finished. Other parent states and any non-null
-conclusion remain rejected. This does not change diagnostic selection, which
-still requires a settled run.
-
-The jobs and artifacts inventories must both retain exact `total_count` equality
-with their returned row counts. The rows must contain exactly one named
-`Build x86_64-unknown-linux-musl` producer with a valid job ID, the selected run
-and attempt, completed status and success conclusion. Missing, ambiguous,
-unfinished, failed or wrong-attempt producers are rejected. All
-source/harness/run/attempt/artifact identity checks remain strict. No extra API
-call, retry or wait is introduced by the queued-state correction.
+The build publishes an artifact ID. Live passes that ID to the same fetcher used
+by diagnostics and additionally requires `--expected-source-sha "$GITHUB_SHA"`.
+The producer's original attempt comes from the selected artifact, never the
+consumer's `GITHUB_RUN_ATTEMPT`. Retrying Live does not require rebuilding the
+package or waiting for macOS. Producer success, trusted source and complete
+artifact verification remain required before the backend secret is used.
 
 The Go-owned full scenario selection runs as separate jobs;
 fail-fast is disabled so one failure cannot hide other outcomes. Parallelism is
@@ -130,8 +114,9 @@ run/attempt/test subject. A local CLI run is only development/diagnostic evidenc
 
 ## Explicit diagnostic Actions path
 
-The separate `grok-live.yml` workflow selects one retained scenario and a required
-`binary_run_id`. It has no native `Cargo` job, and cannot substitute for required
+The separate `grok-live.yml` workflow selects one explicit Go-owned selection
+(a diagnostic scenario or the smoke/full suite) and a required
+`binary_artifact_id`. It has no native `Cargo` job, and cannot substitute for required
 PR/push admission. On an explicit version-line invocation it uses the original
 `GROK_LIVE=1` context and the already approved backend secret; no repository
 variable is necessary for that explicit request.
@@ -140,18 +125,30 @@ Once the selected harness ref contains the workflow, the operator can submit:
 
 ```sh
 gh workflow run 355014891 --repo Harness-X-Harness/codex \
-  --ref grok/rust-v0.158.0 -f binary_run_id=EXPLICIT_RUN_ID -f scenario=basic-primary
+  --ref grok/rust-v0.164.0 -f binary_artifact_id=EXPLICIT_ARTIFACT_ID \
+  -f suite=diagnostic -f scenario=basic-primary
 ```
 
 The ID is the existing `.github/workflows/grok-live.yml` registration. Registry
 state and a declared trigger are not proof of availability. Verify the actual
 submission, matching run/attempt, harness ref, selected artifact and scenario
-result. Historical dispatch failures stay recorded; only an actual new result
-can establish current invocation. Stock `main` remains unchanged. Until that
-verification succeeds, actual manual invocation remains an open #339 obligation.
+result.
 
-The selected package may be diagnostic and its source need not equal the harness
-SHA. Both identities and the original run conclusion remain in evidence. No
+For a version-line diagnostic, the selected package source need not equal the
+harness SHA. Both identities and the producer run's observed current status remain in
+evidence. No
 fallback source is substituted, and a successful invocation does not certify
 source eligibility or other unexecuted scenarios. Actual retained backend results
 belong to #331; release/source acceptance and registration are separate claims.
+
+For a PR diagnostic, choose the current same-repository PR branch and pass
+`--pr-diagnostic` to the fetcher (the workflow derives this from the harness ref).
+The current open PR head must match the harness and build-run head, its
+version-line base and synthetic merge source must match the package, and PR CI
+must have succeeded. This separate PR admission policy is not replaced by
+artifact availability. Forks and stale heads remain rejected before backend use.
+
+`selection.json` records producer `run_id`/`run_attempt`, artifact identity and
+observed run status. `workflow.json` records the consumer's run/attempt. A passed
+single diagnostic does not change a failed or cancelled original run, and is not
+proof of other scenarios or required native CI.

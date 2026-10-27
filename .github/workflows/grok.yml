@@ -118,7 +118,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - name: Fetch and verify the exact same-run Linux package
+      - name: Fetch and verify the published Linux artifact
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ needs.build-linux-x64-musl.outputs.artifact-id }}
@@ -127,9 +127,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok.yml
           python3 grok/package/fetch_artifact.py \
-            --run-id "$GITHUB_RUN_ID" --harness-sha "$GITHUB_SHA" \
-            --same-run-source-sha "$GITHUB_SHA" --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --expected-artifact-id "$ARTIFACT_ID" --output "$RUNNER_TEMP/live-package"
+            --artifact-id "$ARTIFACT_ID" --harness-sha "$GITHUB_SHA" \
+            --expected-source-sha "$GITHUB_SHA" --output "$RUNNER_TEMP/live-package"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: grok/go.mod
