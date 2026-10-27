@@ -48,8 +48,8 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		if err != nil {
 			return errors.New("live: child parent schema unavailable")
 		}
-		parent, current, err := observeProductInputTurn(server, parentID, evidence, "ultra", []protocolv2.UserInput{
-			protocolv2.NewUserInputText(protocolv2.UserInputText{Text: "Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value. Wait for that child to complete, then return a JSON object with child_nonce containing the UUID actually returned by the child, or null if no child result is available. The output schema applies only to your final answer, not the child's answer."}),
+		parent, current, err := observeProductCompletedTurn(server, parentID, evidence, "ultra", []protocolv2.UserInput{
+			protocolv2.NewUserInputText(protocolv2.UserInputText{Text: "Delegate one bounded task to a child named live_child using the default full-history fork. Tell the child: Recall the setup marker from your inherited history and create a fresh UUID v4. Include the marker and your UUID in your answer. Do not ask the parent to supply either value. Wait for that child to complete, then return your final JSON object with child_nonce containing the UUID actually returned by the child. Use null only if delegation and waiting have finished without a completed child result; do not emit intermediate status objects. The output schema applies only to your final answer, not the child's answer."}),
 		}, &parentSchema)
 		if err != nil {
 			return err
@@ -82,24 +82,6 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			}
 		}
 		setupText := strings.Join(knownSetup, "\n")
-		parentReply, err := finalProductReply(current)
-		if err != nil {
-			return err
-		}
-		var result struct {
-			ChildNonce *string `json:"child_nonce"`
-		}
-		parseErr := parseStructuredReply(parentReply, &result, "child_nonce")
-		server.diagnostics.Record("child_parent_result", map[string]any{"reply": parentReply, "parsed_nonce": result.ChildNonce, "parse_valid": parseErr == nil})
-		var parentResultErr error
-		parentNonce := ""
-		if parseErr != nil {
-			parentResultErr = failedObservation("child_parent_result_invalid", "live: invalid structured child parent result")
-		} else if result.ChildNonce == nil || len(*result.ChildNonce) != 36 || !childNonce.MatchString(strings.ToLower(*result.ChildNonce)) {
-			parentResultErr = failedObservation("child_result_not_proven", "live: qualifying child result absent")
-		} else {
-			parentNonce = strings.ToLower(*result.ChildNonce)
-		}
 		// Incidental orchestration is diagnostic. Only a completed, correctly bound
 		// child that recalls the inherited setup marker can supply accepted evidence.
 		childIDs := []string{}
@@ -151,6 +133,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			}
 		}
 		children := []productThread{}
+		boundChildren := make(map[string]bool)
 		for _, childID := range childIDs {
 			child, bindingErr := readProductThread(server, childID, evidence.Model)
 			eligible := bindingErr == nil && child.ParentThreadID == parent.ID && child.ForkedFromID == parent.ID && child.Source.SubAgent.ThreadSpawn.AgentPath == childPaths[childID]
@@ -159,6 +142,26 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 				continue
 			}
 			children = append(children, child)
+			boundChildren[child.ID] = true
+		}
+		parentReply, err := childParentTerminalReply(current, boundChildren)
+		if err != nil {
+			return err
+		}
+		evidence.Completed, evidence.ReplyBytes, evidence.Stage = true, len(parentReply), "product_turn_proven"
+		var result struct {
+			ChildNonce *string `json:"child_nonce"`
+		}
+		parseErr := parseStructuredReply(parentReply, &result, "child_nonce")
+		server.diagnostics.Record("child_parent_result", map[string]any{"reply": parentReply, "parsed_nonce": result.ChildNonce, "parse_valid": parseErr == nil})
+		var parentResultErr error
+		parentNonce := ""
+		if parseErr != nil {
+			parentResultErr = failedObservation("child_parent_result_invalid", "live: invalid structured child parent result")
+		} else if result.ChildNonce == nil || len(*result.ChildNonce) != 36 || !childNonce.MatchString(strings.ToLower(*result.ChildNonce)) {
+			parentResultErr = failedObservation("child_result_not_proven", "live: qualifying child result absent")
+		} else {
+			parentNonce = strings.ToLower(*result.ChildNonce)
 		}
 		if parentResultErr != nil {
 			// Preserve already-available child results and lineage even when the
@@ -360,6 +363,80 @@ func completedProductTurn(turn productTurn) error {
 		return failedTurn(turn.Status, turn.Error, "live: bound turn did not complete")
 	}
 	return nil
+}
+
+// The parent can emit phase-less status messages in sampling rounds that
+// continue through tools. Rust session/turn.rs assigns its terminal answer only
+// when needs_follow_up is false; public history preserves tool creation order.
+// Select that final tool-free segment, not the last parseable JSON or all rounds.
+// This is deliberately local to the structured child-parent consumer.
+func childParentTerminalReply(turn productTurn, boundChildren map[string]bool) (string, error) {
+	if len(turn.Items) > 128 {
+		return "", errors.New("live: product item budget exceeded")
+	}
+	identities := make(map[string][2]string)
+	var messages []protocolv2.ThreadItem
+	terminalStart := 0
+	for _, value := range turn.Items {
+		status := ""
+		switch value.Kind() {
+		case protocolv2.ThreadItemKindCommandExecution:
+			item, _ := value.AsCommandExecution()
+			status = string(item.Status)
+		case protocolv2.ThreadItemKindFileChange:
+			item, _ := value.AsFileChange()
+			status = string(item.Status)
+		case protocolv2.ThreadItemKindMCPToolCall:
+			item, _ := value.AsMCPToolCall()
+			status = string(item.Status)
+		case protocolv2.ThreadItemKindDynamicToolCall:
+			item, _ := value.AsDynamicToolCall()
+			status = string(item.Status)
+		case protocolv2.ThreadItemKindCollabAgentToolCall:
+			item, _ := value.AsCollabAgentToolCall()
+			status = string(item.Status)
+		case protocolv2.ThreadItemKindFunctionCallOutput:
+			status = "completed"
+		case protocolv2.ThreadItemKindSubAgentActivity:
+			item, _ := value.AsSubAgentActivity()
+			// multi_agents_v2/spawn.rs emits Started with the tool call ID only
+			// after successful spawn. Other lifecycle activity is asynchronous.
+			// The accepted result still requires the actual lineage/read binding.
+			if item.Kind == "started" && item.ID != "" && boundChildren[item.AgentThreadID] && item.AgentPath != "" && len(item.AgentPath) <= 1024 {
+				status = "completed"
+			}
+		}
+		// Failed/declined tools can have legitimate subsequent recovery. A
+		// pending activity is not evidence of a finished tool round.
+		if status == "completed" || status == "failed" || status == "declined" {
+			terminalStart = len(messages)
+		}
+		// Completed/other child lifecycle activity must never erase a final
+		// reply or hide invalid suffixes.
+		item, ok := value.AsAgentMessage()
+		if !ok {
+			continue
+		}
+		phase := ""
+		if item.Phase != nil && item.Phase.Value != nil {
+			phase = string(*item.Phase.Value)
+		}
+		if item.ID == "" {
+			return "", errors.New("live: invalid product reply")
+		}
+		identity := [2]string{phase, strings.TrimSpace(item.Text)}
+		if previous, seen := identities[item.ID]; seen {
+			if previous != identity {
+				return "", errors.New("live: conflicting product reply")
+			}
+			continue
+		}
+		identities[item.ID] = identity
+		messages = append(messages, value)
+	}
+	// Only the terminal segment consumes the 4096-byte result budget. Full
+	// bounded public history stays available for diagnostics and freshness.
+	return finalProductReply(productTurn{Items: messages[terminalStart:]})
 }
 
 func finalProductReply(turn productTurn) (string, error) {

@@ -32,7 +32,7 @@ one observably Grok-bound parent Thread
   the runner does not include the marker value in the delegation task, and no
   later child input or alternate tool lookup may supply it;
 - a delegated child produces a fresh, safe bounded result that was not known to
-  the parent when the user task was submitted;
+  the parent before that child's Started activity;
 - that result is delivered to the parent through the stock collaboration
   lifecycle;
 - the parent reaches a visible terminal result that contains the same fresh
@@ -127,8 +127,17 @@ Only the parent's delegation/result turn uses a native object schema with requir
 `child_nonce: string | null` and no additional properties; it contains no expected
 UUID constant. The setup confirmation and child's own output remain natural
 tasks without that schema. Null is valid output but does not prove result delivery.
-Malformed JSON, missing/duplicate/unknown fields, wrong types, and extra JSON are
-rejected, not repaired. Child UUID casing, additional child UUIDs and surrounding
+The structured result is the terminal tool-free reply segment after the last
+finished public parent tool call, in creation order. A V2 spawn Started marker
+is a boundary only with an actually bound child lineage, since the runtime emits
+it after successful spawn; unrelated or completed child activity is not. Interim
+sampling messages remain diagnostic/freshness evidence, not concatenated final JSON. Null in that terminal segment is unproven,
+not a reason to recover an earlier positive answer. Malformed JSON,
+missing/duplicate/unknown fields, wrong types, and extra JSON within the terminal
+segment are rejected, not repaired. The 4096-byte result budget applies to that
+segment, while existing transport/item limits and diagnostic capture bounds
+still constrain the complete turn. Message identity conflicts remain checked
+across the whole turn. Child UUID casing, additional child UUIDs and surrounding
 child prose are not exact-output constraints. Additional orchestration and incidental
 failed/running children or spawns do not supply credit or invalidate an otherwise
 qualifying selected result. Schema conformance alone never substitutes for child

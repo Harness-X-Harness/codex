@@ -157,7 +157,7 @@ func testShippedChildOutputSchemaScope(t *testing.T) {
 }
 
 // Drive the actual negative fixture branch: the pre-spawn final answer must
-// remain inherited, while the complete parent turn is still one schema object.
+// remain inherited, while the terminal tool-free parent reply is one schema object.
 func testShippedChildStructuredNegative(t *testing.T) {
 	integrationObservation(t)
 	message := func(role, text string) map[string]any {
@@ -225,7 +225,12 @@ func testShippedChildStructuredNegative(t *testing.T) {
 	if completion.Code != http.StatusOK || !fixture.continued || fixture.failure != "" {
 		t.Fatalf("negative completion rejected: %s", fixture.failure)
 	}
-	texts = append(texts, finalTexts(completion)...)
+	// The pre-spawn result remains a freshness witness, not part of the
+	// terminal sampling round after the collaboration tool result.
+	texts = finalTexts(completion)
+	if len(texts) != 1 {
+		t.Fatal("terminal parent round must contain exactly one result")
+	}
 	var result struct {
 		Nonce *string `json:"child_nonce"`
 	}

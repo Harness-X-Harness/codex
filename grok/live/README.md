@@ -76,7 +76,14 @@ be wire-rejected; the observer still needs every positive result criterion.
 - [Child collaboration](shipped_child.go) requires inherited-marker recall,
   complete observed own-input coverage, a fresh child result, matching lineage
   and parent consumption through a required nullable `child_nonce` string. The
-  parent result schema is not inherited by child turns. Missing/opaque coverage
+  parent result schema is not inherited by child turns. The parent's structured
+  result is the terminal reply segment after the last finished public tool call
+  (creation order), not concatenated intermediate sampling replies or the last
+  parseable JSON. A successfully bound V2 spawn Started marker is also a tool
+  boundary; unrelated or completed child activity is not. Its 4096-byte budget
+  excludes intermediate text; full-turn identity/freshness checks and
+  bounded diagnostics remain. Terminal null/invalid/multiple objects cannot
+  fall back to an earlier positive answer. Missing/opaque coverage
   is unproven. Natural child prose, additional child UUIDs and intermediate tool
   activity are not failures by themselves;
   supplied or inherited results cannot count as fresh child work.

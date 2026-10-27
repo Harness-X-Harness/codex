@@ -339,13 +339,6 @@ func (fixture *shippedChildHTTP) ServeHTTP(writer http.ResponseWriter, request *
 	}
 	fixture.continued = true
 	parentResult, _ := json.Marshal(map[string]any{"child_nonce": fixture.nonce})
-	if fixture.parentSupplied {
-		// This negative already emitted its structured final answer before spawn,
-		// so the child really inherited the result. Do not append a second JSON
-		// object: the oracle must reach freshness rejection, not format rejection.
-		// Commentary is not retained by the stock child fork.
-		parentResult = nil
-	}
 	childHTTPReply(writer, "parent", string(parentResult))
 }
 
