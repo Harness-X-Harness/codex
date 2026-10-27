@@ -23,7 +23,7 @@ import zlib
 
 from extract_artifact import MAX_PACKAGE_BYTES, extract
 from select_artifact import (REPOSITORY, SELECTION_FAILURE_REASONS, SelectionFailure,
-                             linked_pull_request_number, read_metadata, select)
+                             artifact_identity, linked_pull_request_number, read_metadata, select)
 
 
 MAX_METADATA_BYTES = 16 * 1024 * 1024
@@ -37,7 +37,7 @@ ACQUISITION_ERRORS = (
 # from an exception message, response body, URL, endpoint or credential.
 FAILURE_CODES = frozenset({
     "input", "workspace", "run_request", "run_metadata", "jobs_request",
-    "artifacts_request", "jobs_metadata", "artifacts_metadata", "selection",
+    "artifact_request", "jobs_metadata", "artifact_metadata", "selection",
     "archive_request", "archive_verification", "publication", "unknown",
     "pull_request_request", "pull_request_metadata",
 })
@@ -174,24 +174,16 @@ def gh_api(endpoint: str, destination: Path, byte_limit: int) -> None:
                 process.wait()
 
 
-def fetch(run_id: int, harness_sha: str, output: Path, *,
-          same_run_source_sha: str | None = None,
-          expected_artifact_id: int | None = None,
-          expected_run_attempt: int | None = None,
+def fetch(artifact_id: int, harness_sha: str, output: Path, *,
+          expected_source_sha: str | None = None,
           pr_diagnostic: bool = False) -> dict:
     with acquisition_stage("input"):
-        if type(run_id) is not int or run_id <= 0 or not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
-            raise ValueError("invalid explicit run or harness revision")
-        same_run = any(value is not None for value in (
-            same_run_source_sha, expected_artifact_id, expected_run_attempt))
-        if type(pr_diagnostic) is not bool or (pr_diagnostic and same_run):
-            raise ValueError("PR diagnostics cannot use same-run selection")
-        if same_run and (
-            same_run_source_sha != harness_sha
-            or type(expected_artifact_id) is not int or expected_artifact_id <= 0
-            or type(expected_run_attempt) is not int or expected_run_attempt <= 0
-        ):
-            raise ValueError("incomplete same-run identity")
+        if type(artifact_id) is not int or artifact_id <= 0 or not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
+            raise ValueError("invalid explicit artifact or harness revision")
+        if (type(pr_diagnostic) is not bool
+                or (expected_source_sha is not None and expected_source_sha != harness_sha)
+                or (pr_diagnostic and expected_source_sha is not None)):
+            raise ValueError("invalid formal or PR subject")
         if output.exists() or output.is_symlink():
             raise FileExistsError("output must be a new directory")
     with acquisition_stage("workspace"), tempfile.TemporaryDirectory(
@@ -199,13 +191,16 @@ def fetch(run_id: int, harness_sha: str, output: Path, *,
     ) as temporary:
         root = Path(temporary)
         prefix = f"/repos/{REPOSITORY}/actions"
+        with acquisition_stage("artifact_request"):
+            gh_api(f"{prefix}/artifacts/{artifact_id}", root / "artifact.json", MAX_METADATA_BYTES)
+        with acquisition_stage("artifact_metadata"):
+            artifact = read_metadata(root / "artifact.json")
+        with acquisition_stage("selection"):
+            run_id, attempt, _ = artifact_identity(artifact, artifact_id)
         with acquisition_stage("run_request"):
             gh_api(f"{prefix}/runs/{run_id}", root / "run.json", MAX_METADATA_BYTES)
         with acquisition_stage("run_metadata"):
             run = read_metadata(root / "run.json")
-            attempt = run.get("run_attempt")
-            if type(attempt) is not int or attempt <= 0:
-                raise ValueError("invalid run attempt")
         pull_request = None
         if pr_diagnostic:
             with acquisition_stage("selection"):
@@ -217,18 +212,11 @@ def fetch(run_id: int, harness_sha: str, output: Path, *,
         with acquisition_stage("jobs_request"):
             gh_api(f"{prefix}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=1",
                    root / "jobs.json", MAX_METADATA_BYTES)
-        with acquisition_stage("artifacts_request"):
-            gh_api(f"{prefix}/runs/{run_id}/artifacts?per_page=100&page=1",
-                   root / "artifacts.json", MAX_METADATA_BYTES)
         with acquisition_stage("jobs_metadata"):
             jobs = read_metadata(root / "jobs.json")
-        with acquisition_stage("artifacts_metadata"):
-            artifacts = read_metadata(root / "artifacts.json")
         with acquisition_stage("selection"):
-            selected = select(run, jobs, artifacts, run_id, harness_sha,
-                              same_run_source_sha=same_run_source_sha,
-                              expected_artifact_id=expected_artifact_id,
-                              expected_run_attempt=expected_run_attempt,
+            selected = select(run, jobs, artifact, artifact_id, harness_sha,
+                              expected_source_sha=expected_source_sha,
                               pull_request=pull_request)
             if selected["artifact_size"] > MAX_PACKAGE_BYTES:
                 raise ValueError("selected artifact exceeds the package byte budget")
@@ -254,19 +242,15 @@ def fetch(run_id: int, harness_sha: str, output: Path, *,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", type=int, required=True)
+    parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--harness-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--same-run-source-sha")
+    parser.add_argument("--expected-source-sha")
     parser.add_argument("--pr-diagnostic", action="store_true")
-    parser.add_argument("--expected-artifact-id", type=int)
-    parser.add_argument("--expected-run-attempt", type=int)
     args = parser.parse_args()
     try:
-        result = fetch(args.run_id, args.harness_sha, args.output,
-                       same_run_source_sha=args.same_run_source_sha,
-                       expected_artifact_id=args.expected_artifact_id,
-                       expected_run_attempt=args.expected_run_attempt,
+        result = fetch(args.artifact_id, args.harness_sha, args.output,
+                       expected_source_sha=args.expected_source_sha,
                        pr_diagnostic=args.pr_diagnostic)
     except ACQUISITION_ERRORS as error:
         code = error.code if isinstance(error, AcquisitionFailure) else "unknown"

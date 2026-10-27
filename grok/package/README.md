@@ -84,7 +84,7 @@ expired target artifact remains unavailable. Each target is a distinct job, so
 one target cannot hide the other's failure. Native `Cargo` continues to depend
 only on `grok-proof.yml`, independently of package or backend availability.
 
-For exact same-run and diagnostic artifact selection and owned Live invocation,
+For exact published-artifact selection and diagnostic consumption and owned Live invocation,
 see `ARTIFACTS.md`. These capabilities remain subject to actual Actions proof.
 Manual workflow availability and real-backend execution must be verified
 separately; their declarations are not execution evidence.

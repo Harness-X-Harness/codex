@@ -187,8 +187,12 @@ catalog scenario. Workflow conditions do not maintain a second scenario list.
 Selection capability does not itself authorize a backend run: the operator must
 explicitly dispatch the intended selection once.
 
-For a PR package, select its current branch and exact successful `grok.yml` build
-run ID. The current open PR head must equal the harness and build-run head; its
+Select a package with `binary_artifact_id`, not a workflow run or consumer
+attempt. A version-line package may be consumed while unrelated jobs are
+still running, or after a partial rerun; no package rebuild or latest-success
+fallback is performed. For a PR package, select its current branch and the exact
+artifact from a successful `grok.yml` run. The current open PR head must equal
+the harness and build-run head; its
 version-line base and current synthetic merge commit must match the run and
 package source. The archive, manifest and executable digests retain normal
 verification. Forks, old heads, mismatched merge subjects, and incomplete or
@@ -292,9 +296,11 @@ provenance even when package setup fails. Upload runs on failure when files exis
 runner loss may still prevent upload, and partial manifests remain incomplete. Their configured
 retention is 30 days, under the repository's existing Actions artifact access
 controls; this change grants no new access. Artifact names bind SHA, run and
-attempt (plus scenario for formal runs). Formal package selection is same-run;
-diagnostics retain the explicitly selected producer identity separately from
-the harness run. Trusted repository/ref checks and secret isolation from
+attempt (plus scenario for formal runs). The artifact ID identifies the producer
+run and original attempt, separately
+from the Live consumer run/attempt. Formal selection additionally requires the
+package source to equal the current harness source; diagnostics retain both
+identities explicitly. Trusted repository/ref checks and secret isolation from
 untrusted PRs remain in those workflows. Inspect the actual run/attempt and
 artifact metadata and read back the selected files before claiming delivery;
 workflow configuration alone proves neither upload, current availability nor
@@ -329,7 +335,7 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   successful Linux build and scenario selection, making real API calls and
   incurring their costs without a repository-variable opt-in. It derives the
   supported full matrix from Go, keeps at most three jobs active, and preserves
-  trusted repository/ref and same-run artifact checks.
+  trusted repository/ref, successful producer and exact source/artifact checks.
 - Manual `grok-live.yml` defaults to one `basic-primary` diagnostic. Smoke/full
   are explicit complete selections; their scenario text field is ignored.
   Diagnostic runs do not become release certification.

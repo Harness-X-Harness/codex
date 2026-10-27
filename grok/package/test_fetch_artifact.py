@@ -64,19 +64,18 @@ class FetchCommandTests(unittest.TestCase):
              "status": "completed", "conclusion": "success"},
             {"name": "Build aarch64-apple-darwin", "status": "completed", "conclusion": "failure"},
         ], "private": PRIVATE}
-        self.artifacts = {"total_count": 1, "artifacts": [{
-            "id": 501, "name": NAME, "expired": False,
+        self.artifact = {"id": 501, "name": NAME, "expired": False,
             "workflow_run": {"id": 37, "head_sha": SHA},
             "archive_download_url": "https://untrusted.invalid/" + PRIVATE,
-        }], "private": PRIVATE}
+            "private": PRIVATE}
         self.bundle()
         prefix = f"/repos/{REPOSITORY}/actions"
-        self.endpoints = [f"{prefix}/runs/37", f"{prefix}/runs/37/attempts/2/jobs?per_page=100&page=1",
-                          f"{prefix}/runs/37/artifacts?per_page=100&page=1", f"{prefix}/artifacts/501/zip"]
+        self.endpoints = [f"{prefix}/artifacts/501", f"{prefix}/runs/37",
+                          f"{prefix}/runs/37/attempts/2/jobs?per_page=100&page=1", f"{prefix}/artifacts/501/zip"]
         self.expected_calls = [["api", "--hostname", "github.com", "--method", "GET", endpoint]
                                for endpoint in self.endpoints]
         self.config = {"calls": self.expected_calls,
-                       "files": ["run.json", "jobs.json", "artifacts.json", "artifact.zip"]}
+                       "files": ["artifact.json", "run.json", "jobs.json", "artifact.zip"]}
         fake_bin = self.root / "fake-bin"
         fake_bin.mkdir()
         fake = fake_bin / "gh"
@@ -135,20 +134,20 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         archive = self.fixture_root / "artifact.zip"
         with zipfile.ZipFile(archive, "w") as zipped:
             zipped.writestr(f"grok-{SHA}-{TARGET}.tar.gz", body.getvalue())
-        self.artifacts["artifacts"][0].update(
+        self.artifact.update(
             digest="sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
             size_in_bytes=archive.stat().st_size)
 
     def prepare_fixtures(self):
         for name, body in (("run", self.run), ("jobs", self.jobs),
-                           ("artifacts", self.artifacts), ("config", self.config)):
+                           ("artifact", self.artifact), ("config", self.config)):
             (self.fixture_root / (name + ".json")).write_text(json.dumps(body))
 
     def invoke(self, extra=(), harness=HARNESS):
         self.prepare_fixtures()
         result = subprocess.run(
             [sys.executable, str(Path(__file__).with_name("fetch_artifact.py")),
-             "--run-id", "37", "--harness-sha", harness, "--output", str(self.output), *extra],
+             "--artifact-id", "501", "--harness-sha", harness, "--output", str(self.output), *extra],
             capture_output=True, text=True, timeout=10, env=self.env,
         )
         self.assertFalse(self.marker.exists(), "retrieval must never execute package bytes")
@@ -183,8 +182,8 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             "repository": REPOSITORY, "run_id": 37, "run_attempt": 2,
             "source_sha": SHA, "target": TARGET, "harness_sha": HARNESS,
             "artifact_id": 501, "artifact_name": NAME,
-            "artifact_digest": self.artifacts["artifacts"][0]["digest"],
-            "artifact_size": self.artifacts["artifacts"][0]["size_in_bytes"],
+            "artifact_digest": self.artifact["digest"],
+            "artifact_size": self.artifact["size_in_bytes"],
             "producer_job_id": 101, "selection_mode": "diagnostic", "run_status": "completed",
             "run_conclusion": "failure", "package_archive_sha256": self.tar_digest,
             "runtime_sha256": self.manifest["files"]["bin/grok-bin"]["sha256"],
@@ -209,10 +208,10 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
               "base": {"sha": "d" * 40, "ref": "grok/rust-v0.164.0", "repo": dict(repo)}}
         self.run.update(event="pull_request", head_sha=HARNESS, head_branch="fix/image",
                         conclusion="success", pull_requests=[copy.deepcopy(pr)])
-        self.artifacts["artifacts"][0]["workflow_run"]["head_sha"] = HARNESS
-        self.expected_calls.insert(1, ["api", "--hostname", "github.com", "--method", "GET",
+        self.artifact["workflow_run"]["head_sha"] = HARNESS
+        self.expected_calls.insert(2, ["api", "--hostname", "github.com", "--method", "GET",
                                        f"/repos/{REPOSITORY}/pulls/444"])
-        self.config["files"].insert(1, "pull-request.json")
+        self.config["files"].insert(2, "pull-request.json")
         (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
         return pr
 
@@ -244,94 +243,32 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
 
     def test_pr_command_requires_explicit_mode_and_one_link(self):
         self.run.update(event="pull_request", pull_requests=[])
-        self.assert_failed(self.invoke(["--pr-diagnostic"]), 1, "selection", selection_reason="identity")
+        self.assert_failed(self.invoke(["--pr-diagnostic"]), 2, "selection", selection_reason="identity")
 
-    def test_pr_mode_cannot_be_combined_with_same_run(self):
-        result = self.invoke(["--pr-diagnostic", "--same-run-source-sha", HARNESS,
-                              "--expected-artifact-id", "501", "--expected-run-attempt", "2"])
-        self.assert_failed(result, 0, "input")
+    def test_pr_mode_cannot_be_combined_with_formal_source(self):
+        self.assert_failed(self.invoke(["--pr-diagnostic", "--expected-source-sha", HARNESS]), 0, "input")
 
     def test_pr_metadata_request_failure_is_bounded_and_has_no_archive_fetch(self):
         self.configure_pr()
-        self.config["fail_index"] = 1
-        self.assert_failed(self.invoke(["--pr-diagnostic"]), 2, "pull_request_request")
+        self.config["fail_index"] = 2
+        self.assert_failed(self.invoke(["--pr-diagnostic"]), 3, "pull_request_request")
 
-    def test_same_run_command_binds_source_harness_attempt_and_artifact(self):
-        self.run.update(status="in_progress", conclusion=None)
-        result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
-                              "--expected-run-attempt", "2"], harness=SHA)
+    def test_original_package_is_fetchable_while_later_attempt_and_sibling_are_running(self):
+        self.run.update(status="in_progress", conclusion=None, run_attempt=3)
+        self.jobs["jobs"][1].update(status="in_progress", conclusion=None)
+        result = self.invoke(["--expected-source-sha", SHA], harness=SHA)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_calls(4)
         got = json.loads(result.stdout)
-        self.assertEqual(got["selection_mode"], "same_run")
+        self.assertEqual(got["selection_mode"], "formal")
         self.assertEqual(got["harness_sha"], got["source_sha"])
         self.assertEqual(got["run_attempt"], 2)
         self.assertEqual(got["artifact_id"], 501)
         self.assertEqual(got["run_status"], "in_progress")
         self.assertIsNone(got["run_conclusion"])
 
-    def test_same_run_queued_parent_with_exact_inventories_fetches_once_without_execution(self):
-        self.run.update(status="queued", conclusion=None)
-        self.jobs["jobs"][1].update(status="queued", conclusion=None)
-        result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
-                              "--expected-run-attempt", "2"], harness=SHA)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
-        self.assert_calls(4)
-        verified = json.loads(result.stdout)
-        self.assertEqual(verified["producer_job_id"], 101)
-        self.assertEqual(verified["run_status"], "queued")
-        self.assertIsNone(verified["run_conclusion"])
-
-    def test_same_run_mismatched_jobs_inventory_still_rejects_without_download(self):
-        for status in ("queued", "in_progress"):
-            for count in (1, 3, 101):
-                with self.subTest(status=status, count=count):
-                    self.log.unlink(missing_ok=True)
-                    self.run.update(status=status, conclusion=None)
-                    self.jobs["total_count"] = count
-                    result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
-                                          "--expected-run-attempt", "2"], harness=SHA)
-                    self.assert_failed(result, 3, "selection", selection_reason="jobs_inventory")
-
-    def test_same_run_rejected_state_is_distinct_from_inventory_failure(self):
-        for status, conclusion in (("waiting", None), ("pending", None), ("requested", None),
-                                   ("completed", "success"), ("queued", "failure"),
-                                   (PRIVATE, "https://signed.invalid/?secret=SYNTHETIC_TEST_TOKEN")):
-            with self.subTest(status=status, conclusion=conclusion):
-                self.log.unlink(missing_ok=True)
-                self.run.update(status=status, conclusion=conclusion)
-                result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
-                                      "--expected-run-attempt", "2"], harness=SHA)
-                self.assert_failed(result, 3, "selection", selection_reason="run_state")
-
-    def test_diagnostic_queued_parent_still_rejects_before_download(self):
-        self.run.update(status="queued", conclusion=None)
-        self.assert_failed(self.invoke(), 3, "selection", selection_reason="run_state")
-
-    def test_same_run_artifact_inventory_mismatch_still_rejects(self):
-        self.run.update(status="queued", conclusion=None)
-        self.artifacts["total_count"] = 0
-        result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
-                              "--expected-run-attempt", "2"], harness=SHA)
-        self.assert_failed(result, 3, "selection", selection_reason="artifacts_inventory")
-
-    def test_wrong_same_run_expected_identity_never_downloads(self):
-        self.run.update(status="in_progress", conclusion=None)
-        for artifact, attempt in (("502", "2"), ("501", "3")):
-            with self.subTest(artifact=artifact, attempt=attempt):
-                self.log.unlink(missing_ok=True)
-                result = self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", artifact,
-                                      "--expected-run-attempt", attempt], harness=SHA)
-                reason = "artifact" if artifact != "501" else "identity"
-                self.assert_failed(result, 3, "selection", selection_reason=reason)
-
-    def test_incomplete_same_run_arguments_make_no_external_calls(self):
-        self.assert_failed(self.invoke(["--same-run-source-sha", SHA], harness=SHA), 0, "input")
-
-    def test_wrong_harness_same_run_binding_makes_no_external_calls(self):
-        self.assert_failed(self.invoke(["--same-run-source-sha", SHA, "--expected-artifact-id", "501",
-                                        "--expected-run-attempt", "2"]), 0, "input")
+    def test_wrong_formal_source_never_downloads(self):
+        self.assert_failed(self.invoke(["--expected-source-sha", HARNESS]), 3, "selection", selection_reason="identity")
 
     def test_wrong_run_workflow_or_fork_never_downloads(self):
         for key, value in (("id", 38), ("path", ".github/workflows/other.yml"),
@@ -343,36 +280,31 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 self.assert_failed(self.invoke(), 3, "selection", selection_reason="identity")
                 self.run[key] = original
 
-    def test_wrong_run_attempt_cannot_enter_an_endpoint(self):
-        self.run["run_attempt"] = "2/" + PRIVATE
-        self.assert_failed(self.invoke(), 1, "run_metadata")
+    def test_malformed_artifact_attempt_cannot_enter_an_endpoint(self):
+        self.artifact["name"] = NAME + "/" + PRIVATE
+        self.assert_failed(self.invoke(), 1, "selection", selection_reason="artifact")
 
     def test_incomplete_jobs_inventory_never_downloads_or_falls_back(self):
         self.jobs["total_count"] = 101
         self.assert_failed(self.invoke(), 3, "selection", selection_reason="jobs_inventory")
 
-    def test_incomplete_artifacts_inventory_never_downloads_or_falls_back(self):
-        self.artifacts["total_count"] = 101
-        self.assert_failed(self.invoke(), 3, "selection", selection_reason="artifacts_inventory")
-
     def test_unfinished_build_never_downloads(self):
         self.jobs["jobs"][0].update(status="in_progress", conclusion=None)
         self.assert_failed(self.invoke(), 3, "selection", selection_reason="producer")
 
-    def test_ambiguous_artifact_never_downloads(self):
-        self.artifacts["artifacts"].append(copy.deepcopy(self.artifacts["artifacts"][0]))
-        self.artifacts["total_count"] = 2
-        self.assert_failed(self.invoke(), 3, "selection", selection_reason="artifact")
+    def test_wrong_artifact_id_never_downloads_or_falls_back(self):
+        self.artifact["id"] = 502
+        self.assert_failed(self.invoke(), 1, "selection", selection_reason="artifact")
 
     def test_failed_gh_at_any_stage_has_safe_error_and_no_extra_calls(self):
-        for index, code in enumerate(("run_request", "jobs_request", "artifacts_request", "archive_request")):
+        for index, code in enumerate(("artifact_request", "run_request", "jobs_request", "archive_request")):
             with self.subTest(index=index):
                 self.log.unlink(missing_ok=True)
                 self.config["fail_index"] = index
                 self.assert_failed(self.invoke(), index + 1, code)
 
     def test_http_error_summaries_at_every_request_do_not_repeat_requests(self):
-        for index, code in enumerate(("run_request", "jobs_request", "artifacts_request", "archive_request")):
+        for index, code in enumerate(("artifact_request", "run_request", "jobs_request", "archive_request")):
             with self.subTest(index=index):
                 self.log.unlink(missing_ok=True)
                 self.config.update(fail_index=index, stderr="gh: Not Found (HTTP 404)\n")
@@ -401,7 +333,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             with self.subTest(summary=summary):
                 self.log.unlink(missing_ok=True)
                 self.config.update(fail_index=0, stderr=stderr)
-                self.assert_failed(self.invoke(), 1, "run_request", summary=summary)
+                self.assert_failed(self.invoke(), 1, "artifact_request", summary=summary)
 
     def test_http_summary_never_echoes_secret_url_or_api_body_variants(self):
         # Mutate sensitive-looking strings rather than assuming one redaction pattern.
@@ -412,7 +344,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 self.config.update(fail_index=0,
                                    stderr=f"gh: {private} https://signed.invalid/?{private} (HTTP 404)\n")
                 result = self.invoke()
-                self.assert_failed(result, 1, "run_request", summary="gh=not_found; http=404")
+                self.assert_failed(result, 1, "artifact_request", summary="gh=not_found; http=404")
                 self.assertNotIn(private, result.stdout + result.stderr)
 
     def test_unknown_control_mutated_and_ambiguous_errors_keep_exact_fallback(self):
@@ -425,12 +357,12 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             with self.subTest(stderr=repr(stderr)):
                 self.log.unlink(missing_ok=True)
                 self.config.update(fail_index=0, stderr=stderr)
-                self.assert_failed(self.invoke(), 1, "run_request")
+                self.assert_failed(self.invoke(), 1, "artifact_request")
 
     def test_oversized_stderr_is_drained_but_not_summarized_or_persisted(self):
         self.config.update(fail_index=0, stderr="gh: Not Found (HTTP 404)\n" + PRIVATE * 1024,
                            stderr_repeat=128)
-        self.assert_failed(self.invoke(), 1, "run_request")
+        self.assert_failed(self.invoke(), 1, "artifact_request")
         self.assertFalse(list(self.root.glob("**/*stderr*")))
 
     def test_stderr_summary_respects_exact_capture_budget(self):
@@ -442,7 +374,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 self.config.update(fail_index=0,
                                    stderr="x" * (size - len(diagnostic) - 1) + "\n" + diagnostic)
                 summary = "gh=not_found; http=404" if size <= fetch_artifact.MAX_GH_STDERR_BYTES else None
-                self.assert_failed(self.invoke(), 1, "run_request", summary=summary)
+                self.assert_failed(self.invoke(), 1, "artifact_request", summary=summary)
 
     def test_successful_requests_never_publish_stderr_even_when_large(self):
         for repeat in (1, 128):
@@ -471,14 +403,14 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 started = time.monotonic()
                 with mock.patch.dict(os.environ, self.env), \
                         mock.patch.object(fetch_artifact, "GH_TIMEOUT_SECONDS", 0.3), \
-                        mock.patch.object(sys, "argv", ["fetch_artifact.py", "--run-id", "37",
+                        mock.patch.object(sys, "argv", ["fetch_artifact.py", "--artifact-id", "501",
                                                        "--harness-sha", HARNESS,
                                                        "--output", str(self.output)]), \
                         redirect_stdout(stdout), redirect_stderr(stderr):
                     self.assertEqual(fetch_artifact.main(), 1)
                 self.assertLess(time.monotonic() - started, 2)
                 self.assertEqual(stdout.getvalue(), "")
-                self.assertEqual(stderr.getvalue(), "Package artifact acquisition failed [run_request]; "
+                self.assertEqual(stderr.getvalue(), "Package artifact acquisition failed [artifact_request]; "
                                  "no package execution was attempted.\n")
                 self.assert_calls(1)
                 self.assertFalse(self.output.exists())
@@ -487,17 +419,17 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
     def test_invalid_json_is_not_echoed_or_followed_by_another_call(self):
         (self.fixture_root / "invalid.json").write_text(PRIVATE)
         self.config["files"][0] = "invalid.json"
-        self.assert_failed(self.invoke(), 1, "run_metadata")
+        self.assert_failed(self.invoke(), 1, "artifact_metadata")
 
     def test_deeply_nested_json_is_a_safe_failure(self):
-        (self.fixture_root / "invalid.json").write_text('{"private":' + '[' * 2000 +
-                                                       '"' + PRIVATE + '"' + ']' * 2000 + '}')
+        (self.fixture_root / "invalid.json").write_text('{"private":' + '[' * 20000 +
+                                                       '"' + PRIVATE + '"' + ']' * 20000 + '}')
         self.config["files"][0] = "invalid.json"
-        self.assert_failed(self.invoke(), 1, "run_metadata")
+        self.assert_failed(self.invoke(), 1, "artifact_metadata")
 
     def test_missing_gh_is_a_safe_failure_without_setup_or_fallback(self):
         self.env["PATH"] = str(self.root / "no-tools")
-        self.assert_failed(self.invoke(), 0, "run_request")
+        self.assert_failed(self.invoke(), 0, "artifact_request")
 
     def test_mutated_download_is_rejected_without_publishing_package(self):
         archive = self.fixture_root / "artifact.zip"
@@ -507,7 +439,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assert_failed(self.invoke(), 4, "archive_verification")
 
     def test_archive_over_advertised_size_is_bounded_and_rejected(self):
-        self.artifacts["artifacts"][0]["size_in_bytes"] = 1
+        self.artifact["size_in_bytes"] = 1
         self.assert_failed(self.invoke(), 4, "archive_request")
 
     def test_mutated_runtime_cannot_publish_or_execute(self):
@@ -526,7 +458,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
                 data[8:10] = method.to_bytes(2, "little")
                 data[central + 10:central + 12] = method.to_bytes(2, "little")
                 archive.write_bytes(data)
-                self.artifacts["artifacts"][0]["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
+                self.artifact["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
                 self.log.unlink(missing_ok=True)
                 self.assert_failed(self.invoke(), 4, "archive_verification")
 
@@ -551,12 +483,12 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
 
     def test_invalid_inventory_json_identifies_the_parse_boundary(self):
         (self.fixture_root / "invalid.json").write_text(PRIVATE)
-        for index, code in ((1, "jobs_metadata"), (2, "artifacts_metadata")):
+        for index, code in ((0, "artifact_metadata"), (1, "run_metadata"), (2, "jobs_metadata")):
             with self.subTest(code=code):
                 self.log.unlink(missing_ok=True)
                 original = self.config["files"][index]
                 self.config["files"][index] = "invalid.json"
-                self.assert_failed(self.invoke(), 3, code)
+                self.assert_failed(self.invoke(), index + 1, code)
                 self.config["files"][index] = original
 
     def test_missing_output_parent_identifies_private_workspace_failure(self):
@@ -567,14 +499,14 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assert_failed(self.invoke(harness=PRIVATE), 0, "input")
 
     def test_oversized_selected_package_is_rejected_before_download(self):
-        self.artifacts["artifacts"][0]["size_in_bytes"] = fetch_artifact.MAX_PACKAGE_BYTES + 1
+        self.artifact["size_in_bytes"] = fetch_artifact.MAX_PACKAGE_BYTES + 1
         self.assert_failed(self.invoke(), 3, "selection")
 
 
 class FailureCodeTests(unittest.TestCase):
     def invoke_error(self, error):
         stdout, stderr = io.StringIO(), io.StringIO()
-        with mock.patch.object(sys, "argv", ["fetch_artifact.py", "--run-id", "37",
+        with mock.patch.object(sys, "argv", ["fetch_artifact.py", "--artifact-id", "501",
                                             "--harness-sha", SHA, "--output", "unused"]), \
                 mock.patch.object(fetch_artifact, "fetch", side_effect=error), \
                 redirect_stdout(stdout), redirect_stderr(stderr):
@@ -614,7 +546,7 @@ class FailureCodeTests(unittest.TestCase):
                                  "no package execution was attempted.\n")
 
     def test_selection_reasons_preserve_only_allowlisted_codes_through_outer_boundary(self):
-        for reason in ("run_state", "jobs_inventory", "artifacts_inventory", "identity", "producer", "artifact"):
+        for reason in ("run_state", "jobs_inventory", "identity", "producer", "artifact"):
             with self.subTest(reason=reason):
                 with self.assertRaises(fetch_artifact.AcquisitionFailure) as caught:
                     with fetch_artifact.acquisition_stage("workspace"):
@@ -704,7 +636,7 @@ class PRWorkflowTests(unittest.TestCase):
                     env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                                GITHUB_REF="refs/heads/" + branch, GITHUB_SHA=HARNESS,
                                GITHUB_WORKFLOW_SHA=HARNESS,
-                               BINARY_RUN_ID="37", RUNNER_TEMP=str(root), CAPTURE=str(capture))
+                               BINARY_ARTIFACT_ID="501", RUNNER_TEMP=str(root), CAPTURE=str(capture))
                     result = subprocess.run(["bash", "-c", bind + "\n" + fetch], env=env,
                                             capture_output=True, text=True, timeout=5)
                     self.assertEqual(result.returncode, 0, result.stderr)
