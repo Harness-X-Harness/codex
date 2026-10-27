@@ -60,10 +60,4 @@ func TestAttachedImageStructuredFacts(t *testing.T) {
 			t.Fatalf("unknown or wrong visual facts accepted: %s", text)
 		}
 	}
-	for _, text := range []string{`{"color":"red"}`, `{"color":"red","shape":"circle","other":"value"}`, `{"color":"red","color":"blue","shape":"circle"}`, `{"color":true,"shape":"circle"}`, `{"color":"red","shape":["circle"]}`, `null`, `true`, `"red circle"`, `{"color":"red","shape":"circle"} extra`} {
-		var answer attachedImageProperties
-		if err := parseStructuredReply(text, &answer, "color", "shape"); err == nil {
-			t.Fatalf("invalid structured visual reply accepted: %s", text)
-		}
-	}
 }

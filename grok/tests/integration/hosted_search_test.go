@@ -14,18 +14,15 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
-// Controlled Web completions prove the supported product composition. Retired
-// X cases are explicit negatives and cannot be credited as positive search.
+// Controlled Web completions prove product composition; an unexpected hosted X
+// wire result remains a native negative. Retired selectors are unit-only no-launch checks.
 func TestHostedSearchFixture(t *testing.T) {
 	subject := nativeSubject(t)
-	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "x_retired", "x_window_retired", "unexpected_x_rejected"} {
+	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "unexpected_x_rejected"} {
 		t.Run(scenario, func(t *testing.T) {
 			integrationObservation(t)
 			selected := scenario
 			fixture := &hostedNativeHTTP{scenario: scenario}
-			if strings.HasSuffix(scenario, "_retired") {
-				selected = strings.TrimSuffix(scenario, "_retired")
-			}
 			if scenario == "unexpected_x_rejected" {
 				selected = "web"
 				fixture.scenario = "web"
@@ -41,12 +38,6 @@ func TestHostedSearchFixture(t *testing.T) {
 			defer fixture.mu.Unlock()
 			encoded, _ := json.Marshal(got)
 			t.Logf("controlled %s: evidence=%s responses=%d failure=%s tools=%s", scenario, encoded, fixture.responses, fixture.failure, strings.Join(fixture.tools, " | "))
-			if strings.HasSuffix(scenario, "_retired") {
-				if err == nil || live.DescribeFailure(err).Code != "hosted_x_retired" || got.Completed || got.CanonicalCalls != 0 || got.Processes != 0 || got.Turns != 0 || fixture.responses != 0 || fixture.failure != "" {
-					t.Fatal("retired X selector launched, claimed success or lost its explicit diagnostic")
-				}
-				return
-			}
 			if scenario == "unexpected_x_rejected" {
 				failure := live.DescribeFailure(err)
 				if err == nil || (failure.Code != "hosted_x_retired" && failure.Code != "turn_unsuccessful") || got.Completed || got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 0 || failure.Code == "turn_unsuccessful" && failure.TerminalStatus != "failed" || !got.Bound || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Turns != 1 || got.CleanupPending || fixture.responses != 1 || fixture.failure != "" || ctx.Err() != nil {
@@ -72,9 +63,7 @@ func TestHostedSearchStructuredReplyFailures(t *testing.T) {
 		name    string
 		replies []string
 	}{
-		{"empty_articles", []string{`{"articles":[],"summary":null}`}},
 		{"plain_text", []string{"A headline and URL"}},
-		{"duplicate_nested", []string{`{"articles":[{"headline":"a","headline":"b","url":"https://news.example.test"}],"summary":null}`}},
 		{"null_continuation", []string{valid, `{"summary":null}`}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

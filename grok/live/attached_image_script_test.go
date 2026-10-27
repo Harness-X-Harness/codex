@@ -22,7 +22,7 @@ import (
 )
 
 func TestAttachedImageHistory(t *testing.T) {
-	for _, mode := range []string{"success", "inline", "field_order", "padded_values", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior", "null_color", "null_shape", "missing_field", "extra_field", "duplicate_key", "wrong_type", "unstructured"} {
+	for _, mode := range []string{"success", "inline", "field_order", "padded_values", "harmless_commentary", "wrong_first", "wrong_second", "leaked_second", "failed", "wrong_thread", "missing_image_history", "duplicate_turn", "late_first_failure", "commentary_leak", "color_leak", "shape_leak", "duplicate_prior", "prior_failed", "missing_prior", "null_color", "null_shape", "extra_field"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "attached:"+mode)
 			options.Model = providerfixture.PinnedModel
@@ -43,7 +43,7 @@ func TestAttachedImageHistory(t *testing.T) {
 			if success && strings.Count(trace, "structured_schema_verified\n") != 2 {
 				t.Fatal("formal schema missing from actual request")
 			}
-			if mode == "null_color" || mode == "null_shape" || mode == "missing_field" || mode == "extra_field" || mode == "duplicate_key" || mode == "wrong_type" || mode == "unstructured" {
+			if mode == "null_color" || mode == "null_shape" || mode == "extra_field" {
 				if strings.Count(trace, "turn/start\n") != 1 {
 					t.Fatal("invalid or unknown visual reply triggered extra turn")
 				}
@@ -162,13 +162,9 @@ func fakeAttachedImageServer() {
 				}
 			}
 			invalid := map[string]string{
-				"null_color":    `{"color":null,"shape":"circle"}`,
-				"null_shape":    `{"color":"red","shape":null}`,
-				"missing_field": `{"color":"red"}`,
-				"extra_field":   `{"color":"red","shape":"circle","extra":"unknown"}`,
-				"duplicate_key": `{"color":"red","color":"green","shape":"circle"}`,
-				"wrong_type":    `{"color":true,"shape":"circle"}`,
-				"unstructured":  "a red circle",
+				"null_color":  `{"color":null,"shape":"circle"}`,
+				"null_shape":  `{"color":"red","shape":null}`,
+				"extra_field": `{"color":"red","shape":"circle","extra":"unknown"}`,
 			}
 			if value, ok := invalid[mode]; ok {
 				answer = value

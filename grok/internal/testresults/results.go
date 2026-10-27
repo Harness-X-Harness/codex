@@ -68,8 +68,6 @@ func IntegrationTests() []Test {
 		{pkg, "TestHostedSearchFixture/web"},
 		{pkg, "TestHostedSearchFixture/web_allowed"},
 		{pkg, "TestHostedSearchFixture/web_excluded"},
-		{pkg, "TestHostedSearchFixture/x_retired"},
-		{pkg, "TestHostedSearchFixture/x_window_retired"},
 		{pkg, "TestHostedSearchFixture/unexpected_x_rejected"},
 		{pkg, "TestImagePinnedFixture"},
 		{pkg, "TestAttachedImagePinnedFixture"},
