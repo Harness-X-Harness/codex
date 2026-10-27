@@ -119,9 +119,14 @@ if config.get("create_output_index") == index:
 sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
 ''')
         fake.chmod(0o755)
+        git = fake_bin / "git"
+        git.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_GIT_LOG\"\n"
+                       "printf PRIVATE_RESPONSE_CANARY >&2\nexit \"${FAKE_GIT_EXIT:-0}\"\n")
+        git.chmod(0o755)
         self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
                         FAKE_GH_FIXTURES=str(self.fixture_root), FAKE_GH_LOG=str(self.log),
-                        GH_HOST="untrusted.invalid", GH_TOKEN="SYNTHETIC_TEST_TOKEN")
+                        GH_HOST="untrusted.invalid", GH_TOKEN="SYNTHETIC_TEST_TOKEN",
+                        FAKE_GIT_LOG=str(self.root / "git-calls"))
 
     def bundle(self, contents=None):
         body = io.BytesIO()
@@ -246,7 +251,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assert_failed(self.invoke(["--pr-diagnostic"]), 2, "selection", selection_reason="identity")
 
     def test_pr_mode_cannot_be_combined_with_formal_source(self):
-        self.assert_failed(self.invoke(["--pr-diagnostic", "--expected-source-sha", HARNESS]), 0, "input")
+        self.assert_failed(self.invoke(["--pr-diagnostic", "--expected-line", "grok/rust-v0.164.0"]), 0, "input")
 
     def test_pr_metadata_request_failure_is_bounded_and_has_no_archive_fetch(self):
         self.configure_pr()
@@ -256,19 +261,27 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
     def test_original_package_is_fetchable_while_later_attempt_and_sibling_are_running(self):
         self.run.update(status="in_progress", conclusion=None, run_attempt=3)
         self.jobs["jobs"][1].update(status="in_progress", conclusion=None)
-        result = self.invoke(["--expected-source-sha", SHA], harness=SHA)
+        result = self.invoke(["--expected-line", "grok/rust-v0.158.0"], harness=HARNESS)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_calls(4)
         got = json.loads(result.stdout)
-        self.assertEqual(got["selection_mode"], "formal")
-        self.assertEqual(got["harness_sha"], got["source_sha"])
+        self.assertEqual(got["selection_mode"], "line_bound")
+        self.assertEqual(got["harness_sha"], HARNESS)
+        self.assertEqual(got["source_sha"], SHA)
         self.assertEqual(got["run_attempt"], 2)
         self.assertEqual(got["artifact_id"], 501)
         self.assertEqual(got["run_status"], "in_progress")
         self.assertIsNone(got["run_conclusion"])
+        self.assertEqual((self.root / "git-calls").read_text().splitlines(),
+                         ["merge-base", "--is-ancestor", SHA, HARNESS])
 
-    def test_wrong_formal_source_never_downloads(self):
-        self.assert_failed(self.invoke(["--expected-source-sha", HARNESS]), 3, "selection", selection_reason="identity")
+    def test_formal_nonancestor_rejects_before_archive_without_private_git_output(self):
+        self.env["FAKE_GIT_EXIT"] = "1"
+        self.assert_failed(self.invoke(["--expected-line", "grok/rust-v0.158.0"]),
+                           3, "selection", selection_reason="identity")
+
+    def test_wrong_formal_line_never_downloads(self):
+        self.assert_failed(self.invoke(["--expected-line", "grok/rust-v0.164.0"]), 3, "selection", selection_reason="identity")
 
     def test_wrong_run_workflow_or_fork_never_downloads(self):
         for key, value in (("id", 38), ("path", ".github/workflows/other.yml"),
@@ -606,12 +619,13 @@ class FailureCodeTests(unittest.TestCase):
 class PRWorkflowTests(unittest.TestCase):
     def test_source_admission_is_separate_from_catalog_selection(self):
         workflow = Path(__file__).resolve().parents[2] / ".github/workflows/grok-live.yml"
-        text = workflow.read_text()
-        self.assertIn("if: ${{ github.repository == 'Harness-X-Harness/codex' }}", text)
+        text = workflow.read_text().split("\njobs:\n", 1)[1]
+        self.assertIn("github.repository == 'Harness-X-Harness/codex'", text)
+        self.assertIn("github.ref_name == inputs.formal_line", text)
         self.assertNotIn("image-primary", text)
         self.assertLess(text.index("Validate the explicit Go-owned selection before backend use"),
                         text.index("GROK_API_KEY:"))
-        self.assertLess(text.index("Fetch and verify the explicit diagnostic package"),
+        self.assertLess(text.index("Fetch and verify the explicit package"),
                         text.index("GROK_API_KEY:"))
         self.assertEqual(text.count("GROK_API_KEY:"), 2)
         finalizer = text.split("      - name: Preserve bounded runner errors after execution\n", 1)[1].split("      - ", 1)[0]
@@ -621,21 +635,22 @@ class PRWorkflowTests(unittest.TestCase):
         def script(name):
             step = text.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
             return textwrap.dedent(step.split("        run: |\n", 1)[1])
-        bind = script("Bind the diagnostic harness subject")
-        fetch = script("Fetch and verify the explicit diagnostic package")
+        bind = script("Bind the harness subject")
+        fetch = script("Fetch and verify the explicit package")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "git").write_text("#!/bin/sh\nif [ \"$1\" = rev-parse ]; then printf '%s\\n' \"$GITHUB_SHA\"; fi\n")
             (root / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE\"\n")
             for name in ("git", "python3"):
                 (root / name).chmod(0o755)
-            for branch in ("fix/task", "grok/rust-v0.164.0"):
-                with self.subTest(branch=branch):
+            for branch, line in (("fix/task", ""), ("grok/rust-v0.164.0", ""),
+                                 ("grok/rust-v0.164.0", "grok/rust-v0.164.0")):
+                with self.subTest(branch=branch, line=line):
                     capture = root / "capture"
                     capture.unlink(missing_ok=True)
                     env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                                GITHUB_REF="refs/heads/" + branch, GITHUB_SHA=HARNESS,
-                               GITHUB_WORKFLOW_SHA=HARNESS,
+                               GITHUB_WORKFLOW_SHA=HARNESS, FORMAL_LINE=line,
                                BINARY_ARTIFACT_ID="501", RUNNER_TEMP=str(root), CAPTURE=str(capture))
                     result = subprocess.run(["bash", "-c", bind + "\n" + fetch], env=env,
                                             capture_output=True, text=True, timeout=5)
@@ -643,6 +658,7 @@ class PRWorkflowTests(unittest.TestCase):
                     self.assertTrue(capture.exists())
                     self.assertEqual("--pr-diagnostic" in capture.read_text().splitlines(),
                                      not branch.startswith("grok/rust-v"))
+                    self.assertEqual("--expected-line" in capture.read_text().splitlines(), bool(line))
 
 
 if __name__ == "__main__":

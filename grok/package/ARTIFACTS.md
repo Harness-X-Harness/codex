@@ -86,16 +86,31 @@ See `../cmd/grok-live/README.md` for outcomes and the retained scenario surface.
 
 ## Automatic Actions consumption
 
-On every trusted version-line push, the full Live matrix still depends directly
-on the successful Linux build and scenario selection. The trusted execution step
+On every trusted version-line push, the full Live matrix depends on either the
+successful new Linux build or current controlled proof of the reused package,
+and on scenario selection. The trusted execution step
 sets `GROK_LIVE=1`; this automatic path makes real API calls and incurs their
 costs. Ordinary PR events do not run Live or receive the backend secret.
 
-The build publishes an artifact ID. Live passes that ID to the same fetcher used
-by diagnostics and additionally requires `--expected-source-sha "$GITHUB_SHA"`.
+The scheduler resolves the current version line's latest successful Linux
+producer once. `build_selection.py` compares that source to the complete current
+harness subject using one coarse path classifier: known consumer-only areas do
+not rebuild; unknown paths and binary/build inputs do. Renames and deletions are
+included. Missing/expired latest successful packages or changed binary inputs
+require a new build, with no fallback if that build fails.
+
+The chosen or newly built artifact ID is fixed for all Live scenarios. Live uses
+the same fetcher as diagnostics with `--expected-line "$LINE"`, which verifies
+the exact trusted producer line and source ancestry. It retains the original
+package source and the current harness SHA separately.
 The producer's original attempt comes from the selected artifact, never the
 consumer's `GITHUB_RUN_ATTEMPT`. Retrying Live does not require rebuilding the
-package or waiting for macOS. Producer success, trusted source and complete
+package or waiting for macOS. macOS has its own latest successful producer and
+independent build decision; Linux availability does not stand in for a Mac package.
+Skipping a Mac build retains the original successful producer evidence and
+checks its available artifact metadata; it does not download, revalidate archive
+bytes or execute current Mac fixtures. Current reused-package acceptance below
+applies to the Linux package used by Live. Producer success, trusted source and complete
 artifact verification remain required before the backend secret is used.
 
 The Go-owned full scenario selection runs as separate jobs;
@@ -107,9 +122,11 @@ retained as `grok-live-SCENARIO-SHA-RUN-ATTEMPT` for 30 days. Missing configurat
 artifact failure, timeout, cancellation, backend failure and skipped jobs remain
 distinct from a successful observed result.
 
-The build jobs and Live matrix do not enter required native `Cargo` admission.
-A packaging or product defect still needs diagnosis; independence does not hide
-a failed sibling or turn it green. Formal evidence is the actual GitHub Actions
+The required `Cargo` aggregate combines native proof with successful subject
+selection and the applicable Linux build or reuse-proof path. A legitimate
+not-needed build is distinct from a failed selection or failed required build.
+macOS and actual Live results remain independently visible; they are not
+silently converted into native proof. Formal evidence is the actual GitHub Actions
 run/attempt/test subject. A local CLI run is only development/diagnostic evidence.
 
 ## Explicit diagnostic Actions path
@@ -152,3 +169,21 @@ artifact availability. Forks and stale heads remain rejected before backend use.
 observed run status. `workflow.json` records the consumer's run/attempt. A passed
 single diagnostic does not change a failed or cancelled original run, and is not
 proof of other scenarios or required native CI.
+
+## Build applicability and current proof
+
+`grok.yml` dispatches; `grok-build.yml` owns native target/runner/build settings;
+the existing `build-grok` action owns compilation and staging. The release
+package decision does not suppress native-proof or Go-contract applicability.
+`verify_provider.sh` owns the current controlled package acceptance command and
+is shared by fresh builds and reuse checks; changing it does not change the
+binary, but its current checks still run. This is artifact reuse, not a compiler
+cache, a new artifact registry, or reuse of old test results.
+
+A successful build means a complete published package with a verifiable
+successful original producer. Candidate order is producer workflow run number,
+then the artifact's original producer attempt, descending, restricted to the
+exact version line and ancestor sources. Copied job IDs or execution timestamps
+from a partial rerun do not invent another package or producer identity. Whole-workflow and Live conclusions do not establish producer success.
+The decision records the chosen fixed artifact and actual binary/harness subjects.
+Existing non-version-line PR routes build normally without line reuse.

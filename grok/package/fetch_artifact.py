@@ -175,15 +175,15 @@ def gh_api(endpoint: str, destination: Path, byte_limit: int) -> None:
 
 
 def fetch(artifact_id: int, harness_sha: str, output: Path, *,
-          expected_source_sha: str | None = None,
+          expected_line: str | None = None,
           pr_diagnostic: bool = False) -> dict:
     with acquisition_stage("input"):
         if type(artifact_id) is not int or artifact_id <= 0 or not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
             raise ValueError("invalid explicit artifact or harness revision")
         if (type(pr_diagnostic) is not bool
-                or (expected_source_sha is not None and expected_source_sha != harness_sha)
-                or (pr_diagnostic and expected_source_sha is not None)):
-            raise ValueError("invalid formal or PR subject")
+                or (expected_line is not None and not re.fullmatch(r"grok/rust-v[^\s]+", expected_line))
+                or (pr_diagnostic and expected_line is not None)):
+            raise ValueError("invalid line-bound or PR subject")
         if output.exists() or output.is_symlink():
             raise FileExistsError("output must be a new directory")
     with acquisition_stage("workspace"), tempfile.TemporaryDirectory(
@@ -216,8 +216,17 @@ def fetch(artifact_id: int, harness_sha: str, output: Path, *,
             jobs = read_metadata(root / "jobs.json")
         with acquisition_stage("selection"):
             selected = select(run, jobs, artifact, artifact_id, harness_sha,
-                              expected_source_sha=expected_source_sha,
+                              expected_line=expected_line,
                               pull_request=pull_request)
+            if expected_line is not None:
+                # The scheduler owns binary-input eligibility. Independently bind
+                # this subject to an ancestor on the exact producer line.
+                result = subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", selected["source_sha"], harness_sha],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+                )
+                if result.returncode != 0:
+                    raise SelectionFailure("identity", "package source is not an ancestor of the harness")
             if selected["artifact_size"] > MAX_PACKAGE_BYTES:
                 raise ValueError("selected artifact exceeds the package byte budget")
         with acquisition_stage("archive_request"):
@@ -245,12 +254,12 @@ def main() -> int:
     parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--harness-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--expected-source-sha")
+    parser.add_argument("--expected-line")
     parser.add_argument("--pr-diagnostic", action="store_true")
     args = parser.parse_args()
     try:
         result = fetch(args.artifact_id, args.harness_sha, args.output,
-                       expected_source_sha=args.expected_source_sha,
+                       expected_line=args.expected_line,
                        pr_diagnostic=args.pr_diagnostic)
     except ACQUISITION_ERRORS as error:
         code = error.code if isinstance(error, AcquisitionFailure) else "unknown"

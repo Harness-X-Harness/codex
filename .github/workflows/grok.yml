@@ -19,55 +19,132 @@ jobs:
     name: Native proof
     uses: ./.github/workflows/grok-proof.yml
 
-  cargo:
-    name: Cargo
-    needs: proof
-    if: ${{ always() }}
+  package-selection:
+    name: Select binary subject
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      build-needed: ${{ steps.subject.outputs.build-needed }}
+      mac-build-needed: ${{ steps.subject.outputs.mac-build-needed }}
+      artifact-id: ${{ steps.subject.outputs.artifact-id }}
+      source-sha: ${{ steps.subject.outputs.source-sha }}
     steps:
-      - name: Require the complete native proof
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Resolve the latest successful line package and binary input changes
+        id: subject
         env:
-          PROOF_RESULT: ${{ needs.proof.result }}
+          GH_TOKEN: ${{ github.token }}
+          LINE: ${{ github.base_ref || github.ref_name }}
+          INCLUDE_MACOS: ${{ github.event_name == 'push' }}
         run: |
-          if [[ "$PROOF_RESULT" != "success" ]]; then
-            echo "Native proof did not succeed: $PROOF_RESULT" >&2
-            exit 1
-          fi
+          target_args=()
+          if [[ "$INCLUDE_MACOS" == true ]]; then target_args+=(--include-macos); fi
+          python3 grok/package/build_selection.py --line "$LINE" --harness-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/build-selection.json" --github-output "$GITHUB_OUTPUT" "${target_args[@]}"
+      - name: Retain the binary subject decision
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-build-selection-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/build-selection.json
+          if-no-files-found: warn
+          retention-days: 30
 
   build-linux-x64-musl:
     name: Build x86_64-unknown-linux-musl
-    runs-on: ubuntu-24.04
-    timeout-minutes: 170
-    env:
-      CARGO_BUILD_JOBS: "2"
-      CARGO_INCREMENTAL: "0"
-    outputs:
-      artifact-id: ${{ steps.package.outputs.artifact-id }}
-      artifact-digest: ${{ steps.package.outputs.artifact-digest }}
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/build-grok
-        id: package
-        with:
-          target: x86_64-unknown-linux-musl
+    needs: package-selection
+    if: ${{ needs.package-selection.outputs.build-needed == 'true' }}
+    uses: ./.github/workflows/grok-build.yml
+    with:
+      target: x86_64-unknown-linux-musl
 
   build-macos-arm64:
-    if: ${{ github.event_name == 'push' }}
     name: Build aarch64-apple-darwin
-    runs-on: macos-15
-    timeout-minutes: 170
-    env:
-      CARGO_BUILD_JOBS: "2"
-      CARGO_INCREMENTAL: "0"
+    needs: package-selection
+    if: ${{ github.event_name == 'push' && needs.package-selection.outputs.mac-build-needed == 'true' }}
+    uses: ./.github/workflows/grok-build.yml
+    with:
+      target: aarch64-apple-darwin
+
+  reused-package-proof:
+    name: Verify the reused package with current controlled fixtures
+    needs: package-selection
+    if: ${{ needs.package-selection.outputs.build-needed == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - uses: ./.github/actions/build-grok
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          target: aarch64-apple-darwin
+          python-version: "3.12"
+      - name: Verify the selected original producer and package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.package-selection.outputs.artifact-id }}
+          LINE: ${{ github.base_ref || github.ref_name }}
+        run: |
+          python3 grok/package/fetch_artifact.py --artifact-id "$ARTIFACT_ID" \
+            --harness-sha "$GITHUB_SHA" --expected-line "$LINE" --output "$RUNNER_TEMP/reused-package"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Prepare the hosted Linux sandbox for package acceptance
+        run: bash grok/package/prepare_linux_sandbox_ci.sh
+      - name: Run current controlled package acceptance without rebuilding
+        env:
+          GROK_CODEX_BIN: ${{ runner.temp }}/reused-package/package/bin/grok
+          GROK_LIVE_NATIVE_TARGET: x86_64-unknown-linux-musl
+          GROK_FACTS: "0"
+          GROK_LIVE: "0"
+        run: bash grok/package/verify_provider.sh "$RUNNER_TEMP/reused-package-proof"
+      - name: Retain reused package proof and both subjects
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-reused-package-proof-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/reused-package-proof
+            ${{ runner.temp }}/reused-package/selection.json
+            ${{ runner.temp }}/reused-package/verified.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  cargo:
+    name: Cargo
+    needs: [proof, package-selection, build-linux-x64-musl, reused-package-proof]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require native proof and the applicable package path
+        env:
+          PROOF_RESULT: ${{ needs.proof.result }}
+          SELECTION_RESULT: ${{ needs.package-selection.result }}
+          BUILD_NEEDED: ${{ needs.package-selection.outputs.build-needed }}
+          BUILD_RESULT: ${{ needs.build-linux-x64-musl.result }}
+          REUSE_RESULT: ${{ needs.reused-package-proof.result }}
+        run: |
+          set -euo pipefail
+          test "$PROOF_RESULT" = success
+          test "$SELECTION_RESULT" = success
+          case "$BUILD_NEEDED:$BUILD_RESULT:$REUSE_RESULT" in
+            true:success:skipped|false:skipped:success) ;;
+            *) echo "Applicable package proof did not succeed" >&2; exit 1 ;;
+          esac
 
   live-selection:
     name: Select formal Live scenarios
@@ -95,97 +172,22 @@ jobs:
 
   live:
     name: Grok Live (${{ matrix.scenario }})
-    needs: [build-linux-x64-musl, live-selection]
-    if: ${{ !cancelled() && github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && needs.build-linux-x64-musl.result == 'success' && needs.live-selection.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    needs: [package-selection, build-linux-x64-musl, reused-package-proof, live-selection]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.repository == 'Harness-X-Harness/codex' && startsWith(github.ref, 'refs/heads/grok/rust-v') && needs.package-selection.result == 'success' && needs.live-selection.result == 'success' && ((needs.package-selection.outputs.build-needed == 'true' && needs.build-linux-x64-musl.result == 'success') || (needs.package-selection.outputs.build-needed == 'false' && needs.reused-package-proof.result == 'success')) }}
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     strategy:
       fail-fast: false
       max-parallel: 3
       matrix:
         scenario: ${{ fromJSON(needs.live-selection.outputs.scenarios || '[]') }}
-    steps:
-      - name: Initialize Live evidence before setup
-        run: |
-          mkdir -p "$RUNNER_TEMP/live-evidence"
-          printf '{"harness_sha":"%s","run_id":"%s","attempt":"%s","state":"started"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/live-evidence/workflow.json"
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-      - name: Fetch and verify the published Linux artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_ID: ${{ needs.build-linux-x64-musl.outputs.artifact-id }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok.yml
-          python3 grok/package/fetch_artifact.py \
-            --artifact-id "$ARTIFACT_ID" --harness-sha "$GITHUB_SHA" \
-            --expected-source-sha "$GITHUB_SHA" --output "$RUNNER_TEMP/live-package"
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: grok/go.mod
-          cache: false
-      - name: Prepare the hosted Linux sandbox for Live
-        run: bash grok/package/prepare_linux_sandbox_ci.sh
-      - name: Execute the selected owned Go Live scenario once
-        id: live_execution
-        working-directory: grok
-        env:
-          GROK_LIVE: "1"
-          GROK_LIVE_DIAGNOSTICS_DIR: ${{ runner.temp }}/live-evidence/scenarios
-          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
-          GROK_CODEX_BIN: ${{ runner.temp }}/live-package/package/bin/grok-bin
-          SCENARIO: ${{ matrix.scenario }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/live-evidence"
-          cp "$RUNNER_TEMP/live-package/selection.json" "$RUNNER_TEMP/live-evidence/"
-          cp "$RUNNER_TEMP/live-package/verified.json" "$RUNNER_TEMP/live-evidence/"
-          digest="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["runtime_sha256"])')"
-          status=0
-          go test -tags=live -count=1 -timeout=10m -json ./tests/live -args \
-            -grok-live-suite full -grok-live-scenario "$SCENARIO" \
-            -grok-live-verified-subject -grok-live-binary-sha256 "$digest" \
-            -grok-live-source-sha "$GITHUB_SHA" -grok-live-harness-sha "$GITHUB_SHA" \
-            -grok-live-target x86_64-unknown-linux-musl -grok-live-environment github-actions \
-            > "$RUNNER_TEMP/live-evidence/tests.json" 2> "$RUNNER_TEMP/live-runner-stderr" || status=$?
-          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/live-evidence/tests.json" \
-            --require "github.com/Harness-X-Harness/codex/grok/tests/live:TestLive/$SCENARIO" \
-            > "$RUNNER_TEMP/live-evidence/summary.json" || status=1
-          cat "$RUNNER_TEMP/live-evidence/summary.json"
-          exit "$status"
-      - name: Preserve bounded runner errors after execution
-        if: ${{ always() && contains(fromJSON('["success","failure","cancelled"]'), steps.live_execution.outcome) }}
-        env:
-          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
-        run: |
-          if test -f "$RUNNER_TEMP/live-runner-stderr"; then
-            python3 grok/package/live_diagnostics.py --stderr "$RUNNER_TEMP/live-runner-stderr" --output "$RUNNER_TEMP/live-evidence/runner-stderr.json"
-          fi
-      - name: Finalize available Live evidence
-        if: ${{ always() }}
-        env:
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/live-evidence"
-          printf '{"harness_sha":"%s","run_id":"%s","attempt":"%s","state":"%s"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$JOB_STATUS" > "$RUNNER_TEMP/live-evidence/workflow.json"
-          for name in selection.json verified.json; do
-            if test -f "$RUNNER_TEMP/live-package/$name"; then cp "$RUNNER_TEMP/live-package/$name" "$RUNNER_TEMP/live-evidence/"; fi
-          done
-      - name: Retain the bounded scenario result
-        if: ${{ always() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: grok-live-${{ matrix.scenario }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/live-evidence
-          if-no-files-found: warn
-          retention-days: 30
-
+    uses: ./.github/workflows/grok-live.yml
+    with:
+      binary_artifact_id: ${{ needs.build-linux-x64-musl.outputs.artifact-id || needs.package-selection.outputs.artifact-id }}
+      suite: diagnostic
+      scenario: ${{ matrix.scenario }}
+      formal_line: ${{ github.ref_name }}
+    secrets:
+      GROK_API_KEY: ${{ secrets.GROK_API_KEY }}

@@ -23,12 +23,14 @@ launcher and artifact tests remain Python contracts:
 python3 grok/package/test_stage.py -v
 python3 grok/package/test_diagnose_linux_binary.py -v
 python3 grok/package/test_observe_linux_build.py -v
+python3 grok/package/test_build_selection.py -v
 python3 grok/package/test_select_artifact.py -v
 python3 grok/package/test_extract_artifact.py -v
 python3 grok/package/test_fetch_artifact.py -v
+python3 grok/package/test_live_diagnostics.py -v
 ```
 
-These six Python files currently contain 102 tests; they use synthetic inputs
+These package Python tests use synthetic inputs
 and do not replace native package smoke.
 
 ## Credential-free startup discovery
@@ -298,9 +300,11 @@ retention is 30 days, under the repository's existing Actions artifact access
 controls; this change grants no new access. Artifact names bind SHA, run and
 attempt (plus scenario for formal runs). The artifact ID identifies the producer
 run and original attempt, separately
-from the Live consumer run/attempt. Formal selection additionally requires the
-package source to equal the current harness source; diagnostics retain both
-identities explicitly. Trusted repository/ref checks and secret isolation from
+from the Live consumer run/attempt. Formal selection uses the current version line's latest successful Linux
+producer whose package is available and whose source is an ancestor of the
+harness. A full source-to-harness diff must leave binary inputs unchanged;
+otherwise a new successful build is required. Both real identities remain
+explicit; the manifest is never relabelled as the harness commit. Trusted repository/ref checks and secret isolation from
 untrusted PRs remain in those workflows. Inspect the actual run/attempt and
 artifact metadata and read back the selected files before claiming delivery;
 workflow configuration alone proves neither upload, current availability nor
@@ -320,22 +324,41 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
 - Version-line pushes and PRs targeting them retain the `grok.yml` entry point.
   Native jobs preserve scoped Rust owners and invoke only `tests/integration`
   after the existing CLI build. GNU native proof does not certify release
-  packages: PRs additionally build and check Linux-musl; version-line pushes
-  build and check both Linux-musl and macOS. macOS release/package failures are
-  therefore detected after merge, not at the PR gate. Branch rules are unchanged.
+  packages: PRs additionally build Linux-musl when needed, or check the selected
+  existing package with current controlled fixtures. Version-line pushes also
+  evaluate macOS build applicability independently. New macOS release/package
+  failures are detected after merge, not at the PR gate. Branch rules are unchanged.
 - Release builds use direct rustc while hosted-runner shutdowns and the macOS
   release timeout are investigated. Linux emits bounded numeric resource samples
   during compilation. Native-proof compiler caching is unchanged.
-  Release builds still compile/link for the current source SHA, stage a fresh
-  package and execute package acceptance. No cross-run finished package or test
-  result is reused. Final linking/LTO can still take substantial time.
+  When required, release builds compile/link the current source SHA, stage a
+  fresh package and execute package acceptance. Otherwise an explicitly
+  identified eligible package is reused, not relabelled or rebuilt. Current
+  Linux proof never reuses old test results. Final linking/LTO of a required
+  build can still take substantial time.
 - `build-grok` keeps its five actual package consumer owners in
   `tests/integration`; it does not repeat the offline suite.
+- `build_selection.py` is the single binary-applicability owner. Clearly
+  consumer-owned Grok harness/tests/docs and artifact-consumption code do not
+  require release recompilation; unknown paths, `codex-rs`, shipped distribution
+  assets and the actual build/staging chain do. The full diff from the latest
+  successful producer is used, including deletions and both rename paths.
+  The latest complete published successful package is the candidate authority;
+  an observed missing/expired package requires a new build rather than a silent
+  older-package fallback. Linux and macOS decisions are independent.
+- `grok.yml` owns scheduling; `grok-build.yml` owns target/runner/build parameters
+  and calls the existing build action. `grok-live.yml` owns both automatic and
+  manual execution. Native proof and Go contracts remain independent; reused
+  Linux packages still run current controlled fixtures. A skipped Mac build
+  retains its original successful producer evidence and available metadata,
+  without downloading or executing current Mac fixtures. Cargo fails on
+  selection errors or failure of the applicable build/reuse-proof path.
 - Formal Live runs automatically on every trusted version-line push after the
-  successful Linux build and scenario selection, making real API calls and
+  successful new Linux build or reused-package proof and scenario selection, making real API calls and
   incurring their costs without a repository-variable opt-in. It derives the
   supported full matrix from Go, keeps at most three jobs active, and preserves
-  trusted repository/ref, successful producer and exact source/artifact checks.
+  trusted repository/ref, original successful producer, line/ancestry and exact
+  artifact checks. The binary source may differ from the current harness SHA.
 - Manual `grok-live.yml` defaults to one `basic-primary` diagnostic. Smoke/full
   are explicit complete selections; their scenario text field is ignored.
   Diagnostic runs do not become release certification.

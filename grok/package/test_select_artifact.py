@@ -54,7 +54,7 @@ class ArtifactTests(unittest.TestCase):
             select(run, jobs, artifact, 501, HARNESS)
         with self.assertRaises(ValueError):
             select(run, jobs, artifact, 501, HARNESS, pull_request=pr,
-                   expected_source_sha=HARNESS)
+                   expected_line="grok/rust-v0.164.0")
 
     def test_pr_diagnostic_rejects_stale_fork_unlinked_or_wrong_subject(self):
         for mode in ("fork", "base_fork", "wrong_number", "closed", "merged", "stale_head",
@@ -153,18 +153,21 @@ class ArtifactTests(unittest.TestCase):
         run.update(run_attempt=3, status="in_progress", conclusion=None)
         jobs["jobs"].append({"name": "Build aarch64-apple-darwin", "status": "in_progress"})
         jobs["total_count"] = 2
-        got = select(run, jobs, artifact, 501, SHA, expected_source_sha=SHA)
+        got = select(run, jobs, artifact, 501, SHA, expected_line="grok/rust-v0.158.0")
         self.assertEqual(got["run_attempt"], 2)
         self.assertEqual(got["artifact_id"], 501)
-        self.assertEqual(got["selection_mode"], "formal")
+        self.assertEqual(got["selection_mode"], "line_bound")
+        jobs["jobs"][0]["name"] = "Build " + TARGET + " / Package"
+        self.assertEqual(select(run, jobs, artifact, 501, SHA,
+                                expected_line="grok/rust-v0.158.0")["producer_job_id"], 101)
         self.assertEqual(got["run_status"], "in_progress")
         self.assertIsNone(got["run_conclusion"])
         run.update(status="PRIVATE_CANARY", conclusion="PRIVATE_CANARY")
-        observed = select(run, jobs, artifact, 501, SHA, expected_source_sha=SHA)
+        observed = select(run, jobs, artifact, 501, SHA, expected_line="grok/rust-v0.158.0")
         self.assertEqual(observed["run_status"], "unknown")
         self.assertEqual(observed["run_conclusion"], "unknown")
         with self.assertRaises(ValueError):
-            select(run, jobs, artifact, 501, HARNESS, expected_source_sha=HARNESS)
+            select(run, jobs, artifact, 501, HARNESS, expected_line="grok/rust-v0.164.0")
 
     def test_selection_failure_reason_is_a_fixed_allowlist(self):
         self.assertEqual(selection.SELECTION_FAILURE_REASONS, frozenset({

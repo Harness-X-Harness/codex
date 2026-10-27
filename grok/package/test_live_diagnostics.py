@@ -26,7 +26,7 @@ class DiagnosticsTests(unittest.TestCase):
 class WorkflowRetentionTests(unittest.TestCase):
     def test_early_failure_keeps_workflow_identity_without_package(self):
         root = Path(__file__).resolve().parents[2]
-        for workflow in ("grok-live.yml", "grok.yml"):
+        for workflow in ("grok-live.yml",):
             text = (root / ".github/workflows" / workflow).read_text()
             def script(name):
                 step = text.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
