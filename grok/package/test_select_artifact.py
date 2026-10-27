@@ -44,22 +44,18 @@ class ArtifactTests(unittest.TestCase):
     def test_pr_diagnostic_binds_head_and_distinct_tested_merge_source(self):
         run, jobs, artifact, pr = pr_fixture()
         self.assertEqual(admit_harness(pr, run, HARNESS, "fix/image"), SHA)
-        got = select(run, jobs, artifact, 501, HARNESS, pull_request=pr)
+        got = select(run, jobs, artifact, 501, HARNESS, producer_source={"source_sha": SHA, "head_sha": HARNESS, "run_id": 37, "line": pr["base"]["ref"]})
         self.assertEqual(got["source_sha"], SHA)
-        self.assertEqual(got["pr_head_sha"], HARNESS)
+        self.assertEqual(got["producer_source"]["head_sha"], HARNESS)
         self.assertEqual(got["harness_sha"], HARNESS)
-        self.assertEqual(got["pull_request_number"], 444)
-        self.assertEqual(got["selection_mode"], "pr_diagnostic")
+        self.assertEqual(got["selection_mode"], "diagnostic")
         self.assertEqual(got["artifact_name"], NAME)
         with self.assertRaises(ValueError):
             select(run, jobs, artifact, 501, HARNESS)
-        with self.assertRaises(ValueError):
-            select(run, jobs, artifact, 501, HARNESS, pull_request=pr,
-                   expected_line="grok/rust-v0.164.0")
 
     def test_pr_diagnostic_rejects_stale_fork_unlinked_or_wrong_subject(self):
         for mode in ("fork", "base_fork", "wrong_number", "closed", "merged", "stale_head",
-                     "stale_base", "stale_base_ref", "stale_merge", "missing_merge", "wrong_harness",
+                     "stale_base", "stale_base_ref", "missing_merge", "wrong_harness",
                      "wrong_ref", "not_version_line", "no_link", "two_links", "wrong_link",
                      "wrong_link_repo", "failed_ci", "wrong_run_repo", "wrong_workflow",
                      "artifact_head_is_merge", "expired", "failed_build"):
@@ -74,7 +70,6 @@ class ArtifactTests(unittest.TestCase):
                 elif mode == "stale_head": pr["head"]["sha"] = "e" * 40
                 elif mode == "stale_base": pr["base"]["sha"] = "e" * 40
                 elif mode == "stale_base_ref": pr["base"]["ref"] = "grok/rust-v0.165.0"
-                elif mode == "stale_merge": pr["merge_commit_sha"] = "e" * 40
                 elif mode == "missing_merge": pr["merge_commit_sha"] = None
                 elif mode == "wrong_harness": harness = "e" * 40
                 elif mode == "wrong_ref": run["head_branch"] = "unrelated"
@@ -91,7 +86,7 @@ class ArtifactTests(unittest.TestCase):
                 elif mode == "failed_build": jobs["jobs"][0]["conclusion"] = "failure"
                 with self.assertRaises(ValueError):
                     admit_harness(pr, run, harness, "fix/image")
-                    select(run, jobs, artifact, 501, harness, pull_request=pr)
+                    select(run, jobs, artifact, 501, harness, producer_source={"source_sha": SHA, "head_sha": HARNESS, "run_id": 37, "line": pr["base"]["ref"]})
 
     def test_exact_attempt_identity_and_sibling_failure_are_retained(self):
         run, jobs, artifact = fixture()
@@ -99,7 +94,7 @@ class ArtifactTests(unittest.TestCase):
         jobs["jobs"].append({"name": "Build aarch64-apple-darwin", "conclusion": "failure"})
         jobs["total_count"] = 2
         self.assertEqual(select(run, jobs, artifact, 501, HARNESS), {
-            "repository": REPOSITORY, "run_id": 37, "run_attempt": 2, "source_sha": SHA,
+            "repository": REPOSITORY, "run_id": 37, "run_attempt": 2, "source_sha": SHA, "producer_line": "grok/rust-v0.158.0",
             "target": TARGET, "harness_sha": HARNESS, "artifact_id": 501, "artifact_name": NAME,
             "artifact_digest": "sha256:" + "c" * 64, "artifact_size": 4096,
             "producer_job_id": 101, "run_conclusion": "failure",
@@ -109,7 +104,7 @@ class ArtifactTests(unittest.TestCase):
     def test_rejects_wrong_repository_source_and_workflow(self):
         mutations = [
             ("id", 38), ("event", "pull_request"),
-            ("path", ".github/workflows/other.yml"), ("head_branch", "main"), ("head_sha", "a"),
+            ("path", ".github/workflows/other.yml"), ("head_sha", "a"),
             ("repository", {"full_name": "other/repo"}), ("head_repository", {"full_name": "fork/repo"}),
         ]
         for key, value in mutations:

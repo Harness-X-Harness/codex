@@ -189,7 +189,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assert_calls(4)
         expected = {
             "repository": REPOSITORY, "run_id": 37, "run_attempt": 2,
-            "source_sha": SHA, "target": TARGET, "harness_sha": HARNESS,
+            "source_sha": SHA, "producer_line": "grok/rust-v0.158.0", "target": TARGET, "harness_sha": HARNESS,
             "artifact_id": 501, "artifact_name": NAME,
             "artifact_digest": self.artifact["digest"],
             "artifact_size": self.artifact["size_in_bytes"],
@@ -258,13 +258,24 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             "run_id": ci_id, "run_attempt": 1, "status": "completed", "conclusion": "success"}]}
         for name, body in (("harness-artifacts", subjects), ("harness-jobs", subject_jobs)):
             (self.fixture_root / (name + ".json")).write_text(json.dumps(body))
+        if not canonical:
+            producer_requests = [
+                (prefix + "/actions/runs/37/artifacts?per_page=100&page=1", "harness-artifacts.json"),
+                (prefix + "/actions/runs/37/attempts/1/jobs?per_page=100&page=1", "harness-jobs.json"),
+                (prefix + "/actions/artifacts/901/zip", "harness-subject.zip"),
+                (prefix + "/pulls/444", "producer-pr.json"),
+            ]
+            for index, (endpoint, filename) in enumerate(producer_requests, 9):
+                self.expected_calls.insert(index, ["api", "--hostname", "github.com", "--method", "GET", endpoint])
+                self.config["files"].insert(index, filename)
+            (self.fixture_root / "producer-pr.json").write_text(json.dumps(pr))
         return pr
 
     def test_pr_command_fetches_current_metadata_and_verifies_merge_package(self):
         self.configure_pr()
         result = self.invoke(["--harness-ref", "fix/image"])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_calls(10)
+        self.assert_calls(14)
         got = json.loads(result.stdout)
         self.assertEqual(got["selection_mode"], "pr_diagnostic")
         self.assertEqual(got["source_sha"], SHA)
@@ -281,7 +292,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.manifest["source_sha"] = HARNESS
         self.contents["grok-package.json"] = json.dumps(self.manifest).encode()
         self.bundle()
-        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 10, "archive_verification")
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 14, "archive_verification")
 
     def test_pr_command_rejects_changed_head_before_archive_download(self):
         pr = self.configure_pr()
@@ -304,7 +315,7 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assertEqual(got["harness_ci_source_sha"], "c" * 40)
         calls = (self.root / "git-calls").read_text().splitlines()
         self.assertIn("refs/pull/444/merge", calls)
-        self.assertEqual(calls[calls.index("--is-ancestor") + 1:][:2], [SHA, "c" * 40])
+        self.assertNotIn("--is-ancestor", calls)
         self.assertEqual(calls[calls.index("-z") + 1:][:2], [SHA, "c" * 40])
 
     def test_pr_harness_rejects_binary_diff_before_download(self):
@@ -329,6 +340,12 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         path.write_text(json.dumps(ci))
         self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 8, "harness_ci_metadata")
 
+    def test_current_harness_merge_must_have_actual_ci_subject_proof(self):
+        pr = self.configure_pr(canonical=True)
+        pr["merge_commit_sha"] = "e" * 40
+        (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 6, "harness_ci_metadata")
+
     def test_pr_mode_cannot_be_combined_with_formal_source(self):
         self.assert_failed(self.invoke(["--harness-ref", "fix/image", "--expected-line", "grok/rust-v0.164.0"]), 0, "input")
 
@@ -352,13 +369,31 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assertEqual(got["run_status"], "in_progress")
         self.assertIsNone(got["run_conclusion"])
         self.assertEqual((self.root / "git-calls").read_text().splitlines(),
-                         ["merge-base", "--is-ancestor", SHA, HARNESS,
+                         ["cat-file", "-e", SHA + "^{commit}",
                           "diff", "--name-only", "--no-renames", "-z", SHA, HARNESS, "--"])
 
-    def test_formal_nonancestor_rejects_before_archive_without_private_git_output(self):
-        self.env["FAKE_GIT_EXIT"] = "1"
-        self.assert_failed(self.invoke(["--expected-line", "grok/rust-v0.158.0"]),
-                           3, "selection", selection_reason="identity")
+    def test_closed_pr_producer_is_independent_of_current_pr_state_and_consumer_sha(self):
+        pr = self.configure_pr()
+        # This is a version-line consumer, not an admission of the old PR harness.
+        del self.expected_calls[2:8]
+        del self.config["files"][2:8]
+        self.run["pull_requests"] = []
+        pr.update(state="closed", merged=True, merge_commit_sha="f" * 40)
+        pr["head"]["sha"] = "e" * 40
+        (self.fixture_root / "producer-pr.json").write_text(json.dumps(pr))
+        self.env["FAKE_GIT_EXIT"] = "1"  # No ancestry command may decide equivalence.
+        result = self.invoke(["--expected-line", "grok/rust-v0.164.0"], harness="e" * 40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_calls(8)
+        got = json.loads(result.stdout)
+        self.assertEqual(got["source_sha"], SHA)
+        self.assertEqual(got["producer_source"]["head_sha"], HARNESS)
+        self.assertEqual(got["harness_sha"], "e" * 40)
+        self.assertNotIn("--is-ancestor", (self.root / "git-calls").read_text())
+
+    def test_explicit_fetch_rejects_outside_version_line_before_download(self):
+        self.run["head_branch"] = "grok/c7-web-activity-20261008"
+        self.assert_failed(self.invoke(), 3, "selection", selection_reason="identity")
 
     def test_wrong_formal_line_never_downloads(self):
         self.assert_failed(self.invoke(["--expected-line", "grok/rust-v0.164.0"]), 3, "selection", selection_reason="identity")
