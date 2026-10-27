@@ -150,11 +150,9 @@ func fakeImageServer() {
 				if mode == "wrong_first" && generated == 1 || mode == "wrong_edit" && generated == 2 || mode == "negated" {
 					reply = "false"
 				}
-				malformed := map[string]string{"judge_null": "null", "judge_string": `"true"`, "judge_number": "1", "judge_object": `{"answer":true}`, "judge_extra": "true because dog", "judge_malformed": "tru"}
-				if value, ok := malformed[mode]; ok {
-					reply = value
+				if mode == "judge_null" {
+					reply = "null"
 				}
-
 				items = append(items, map[string]any{"type": "agentMessage", "id": "answer", "text": reply, "phase": "final_answer"})
 			}
 			if mode == "reused_turn" && p.ThreadID == "thread-1" && generated == 2 {

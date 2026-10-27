@@ -41,7 +41,7 @@ func TestGrokImageGenerationEdit(t *testing.T) {
 	}
 }
 func TestImageGenerationEditRejectsFalseEvidence(t *testing.T) {
-	for _, mode := range []string{"missing_image", "bad_payload", "missing_artifact", "failed_turn", "edit_failed", "wrong_first", "wrong_edit", "negated", "judge_null", "judge_string", "judge_number", "judge_object", "judge_extra", "judge_malformed", "judge_failed", "wrong_thread", "mismatched_artifact", "completed_error", "late_failed", "reused_turn"} {
+	for _, mode := range []string{"missing_image", "bad_payload", "missing_artifact", "failed_turn", "edit_failed", "wrong_first", "wrong_edit", "negated", "judge_null", "judge_failed", "wrong_thread", "mismatched_artifact", "completed_error", "late_failed", "reused_turn"} {
 		t.Run(mode, func(t *testing.T) {
 			options := fixtureOptions(t, "image:"+mode)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)

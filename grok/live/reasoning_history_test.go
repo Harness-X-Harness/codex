@@ -591,6 +591,12 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 	modes = append(modes, "identity_turn_reset")
 	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {
 		for _, mode := range modes {
+			// Model-independent failures need one protocol run. Both models still
+			// exercise every positive path and the model/provider binding rejects.
+			if model == providerfixture.PinnedModel && !historySuccess(mode) &&
+				mode != "wrong_model" && mode != "wrong_provider" && mode != "wrong_thread_provider" {
+				continue
+			}
 			t.Run(model+"/"+mode, func(t *testing.T) {
 				t.Parallel()
 				if strings.Contains(mode, "identity_limit") || strings.Contains(mode, "identity_overflow") {

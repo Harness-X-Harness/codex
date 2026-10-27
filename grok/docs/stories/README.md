@@ -65,7 +65,8 @@ the pinned SDK baseline. The product stops advertising `x_search`, rejects expli
 X configuration and unexpected X ingress, removes `xSearch` public items and the
 fork-only `item/searchActivity` method, and rejects old X history explicitly rather
 than silently dropping it or pretending it is Web/prose/local-tool execution.
-[`TestHostedSearchFixture`](../../tests/integration/hosted_search_test.go) retains Web positives plus retired-X negative controls.
+[`TestHostedSearchFixture`](../../tests/integration/hosted_search_test.go) retains Web positives and unexpected X wire-ingress rejection.
+Retired selector no-launch behavior belongs to the [offline search tests](../../live/search_test.go), not native integration.
 The [Rust public stream tests](../../../codex-rs/app-server/tests/suite/v2/grok_search_activity.rs)
 own emitted-ABI absence. [Rollout forward/reverse readers](../../../codex-rs/rollout/src/recorder_tests.rs),
 [cached/paginated history](../../../codex-rs/thread-store/src/local/thread_history/read_tests.rs)
