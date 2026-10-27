@@ -271,6 +271,38 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             (self.fixture_root / "producer-pr.json").write_text(json.dumps(pr))
         return pr
 
+    def test_missing_subject_is_unavailable_but_explicit_consumer_rejects_it(self):
+        self.configure_pr()
+        (self.fixture_root / "harness-artifacts.json").write_text(json.dumps(
+            {"total_count": 0, "artifacts": []}))
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]),
+                            6, "harness_ci_metadata")
+
+    def test_subject_availability_does_not_hide_identity_or_producer_failures(self):
+        self.configure_pr()
+        original = json.loads((self.fixture_root / "harness-artifacts.json").read_text())
+        def read_fixture(endpoint, destination, limit):
+            name = "harness-jobs.json" if "/jobs?" in endpoint else "harness-artifacts.json"
+            destination.write_bytes((self.fixture_root / name).read_bytes())
+        cases = ("missing", "expired", "wrong_source", "incomplete", "failed_owner")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                body = copy.deepcopy(original)
+                if case == "missing": body = {"total_count": 0, "artifacts": []}
+                if case == "expired": body["artifacts"][0]["expired"] = True
+                if case == "wrong_source": body["artifacts"][0]["name"] = body["artifacts"][0]["name"].replace(SHA, "e" * 40)
+                if case == "incomplete": body["total_count"] += 1
+                if case == "failed_owner":
+                    jobs = json.loads((self.fixture_root / "harness-jobs.json").read_text())
+                    jobs["jobs"][0]["conclusion"] = "failure"
+                    (self.fixture_root / "harness-jobs.json").write_text(json.dumps(jobs))
+                (self.fixture_root / "harness-artifacts.json").write_text(json.dumps(body))
+                with mock.patch.object(fetch_artifact, "gh_api", side_effect=read_fixture):
+                    with self.assertRaises(select_artifact.SelectionFailure) as error:
+                        fetch_artifact.verify_subject(Path(temporary) / "proof", self.run, SHA, None, HARNESS)
+                self.assertEqual(isinstance(error.exception, fetch_artifact.ProducerEvidenceUnavailable),
+                                 case in ("missing", "expired"))
+
     def test_pr_command_fetches_current_metadata_and_verifies_merge_package(self):
         self.configure_pr()
         result = self.invoke(["--harness-ref", "fix/image"])

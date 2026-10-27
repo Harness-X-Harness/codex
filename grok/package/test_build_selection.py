@@ -176,6 +176,26 @@ class BuildSelectionTests(unittest.TestCase):
         self.assertIn("/attempts/2/jobs", calls[-1])
         self.assertFalse(any("/runs/36/" in path for path in calls))
 
+    def test_known_unavailable_subject_skips_candidate_without_weakening_source_errors(self):
+        run, artifact, job = fixture()
+        older = {**run, "id": 36, "run_number": 11}
+        older_artifact = {**artifact, "id": 500,
+                          "name": artifact["name"].replace("-37-", "-36-"),
+                          "workflow_run": {"id": 36, "head_sha": SHA}}
+        def inventory(endpoint, key):
+            old = "/runs/36/" in endpoint
+            return [older_artifact if old else artifact] if key == "artifacts" else [{**job, "run_id": 36 if old else 37}]
+        for has_older in (True, False):
+            with self.subTest(has_older=has_older), \
+                 mock.patch.object(selection, "recent_runs", return_value=[run, older] if has_older else [run]), \
+                 mock.patch.object(selection, "inventory", side_effect=inventory), \
+                 mock.patch.object(selection, "binary_inputs_changed", return_value=False), \
+                 mock.patch.object(selection, "resolve_producer", side_effect=[
+                     selection.ProducerEvidenceUnavailable(), {"source_sha": SHA, "producer_line": LINE}]):
+                result = selection.plan(LINE, HEAD, Path.cwd())
+            self.assertEqual(result["build_needed"], not has_older)
+            self.assertEqual(result["artifact_id"], 500 if has_older else None)
+
     def test_corrupt_identity_or_source_authentication_fails_instead_of_build_or_fallback(self):
         run, artifact, job = fixture()
         artifact["digest"] = "bad"

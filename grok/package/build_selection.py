@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import sys
 
-from fetch_artifact import MAX_METADATA_BYTES, gh_api, resolve_producer
+from fetch_artifact import MAX_METADATA_BYTES, ProducerEvidenceUnavailable, gh_api, resolve_producer
 from select_artifact import (REPOSITORY, TARGET, binary_inputs_changed,
                              is_binary_input, producer_names, read_metadata)
 
@@ -160,10 +160,15 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
                     continue
                 jobs = rows(prefix + f"/runs/{run['id']}/attempts/{attempt}/jobs", "jobs")
                 with tempfile.TemporaryDirectory(prefix="grok-build-source-") as temporary:
-                    selected = resolve_producer(
-                        Path(temporary), run, {"total_count": len(jobs), "jobs": jobs},
-                        artifact, artifact["id"], harness, target=target,
-                    )
+                    try:
+                        selected = resolve_producer(
+                            Path(temporary), run, {"total_count": len(jobs), "jobs": jobs},
+                            artifact, artifact["id"], harness, target=target,
+                        )
+                    except ProducerEvidenceUnavailable:
+                        # An undiscoverable proof makes this cache candidate unavailable.
+                        # Explicit consumers still reject it; identity/API failures propagate.
+                        continue
                 if selected["producer_line"] != line:
                     continue
                 # Git content, not event type, commit identity or ancestry, determines
