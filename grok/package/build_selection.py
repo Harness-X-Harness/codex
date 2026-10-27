@@ -8,15 +8,13 @@ import re
 import subprocess
 import tempfile
 import sys
-from urllib.parse import urlencode
 
-from fetch_artifact import MAX_METADATA_BYTES, MAX_PACKAGE_BYTES, fetch, gh_api
-from select_artifact import (REPOSITORY, TARGET, ancestor, binary_inputs_changed,
-                             is_binary_input, producer_names, read_metadata, select)
+from fetch_artifact import MAX_METADATA_BYTES, gh_api, resolve_producer
+from select_artifact import (REPOSITORY, TARGET, binary_inputs_changed,
+                             is_binary_input, producer_names, read_metadata)
 
 
 MAX_INVENTORY = 1000
-MAX_RUN_PAGES = 10
 
 
 class BuildSelectionError(ValueError):
@@ -62,35 +60,24 @@ def inventory(endpoint: str, key: str) -> list[dict]:
     raise BuildSelectionError("inventory_budget")
 
 
-def newest_runs(endpoint: str):
-    """Read only the newest pages needed to establish the selected producer.
-
-    Workflow run numbers must arrive strictly newest-first; sorting an incomplete
-    response locally could conceal a newer producer. Budget exhaustion is an error,
-    never evidence that no package exists.
-    """
+def recent_runs(endpoint: str) -> list[dict]:
+    """Observe one fixed recent window, not a complete historical inventory."""
+    data = api(endpoint + "?per_page=100&page=1")
+    count, batch = data.get("total_count"), data.get("workflow_runs")
+    if (type(count) is not int or count < 0 or not isinstance(batch, list)
+            or len(batch) != min(count, 100)
+            or any(not isinstance(row, dict) for row in batch)):
+        raise BuildSelectionError("run_window")
     seen, previous = set(), None
-    for page in range(1, MAX_RUN_PAGES + 1):
-        data = api(endpoint + f"&per_page=100&page={page}")
-        count, batch = data.get("total_count"), data.get("workflow_runs")
-        offset = (page - 1) * 100
-        if (type(count) is not int or count < 0 or not isinstance(batch, list)
-                or any(not isinstance(row, dict) for row in batch)
-                or len(batch) != min(100, max(0, count - offset))):
-            raise BuildSelectionError("run_pagination")
-        # Validate the complete page before yielding any candidate from it.
-        for run in batch:
-            identity, number = run.get("id"), run.get("run_number")
-            if (type(identity) is not int or identity <= 0 or identity in seen
-                    or type(number) is not int or number <= 0
-                    or (previous is not None and number >= previous)):
-                raise BuildSelectionError("run_order")
-            seen.add(identity)
-            previous = number
-        yield from batch
-        if offset + len(batch) >= count:
-            return
-    raise BuildSelectionError("run_budget")
+    for run in batch:
+        identity, number = run.get("id"), run.get("run_number")
+        if (type(identity) is not int or identity <= 0 or identity in seen
+                or type(number) is not int or number <= 0
+                or (previous is not None and number >= previous)):
+            raise BuildSelectionError("run_order")
+        seen.add(identity)
+        previous = number
+    return batch
 
 
 def decision(line: str, harness: str, *, artifact_id: int | None = None,
@@ -106,24 +93,7 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
         return {**decision(line, harness, reason="no_reusable_version_line"),
                 "mac_build_needed": include_macos}
     prefix = f"/repos/{REPOSITORY}/actions"
-    run_source = iter(newest_runs(prefix + "/workflows/grok.yml/runs?" + urlencode({"branch": line, "event": "push"})))
-    run_cache, run_complete = [], False
-
-    def runs():
-        nonlocal run_complete
-        index = 0
-        while True:
-            if index == len(run_cache):
-                if run_complete:
-                    return
-                try:
-                    run_cache.append(next(run_source))
-                except StopIteration:
-                    run_complete = True
-                    return
-            yield run_cache[index]
-            index += 1
-
+    runs = recent_runs(prefix + "/workflows/grok.yml/runs")
     metadata = {}
 
     def rows(endpoint: str, key: str) -> list[dict]:
@@ -152,18 +122,18 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
         return job
 
     def choose(target: str) -> dict:
-        for run in runs():
-            if (run.get("head_branch") != line or run.get("event") != "push"
-                    or run.get("path") != ".github/workflows/grok.yml"
-                    or run.get("repository", {}).get("full_name") != REPOSITORY
-                    or run.get("head_repository", {}).get("full_name") != REPOSITORY
-                    or not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha", ""))):
-                raise ValueError("untrusted producer run")
-            try:
-                eligible = ancestor(checkout, run["head_sha"], harness)
-            except (OSError, ValueError, subprocess.SubprocessError):
-                raise BuildSelectionError("source_history") from None
-            if not eligible:
+        for run in runs:
+            if run.get("event") not in ("push", "pull_request"):
+                continue
+            repository = run.get("repository", {}).get("full_name")
+            head_repository = run.get("head_repository", {}).get("full_name")
+            workflow = run.get("path")
+            if not all(isinstance(value, str) and value for value in (repository, head_repository, workflow)):
+                raise ValueError("incomplete producer scope")
+            if (repository != REPOSITORY or head_repository != REPOSITORY
+                    or workflow != ".github/workflows/grok.yml"):
+                continue
+            if run.get("event") == "push" and run.get("head_branch") != line:
                 continue
             artifacts = rows(prefix + f"/runs/{run['id']}/artifacts", "artifacts")
             packages = []
@@ -174,7 +144,7 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
                     continue
                 identity = artifact.get("workflow_run", {})
                 if (type(artifact.get("id")) is not int or artifact["id"] <= 0
-                        or int(match[2]) != run["id"] or match[1] != run["head_sha"]
+                        or int(match[2]) != run["id"]
                         or identity.get("id") != run["id"] or identity.get("head_sha") != run["head_sha"]):
                     raise ValueError("artifact source mismatch")
                 packages.append((int(match[3]), artifact))
@@ -187,41 +157,26 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
                 if job.get("status") != "completed" or job.get("conclusion") != "success":
                     continue
                 if artifact.get("expired") is True:
-                    return decision(line, harness, reason="latest_package_unavailable")
-                if (artifact.get("expired") is not False
-                        or type(artifact.get("size_in_bytes")) is not int
-                        or not 0 < artifact["size_in_bytes"] <= MAX_PACKAGE_BYTES
-                        or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest", ""))):
-                    raise ValueError("invalid package metadata")
-                # A later failed code build cannot make an old binary prove changed inputs.
+                    continue
+                jobs = rows(prefix + f"/runs/{run['id']}/attempts/{attempt}/jobs", "jobs")
+                with tempfile.TemporaryDirectory(prefix="grok-build-source-") as temporary:
+                    selected = resolve_producer(
+                        Path(temporary), run, {"total_count": len(jobs), "jobs": jobs},
+                        artifact, artifact["id"], harness, target=target,
+                    )
+                if selected["producer_line"] != line:
+                    continue
+                # Git content, not event type, commit identity or ancestry, determines
+                # whether this authenticated package covers the current binary inputs.
+                source = selected["source_sha"]
                 try:
-                    changed = binary_inputs_changed(checkout, run["head_sha"], harness)
+                    changed = binary_inputs_changed(checkout, source, harness)
                 except (OSError, ValueError, subprocess.SubprocessError):
                     raise BuildSelectionError("source_diff") from None
                 if changed:
-                    return decision(line, harness, reason="binary_inputs_changed")
-                if target == TARGET:
-                    jobs = rows(prefix + f"/runs/{run['id']}/attempts/{attempt}/jobs", "jobs")
-                    select(run, {"total_count": len(jobs), "jobs": jobs}, artifact, artifact["id"], harness,
-                           expected_line=line)
-                    with tempfile.TemporaryDirectory(prefix="grok-build-package-") as temporary:
-                        try:
-                            verified = fetch(artifact["id"], harness, Path(temporary) / "verified", expected_line=line)
-                        except (OSError, ValueError, subprocess.SubprocessError):
-                            raise BuildSelectionError("package_verification") from None
-                        if verified["source_sha"] != run["head_sha"] or verified["artifact_id"] != artifact["id"]:
-                            raise ValueError("verified package subject changed")
-                return decision(line, harness, artifact_id=artifact["id"], source=run["head_sha"], reason="reuse")
-            # Without a retained package, a successful newer producer requires rebuilding,
-            # not fallback to an older run. A partial rerun with a retained original
-            # artifact was resolved by that artifact's own attempt above.
-            attempt = run.get("run_attempt")
-            if type(attempt) is not int or attempt <= 0:
-                raise ValueError("missing current producer observation")
-            job = producer(run, target, attempt)
-            if job and job.get("status") == "completed" and job.get("conclusion") == "success":
-                return decision(line, harness, reason="latest_package_unavailable")
-        return decision(line, harness, reason="no_available_package")
+                    continue
+                return decision(line, harness, artifact_id=artifact["id"], source=source, reason="reuse")
+        return decision(line, harness, reason="no_matching_recent_artifact")
 
     result = choose(TARGET)
     mac = choose("aarch64-apple-darwin") if include_macos else None

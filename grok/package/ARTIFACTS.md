@@ -19,8 +19,12 @@ completed Linux build. The current workflow attempt and unrelated jobs do not
 choose or invalidate that package: Live can consume it while macOS is running,
 after a sibling failure, or when a partial rerun reuses the original build.
 
-The selector verifies the trusted `grok.yml` version-line push, or the explicit
-same-repository PR diagnostic contract below. Missing, expired or misidentified
+The selector authenticates the actual source of a trusted same-repository
+`grok.yml` producer, independently of the consumer harness. Push and PR builds
+use the same package contract; closing or merging a producer PR does not
+invalidate its original successful build. PR checkout identity uses the existing
+subject proof, retained for the same 30 days as packages. Previously expired
+subject evidence cannot be recovered or replaced by a guess. Missing, expired or misidentified
 artifacts and incomplete producer-job inventories are rejected. No other
 artifact, run or latest-success fallback is selected. Inventories above 100 jobs
 fail closed.
@@ -96,15 +100,16 @@ sets `GROK_LIVE=1`; this automatic path makes real API calls and incurs their
 costs. Ordinary PR events do not run Live or receive the backend secret.
 
 The scheduler resolves the current version line's latest successful Linux
-producer once. `build_selection.py` compares that source to the complete current
+available, content-compatible producer once. `build_selection.py` compares that source to the complete current
 harness subject using the shared coarse classifier in `select_artifact.py`: known consumer-only areas do
 not rebuild; unknown paths and binary/build inputs do. Renames and deletions are
-included. Missing/expired latest successful packages or changed binary inputs
-require a new build, with no fallback if that build fails.
+included. Unavailable packages and packages with different binary inputs are
+not candidates. If none match, a new build is required; a failed required build
+does not fall back to a package with different inputs.
 
 The chosen or newly built artifact ID is fixed for all Live scenarios. Live uses
 the same fetcher as diagnostics with `--expected-line "$LINE"`, which verifies
-the exact trusted producer line and source ancestry. It retains the original
+the candidate line scope and the complete binary-input diff. It retains the original
 package source and the current harness SHA separately.
 The producer's original attempt comes from the selected artifact, never the
 consumer's `GITHUB_RUN_ATTEMPT`. Retrying Live does not require rebuilding the
@@ -172,10 +177,10 @@ The current merge object is separately fetched and verified; a workflow run's
 head SHA is not misrepresented as its checkout merge SHA.
 The binary producer does not grant harness admission.
 
-A canonical package on the PR's base line or the PR's own newly built package
-then goes through the same artifact/content checks. Binary eligibility compares
-its real source to the current PR merge subject, not the PR head: ancestry and
-the shared full binary-input diff must both pass. The fixed PR merge ref is
+A trusted push or PR package in the candidate line scope then goes through
+the same artifact/content checks. Binary eligibility compares its real source
+to the current PR merge subject, not the PR head: the shared full binary-input
+diff must leave build inputs unchanged. The fixed PR merge ref is
 fetched read-only and checked against the admitted merge SHA; a moved subject
 fails. No credentials are installed. Stale/forked PRs or stale CI remain rejected
 before backend use; the original package source is never relabelled.
@@ -195,20 +200,25 @@ is shared by fresh builds and reuse checks; changing it does not change the
 binary, but its current checks still run. This is artifact reuse, not a compiler
 cache, a new artifact registry, or reuse of old test results.
 
-A successful build means a complete published package with a verifiable
-successful original producer. Candidate order is producer workflow run number,
+An eligible build is an available published package with a verified successful
+original producer and unchanged binary inputs. Candidate order is producer workflow run number,
 then the artifact's original producer attempt, descending, restricted to the
-exact version line and ancestor sources. Copied job IDs or execution timestamps
+candidate version-line scope. Push refs and the current producer PR base ref
+filter that scope; they do not prove a unique historical branch name. Actual
+source comes from the producer evidence, not the PR's current merge/head. Copied job IDs or execution timestamps
 from a partial rerun do not invent another package or producer identity. Whole-workflow and Live conclusions do not establish producer success.
-The decision records the chosen fixed artifact and actual binary/harness subjects.
+Git commits and the complete source-to-subject diff own content compatibility.
+Identical trees naturally have an empty diff, including after rebase or squash;
+no event-specific content rule or source-ancestry requirement is used.
+The planner resolves metadata and the fixed ID without downloading the package.
+The consumer downloads and verifies archive/manifest/runtime hashes before
+execution. The decision records actual binary/harness subjects.
 Existing non-version-line PR routes build normally without line reuse.
 
-Candidate discovery reads newest-first run pages lazily and stops as soon as a
-qualified package is fixed. It does not require enumerating the line's complete
-history or keeping a cross-page `total_count` snapshot. Ordering, duplicate,
-page completeness and a bounded search budget still protect the decision.
-An API/pagination/source-history/diff failure is a nonzero selection error with
-a safe error decision, never `binary_inputs_changed` or `no_available_package`.
-Only a proved input change or a proved lack of an eligible published package
-permits a fresh build; no stale package fallback or error-triggered rebuild is
-used to hide an unresolved selection.
+Candidate discovery examines the latest 100 `grok.yml` runs, newest first,
+and stops at the first trusted, available, content-compatible package. This is
+an optimization window, not a proof about all build history. After a successful
+read of that window, no match means `no_matching_recent_artifact` and a new
+build; an older matching package outside the window can therefore be rebuilt.
+Known absent or expired packages are skipped. API, identity, digest and Git
+diff errors remain explicit errors rather than being disguised as a cache miss.

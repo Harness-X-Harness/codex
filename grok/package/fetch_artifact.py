@@ -25,7 +25,7 @@ from urllib.parse import urlencode
 
 from extract_artifact import MAX_PACKAGE_BYTES, extract
 from select_artifact import (REPOSITORY, SELECTION_FAILURE_REASONS, SelectionFailure,
-                             artifact_identity, admit_harness, ancestor, binary_inputs_changed, read_metadata, select)
+                             artifact_identity, admit_harness, binary_inputs_changed, read_metadata, select, TARGET)
 
 
 MAX_METADATA_BYTES = 16 * 1024 * 1024
@@ -176,8 +176,10 @@ def gh_api(endpoint: str, destination: Path, byte_limit: int) -> None:
                 process.wait()
 
 
-def verify_harness_ci_subject(root: Path, ci: dict, pr: dict, harness_sha: str) -> dict:
-    """Read the existing subject proof from its original successful producer."""
+def verify_subject(root: Path, ci: dict, source_sha: str, pr_number: int | None,
+                   head_sha: str, base_sha: str | None = None) -> dict:
+    """Authenticate an actual PR checkout from the existing original subject proof."""
+    root.mkdir()
     run_id = ci.get("id")
     if type(run_id) is not int or run_id <= 0:
         raise SelectionFailure("identity", "invalid harness CI identity")
@@ -192,7 +194,7 @@ def verify_harness_ci_subject(root: Path, ci: dict, pr: dict, harness_sha: str) 
     for item in rows:
         match = re.fullmatch(r"grok-subject-([0-9a-f]{40})-" + str(run_id) + r"-([1-9][0-9]*)",
                              item.get("name", ""))
-        if match and match[1] == pr["merge_commit_sha"] and item.get("expired") is False:
+        if match and match[1] == source_sha and item.get("expired") is False:
             candidates.append((int(match[2]), match[1], item))
     candidates.sort(key=lambda item: item[0], reverse=True)
     attempts = [item[0] for item in candidates]
@@ -204,7 +206,7 @@ def verify_harness_ci_subject(root: Path, ci: dict, pr: dict, harness_sha: str) 
         if (type(artifact_id) is not int or artifact_id <= 0
                 or type(size) is not int or not 0 < size <= MAX_METADATA_BYTES
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
-                or identity.get("id") != run_id or identity.get("head_sha") != harness_sha):
+                or identity.get("id") != run_id or identity.get("head_sha") != head_sha):
             raise SelectionFailure("identity", "misidentified harness subject artifact")
         gh_api(f"{prefix}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=1",
                root / f"harness-jobs-{attempt}.json", MAX_METADATA_BYTES)
@@ -230,21 +232,64 @@ def verify_harness_ci_subject(root: Path, ci: dict, pr: dict, harness_sha: str) 
             if len(entries) != 1 or entries[0].filename != "grok-subject.json" or not 0 < entries[0].file_size <= MAX_METADATA_BYTES:
                 raise SelectionFailure("identity", "invalid harness subject archive")
             report = json.loads(zipped.read(entries[0]))
-        ref = f"refs/pull/{pr['number']}/merge"
+        if not isinstance(report, dict):
+            raise SelectionFailure("identity", "invalid subject report")
+        ref = report.get("GITHUB_REF", "")
+        match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", ref)
+        if match is None or (pr_number is not None and int(match[1]) != pr_number):
+            raise SelectionFailure("identity", "subject PR identity does not match")
+        actual_pr_number = int(match[1])
         expected = {
             "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_RUN_ID": str(run_id), "GITHUB_RUN_ATTEMPT": str(attempt),
             "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": ref,
             "GITHUB_SHA": subject, "GROK_CHECKOUT_SHA": subject, "GROK_SUBJECT_KIND": "pr_test_merge",
             "GITHUB_WORKFLOW_REF": f"{REPOSITORY}/.github/workflows/grok.yml@{ref}",
-            "PR_HEAD_SHA": harness_sha, "PR_BASE_SHA": pr["base"]["sha"],
+            "PR_HEAD_SHA": head_sha,
         }
         if (not isinstance(report, dict) or any(report.get(key) != value for key, value in expected.items())
-                or not re.fullmatch(r"[0-9a-f]{40}", report.get("GITHUB_WORKFLOW_SHA", ""))):
+                or not re.fullmatch(r"[0-9a-f]{40}", report.get("GITHUB_WORKFLOW_SHA", ""))
+                or not re.fullmatch(r"[0-9a-f]{40}", report.get("PR_BASE_SHA", ""))
+                or (base_sha is not None and report.get("PR_BASE_SHA") != base_sha)):
             raise SelectionFailure("identity", "harness CI proved a different PR subject")
-        return {"harness_ci_run_id": run_id, "harness_ci_attempt": attempt,
-                "harness_ci_artifact_id": artifact_id, "harness_ci_source_sha": subject,
-                "harness_ci_producer_job_id": owner["id"]}
-    raise SelectionFailure("identity", "successful harness subject evidence is unavailable")
+        return {"run_id": run_id, "attempt": attempt, "artifact_id": artifact_id,
+                "source_sha": subject, "head_sha": head_sha, "base_sha": report["PR_BASE_SHA"],
+                "producer_job_id": owner["id"], "pull_request_number": actual_pr_number}
+    raise SelectionFailure("identity", "successful subject evidence is unavailable")
+
+
+def verify_harness_ci_subject(root: Path, ci: dict, pr: dict, harness_sha: str) -> dict:
+    proof = verify_subject(root / "harness-proof", ci, pr["merge_commit_sha"], pr["number"],
+                           harness_sha, pr["base"]["sha"])
+    return {"harness_ci_" + key: value for key, value in proof.items()
+            if key not in ("head_sha", "base_sha", "pull_request_number")}
+
+
+def resolve_producer(root: Path, run: dict, jobs: dict, artifact: dict, artifact_id: int,
+                     harness_sha: str, *, target: str = TARGET, expected_line: str | None = None) -> dict:
+    """Authenticate producer metadata and its actual checkout, never download the binary."""
+    if (run.get("repository", {}).get("full_name") != REPOSITORY
+            or run.get("head_repository", {}).get("full_name") != REPOSITORY
+            or run.get("path") != ".github/workflows/grok.yml"
+            or run.get("event") not in ("push", "pull_request")):
+        raise SelectionFailure("identity", "untrusted producer workflow")
+    proof = None
+    if run["event"] == "pull_request":
+        _, _, source = artifact_identity(artifact, artifact_id, target)
+        proof = verify_subject(root / "producer-proof", run, source, None, run["head_sha"])
+        # After merge run.pull_requests may be empty; the immutable subject owns this ID.
+        number = proof["pull_request_number"]
+        path = root / "producer-pr.json"
+        gh_api(f"/repos/{REPOSITORY}/pulls/{number}", path, MAX_METADATA_BYTES)
+        pr = read_metadata(path)
+        if (pr.get("number") != number or pr.get("head", {}).get("repo", {}).get("full_name") != REPOSITORY
+                or pr.get("base", {}).get("repo", {}).get("full_name") != REPOSITORY):
+            raise SelectionFailure("identity", "producer PR is not from the trusted repository")
+        proof = {**proof, "line": pr.get("base", {}).get("ref", "")}
+    selected = select(run, jobs, artifact, artifact_id, harness_sha, target=target,
+                      expected_line=expected_line, producer_source=proof)
+    if selected["artifact_size"] > MAX_PACKAGE_BYTES:
+        raise ValueError("selected artifact exceeds the package byte budget")
+    return selected
 
 
 def fetch(artifact_id: int, harness_sha: str, output: Path, *,
@@ -320,17 +365,17 @@ def fetch(artifact_id: int, harness_sha: str, output: Path, *,
         with acquisition_stage("jobs_metadata"):
             jobs = read_metadata(root / "jobs.json")
         with acquisition_stage("selection"):
-            selected = select(run, jobs, artifact, artifact_id, harness_sha,
-                              expected_line=expected_line,
-                              pull_request=pull_request)
+            selected = resolve_producer(root, run, jobs, artifact, artifact_id, harness_sha,
+                                        expected_line=pull_request["base"]["ref"] if pull_request else expected_line)
+            if not re.fullmatch(r"grok/rust-v[^\s]+", selected["producer_line"]):
+                raise SelectionFailure("identity", "package is outside a supported version line")
             if harness_evidence:
-                selected.update(harness_evidence, harness_merge_sha=subject_sha)
+                selected.update(harness_evidence, harness_merge_sha=subject_sha,
+                                selection_mode="pr_diagnostic", pull_request_number=pull_request["number"],
+                                pr_head_sha=harness_sha)
             if expected_line is not None or pull_request is not None:
-                if (not ancestor(Path.cwd(), selected["source_sha"], subject_sha)
-                        or binary_inputs_changed(Path.cwd(), selected["source_sha"], subject_sha)):
+                if binary_inputs_changed(Path.cwd(), selected["source_sha"], subject_sha):
                     raise SelectionFailure("identity", "binary inputs do not match the admitted subject")
-            if selected["artifact_size"] > MAX_PACKAGE_BYTES:
-                raise ValueError("selected artifact exceeds the package byte budget")
         with acquisition_stage("archive_request"):
             gh_api(f"{prefix}/artifacts/{selected['artifact_id']}/zip",
                    root / "artifact.zip", selected["artifact_size"])

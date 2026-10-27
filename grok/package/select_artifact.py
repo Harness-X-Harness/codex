@@ -56,16 +56,23 @@ def is_binary_input(path: str) -> bool:
     return True
 
 
-def ancestor(checkout: Path, source: str, subject: str) -> bool:
-    result = subprocess.run(["git", "merge-base", "--is-ancestor", source, subject],
-                            cwd=checkout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            timeout=30)
-    if result.returncode not in (0, 1):
-        raise ValueError("source ancestry unavailable")
-    return result.returncode == 0
+def ensure_source_commit(checkout: Path, source: str) -> None:
+    """Materialize only the authenticated commit from the fixed public repository."""
+    if not re.fullmatch(r"[0-9a-f]{40}", source):
+        raise ValueError("invalid source commit")
+    command = ["git", "cat-file", "-e", source + "^{commit}"]
+    result = subprocess.run(command, cwd=checkout, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=30)
+    if result.returncode != 0:
+        subprocess.run(["git", "fetch", "--no-tags", "https://github.com/" + REPOSITORY + ".git", source],
+                       cwd=checkout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=30, check=True)
+        subprocess.run(command, cwd=checkout, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=30, check=True)
 
 
 def binary_inputs_changed(checkout: Path, source: str, subject: str) -> bool:
+    ensure_source_commit(checkout, source)
     # No rename detection: both old and new paths matter, including deletes.
     result = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", source, subject, "--"],
                             cwd=checkout, capture_output=True, timeout=30, check=True)
@@ -73,12 +80,13 @@ def binary_inputs_changed(checkout: Path, source: str, subject: str) -> bool:
     return any(is_binary_input(path) for path in paths if path)
 
 
-def artifact_identity(artifact: dict, artifact_id: int) -> tuple[int, int, str]:
+def artifact_identity(artifact: dict, artifact_id: int, target: str = TARGET) -> tuple[int, int, str]:
     """Read producer identity from this exact immutable artifact, never a current attempt."""
-    if (type(artifact_id) is not int or artifact_id <= 0
+    if (target not in (TARGET, "aarch64-apple-darwin")
+            or type(artifact_id) is not int or artifact_id <= 0
             or artifact.get("id") != artifact_id):
         raise SelectionFailure("artifact", "artifact identity does not match the explicit selection")
-    match = re.fullmatch(r"grok-([0-9a-f]{40})-" + re.escape(TARGET) + r"-([1-9][0-9]*)-([1-9][0-9]*)",
+    match = re.fullmatch(r"grok-([0-9a-f]{40})-" + re.escape(target) + r"-([1-9][0-9]*)-([1-9][0-9]*)",
                          artifact.get("name", ""))
     identity = artifact.get("workflow_run", {})
     if match is None or identity.get("id") != int(match[2]):
@@ -88,34 +96,37 @@ def artifact_identity(artifact: dict, artifact_id: int) -> tuple[int, int, str]:
 
 def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha: str,
            *, expected_line: str | None = None,
-           pull_request: dict | None = None) -> dict:
-    """Validate one artifact; any PR harness must first pass admit_harness."""
+           producer_source: dict | None = None, target: str = TARGET) -> dict:
+    """Validate the actual producer independently of the current consumer harness."""
     if (not re.fullmatch(r"[0-9a-f]{40}", harness_sha)
             or (expected_line is not None and not re.fullmatch(r"grok/rust-v[^\s]+", expected_line))
             ):
         raise SelectionFailure("identity", "invalid harness or producer line")
-    run_id, attempt, artifact_source = artifact_identity(artifact, artifact_id)
+    run_id, attempt, artifact_source = artifact_identity(artifact, artifact_id, target)
     sha = run.get("head_sha", "")
     if (
         run.get("id") != run_id
-        or run.get("event") not in (("push", "pull_request") if pull_request is not None else ("push",))
+        or run.get("event") not in ("push", "pull_request")
         or run.get("path") != ".github/workflows/grok.yml"
-        or (pull_request is None and not run.get("head_branch", "").startswith("grok/rust-v"))
         or not re.fullmatch(r"[0-9a-f]{40}", sha)
         or run.get("repository", {}).get("full_name") != REPOSITORY
         or run.get("head_repository", {}).get("full_name") != REPOSITORY
     ):
         raise SelectionFailure("identity", "inappropriate package producer run")
-    source_sha = pr_source(run, pull_request, harness_sha) if run.get("event") == "pull_request" else sha
-    if pull_request is not None and run.get("event") == "push":
-        if run.get("head_branch") != pull_request["base"]["ref"]:
-            raise SelectionFailure("identity", "package is not from the admitted PR base line")
-    if artifact_source != source_sha or (expected_line is not None and run.get("head_branch") != expected_line):
-        raise SelectionFailure("identity", "artifact source differs from the consuming subject")
+    if run["event"] == "push":
+        source_sha, line = sha, run.get("head_branch", "")
+    else:
+        if (producer_source is None or producer_source.get("head_sha") != sha
+                or producer_source.get("run_id") != run_id):
+            raise SelectionFailure("identity", "PR producer checkout is not authenticated")
+        source_sha, line = producer_source.get("source_sha"), producer_source.get("line", "")
+    if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", line) or artifact_source != source_sha
+            or (expected_line is not None and line != expected_line)):
+        raise SelectionFailure("identity", "artifact source or candidate line does not match")
     job_list = jobs.get("jobs")
     if not isinstance(job_list, list) or jobs.get("total_count") != len(job_list):
         raise SelectionFailure("jobs_inventory", "complete producer job inventory is required")
-    producers = [job for job in job_list if job.get("name") in PRODUCER_NAMES]
+    producers = [job for job in job_list if job.get("name") in producer_names(target)]
     if len(producers) != 1:
         raise SelectionFailure("producer", "missing or ambiguous package producer")
     producer = producers[0]
@@ -136,12 +147,11 @@ def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha:
         raise SelectionFailure("artifact", "unavailable or misidentified package artifact")
     selected = {
         "repository": REPOSITORY, "run_id": run_id, "run_attempt": attempt,
-        "source_sha": source_sha, "target": TARGET, "harness_sha": harness_sha,
+        "source_sha": source_sha, "producer_line": line, "target": target, "harness_sha": harness_sha,
         "artifact_id": artifact_id, "artifact_name": artifact["name"],
         "artifact_digest": digest, "artifact_size": artifact["size_in_bytes"],
         "producer_job_id": producer["id"],
-        "selection_mode": "pr_diagnostic" if pull_request is not None else (
-            "line_bound" if expected_line is not None else "diagnostic"),
+        "selection_mode": "line_bound" if expected_line is not None else "diagnostic",
         # Observation only: neither sibling jobs nor later attempts own this package.
         "run_status": run.get("status") if run.get("status") in (
             "queued", "in_progress", "completed", "waiting", "requested", "pending"
@@ -151,8 +161,8 @@ def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha:
             "neutral", "skipped", "stale", "startup_failure",
         ) else "unknown",
     }
-    if pull_request is not None:
-        selected.update(pull_request_number=pull_request["number"], pr_head_sha=pull_request["head"]["sha"])
+    if producer_source is not None:
+        selected.update(producer_source=producer_source)
     return selected
 
 
@@ -220,7 +230,7 @@ def main() -> int:
     parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--harness-sha", required=True)
     parser.add_argument("--expected-line")
-    parser.add_argument("--pull-request-json", type=Path)
+    parser.add_argument("--producer-source-json", type=Path)
     for name in ("run", "jobs", "artifact"):
         parser.add_argument("--" + name + "-json", type=Path, required=True)
     args = parser.parse_args()
@@ -228,7 +238,7 @@ def main() -> int:
         selected = select(read_metadata(args.run_json), read_metadata(args.jobs_json),
                           read_metadata(args.artifact_json), args.artifact_id, args.harness_sha,
                           expected_line=args.expected_line,
-                          pull_request=read_metadata(args.pull_request_json) if args.pull_request_json else None)
+                          producer_source=read_metadata(args.producer_source_json) if args.producer_source_json else None)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print("No eligible explicit package artifact was selected.", file=sys.stderr)
         return 1

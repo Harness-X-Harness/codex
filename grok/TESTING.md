@@ -200,9 +200,9 @@ actual tested head/base/merge, with the original successful subject producer
 attempt, not the current rerun attempt. The current merge subject is also
 fetched and verified for binary comparison.
 
-The binary may come from that PR's successful build or from a successful
-canonical producer on the same base line. Its source must be an ancestor of the
-current PR merge subject and the complete binary-input diff must be unchanged.
+The binary may come from a trusted successful push or PR producer in the
+base-line candidate scope, including a closed or merged producer PR. Its actual
+source-to-current-merge diff must leave binary inputs unchanged.
 The merge subject, not the PR head, is the binary comparison target. Artifact,
 manifest and executable verification remains mandatory. Forks, stale head/base,
 unproven current CI, cross-line packages and binary-input differences fail
@@ -309,8 +309,7 @@ controls; this change grants no new access. Artifact names bind SHA, run and
 attempt (plus scenario for formal runs). The artifact ID identifies the producer
 run and original attempt, separately
 from the Live consumer run/attempt. Formal selection uses the current version line's latest successful Linux
-producer whose package is available and whose source is an ancestor of the
-harness. A full source-to-harness diff must leave binary inputs unchanged;
+producer whose package is available in the candidate line scope. A full source-to-harness diff must leave binary inputs unchanged;
 otherwise a new successful build is required. Both real identities remain
 explicit; the manifest is never relabelled as the harness commit. Trusted repository/ref checks and secret isolation from
 untrusted PRs remain in those workflows. Inspect the actual run/attempt and
@@ -352,12 +351,16 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   require release recompilation; unknown paths, `codex-rs`, shipped distribution
   assets and the actual build/staging chain do. The full diff from the latest
   successful producer is used, including deletions and both rename paths.
-  Runs are inspected lazily in newest-first order and selection stops at the
-  first eligible package. Network, pagination, ordering, history/diff failures
-  and an exhausted search budget are selection errors, not reasons to rebuild.
-  The latest complete published successful package is the candidate authority;
-  an observed missing/expired package requires a new build rather than a silent
-  older-package fallback. Linux and macOS decisions are independent.
+  The latest 100 runs are inspected newest-first; selection stops at the first
+  eligible package. No match in that successfully read window means build,
+  even if older matching packages exist outside it. The planner does not download the package; execution
+  consumers verify its archive, manifest and runtime hashes. Same-tree PR and
+  post-merge sources naturally pass the same Git diff rule, without a rebase
+  exception or source-ancestry gate. Network, identity and Git diff errors remain
+  selection errors, not reasons to rebuild.
+  The latest trusted, available and content-compatible package is selected.
+  Known missing/expired or content-incompatible packages are skipped; identity
+  conflicts and unknown API results are errors. No matching package means build. Linux and macOS decisions are independent.
 - `grok.yml` owns scheduling; `grok-build.yml` owns target/runner/build parameters
   and calls the existing build action. `grok-live.yml` owns both automatic and
   manual execution. Native proof and Go contracts remain independent; reused
@@ -369,7 +372,7 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   successful new Linux build or reused-package proof and scenario selection, making real API calls and
   incurring their costs without a repository-variable opt-in. It derives the
   supported full matrix from Go, keeps at most three jobs active, and preserves
-  trusted repository/ref, original successful producer, line/ancestry and exact
+  trusted repository/ref, original successful producer, Git content eligibility and exact
   artifact checks. The binary source may differ from the current harness SHA.
 - Manual `grok-live.yml` defaults to one `basic-primary` diagnostic. Smoke/full
   are explicit complete selections; their scenario text field is ignored.

@@ -47,8 +47,10 @@ results remain development diagnostics, and formal evidence is Actions-only.
 
 ## Native target builds and package smoke
 
-The branch-local `grok.yml` runs separate Linux musl and macOS ARM build jobs on
-its ordinary PR and version-line push events. The `build-grok` action builds each
+The branch-local `grok.yml` selects an existing compatible package or runs the
+Linux musl build on PR and version-line events; version-line pushes independently
+select or build macOS ARM. Package reuse follows the complete Git input diff,
+not whether a source commit was produced before or after PR merge. The `build-grok` action builds each
 target's runtime and Code Mode host once with the locked stock release profile,
 uses the stock helper layout/resolvers, and stages the resulting complete
 package. Linux embeds the final stripped `bwrap` digest before building Codex.
