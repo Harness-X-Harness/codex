@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 
 REPOSITORY = "Harness-X-Harness/codex"
@@ -31,6 +32,47 @@ class SelectionFailure(ValueError):
         super().__init__(message)
 
 
+# Binary inputs are the default; these paths are owned by consumers only.
+CONSUMER_DIRECTORIES = tuple("grok/" + name + "/" for name in (
+    "live", "tests", "facts", "cmd", "internal", "docs",
+))
+CONSUMER_FILES = frozenset({
+    "README.md", "CHANGELOG.md", "grok/go.mod", "grok/go.sum", "grok/TESTING.md",
+    "grok/package/fetch_artifact.py", "grok/package/select_artifact.py",
+    "grok/package/extract_artifact.py", "grok/package/live_diagnostics.py",
+    "grok/package/build_selection.py", "grok/package/verify_provider.sh",
+    "grok/package/README.md", "grok/package/ARTIFACTS.md",
+    ".github/workflows/grok.yml", ".github/workflows/grok-live.yml",
+    ".github/workflows/grok-facts.yml", ".github/workflows/grok-go.yml",
+    ".github/workflows/grok-proof.yml",
+})
+
+
+def is_binary_input(path: str) -> bool:
+    if path in CONSUMER_FILES or path.startswith(CONSUMER_DIRECTORIES):
+        return False
+    if path.startswith("grok/package/test_") and path.endswith(".py") and "/" not in path[len("grok/package/"):]:
+        return False
+    return True
+
+
+def ancestor(checkout: Path, source: str, subject: str) -> bool:
+    result = subprocess.run(["git", "merge-base", "--is-ancestor", source, subject],
+                            cwd=checkout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=30)
+    if result.returncode not in (0, 1):
+        raise ValueError("source ancestry unavailable")
+    return result.returncode == 0
+
+
+def binary_inputs_changed(checkout: Path, source: str, subject: str) -> bool:
+    # No rename detection: both old and new paths matter, including deletes.
+    result = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", source, subject, "--"],
+                            cwd=checkout, capture_output=True, timeout=30, check=True)
+    paths = result.stdout.decode("utf-8", errors="strict").split("\0")
+    return any(is_binary_input(path) for path in paths if path)
+
+
 def artifact_identity(artifact: dict, artifact_id: int) -> tuple[int, int, str]:
     """Read producer identity from this exact immutable artifact, never a current attempt."""
     if (type(artifact_id) is not int or artifact_id <= 0
@@ -47,16 +89,16 @@ def artifact_identity(artifact: dict, artifact_id: int) -> tuple[int, int, str]:
 def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha: str,
            *, expected_line: str | None = None,
            pull_request: dict | None = None) -> dict:
-    """Validate one artifact and its original producer; no fallback or execution."""
+    """Validate one artifact; any PR harness must first pass admit_harness."""
     if (not re.fullmatch(r"[0-9a-f]{40}", harness_sha)
             or (expected_line is not None and not re.fullmatch(r"grok/rust-v[^\s]+", expected_line))
-            or (expected_line is not None and pull_request is not None)):
+            ):
         raise SelectionFailure("identity", "invalid harness or producer line")
     run_id, attempt, artifact_source = artifact_identity(artifact, artifact_id)
     sha = run.get("head_sha", "")
     if (
         run.get("id") != run_id
-        or run.get("event") != ("pull_request" if pull_request is not None else "push")
+        or run.get("event") not in (("push", "pull_request") if pull_request is not None else ("push",))
         or run.get("path") != ".github/workflows/grok.yml"
         or (pull_request is None and not run.get("head_branch", "").startswith("grok/rust-v"))
         or not re.fullmatch(r"[0-9a-f]{40}", sha)
@@ -64,7 +106,10 @@ def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha:
         or run.get("head_repository", {}).get("full_name") != REPOSITORY
     ):
         raise SelectionFailure("identity", "inappropriate package producer run")
-    source_sha = pr_source(run, pull_request, harness_sha) if pull_request is not None else sha
+    source_sha = pr_source(run, pull_request, harness_sha) if run.get("event") == "pull_request" else sha
+    if pull_request is not None and run.get("event") == "push":
+        if run.get("head_branch") != pull_request["base"]["ref"]:
+            raise SelectionFailure("identity", "package is not from the admitted PR base line")
     if artifact_source != source_sha or (expected_line is not None and run.get("head_branch") != expected_line):
         raise SelectionFailure("identity", "artifact source differs from the consuming subject")
     job_list = jobs.get("jobs")
@@ -107,7 +152,7 @@ def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha:
         ) else "unknown",
     }
     if pull_request is not None:
-        selected.update(pull_request_number=pull_request["number"], pr_head_sha=sha)
+        selected.update(pull_request_number=pull_request["number"], pr_head_sha=pull_request["head"]["sha"])
     return selected
 
 
@@ -121,9 +166,7 @@ def linked_pull_request_number(run: dict) -> int:
 
 
 def pr_source(run: dict, pull_request: dict, harness_sha: str) -> str:
-    """Bind the current PR head to its tested merge-source package, not another run."""
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
-        raise SelectionFailure("run_state", "PR diagnostic requires successful settled CI")
+    """Bind PR head/base metadata to the current merge source, not another PR."""
     number = linked_pull_request_number(run)
     try:
         linked = run["pull_requests"][0]
@@ -148,6 +191,18 @@ def pr_source(run: dict, pull_request: dict, harness_sha: str) -> str:
     if not valid:
         raise SelectionFailure("identity", "PR package does not match the current diagnostic subject")
     return source
+
+
+def admit_harness(pull_request: dict, ci_run: dict, harness_sha: str, harness_ref: str) -> str:
+    """Admit the current PR harness independently of the selected binary producer."""
+    if (ci_run.get("status") != "completed" or ci_run.get("conclusion") != "success"
+            or ci_run.get("path") != ".github/workflows/grok.yml"
+            or ci_run.get("repository", {}).get("full_name") != REPOSITORY
+            or ci_run.get("head_repository", {}).get("full_name") != REPOSITORY):
+        raise SelectionFailure("run_state", "PR harness requires successful current CI")
+    if pull_request.get("head", {}).get("ref") != harness_ref:
+        raise SelectionFailure("identity", "PR harness ref does not match")
+    return pr_source(ci_run, pull_request, harness_sha)
 
 
 def read_metadata(path: Path) -> dict:

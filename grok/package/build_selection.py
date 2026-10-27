@@ -10,59 +10,34 @@ import tempfile
 import sys
 from urllib.parse import urlencode
 
-from fetch_artifact import MAX_METADATA_BYTES, fetch, gh_api
-from select_artifact import REPOSITORY, TARGET, producer_names, read_metadata, select
+from fetch_artifact import MAX_METADATA_BYTES, MAX_PACKAGE_BYTES, fetch, gh_api
+from select_artifact import (REPOSITORY, TARGET, ancestor, binary_inputs_changed,
+                             is_binary_input, producer_names, read_metadata, select)
 
 
-# Binary inputs are the default. Only clearly consumer-owned areas opt out.
-CONSUMER_DIRECTORIES = tuple("grok/" + name + "/" for name in (
-    "live", "tests", "facts", "cmd", "internal", "docs",
-))
-CONSUMER_FILES = frozenset({
-    "README.md", "CHANGELOG.md", "grok/go.mod", "grok/go.sum", "grok/TESTING.md",
-    "grok/package/fetch_artifact.py", "grok/package/select_artifact.py",
-    "grok/package/extract_artifact.py", "grok/package/live_diagnostics.py",
-    "grok/package/build_selection.py", "grok/package/verify_provider.sh", "grok/package/README.md", "grok/package/ARTIFACTS.md",
-    ".github/workflows/grok.yml", ".github/workflows/grok-live.yml",
-    ".github/workflows/grok-facts.yml", ".github/workflows/grok-go.yml",
-    ".github/workflows/grok-proof.yml",
-})
 MAX_INVENTORY = 1000
+MAX_RUN_PAGES = 10
 
 
-def is_binary_input(path: str) -> bool:
-    if path in CONSUMER_FILES or path.startswith(CONSUMER_DIRECTORIES):
-        return False
-    if path.startswith("grok/package/test_") and path.endswith(".py") and "/" not in path[len("grok/package/"):]:
-        return False
-    return True
+class BuildSelectionError(ValueError):
+    """A fixed local stage, never an external error message."""
 
-
-def ancestor(checkout: Path, source: str, harness: str) -> bool:
-    result = subprocess.run(["git", "merge-base", "--is-ancestor", source, harness],
-                            cwd=checkout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            timeout=30)
-    if result.returncode not in (0, 1):
-        raise ValueError("source ancestry unavailable")
-    return result.returncode == 0
-
-
-def binary_inputs_changed(checkout: Path, source: str, harness: str) -> bool:
-    # Disabling rename detection exposes both the old and new path, including deletes.
-    try:
-        result = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", source, harness, "--"],
-                                cwd=checkout, capture_output=True, timeout=30, check=True)
-        paths = result.stdout.decode("utf-8", errors="strict").split("\0")
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return True
-    return any(is_binary_input(path) for path in paths if path)
+    def __init__(self, stage: str):
+        self.stage = stage
+        super().__init__(stage)
 
 
 def api(endpoint: str) -> dict:
     with tempfile.TemporaryDirectory(prefix="grok-build-metadata-") as temporary:
         path = Path(temporary) / "metadata.json"
-        gh_api(endpoint, path, MAX_METADATA_BYTES)
-        return read_metadata(path)
+        try:
+            gh_api(endpoint, path, MAX_METADATA_BYTES)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            raise BuildSelectionError("api_request") from None
+        try:
+            return read_metadata(path)
+        except (OSError, ValueError):
+            raise BuildSelectionError("api_metadata") from None
 
 
 def inventory(endpoint: str, key: str) -> list[dict]:
@@ -74,17 +49,48 @@ def inventory(endpoint: str, key: str) -> list[dict]:
         if (type(count) is not int or not 0 <= count <= MAX_INVENTORY
                 or not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch)
                 or (total is not None and total != count)):
-            raise ValueError("incomplete metadata inventory")
+            raise BuildSelectionError("inventory")
         total = count
         rows.extend(batch)
         if len(rows) == total:
             ids = [row.get("id") for row in rows]
             if any(type(value) is not int or value <= 0 for value in ids) or len(set(ids)) != len(ids):
-                raise ValueError("ambiguous metadata inventory")
+                raise BuildSelectionError("inventory")
             return rows
         if not batch or len(rows) > total:
-            raise ValueError("incomplete metadata inventory")
-    raise ValueError("inventory exceeds bounded selection")
+            raise BuildSelectionError("inventory")
+    raise BuildSelectionError("inventory_budget")
+
+
+def newest_runs(endpoint: str):
+    """Read only the newest pages needed to establish the selected producer.
+
+    Workflow run numbers must arrive strictly newest-first; sorting an incomplete
+    response locally could conceal a newer producer. Budget exhaustion is an error,
+    never evidence that no package exists.
+    """
+    seen, previous = set(), None
+    for page in range(1, MAX_RUN_PAGES + 1):
+        data = api(endpoint + f"&per_page=100&page={page}")
+        count, batch = data.get("total_count"), data.get("workflow_runs")
+        offset = (page - 1) * 100
+        if (type(count) is not int or count < 0 or not isinstance(batch, list)
+                or any(not isinstance(row, dict) for row in batch)
+                or len(batch) != min(100, max(0, count - offset))):
+            raise BuildSelectionError("run_pagination")
+        # Validate the complete page before yielding any candidate from it.
+        for run in batch:
+            identity, number = run.get("id"), run.get("run_number")
+            if (type(identity) is not int or identity <= 0 or identity in seen
+                    or type(number) is not int or number <= 0
+                    or (previous is not None and number >= previous)):
+                raise BuildSelectionError("run_order")
+            seen.add(identity)
+            previous = number
+        yield from batch
+        if offset + len(batch) >= count:
+            return
+    raise BuildSelectionError("run_budget")
 
 
 def decision(line: str, harness: str, *, artifact_id: int | None = None,
@@ -100,12 +106,24 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
         return {**decision(line, harness, reason="no_reusable_version_line"),
                 "mac_build_needed": include_macos}
     prefix = f"/repos/{REPOSITORY}/actions"
-    runs = inventory(prefix + "/workflows/grok.yml/runs?" + urlencode({"branch": line, "event": "push"}), "workflow_runs")
-    if any(type(run.get("run_number")) is not int or run["run_number"] <= 0 for run in runs):
-        raise ValueError("missing producer order")
-    if len({run["run_number"] for run in runs}) != len(runs):
-        raise ValueError("ambiguous producer order")
-    runs.sort(key=lambda item: item["run_number"], reverse=True)
+    run_source = iter(newest_runs(prefix + "/workflows/grok.yml/runs?" + urlencode({"branch": line, "event": "push"})))
+    run_cache, run_complete = [], False
+
+    def runs():
+        nonlocal run_complete
+        index = 0
+        while True:
+            if index == len(run_cache):
+                if run_complete:
+                    return
+                try:
+                    run_cache.append(next(run_source))
+                except StopIteration:
+                    run_complete = True
+                    return
+            yield run_cache[index]
+            index += 1
+
     metadata = {}
 
     def rows(endpoint: str, key: str) -> list[dict]:
@@ -124,10 +142,17 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
         if (type(job.get("id")) is not int or job["id"] <= 0
                 or job.get("run_id") != run["id"] or job.get("run_attempt") != attempt):
             raise ValueError("mismatched original producer")
+        status, conclusion = job.get("status"), job.get("conclusion")
+        if (status not in ("queued", "in_progress", "completed", "waiting", "pending", "requested")
+                or (status != "completed" and conclusion is not None)
+                or (status == "completed" and conclusion not in (
+                    "success", "failure", "cancelled", "timed_out", "action_required",
+                    "neutral", "skipped", "stale", "startup_failure"))):
+            raise ValueError("incomplete producer state")
         return job
 
     def choose(target: str) -> dict:
-        for run in runs:
+        for run in runs():
             if (run.get("head_branch") != line or run.get("event") != "push"
                     or run.get("path") != ".github/workflows/grok.yml"
                     or run.get("repository", {}).get("full_name") != REPOSITORY
@@ -137,7 +162,7 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
             try:
                 eligible = ancestor(checkout, run["head_sha"], harness)
             except (OSError, ValueError, subprocess.SubprocessError):
-                return decision(line, harness, reason="source_history_unavailable")
+                raise BuildSelectionError("source_history") from None
             if not eligible:
                 continue
             artifacts = rows(prefix + f"/runs/{run['id']}/artifacts", "artifacts")
@@ -164,18 +189,26 @@ def plan(line: str, harness: str, checkout: Path, *, include_macos: bool = False
                 if artifact.get("expired") is True:
                     return decision(line, harness, reason="latest_package_unavailable")
                 if (artifact.get("expired") is not False
-                        or type(artifact.get("size_in_bytes")) is not int or artifact["size_in_bytes"] <= 0
+                        or type(artifact.get("size_in_bytes")) is not int
+                        or not 0 < artifact["size_in_bytes"] <= MAX_PACKAGE_BYTES
                         or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest", ""))):
                     raise ValueError("invalid package metadata")
                 # A later failed code build cannot make an old binary prove changed inputs.
-                if binary_inputs_changed(checkout, run["head_sha"], harness):
+                try:
+                    changed = binary_inputs_changed(checkout, run["head_sha"], harness)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    raise BuildSelectionError("source_diff") from None
+                if changed:
                     return decision(line, harness, reason="binary_inputs_changed")
                 if target == TARGET:
                     jobs = rows(prefix + f"/runs/{run['id']}/attempts/{attempt}/jobs", "jobs")
                     select(run, {"total_count": len(jobs), "jobs": jobs}, artifact, artifact["id"], harness,
                            expected_line=line)
                     with tempfile.TemporaryDirectory(prefix="grok-build-package-") as temporary:
-                        verified = fetch(artifact["id"], harness, Path(temporary) / "verified", expected_line=line)
+                        try:
+                            verified = fetch(artifact["id"], harness, Path(temporary) / "verified", expected_line=line)
+                        except (OSError, ValueError, subprocess.SubprocessError):
+                            raise BuildSelectionError("package_verification") from None
                         if verified["source_sha"] != run["head_sha"] or verified["artifact_id"] != artifact["id"]:
                             raise ValueError("verified package subject changed")
                 return decision(line, harness, artifact_id=artifact["id"], source=run["head_sha"], reason="reuse")
@@ -217,8 +250,13 @@ def main() -> int:
                 target.write("source-sha=" + result["source_sha"] + "\n")
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
-        print("Build subject selection failed; no reuse or build decision was published.", file=sys.stderr)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
+        reason = error.stage if isinstance(error, BuildSelectionError) else "selection"
+        try:
+            args.output.write_text(json.dumps({"state": "error", "reason": reason}) + "\n")
+        except OSError:
+            pass
+        print("Build subject selection failed [" + reason + "]; no reuse or build was authorized.", file=sys.stderr)
         return 1
 
 

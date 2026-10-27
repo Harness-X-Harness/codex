@@ -14,6 +14,7 @@ import textwrap
 import unittest
 from unittest import mock
 import zipfile
+from urllib.parse import urlencode
 
 import fetch_artifact
 import select_artifact
@@ -120,13 +121,16 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
 ''')
         fake.chmod(0o755)
         git = fake_bin / "git"
-        git.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_GIT_LOG\"\n"
-                       "printf PRIVATE_RESPONSE_CANARY >&2\nexit \"${FAKE_GIT_EXIT:-0}\"\n")
+        git.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$FAKE_GIT_LOG\"\n"
+                       "printf PRIVATE_RESPONSE_CANARY >&2\n"
+                       "case \"$1\" in\n rev-parse) printf '%s\\n' \"$FAKE_MERGE_SHA\";;\n"
+                       " merge-base) exit \"${FAKE_GIT_EXIT:-0}\";;\n"
+                       " diff) printf '%s' \"${FAKE_DIFF:-}\";;\nesac\n")
         git.chmod(0o755)
         self.env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
                         FAKE_GH_FIXTURES=str(self.fixture_root), FAKE_GH_LOG=str(self.log),
                         GH_HOST="untrusted.invalid", GH_TOKEN="SYNTHETIC_TEST_TOKEN",
-                        FAKE_GIT_LOG=str(self.root / "git-calls"))
+                        FAKE_GIT_LOG=str(self.root / "git-calls"), FAKE_MERGE_SHA=SHA)
 
     def bundle(self, contents=None):
         body = io.BytesIO()
@@ -206,30 +210,69 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
             self.assertEqual(path.read_bytes(), data)
             self.assertEqual(path.stat().st_mode & 0o7777, 0o755 if name in EXECUTABLES else 0o600)
 
-    def configure_pr(self):
+    def configure_pr(self, canonical=False):
+        ci_id = 38 if canonical else 37
+        merge_sha = "c" * 40 if canonical else SHA
+        self.env["FAKE_MERGE_SHA"] = merge_sha
         repo = {"id": 123, "full_name": REPOSITORY}
-        pr = {"number": 444, "state": "open", "merged": False, "merge_commit_sha": SHA,
+        pr = {"number": 444, "state": "open", "merged": False, "merge_commit_sha": merge_sha,
               "head": {"sha": HARNESS, "ref": "fix/image", "repo": dict(repo)},
               "base": {"sha": "d" * 40, "ref": "grok/rust-v0.164.0", "repo": dict(repo)}}
-        self.run.update(event="pull_request", head_sha=HARNESS, head_branch="fix/image",
-                        conclusion="success", pull_requests=[copy.deepcopy(pr)])
-        self.artifact["workflow_run"]["head_sha"] = HARNESS
-        self.expected_calls.insert(2, ["api", "--hostname", "github.com", "--method", "GET",
-                                       f"/repos/{REPOSITORY}/pulls/444"])
-        self.config["files"].insert(2, "pull-request.json")
-        (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
+        ci = {**self.run, "id": ci_id, "event": "pull_request", "head_sha": HARNESS, "head_branch": "fix/image",
+              "conclusion": "success", "run_attempt": 3, "pull_requests": [copy.deepcopy(pr)]}
+        if canonical:
+            self.run["head_branch"] = pr["base"]["ref"]
+        else:
+            self.run.update(ci)
+            self.artifact["workflow_run"]["head_sha"] = HARNESS
+        prefix = f"/repos/{REPOSITORY}"
+        requests = [
+            (prefix + "/pulls?" + urlencode({"state": "open", "head": "Harness-X-Harness:fix/image", "per_page": 100, "page": 1}), "pulls.json"),
+            (prefix + "/pulls/444", "pull-request.json"),
+            (prefix + "/actions/workflows/grok.yml/runs?" + urlencode({"event": "pull_request", "head_sha": HARNESS, "per_page": 1, "page": 1}), "harness-ci.json"),
+            (prefix + f"/actions/runs/{ci_id}/artifacts?per_page=100&page=1", "harness-artifacts.json"),
+            (prefix + f"/actions/runs/{ci_id}/attempts/1/jobs?per_page=100&page=1", "harness-jobs.json"),
+            (prefix + "/actions/artifacts/901/zip", "harness-subject.zip"),
+        ]
+        for index, (endpoint, filename) in enumerate(requests, 2):
+            self.expected_calls.insert(index, ["api", "--hostname", "github.com", "--method", "GET", endpoint])
+            self.config["files"].insert(index, filename)
+        for name, body in (("pulls", [{"number": 444}]), ("pull-request", pr),
+                           ("harness-ci", {"total_count": 1, "workflow_runs": [ci]})):
+            (self.fixture_root / (name + ".json")).write_text(json.dumps(body))
+        report = {
+            "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_RUN_ID": str(ci_id), "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/444/merge",
+            "GITHUB_SHA": merge_sha, "GROK_CHECKOUT_SHA": merge_sha, "GROK_SUBJECT_KIND": "pr_test_merge",
+            "GITHUB_WORKFLOW_REF": REPOSITORY + "/.github/workflows/grok.yml@refs/pull/444/merge",
+            "GITHUB_WORKFLOW_SHA": merge_sha, "PR_HEAD_SHA": HARNESS, "PR_BASE_SHA": pr["base"]["sha"],
+        }
+        archive = self.fixture_root / "harness-subject.zip"
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr("grok-subject.json", json.dumps(report))
+        subjects = {"total_count": 1, "artifacts": [{"id": 901, "name": f"grok-subject-{merge_sha}-{ci_id}-1",
+            "expired": False, "size_in_bytes": archive.stat().st_size,
+            "digest": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+            "workflow_run": {"id": ci_id, "head_sha": HARNESS}}]}
+        subject_jobs = {"total_count": 1, "jobs": [{"id": 902, "name": "Native proof / Execution subject",
+            "run_id": ci_id, "run_attempt": 1, "status": "completed", "conclusion": "success"}]}
+        for name, body in (("harness-artifacts", subjects), ("harness-jobs", subject_jobs)):
+            (self.fixture_root / (name + ".json")).write_text(json.dumps(body))
         return pr
 
     def test_pr_command_fetches_current_metadata_and_verifies_merge_package(self):
         self.configure_pr()
-        result = self.invoke(["--pr-diagnostic"])
+        result = self.invoke(["--harness-ref", "fix/image"])
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_calls(5)
+        self.assert_calls(10)
         got = json.loads(result.stdout)
         self.assertEqual(got["selection_mode"], "pr_diagnostic")
         self.assertEqual(got["source_sha"], SHA)
         self.assertEqual(got["harness_sha"], HARNESS)
         self.assertEqual(got["pr_head_sha"], HARNESS)
+        self.assertEqual(got["harness_ci_attempt"], 1)
+        self.assertEqual(got["harness_ci_artifact_id"], 901)
+        self.assertEqual(got["harness_ci_source_sha"], SHA)
         self.assertEqual(got["pull_request_number"], 444)
         self.assertEqual(got["runtime_sha256"], self.manifest["files"]["bin/grok-bin"]["sha256"])
 
@@ -238,25 +281,61 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.manifest["source_sha"] = HARNESS
         self.contents["grok-package.json"] = json.dumps(self.manifest).encode()
         self.bundle()
-        self.assert_failed(self.invoke(["--pr-diagnostic"]), 5, "archive_verification")
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 10, "archive_verification")
 
     def test_pr_command_rejects_changed_head_before_archive_download(self):
         pr = self.configure_pr()
         pr["head"]["sha"] = "e" * 40
         (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
-        self.assert_failed(self.invoke(["--pr-diagnostic"]), 4, "selection", selection_reason="identity")
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 5, "harness_ci_metadata")
 
-    def test_pr_command_requires_explicit_mode_and_one_link(self):
-        self.run.update(event="pull_request", pull_requests=[])
-        self.assert_failed(self.invoke(["--pr-diagnostic"]), 2, "selection", selection_reason="identity")
+    def test_pr_harness_accepts_independent_canonical_binary(self):
+        self.configure_pr(canonical=True)
+        result = self.invoke(["--harness-ref", "fix/image"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_calls(10)
+        got = json.loads(result.stdout)
+        self.assertEqual(got["source_sha"], SHA)
+        self.assertEqual(got["run_id"], 37)
+        self.assertEqual(got["harness_ci_run_id"], 38)
+        self.assertEqual(got["pr_head_sha"], HARNESS)
+        self.assertEqual(got["harness_ci_attempt"], 1)
+        self.assertEqual(got["harness_ci_artifact_id"], 901)
+        self.assertEqual(got["harness_ci_source_sha"], "c" * 40)
+        calls = (self.root / "git-calls").read_text().splitlines()
+        self.assertIn("refs/pull/444/merge", calls)
+        self.assertEqual(calls[calls.index("--is-ancestor") + 1:][:2], [SHA, "c" * 40])
+        self.assertEqual(calls[calls.index("-z") + 1:][:2], [SHA, "c" * 40])
+
+    def test_pr_harness_rejects_binary_diff_before_download(self):
+        self.configure_pr(canonical=True)
+        self.env["FAKE_DIFF"] = "codex-rs/core/src/lib.rs"
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 9,
+                           "selection", selection_reason="identity")
+
+    def test_pr_harness_rejects_changed_merge_object_before_download(self):
+        self.configure_pr(canonical=True)
+        self.env["FAKE_MERGE_SHA"] = "e" * 40
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 8,
+                           "selection", selection_reason="identity")
+
+    def test_historical_subject_rejects_advanced_base_despite_updated_api_links(self):
+        pr = self.configure_pr(canonical=True)
+        pr["base"]["sha"] = "e" * 40
+        (self.fixture_root / "pull-request.json").write_text(json.dumps(pr))
+        path = self.fixture_root / "harness-ci.json"
+        ci = json.loads(path.read_text())
+        ci["workflow_runs"][0]["pull_requests"][0]["base"]["sha"] = pr["base"]["sha"]
+        path.write_text(json.dumps(ci))
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 8, "harness_ci_metadata")
 
     def test_pr_mode_cannot_be_combined_with_formal_source(self):
-        self.assert_failed(self.invoke(["--pr-diagnostic", "--expected-line", "grok/rust-v0.164.0"]), 0, "input")
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image", "--expected-line", "grok/rust-v0.164.0"]), 0, "input")
 
     def test_pr_metadata_request_failure_is_bounded_and_has_no_archive_fetch(self):
         self.configure_pr()
         self.config["fail_index"] = 2
-        self.assert_failed(self.invoke(["--pr-diagnostic"]), 3, "pull_request_request")
+        self.assert_failed(self.invoke(["--harness-ref", "fix/image"]), 3, "pull_request_request")
 
     def test_original_package_is_fetchable_while_later_attempt_and_sibling_are_running(self):
         self.run.update(status="in_progress", conclusion=None, run_attempt=3)
@@ -273,7 +352,8 @@ sys.stdout.buffer.write((root / config["files"][index]).read_bytes())
         self.assertEqual(got["run_status"], "in_progress")
         self.assertIsNone(got["run_conclusion"])
         self.assertEqual((self.root / "git-calls").read_text().splitlines(),
-                         ["merge-base", "--is-ancestor", SHA, HARNESS])
+                         ["merge-base", "--is-ancestor", SHA, HARNESS,
+                          "diff", "--name-only", "--no-renames", "-z", SHA, HARNESS, "--"])
 
     def test_formal_nonancestor_rejects_before_archive_without_private_git_output(self):
         self.env["FAKE_GIT_EXIT"] = "1"
@@ -649,14 +729,14 @@ class PRWorkflowTests(unittest.TestCase):
                     capture = root / "capture"
                     capture.unlink(missing_ok=True)
                     env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                               GITHUB_REF="refs/heads/" + branch, GITHUB_SHA=HARNESS,
+                               GITHUB_REF="refs/heads/" + branch, GITHUB_REF_NAME=branch, GITHUB_SHA=HARNESS,
                                GITHUB_WORKFLOW_SHA=HARNESS, FORMAL_LINE=line,
                                BINARY_ARTIFACT_ID="501", RUNNER_TEMP=str(root), CAPTURE=str(capture))
                     result = subprocess.run(["bash", "-c", bind + "\n" + fetch], env=env,
                                             capture_output=True, text=True, timeout=5)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertTrue(capture.exists())
-                    self.assertEqual("--pr-diagnostic" in capture.read_text().splitlines(),
+                    self.assertEqual("--harness-ref" in capture.read_text().splitlines(),
                                      not branch.startswith("grok/rust-v"))
                     self.assertEqual("--expected-line" in capture.read_text().splitlines(), bool(line))
 

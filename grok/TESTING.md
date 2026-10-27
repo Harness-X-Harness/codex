@@ -192,15 +192,23 @@ explicitly dispatch the intended selection once.
 Select a package with `binary_artifact_id`, not a workflow run or consumer
 attempt. A version-line package may be consumed while unrelated jobs are
 still running, or after a partial rerun; no package rebuild or latest-success
-fallback is performed. For a PR package, select its current branch and the exact
-artifact from a successful `grok.yml` run. The current open PR head must equal
-the harness and build-run head; its
-version-line base and current synthetic merge commit must match the run and
-package source. The archive, manifest and executable digests retain normal
-verification. Forks, old heads, mismatched merge subjects, and incomplete or
-failed PR builds fail before backend use. Invalid catalog selections also fail
-before backend use. PR observations remain diagnostic evidence, not formal
-version-line acceptance; a full selection does not merge or release the PR.
+fallback is performed. For a PR diagnostic, select the current branch and an
+explicit artifact. The harness is admitted independently: exactly one open
+same-repository PR, current head matching the harness, version-line base, and
+successful current `grok.yml` CI. Its existing subject artifact proves the
+actual tested head/base/merge, with the original successful subject producer
+attempt, not the current rerun attempt. The current merge subject is also
+fetched and verified for binary comparison.
+
+The binary may come from that PR's successful build or from a successful
+canonical producer on the same base line. Its source must be an ancestor of the
+current PR merge subject and the complete binary-input diff must be unchanged.
+The merge subject, not the PR head, is the binary comparison target. Artifact,
+manifest and executable verification remains mandatory. Forks, stale head/base,
+unproven current CI, cross-line packages and binary-input differences fail
+before backend use. This permits harness-only PR Live with an existing package
+without pretending the package was built by the PR. PR observations remain
+diagnostic evidence, not formal version-line acceptance.
 
 Each selected scenario is submitted once, with no automatic retry or merge.
 `GROK_API_KEY` remains scoped to the backend execution step and its conditional
@@ -338,11 +346,15 @@ expiry. A local output file has no automatic store, access or expiry guarantee.
   build can still take substantial time.
 - `build-grok` keeps its five actual package consumer owners in
   `tests/integration`; it does not repeat the offline suite.
-- `build_selection.py` is the single binary-applicability owner. Clearly
+- `select_artifact.py` owns the shared binary-input classification and full-diff
+  check; `build_selection.py` owns candidate discovery and build applicability. Clearly
   consumer-owned Grok harness/tests/docs and artifact-consumption code do not
   require release recompilation; unknown paths, `codex-rs`, shipped distribution
   assets and the actual build/staging chain do. The full diff from the latest
   successful producer is used, including deletions and both rename paths.
+  Runs are inspected lazily in newest-first order and selection stops at the
+  first eligible package. Network, pagination, ordering, history/diff failures
+  and an exhausted search budget are selection errors, not reasons to rebuild.
   The latest complete published successful package is the candidate authority;
   an observed missing/expired package requires a new build rather than a silent
   older-package fallback. Linux and macOS decisions are independent.

@@ -7,6 +7,7 @@ page fail closed; there is no fallback run, artifact, host, or retry.
 """
 
 import argparse
+import hashlib
 from contextlib import contextmanager
 import json
 import os
@@ -20,10 +21,11 @@ import tempfile
 import time
 import zipfile
 import zlib
+from urllib.parse import urlencode
 
 from extract_artifact import MAX_PACKAGE_BYTES, extract
 from select_artifact import (REPOSITORY, SELECTION_FAILURE_REASONS, SelectionFailure,
-                             artifact_identity, linked_pull_request_number, read_metadata, select)
+                             artifact_identity, admit_harness, ancestor, binary_inputs_changed, read_metadata, select)
 
 
 MAX_METADATA_BYTES = 16 * 1024 * 1024
@@ -39,7 +41,7 @@ FAILURE_CODES = frozenset({
     "input", "workspace", "run_request", "run_metadata", "jobs_request",
     "artifact_request", "jobs_metadata", "artifact_metadata", "selection",
     "archive_request", "archive_verification", "publication", "unknown",
-    "pull_request_request", "pull_request_metadata",
+    "pull_request_request", "pull_request_metadata", "harness_ci_request", "harness_ci_metadata",
 })
 
 
@@ -174,15 +176,86 @@ def gh_api(endpoint: str, destination: Path, byte_limit: int) -> None:
                 process.wait()
 
 
+def verify_harness_ci_subject(root: Path, ci: dict, pr: dict, harness_sha: str) -> dict:
+    """Read the existing subject proof from its original successful producer."""
+    run_id = ci.get("id")
+    if type(run_id) is not int or run_id <= 0:
+        raise SelectionFailure("identity", "invalid harness CI identity")
+    prefix = f"/repos/{REPOSITORY}/actions"
+    gh_api(f"{prefix}/runs/{run_id}/artifacts?per_page=100&page=1",
+           root / "harness-artifacts.json", MAX_METADATA_BYTES)
+    inventory = read_metadata(root / "harness-artifacts.json")
+    rows = inventory.get("artifacts")
+    if not isinstance(rows, list) or inventory.get("total_count") != len(rows):
+        raise SelectionFailure("identity", "incomplete harness subject inventory")
+    candidates = []
+    for item in rows:
+        match = re.fullmatch(r"grok-subject-([0-9a-f]{40})-" + str(run_id) + r"-([1-9][0-9]*)",
+                             item.get("name", ""))
+        if match and match[1] == pr["merge_commit_sha"] and item.get("expired") is False:
+            candidates.append((int(match[2]), match[1], item))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    attempts = [item[0] for item in candidates]
+    if len(set(attempts)) != len(attempts):
+        raise SelectionFailure("identity", "ambiguous harness subject producer")
+    for attempt, subject, artifact in candidates:
+        identity = artifact.get("workflow_run", {})
+        size, digest, artifact_id = artifact.get("size_in_bytes"), artifact.get("digest", ""), artifact.get("id")
+        if (type(artifact_id) is not int or artifact_id <= 0
+                or type(size) is not int or not 0 < size <= MAX_METADATA_BYTES
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+                or identity.get("id") != run_id or identity.get("head_sha") != harness_sha):
+            raise SelectionFailure("identity", "misidentified harness subject artifact")
+        gh_api(f"{prefix}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=1",
+               root / f"harness-jobs-{attempt}.json", MAX_METADATA_BYTES)
+        jobs = read_metadata(root / f"harness-jobs-{attempt}.json")
+        entries = jobs.get("jobs")
+        if not isinstance(entries, list) or jobs.get("total_count") != len(entries):
+            raise SelectionFailure("identity", "incomplete harness subject job inventory")
+        owners = [job for job in entries if job.get("name") == "Native proof / Execution subject"]
+        if len(owners) != 1:
+            raise SelectionFailure("identity", "ambiguous harness subject job")
+        owner = owners[0]
+        if (type(owner.get("id")) is not int or owner["id"] <= 0
+                or owner.get("run_id") != run_id or owner.get("run_attempt") != attempt):
+            raise SelectionFailure("identity", "mismatched harness subject job")
+        if owner.get("status") != "completed" or owner.get("conclusion") != "success":
+            continue
+        archive = root / f"harness-subject-{attempt}.zip"
+        gh_api(f"{prefix}/artifacts/{artifact_id}/zip", archive, size)
+        if archive.stat().st_size != size or hashlib.sha256(archive.read_bytes()).hexdigest() != digest[7:]:
+            raise SelectionFailure("identity", "harness subject archive does not match")
+        with zipfile.ZipFile(archive) as zipped:
+            entries = zipped.infolist()
+            if len(entries) != 1 or entries[0].filename != "grok-subject.json" or not 0 < entries[0].file_size <= MAX_METADATA_BYTES:
+                raise SelectionFailure("identity", "invalid harness subject archive")
+            report = json.loads(zipped.read(entries[0]))
+        ref = f"refs/pull/{pr['number']}/merge"
+        expected = {
+            "GITHUB_REPOSITORY": REPOSITORY, "GITHUB_RUN_ID": str(run_id), "GITHUB_RUN_ATTEMPT": str(attempt),
+            "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": ref,
+            "GITHUB_SHA": subject, "GROK_CHECKOUT_SHA": subject, "GROK_SUBJECT_KIND": "pr_test_merge",
+            "GITHUB_WORKFLOW_REF": f"{REPOSITORY}/.github/workflows/grok.yml@{ref}",
+            "PR_HEAD_SHA": harness_sha, "PR_BASE_SHA": pr["base"]["sha"],
+        }
+        if (not isinstance(report, dict) or any(report.get(key) != value for key, value in expected.items())
+                or not re.fullmatch(r"[0-9a-f]{40}", report.get("GITHUB_WORKFLOW_SHA", ""))):
+            raise SelectionFailure("identity", "harness CI proved a different PR subject")
+        return {"harness_ci_run_id": run_id, "harness_ci_attempt": attempt,
+                "harness_ci_artifact_id": artifact_id, "harness_ci_source_sha": subject,
+                "harness_ci_producer_job_id": owner["id"]}
+    raise SelectionFailure("identity", "successful harness subject evidence is unavailable")
+
+
 def fetch(artifact_id: int, harness_sha: str, output: Path, *,
           expected_line: str | None = None,
-          pr_diagnostic: bool = False) -> dict:
+          harness_ref: str | None = None) -> dict:
     with acquisition_stage("input"):
         if type(artifact_id) is not int or artifact_id <= 0 or not re.fullmatch(r"[0-9a-f]{40}", harness_sha):
             raise ValueError("invalid explicit artifact or harness revision")
-        if (type(pr_diagnostic) is not bool
-                or (expected_line is not None and not re.fullmatch(r"grok/rust-v[^\s]+", expected_line))
-                or (pr_diagnostic and expected_line is not None)):
+        if ((harness_ref is not None and (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", harness_ref)
+                                         or expected_line is not None))
+                or (expected_line is not None and not re.fullmatch(r"grok/rust-v[^\s]+", expected_line))):
             raise ValueError("invalid line-bound or PR subject")
         if output.exists() or output.is_symlink():
             raise FileExistsError("output must be a new directory")
@@ -202,13 +275,45 @@ def fetch(artifact_id: int, harness_sha: str, output: Path, *,
         with acquisition_stage("run_metadata"):
             run = read_metadata(root / "run.json")
         pull_request = None
-        if pr_diagnostic:
-            with acquisition_stage("selection"):
-                number = linked_pull_request_number(run)
+        subject_sha = harness_sha
+        harness_evidence = {}
+        if harness_ref is not None:
+            with acquisition_stage("pull_request_request"):
+                query = urlencode({"state": "open", "head": REPOSITORY.split("/")[0] + ":" + harness_ref,
+                                   "per_page": 100, "page": 1})
+                gh_api(f"/repos/{REPOSITORY}/pulls?{query}", root / "pulls.json", MAX_METADATA_BYTES)
+            with acquisition_stage("pull_request_metadata"):
+                pulls = json.loads((root / "pulls.json").read_text())
+                if not isinstance(pulls, list) or len(pulls) != 1:
+                    raise SelectionFailure("identity", "one current PR harness is required")
+                number = pulls[0].get("number")
+                if type(number) is not int or number <= 0:
+                    raise SelectionFailure("identity", "invalid PR harness identity")
             with acquisition_stage("pull_request_request"):
                 gh_api(f"/repos/{REPOSITORY}/pulls/{number}", root / "pull-request.json", MAX_METADATA_BYTES)
             with acquisition_stage("pull_request_metadata"):
                 pull_request = read_metadata(root / "pull-request.json")
+                if pull_request.get("number") != number:
+                    raise SelectionFailure("identity", "PR lookup identity changed")
+            with acquisition_stage("harness_ci_request"):
+                query = urlencode({"event": "pull_request", "head_sha": harness_sha, "per_page": 1, "page": 1})
+                gh_api(f"{prefix}/workflows/grok.yml/runs?{query}", root / "harness-ci.json", MAX_METADATA_BYTES)
+            with acquisition_stage("harness_ci_metadata"):
+                inventory = read_metadata(root / "harness-ci.json")
+                runs = inventory.get("workflow_runs")
+                if (type(inventory.get("total_count")) is not int or inventory["total_count"] < 1
+                        or not isinstance(runs, list) or len(runs) != 1):
+                    raise SelectionFailure("identity", "latest PR harness CI is unavailable")
+                subject_sha = admit_harness(pull_request, runs[0], harness_sha, harness_ref)
+            with acquisition_stage("harness_ci_metadata"):
+                harness_evidence = verify_harness_ci_subject(root, runs[0], pull_request, harness_sha)
+            with acquisition_stage("selection"):
+                subprocess.run(["git", "fetch", "--no-tags", "origin", f"refs/pull/{number}/merge"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=True)
+                merge = subprocess.run(["git", "rev-parse", "FETCH_HEAD"], capture_output=True,
+                                       timeout=30, check=True).stdout.decode("ascii").strip()
+                if merge != subject_sha:
+                    raise SelectionFailure("identity", "PR merge changed during harness admission")
         with acquisition_stage("jobs_request"):
             gh_api(f"{prefix}/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page=1",
                    root / "jobs.json", MAX_METADATA_BYTES)
@@ -218,15 +323,12 @@ def fetch(artifact_id: int, harness_sha: str, output: Path, *,
             selected = select(run, jobs, artifact, artifact_id, harness_sha,
                               expected_line=expected_line,
                               pull_request=pull_request)
-            if expected_line is not None:
-                # The scheduler owns binary-input eligibility. Independently bind
-                # this subject to an ancestor on the exact producer line.
-                result = subprocess.run(
-                    ["git", "merge-base", "--is-ancestor", selected["source_sha"], harness_sha],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
-                )
-                if result.returncode != 0:
-                    raise SelectionFailure("identity", "package source is not an ancestor of the harness")
+            if harness_evidence:
+                selected.update(harness_evidence, harness_merge_sha=subject_sha)
+            if expected_line is not None or pull_request is not None:
+                if (not ancestor(Path.cwd(), selected["source_sha"], subject_sha)
+                        or binary_inputs_changed(Path.cwd(), selected["source_sha"], subject_sha)):
+                    raise SelectionFailure("identity", "binary inputs do not match the admitted subject")
             if selected["artifact_size"] > MAX_PACKAGE_BYTES:
                 raise ValueError("selected artifact exceeds the package byte budget")
         with acquisition_stage("archive_request"):
@@ -255,12 +357,12 @@ def main() -> int:
     parser.add_argument("--harness-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-line")
-    parser.add_argument("--pr-diagnostic", action="store_true")
+    parser.add_argument("--harness-ref")
     args = parser.parse_args()
     try:
         result = fetch(args.artifact_id, args.harness_sha, args.output,
                        expected_line=args.expected_line,
-                       pr_diagnostic=args.pr_diagnostic)
+                       harness_ref=args.harness_ref)
     except ACQUISITION_ERRORS as error:
         code = error.code if isinstance(error, AcquisitionFailure) else "unknown"
         if type(code) is not str or code not in FAILURE_CODES:

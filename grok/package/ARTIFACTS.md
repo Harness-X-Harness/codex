@@ -27,7 +27,8 @@ fail closed.
 
 The command uses bounded, read-only `gh api` calls for the exact artifact,
 its producer run, the original attempt's jobs, and that artifact's ZIP. PR
-selection additionally reads the linked PR. Each call has a 180-second limit,
+selection independently reads the current harness PR and its current CI, not
+the binary producer's PR as a substitute for harness authorization. Each call has a 180-second limit,
 metadata is capped at 16 MiB, and the package is capped at 2 GiB. Raw API
 responses, signed URLs and authentication errors are not retained in published
 evidence. There is no automatic retry.
@@ -42,6 +43,8 @@ Acquisition failures include one fixed, allowlisted stage code in brackets:
   be read as metadata. Producer identity is checked before using it.
 - `selection`: the existing run/producer/artifact identity or inventory checks,
   or the selected package byte budget, rejected the metadata.
+- `harness_ci_request`, `harness_ci_metadata`: the independently selected
+  current PR CI request or its admission evidence failed.
 - `archive_request`: the bounded selected ZIP request failed.
 - `archive_verification`: archive or package verification/extraction failed.
 - `publication`: writing or publishing the verified selection failed.
@@ -94,7 +97,7 @@ costs. Ordinary PR events do not run Live or receive the backend secret.
 
 The scheduler resolves the current version line's latest successful Linux
 producer once. `build_selection.py` compares that source to the complete current
-harness subject using one coarse path classifier: known consumer-only areas do
+harness subject using the shared coarse classifier in `select_artifact.py`: known consumer-only areas do
 not rebuild; unknown paths and binary/build inputs do. Renames and deletions are
 included. Missing/expired latest successful packages or changed binary inputs
 require a new build, with no fallback if that build fails.
@@ -158,12 +161,24 @@ fallback source is substituted, and a successful invocation does not certify
 source eligibility or other unexecuted scenarios. Actual retained backend results
 belong to #331; release/source acceptance and registration are separate claims.
 
-For a PR diagnostic, choose the current same-repository PR branch and pass
-`--pr-diagnostic` to the fetcher (the workflow derives this from the harness ref).
-The current open PR head must match the harness and build-run head, its
-version-line base and synthetic merge source must match the package, and PR CI
-must have succeeded. This separate PR admission policy is not replaced by
-artifact availability. Forks and stale heads remain rejected before backend use.
+For a PR diagnostic, choose its current same-repository branch. The workflow
+passes `--harness-ref` from that ref; this independently resolves exactly one
+open PR whose current head matches the harness, whose base is a version line,
+and whose current head/base has successful `grok.yml` CI. The existing
+`grok-subject.json` artifact proves the actual tested head/base/merge: its archive
+digest and original successful `Execution subject` producer are verified,
+without binding it to the current rerun attempt or introducing another schema.
+The current merge object is separately fetched and verified; a workflow run's
+head SHA is not misrepresented as its checkout merge SHA.
+The binary producer does not grant harness admission.
+
+A canonical package on the PR's base line or the PR's own newly built package
+then goes through the same artifact/content checks. Binary eligibility compares
+its real source to the current PR merge subject, not the PR head: ancestry and
+the shared full binary-input diff must both pass. The fixed PR merge ref is
+fetched read-only and checked against the admitted merge SHA; a moved subject
+fails. No credentials are installed. Stale/forked PRs or stale CI remain rejected
+before backend use; the original package source is never relabelled.
 
 `selection.json` records producer `run_id`/`run_attempt`, artifact identity and
 observed run status. `workflow.json` records the consumer's run/attempt. A passed
@@ -187,3 +202,13 @@ exact version line and ancestor sources. Copied job IDs or execution timestamps
 from a partial rerun do not invent another package or producer identity. Whole-workflow and Live conclusions do not establish producer success.
 The decision records the chosen fixed artifact and actual binary/harness subjects.
 Existing non-version-line PR routes build normally without line reuse.
+
+Candidate discovery reads newest-first run pages lazily and stops as soon as a
+qualified package is fixed. It does not require enumerating the line's complete
+history or keeping a cross-page `total_count` snapshot. Ordering, duplicate,
+page completeness and a bounded search budget still protect the decision.
+An API/pagination/source-history/diff failure is a nonzero selection error with
+a safe error decision, never `binary_inputs_changed` or `no_available_package`.
+Only a proved input change or a proved lack of an eligible published package
+permits a fresh build; no stale package fallback or error-triggered rebuild is
+used to hide an unresolved selection.
