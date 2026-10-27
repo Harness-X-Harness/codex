@@ -80,7 +80,7 @@ jobs:
           if [[ -n "$FORMAL_LINE" ]]; then
             source_args+=(--expected-line "$FORMAL_LINE")
           elif [[ "$GITHUB_REF" != refs/heads/grok/rust-v* ]]; then
-            source_args+=(--pr-diagnostic)
+            source_args+=(--harness-ref "$GITHUB_REF_NAME")
           fi
           python3 grok/package/fetch_artifact.py --artifact-id "$BINARY_ARTIFACT_ID" \
             --harness-sha "$GITHUB_SHA" "${source_args[@]}" --output "$RUNNER_TEMP/live-package"

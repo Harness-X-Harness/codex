@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 import select_artifact as selection
-from select_artifact import REPOSITORY, TARGET, select
+from select_artifact import REPOSITORY, TARGET, select, admit_harness
 
 
 SHA = "a" * 40
@@ -43,6 +43,7 @@ def pr_fixture():
 class ArtifactTests(unittest.TestCase):
     def test_pr_diagnostic_binds_head_and_distinct_tested_merge_source(self):
         run, jobs, artifact, pr = pr_fixture()
+        self.assertEqual(admit_harness(pr, run, HARNESS, "fix/image"), SHA)
         got = select(run, jobs, artifact, 501, HARNESS, pull_request=pr)
         self.assertEqual(got["source_sha"], SHA)
         self.assertEqual(got["pr_head_sha"], HARNESS)
@@ -89,6 +90,7 @@ class ArtifactTests(unittest.TestCase):
                 elif mode == "expired": artifact["expired"] = True
                 elif mode == "failed_build": jobs["jobs"][0]["conclusion"] = "failure"
                 with self.assertRaises(ValueError):
+                    admit_harness(pr, run, harness, "fix/image")
                     select(run, jobs, artifact, 501, harness, pull_request=pr)
 
     def test_exact_attempt_identity_and_sibling_failure_are_retained(self):
