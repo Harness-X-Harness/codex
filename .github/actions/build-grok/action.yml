@@ -306,22 +306,7 @@ runs:
         TARGET: ${{ inputs.target }}
         GROK_FACTS: "0"
         GROK_LIVE: "0"
-      run: |
-        set -euo pipefail
-        evidence="$RUNNER_TEMP/grok-package-evidence-$TARGET"
-        status=0
-        go test -race -tags=integration -count=1 -timeout=8m -json ./tests/integration \
-          -run '^Test(BasicFixture|ShippedCatalog|StructuredEditFixture|ShippedChildFixture|FirstRequestShape)$' \
-          > "$evidence/provider-fixture.json" || status=$?
-        go run ./cmd/grok-test-results --input "$evidence/provider-fixture.json" \
-          --integration-owner TestBasicFixture \
-          --integration-owner TestShippedCatalog \
-          --integration-owner TestStructuredEditFixture \
-          --integration-owner TestShippedChildFixture \
-          --integration-owner TestFirstRequestShape \
-          > "$evidence/provider-fixture-summary.json" || status=1
-        cat "$evidence/provider-fixture-summary.json"
-        exit "$status"
+      run: bash package/verify_provider.sh "$RUNNER_TEMP/grok-package-evidence-$TARGET"
     - name: Archive the complete package with executable bits
       shell: bash
       env:

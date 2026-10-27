@@ -66,9 +66,11 @@ jobs:
           python3 grok/package/test_observe_linux_build.py -v
       - name: Test exact artifact selection and extraction without downloads
         run: |
+          python3 grok/package/test_build_selection.py -v
           python3 grok/package/test_select_artifact.py -v
           python3 grok/package/test_extract_artifact.py -v
           python3 grok/package/test_fetch_artifact.py -v
+          python3 grok/package/test_live_diagnostics.py -v
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree

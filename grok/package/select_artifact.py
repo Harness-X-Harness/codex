@@ -10,6 +10,12 @@ import sys
 
 REPOSITORY = "Harness-X-Harness/codex"
 TARGET = "x86_64-unknown-linux-musl"
+def producer_names(target: str) -> frozenset[str]:
+    # Published artifacts keep their original identity after workflow extraction.
+    return frozenset({"Build " + target, "Build " + target + " / Package"})
+
+
+PRODUCER_NAMES = producer_names(TARGET)
 SELECTION_FAILURE_REASONS = frozenset({
     "run_state", "jobs_inventory", "identity", "producer", "artifact",
 })
@@ -39,13 +45,13 @@ def artifact_identity(artifact: dict, artifact_id: int) -> tuple[int, int, str]:
 
 
 def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha: str,
-           *, expected_source_sha: str | None = None,
+           *, expected_line: str | None = None,
            pull_request: dict | None = None) -> dict:
     """Validate one artifact and its original producer; no fallback or execution."""
     if (not re.fullmatch(r"[0-9a-f]{40}", harness_sha)
-            or (expected_source_sha is not None and expected_source_sha != harness_sha)
-            or (expected_source_sha is not None and pull_request is not None)):
-        raise SelectionFailure("identity", "invalid harness or formal source revision")
+            or (expected_line is not None and not re.fullmatch(r"grok/rust-v[^\s]+", expected_line))
+            or (expected_line is not None and pull_request is not None)):
+        raise SelectionFailure("identity", "invalid harness or producer line")
     run_id, attempt, artifact_source = artifact_identity(artifact, artifact_id)
     sha = run.get("head_sha", "")
     if (
@@ -59,12 +65,12 @@ def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha:
     ):
         raise SelectionFailure("identity", "inappropriate package producer run")
     source_sha = pr_source(run, pull_request, harness_sha) if pull_request is not None else sha
-    if artifact_source != source_sha or (expected_source_sha is not None and source_sha != expected_source_sha):
+    if artifact_source != source_sha or (expected_line is not None and run.get("head_branch") != expected_line):
         raise SelectionFailure("identity", "artifact source differs from the consuming subject")
     job_list = jobs.get("jobs")
     if not isinstance(job_list, list) or jobs.get("total_count") != len(job_list):
         raise SelectionFailure("jobs_inventory", "complete producer job inventory is required")
-    producers = [job for job in job_list if job.get("name") == "Build " + TARGET]
+    producers = [job for job in job_list if job.get("name") in PRODUCER_NAMES]
     if len(producers) != 1:
         raise SelectionFailure("producer", "missing or ambiguous package producer")
     producer = producers[0]
@@ -90,7 +96,7 @@ def select(run: dict, jobs: dict, artifact: dict, artifact_id: int, harness_sha:
         "artifact_digest": digest, "artifact_size": artifact["size_in_bytes"],
         "producer_job_id": producer["id"],
         "selection_mode": "pr_diagnostic" if pull_request is not None else (
-            "formal" if expected_source_sha is not None else "diagnostic"),
+            "line_bound" if expected_line is not None else "diagnostic"),
         # Observation only: neither sibling jobs nor later attempts own this package.
         "run_status": run.get("status") if run.get("status") in (
             "queued", "in_progress", "completed", "waiting", "requested", "pending"
@@ -158,7 +164,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--harness-sha", required=True)
-    parser.add_argument("--expected-source-sha")
+    parser.add_argument("--expected-line")
     parser.add_argument("--pull-request-json", type=Path)
     for name in ("run", "jobs", "artifact"):
         parser.add_argument("--" + name + "-json", type=Path, required=True)
@@ -166,7 +172,7 @@ def main() -> int:
     try:
         selected = select(read_metadata(args.run_json), read_metadata(args.jobs_json),
                           read_metadata(args.artifact_json), args.artifact_id, args.harness_sha,
-                          expected_source_sha=args.expected_source_sha,
+                          expected_line=args.expected_line,
                           pull_request=read_metadata(args.pull_request_json) if args.pull_request_json else None)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         print("No eligible explicit package artifact was selected.", file=sys.stderr)
