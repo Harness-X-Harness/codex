@@ -24,7 +24,11 @@ The selector authenticates the actual source of a trusted same-repository
 use the same package contract; closing or merging a producer PR does not
 invalidate its original successful build. PR checkout identity uses the existing
 subject proof, retained for the same 30 days as packages. Previously expired
-subject evidence cannot be recovered or replaced by a guess. Missing, expired or misidentified
+subject evidence cannot be recovered or replaced by a guess. A complete
+inventory proving its absence or expiry makes that producer unavailable to
+discovery; an explicit request for that package still fails before execution.
+Conflicting identity, invalid digest, unsuccessful proof producer or incomplete
+API evidence remain errors, not unavailable candidates. Missing, expired or misidentified
 artifacts and incomplete producer-job inventories are rejected. No other
 artifact, run or latest-success fallback is selected. Inventories above 100 jobs
 fail closed.

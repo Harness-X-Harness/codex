@@ -176,6 +176,13 @@ def gh_api(endpoint: str, destination: Path, byte_limit: int) -> None:
                 process.wait()
 
 
+class ProducerEvidenceUnavailable(SelectionFailure):
+    """A complete inventory proves the source evidence is missing or expired."""
+
+    def __init__(self):
+        super().__init__("identity", "source subject evidence is unavailable")
+
+
 def verify_subject(root: Path, ci: dict, source_sha: str, pr_number: int | None,
                    head_sha: str, base_sha: str | None = None) -> dict:
     """Authenticate an actual PR checkout from the existing original subject proof."""
@@ -191,11 +198,20 @@ def verify_subject(root: Path, ci: dict, source_sha: str, pr_number: int | None,
     if not isinstance(rows, list) or inventory.get("total_count") != len(rows):
         raise SelectionFailure("identity", "incomplete harness subject inventory")
     candidates = []
+    subjects = []
     for item in rows:
         match = re.fullmatch(r"grok-subject-([0-9a-f]{40})-" + str(run_id) + r"-([1-9][0-9]*)",
                              item.get("name", ""))
-        if match and match[1] == source_sha and item.get("expired") is False:
-            candidates.append((int(match[2]), match[1], item))
+        if match:
+            subjects.append((match, item))
+            if type(item.get("expired")) is not bool:
+                raise SelectionFailure("identity", "invalid subject availability metadata")
+            if match[1] == source_sha and item["expired"] is False:
+                candidates.append((int(match[2]), match[1], item))
+    if not candidates:
+        if subjects and not any(match[1] == source_sha for match, _ in subjects):
+            raise SelectionFailure("identity", "subject evidence identifies a different source")
+        raise ProducerEvidenceUnavailable()
     candidates.sort(key=lambda item: item[0], reverse=True)
     attempts = [item[0] for item in candidates]
     if len(set(attempts)) != len(attempts):
