@@ -13,7 +13,8 @@ bytes and forwarded headers remain only in memory. Before any upstream send,
 bodies must compare equal with only the previously proven cache key, typed msg/fco
 identities, temporary cwd and random tool-token normalization. Header comparisons
 allow only explicit native UUID identity fields (one mapping per session preserves
-relationships), positive integer turn start time, and the same temporary paths.
+relationships), native window IDs as UUID:windowNumber with the number preserved,
+positive integer turn start time, and the same temporary paths.
 All other fields, including sandbox, request kind and tool configuration, must
 remain equal. Unknown differences stop with zero upstream requests. A/B must have
 distinct thread IDs and raw bodies; each retains its own bytes for exact replay.

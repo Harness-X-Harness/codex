@@ -51,6 +51,7 @@ jobs:
           python3 -m unittest -v test_relay.py test_controller.py test_frozen.py
           python3 run.py --offline --binary "$RUNNER_TEMP/ab-package/package/bin/grok-bin" --output "$RUNNER_TEMP/ab-offline"
       - name: Execute the authorized bounded experiment once
+        if: ${{ false }} # Offline-only header comparison diagnosis; no backend requests.
         working-directory: experiment-source/grok/diagnostic-effort-ab
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}

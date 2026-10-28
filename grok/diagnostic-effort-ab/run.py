@@ -159,13 +159,20 @@ def comparable_headers(headers):
    if value not in identities:identities[value]='SESSION_ID_'+str(len(identities))
    return identities[value]
   return value
- for name in ('session-id','thread-id','x-client-request-id','x-codex-window-id'):
+ def window(value):
+  if isinstance(value,str):
+   match=re.fullmatch(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9]+)',value)
+   if match:return identity(match[1])+':'+match[2]
+  return value
+ for name in ('session-id','thread-id','x-client-request-id'):
   if name in headers:headers[name]=identity(headers[name])
+ if 'x-codex-window-id' in headers:headers['x-codex-window-id']=window(headers['x-codex-window-id'])
  if 'x-codex-turn-metadata' in headers:
   metadata=json.loads(headers['x-codex-turn-metadata'])
   if not isinstance(metadata,dict):raise ValueError('identity_pair_mismatch')
-  for key in ('installation_id','session_id','thread_id','turn_id','window_id','context_window_id'):
+  for key in ('installation_id','session_id','thread_id','turn_id','context_window_id'):
    if key in metadata:metadata[key]=identity(metadata[key])
+  if 'window_id' in metadata:metadata['window_id']=window(metadata['window_id'])
   if 'turn_started_at_unix_ms' in metadata:
    value=metadata['turn_started_at_unix_ms']
    if type(value) is not int or value<=0:raise ValueError('identity_pair_mismatch')
@@ -191,7 +198,12 @@ def capture_pair(binary,out,offline):
          'distinct_raw_body':a.summary()['body_sha256']!=b.summary()['body_sha256'],
          'headers_comparable':False,'passed':False,'real_http_requests':0}
  try:
-  report['headers_comparable']=comparable_headers(left)==comparable_headers(right)
+  normalized_left,normalized_right=comparable_headers(left),comparable_headers(right)
+  report['headers_comparable']=normalized_left==normalized_right
+  # Authorization participates in equality but never in diagnostics, even hashed.
+  safe_left={k:v for k,v in normalized_left.items() if k!='authorization'}
+  safe_right={k:v for k,v in normalized_right.items() if k!='authorization'}
+  report['normalized_header_difference']=difference_report(safe_left,safe_right)
   report['passed']=body_diff['count']==0 and report['headers_comparable'] and report['distinct_thread_id'] and report['distinct_raw_body']
  finally:write(out/'identity-pair.json',report)
  if not report['passed']:raise ValueError('identity_pair_mismatch')
