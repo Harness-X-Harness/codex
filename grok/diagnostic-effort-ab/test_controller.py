@@ -8,13 +8,13 @@ class FakeRelay:
  def __exit__(self,*args):pass
  def summary(self):return {'sent':0}
 class ControllerTests(unittest.TestCase):
- def test_main_only_runs_one_mfm_batch_and_reports_budget(self):
+ def test_main_only_runs_one_fcf_batch_and_reports_budget(self):
   with tempfile.TemporaryDirectory() as t:
-   root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'full_initial_capture_passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
-   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_initial',return_value='full') as capture,patch.object(run,'run_mfm',side_effect=lambda full,report,**kw:report.update(sent=3)) as pair,patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
+   root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'full_initial_capture_passed':True,'context_input_gate_passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
+   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_initial',return_value='full') as capture,patch.object(run,'prepare_context',return_value={'changed_field':'input'}),patch.object(run,'run_fcf',side_effect=lambda full,report,**kw:report.update(sent=3)) as pair,patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
    self.assertEqual(capture.call_count,1);pair.assert_called_once_with('full',{'sent':3},enabled=True)
    summary=json.loads((root/'out'/'summary.json').read_text())
-   self.assertEqual(summary['request_limit'],3);self.assertEqual(summary['cumulative_real_requests'],24)
+   self.assertEqual(summary['request_limit'],3);self.assertEqual(summary['cumulative_real_requests'],27)
    self.assertNotIn('CREDENTIAL_CANARY',json.dumps(summary))
  def test_missing_capture_gate_stops_before_any_capture(self):
   with tempfile.TemporaryDirectory() as t:

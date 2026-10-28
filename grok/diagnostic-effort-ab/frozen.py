@@ -1,4 +1,4 @@
-"""One explicitly enabled MFM batch of initial requests; no model continuation."""
+"""One explicitly enabled FCF batch of initial requests; no model continuation."""
 import hashlib
 import http.client
 import json
@@ -75,8 +75,41 @@ _BATCH_LOCK = threading.Lock()
 _batch_started = False
 
 
-def run_mfm(full, report, *, enabled=False):
-    """The only send entrypoint: one process-wide, fixed MFM batch, at most three."""
+TASK_PROMPT = 'Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable.'
+
+
+def _context(full):
+    if not isinstance(full, FrozenReplay):
+        raise ValueError('native full capture required')
+    body = full.body()
+    matches = [item for item in body['input'] if isinstance(item, dict)
+               and item.get('type') == 'message' and item.get('role') == 'user'
+               and isinstance(item.get('content'), list)
+               and any(isinstance(part, dict) and part.get('type') == 'input_text'
+                       and part.get('text') == TASK_PROMPT for part in item['content'])]
+    if len(body['input']) <= 1 or len(matches) != 1 or len(matches[0]['content']) != 1:
+        raise ValueError('one exact standalone task message required')
+    context = dict(body)
+    context['input'] = matches
+    raw = json.dumps(context, separators=(',', ':')).encode()
+    safe = {'changed_field': 'input', 'task_message_matches': 1,
+            'full_input_count': len(body['input']), 'context_input_count': 1,
+            'non_input_fields_equal': {k:v for k,v in body.items() if k != 'input'} == {k:v for k,v in context.items() if k != 'input'},
+            'task_message_preserved': context['input'][0] == matches[0],
+            'headers_equal': True,
+            'F': full.summary(),
+            'C': {'body_sha256': hashlib.sha256(raw).hexdigest(), 'body_bytes': len(raw),
+                  'shape': safe_shape(context), 'header_names': sorted(k.lower() for k in full.headers())}}
+    return raw, safe
+
+
+def prepare_context(full):
+    """Offline-only structural gate; return safe evidence, never request contents."""
+    return _context(full)[1]
+
+
+def run_fcf(full, report, *, enabled=False):
+    """The only send entrypoint: one process-wide, fixed FCF batch, at most three."""
     global _batch_started
     if type(report) is not dict or report:
         raise ValueError('empty safe report required')
@@ -84,33 +117,27 @@ def run_mfm(full, report, *, enabled=False):
         raise ValueError('real sends require explicit enablement')
     if not isinstance(full, FrozenReplay):
         raise ValueError('native full capture required')
+    context_raw, comparison = _context(full)
     with _BATCH_LOCK, full._lock:
         if _batch_started or full._used or full._raw is None:
             raise ValueError('frozen batch unavailable')
-        auth = next(v for k, v in full._headers.items() if k.lower() == 'authorization')
         _batch_started = True
         full._used = True
-    minimal_body = {'model': 'grok-4.6', 'input': [{'type': 'message', 'role': 'user',
-        'content': [{'type': 'input_text', 'text': 'Reply exactly OK.'}]}],
-        'stream': True, 'store': False}
-    minimal_raw = json.dumps(minimal_body, separators=(',', ':')).encode()
-    minimal_headers = {'Authorization': auth, 'Content-Type': 'application/json', 'Accept': 'text/event-stream'}
-    report.update({'sent': 0, 'request_limit': 3, 'sequence': 'MFM', 'requests': [],
-                   'tool_executions': 0, 'continuations': 0,
-                   'captures': {'F': full.summary(), 'M': {'body_sha256': hashlib.sha256(minimal_raw).hexdigest(),
-                       'shape': safe_shape(minimal_body), 'header_names': sorted(k.lower() for k in minimal_headers)}}})
-    for index, label in enumerate(('M', 'F', 'M')):
+    report.update({'sent': 0, 'request_limit': 3, 'sequence': 'FCF', 'requests': [],
+                   'tool_executions': 0, 'continuations': 0, 'comparison': comparison,
+                   'captures': {'F': comparison['F'], 'C': comparison['C']}})
+    for index, label in enumerate(('F', 'C', 'F')):
         if index:
             deadline = time.monotonic() + 60
             while (remaining := deadline - time.monotonic()) > 0:
                 time.sleep(remaining)
         with _BATCH_LOCK:
             report['sent'] += 1  # Reservation is never refunded, even before connect.
-            send_headers = dict(minimal_headers if label == 'M' else full._headers)
-            send_raw = minimal_raw if label == 'M' else full._raw
+            send_headers = dict(full._headers)
+            send_raw = context_raw if label == 'C' else full._raw
             item = {'request': index + 1, 'arm': label, 'body_sha256': hashlib.sha256(send_raw).hexdigest(),
                     'header_names': sorted(k.lower() for k in send_headers),
-                    'header_values_equal_to_frozen': send_headers == (minimal_headers if label == 'M' else full._headers), 'utc': datetime.now(timezone.utc).isoformat(),
+                    'header_values_equal_to_frozen': send_headers == full._headers, 'utc': datetime.now(timezone.utc).isoformat(),
                     'send_monotonic': time.monotonic(), 'status': None, 'state': 'sending'}
             item['seconds_after_previous_completion'] = (item['send_monotonic'] - report['requests'][-1]['completed_monotonic']) if index else None
             report['requests'].append(item)
@@ -128,19 +155,6 @@ def run_mfm(full, report, *, enabled=False):
                 raise ValueError('response size budget')
             types = set()
             completed, failed, incomplete = False, False, False
-            public_messages = {}
-            def remember_message(message, fallback):
-                if label != 'M' or not isinstance(message, dict) or message.get('type') != 'message' or message.get('role') != 'assistant':
-                    return
-                identity = message.get('id')
-                key = ('id', identity) if isinstance(identity, str) else ('index', fallback)
-                text, length = '', 0
-                content = message.get('content')
-                for part in content if isinstance(content, list) else []:
-                    if isinstance(part, dict) and part.get('type') == 'output_text' and isinstance(part.get('text'), str):
-                        length += len(part['text'])
-                        text += part['text'][:max(0, 256 - len(text))]
-                public_messages[key] = (text, length)
             for line in data.splitlines() if response.status == 200 else []:
                 if line.startswith(b'event:'):
                     name = line[6:].strip().decode('ascii', 'replace')
@@ -164,21 +178,10 @@ def run_mfm(full, report, *, enabled=False):
                 if isinstance(response_body, dict):
                     failed |= response_body.get('status') == 'failed'
                     incomplete |= response_body.get('status') == 'incomplete'
-                if name == 'response.output_item.done':
-                    remember_message(frame.get('item'), frame.get('output_index', 0))
                 if name == 'response.completed':
                     completed = True
-                    if isinstance(response_body, dict) and isinstance(response_body.get('output'), list):
-                        # Terminal output is the complete authoritative message inventory.
-                        # Replace the done-message projection, so identical items are not duplicated.
-                        public_messages.clear()
-                        for output_index, message in enumerate(response_body['output']):
-                            remember_message(message, output_index)
             item['sse_types'] = sorted(types)
             item['completion'] = 'failed' if failed else 'incomplete' if incomplete else 'completed' if completed else 'unknown'
-            if label == 'M':
-                item['public_output_text'] = ''.join(text for text, _ in public_messages.values())[:256]
-                item['public_output_truncated'] = sum(length for _, length in public_messages.values()) > 256
             item['state'] = 'received' if response.status in (200, 403) else 'stopped_status'
             if response.status == 200 and item['completion'] == 'unknown':
                 item['state'] = 'response_unknown'

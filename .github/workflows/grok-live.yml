@@ -1,4 +1,4 @@
-name: Temporary bounded minimal-full-minimal control
+name: Temporary bounded input-context FCF control
 on:
   workflow_dispatch:
 permissions:
