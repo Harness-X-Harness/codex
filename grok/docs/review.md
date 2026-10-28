@@ -1,10 +1,8 @@
 # Review a complete, test-backed change
 
-Apply the [current Grok development policy](./carry-forward.md) and the
-ordinary [actual-HEAD acceptance rule](https://github.com/Harness-X-Harness/codex/issues/233).
+Apply the [current Grok development and acceptance policy](./carry-forward.md).
 Review whether the requested behavior and its affected contracts are
-protected by the appropriate executable evidence, without adding a
-milestone gate or second certification.
+protected by the appropriate executable evidence.
 
 ## Subject and current contract
 
@@ -28,9 +26,7 @@ milestone gate or second certification.
   travels with its owning test and consumer. No half-implemented API or
   deferred mandatory safety proof.
 - Prefer the actual owner and the smallest complete PR. Split for a
-  demonstrated technical prerequisite or independently testable outcome,
-  not because a C0–C8 stage, previous commit grouping, or arbitrary file
-  count calls for it.
+  demonstrated technical prerequisite or independently testable outcome.
 - For context reduction, identify the current consumer/invariant of each
   extra layer, field, historical compatibility path and test. Remove dead
   authorities and their consumers together; keep real security, recovery,
@@ -66,8 +62,8 @@ does not retire the invariant.
   claim. Use the actual configured branch protections; a particular branch
   name is not a test.
 - Do not promote a PR synthetic merge result as source-HEAD proof.
-  Squash/rebase may change SHA: inspect its ordinary resulting checks,
-  without inventing post-squash certification or a Green Prefix pause.
+  Squash/rebase may change SHA: inspect the applicable checks on the
+  resulting source HEAD.
 - Preserve source/build/package and executable digests at boundaries that
   need them. GNU/native Integration does not certify Linux-musl/macOS
   packages; one Live result cannot certify an untested target, backend or
@@ -82,9 +78,7 @@ Report material findings with the owner, violated invariant, concrete
 source/test evidence, consequence, smallest fix and risk. If none, say
 `none`. State exact tested SHA/run/attempt, what passed or was not executed,
 and unresolved uncertainty. Leave behavior and test ownership in code,
-current contracts in Stories, CI evidence in Actions, and historical
-decisions in existing Issues/Git—no extra roadmap, proof ledger, or
-approval state machine.
+current contracts in Stories and CI evidence in Actions.
 
 Review does not authorize code, branch-protection, release or historical
 ref mutations without the user's explicit request.
