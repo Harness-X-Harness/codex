@@ -1,4 +1,4 @@
-name: Temporary bounded synthetic-context ABBA control
+name: Temporary bounded ordinary-apples scenario ABBA control
 on:
   workflow_dispatch:
 permissions:

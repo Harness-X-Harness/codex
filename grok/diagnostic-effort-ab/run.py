@@ -131,7 +131,7 @@ def offline_gate(binary,out,identity):
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'ABBA: prepend factual synthetic-marker context to one original user task; all other wire bytes and headers remain equal','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'ABBA: original task versus apples price task; only task text, one fixture tool name/description, and output schema change; all other wire bytes and headers remain equal','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
 def capture_initial(binary,out,offline,arm):
  frozen=FrozenReplay()
@@ -160,25 +160,25 @@ def main():
   offline_gate(binary,out,identity)
   try:
    full=capture_initial(binary,out,True,'A')
-   write(out/'prompt-proof.json',prepare_prompt(full)[1])
+   write(out/'scenario-proof.json',prepare_prompt(full)[1])
   except Exception:
    (out/'proof.json').unlink(missing_ok=True)
    raise
-  proof=json.loads((out/'proof.json').read_text());proof['full_initial_capture_passed']=True;proof['prompt_only_gate_passed']=True;write(out/'proof.json',proof)
+  proof=json.loads((out/'proof.json').read_text());proof['full_initial_capture_passed']=True;proof['scenario_diff_gate_passed']=True;write(out/'proof.json',proof)
   return
  proof=json.loads(args.offline_proof.read_text()) if args.offline_proof else {}
- if proof.get('passed') is not True or proof.get('full_initial_capture_passed') is not True or proof.get('prompt_only_gate_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
+ if proof.get('passed') is not True or proof.get('full_initial_capture_passed') is not True or proof.get('scenario_diff_gate_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
  if not os.environ.get('GROK_API_KEY'):raise ValueError('credential_unavailable')
  full=capture_initial(binary,out,False,'A')
- write(out/'prompt-proof.json',prepare_prompt(full)[1])
+ write(out/'scenario-proof.json',prepare_prompt(full)[1])
  report={}
  try:run_abba(full,report,enabled=True)
  finally:
   write(out/'replay.json',report)
   write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6',
-   'experiment':'prompt_synthetic_context_abba','request_limit':4,'previous_real_requests':27,
+   'experiment':'ordinary_apples_scenario_abba','request_limit':4,'previous_real_requests':27,
    'cumulative_real_requests':27+report.get('sent',0),'source_files':identity,
-   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; synthetic-context prompt association only; HTTP acceptance is not complete tool-task success'})
+   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; whole-task scenario association only, not single-word attribution; HTTP acceptance is not complete tool-task success'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:

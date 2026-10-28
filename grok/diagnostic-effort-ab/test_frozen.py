@@ -97,7 +97,7 @@ class RegressionTests(unittest.TestCase):
     def test_modified_request_oversize_blocks_before_network(self):
         value=body();value['padding']='';value['padding']='x'*(frozen.MAX_BYTES-len(raw(value)))
         f=frozen.FrozenReplay();f.capture(raw(value),HEADERS)
-        with mock.patch('http.client.HTTPSConnection') as network:
+        with mock.patch('http.client.HTTPSConnection') as network, mock.patch('prompt_variant.PROMPT_B','x'*1024):
             with self.assertRaisesRegex(ValueError,'modified_body_bounds'):frozen.run_abba(f,{},enabled=True)
         network.assert_not_called()
 

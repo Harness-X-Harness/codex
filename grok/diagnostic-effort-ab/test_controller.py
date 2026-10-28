@@ -10,7 +10,7 @@ class FakeRelay:
 class ControllerTests(unittest.TestCase):
  def test_main_only_runs_one_abba_batch_and_reports_budget(self):
   with tempfile.TemporaryDirectory() as t:
-   root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'full_initial_capture_passed':True,'prompt_only_gate_passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
+   root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'full_initial_capture_passed':True,'scenario_diff_gate_passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
    with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_initial',return_value='full') as capture,patch.object(run,'prepare_prompt',return_value=(b'unused',{'changed_field':'prompt'})),patch.object(run,'run_abba',side_effect=lambda full,report,**kw:report.update(sent=4)) as pair,patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
    self.assertEqual(capture.call_count,1);pair.assert_called_once_with('full',{'sent':4},enabled=True)
    summary=json.loads((root/'out'/'summary.json').read_text())
