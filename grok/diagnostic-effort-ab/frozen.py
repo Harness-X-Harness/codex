@@ -1,4 +1,4 @@
-"""One explicitly enabled FCF batch of initial requests; no model continuation."""
+"""One explicitly enabled ABBA prompt-only batch of initial requests; no model continuation."""
 import hashlib
 import http.client
 import json
@@ -6,7 +6,8 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
-from relay import HOST, PATH, MAX_BYTES, safe_shape
+from relay import HOST, PATH, safe_shape
+from prompt_variant import prepare, MAX_BYTES
 
 HEADER_NAMES = frozenset(('authorization', 'content-type', 'accept', 'user-agent',
     'session-id', 'thread-id', 'x-client-request-id', 'originator', 'version',
@@ -35,7 +36,6 @@ class FrozenReplay:
         if (not isinstance(body, dict) or body.get('model') != 'grok-4.6'
                 or body.get('store') is not False or body.get('stream') is not True
                 or not isinstance(body.get('input'), list)
-                or not isinstance(body.get('reasoning'), dict) or body['reasoning'].get('effort') != 'high'
                 or any(isinstance(x, dict) and (x.get('type') in ('function_call', 'function_call_output')
                        or x.get('encrypted_content') is not None) for x in body['input'])):
             raise ValueError('not a store-disabled initial request')
@@ -75,41 +75,17 @@ _BATCH_LOCK = threading.Lock()
 _batch_started = False
 
 
-TASK_PROMPT = 'Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable.'
-
-
-def _context(full):
+def prepare_prompt(full):
     if not isinstance(full, FrozenReplay):
         raise ValueError('native full capture required')
-    body = full.body()
-    matches = [item for item in body['input'] if isinstance(item, dict)
-               and item.get('type') == 'message' and item.get('role') == 'user'
-               and isinstance(item.get('content'), list)
-               and any(isinstance(part, dict) and part.get('type') == 'input_text'
-                       and part.get('text') == TASK_PROMPT for part in item['content'])]
-    if len(body['input']) <= 1 or len(matches) != 1 or len(matches[0]['content']) != 1:
-        raise ValueError('one exact standalone task message required')
-    context = dict(body)
-    context['input'] = matches
-    raw = json.dumps(context, separators=(',', ':')).encode()
-    safe = {'changed_field': 'input', 'task_message_matches': 1,
-            'full_input_count': len(body['input']), 'context_input_count': 1,
-            'non_input_fields_equal': {k:v for k,v in body.items() if k != 'input'} == {k:v for k,v in context.items() if k != 'input'},
-            'task_message_preserved': context['input'][0] == matches[0],
-            'headers_equal': True,
-            'F': full.summary(),
-            'C': {'body_sha256': hashlib.sha256(raw).hexdigest(), 'body_bytes': len(raw),
-                  'shape': safe_shape(context), 'header_names': sorted(k.lower() for k in full.headers())}}
-    return raw, safe
+    with full._lock:
+        if full._raw is None:
+            raise ValueError('capture unavailable')
+        return prepare(full._raw)
 
 
-def prepare_context(full):
-    """Offline-only structural gate; return safe evidence, never request contents."""
-    return _context(full)[1]
-
-
-def run_fcf(full, report, *, enabled=False):
-    """The only send entrypoint: one process-wide, fixed FCF batch, at most three."""
+def run_abba(full, report, *, enabled=False):
+    """The only send entrypoint: one process-wide, fixed ABBA batch, at most four."""
     global _batch_started
     if type(report) is not dict or report:
         raise ValueError('empty safe report required')
@@ -117,16 +93,15 @@ def run_fcf(full, report, *, enabled=False):
         raise ValueError('real sends require explicit enablement')
     if not isinstance(full, FrozenReplay):
         raise ValueError('native full capture required')
-    context_raw, comparison = _context(full)
+    variant_raw, comparison = prepare_prompt(full)
     with _BATCH_LOCK, full._lock:
         if _batch_started or full._used or full._raw is None:
             raise ValueError('frozen batch unavailable')
         _batch_started = True
         full._used = True
-    report.update({'sent': 0, 'request_limit': 3, 'sequence': 'FCF', 'requests': [],
-                   'tool_executions': 0, 'continuations': 0, 'comparison': comparison,
-                   'captures': {'F': comparison['F'], 'C': comparison['C']}})
-    for index, label in enumerate(('F', 'C', 'F')):
+    report.update({'sent': 0, 'request_limit': 4, 'sequence': 'ABBA', 'requests': [],
+                   'tool_executions': 0, 'continuations': 0, 'comparison': comparison})
+    for index, label in enumerate(('A', 'B', 'B', 'A')):
         if index:
             deadline = time.monotonic() + 60
             while (remaining := deadline - time.monotonic()) > 0:
@@ -134,7 +109,7 @@ def run_fcf(full, report, *, enabled=False):
         with _BATCH_LOCK:
             report['sent'] += 1  # Reservation is never refunded, even before connect.
             send_headers = dict(full._headers)
-            send_raw = context_raw if label == 'C' else full._raw
+            send_raw = variant_raw if label == 'B' else full._raw
             item = {'request': index + 1, 'arm': label, 'body_sha256': hashlib.sha256(send_raw).hexdigest(),
                     'header_names': sorted(k.lower() for k in send_headers),
                     'header_values_equal_to_frozen': send_headers == full._headers, 'utc': datetime.now(timezone.utc).isoformat(),
@@ -153,6 +128,16 @@ def run_fcf(full, report, *, enabled=False):
             data = response.read(MAX_BYTES + 1)
             if len(data) > MAX_BYTES:
                 raise ValueError('response size budget')
+            item['error_class'] = None
+            if response.status == 403:
+                try:
+                    error_body = json.loads(data)
+                    candidates = [error_body.get('code')]
+                    if isinstance(error_body.get('error'), dict):
+                        candidates.append(error_body['error'].get('code'))
+                    item['error_class'] = 'permission-denied' if 'permission-denied' in candidates else 'other_403'
+                except (ValueError, UnicodeError, AttributeError):
+                    item['error_class'] = 'other_403'
             types = set()
             completed, failed, incomplete = False, False, False
             for line in data.splitlines() if response.status == 200 else []:

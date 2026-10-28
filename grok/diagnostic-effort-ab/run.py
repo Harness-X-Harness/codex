@@ -2,7 +2,8 @@
 import argparse,hashlib,json,os,re,subprocess,tempfile,signal,time
 from pathlib import Path
 from relay import Relay
-from frozen import FrozenReplay, run_fcf, prepare_context, TASK_PROMPT as PROMPT_A
+from frozen import FrozenReplay, run_abba, prepare_prompt
+from prompt_variant import PROMPT_A
 from offline_probe import sse
 ROOT=Path(__file__).resolve().parent
 RUNTIME_SHA='47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16'
@@ -11,7 +12,7 @@ RUNTIME_SHA='47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16'
 def digest(path):
  with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 def source_identity():
- return {p.name:digest(p) for p in [ROOT/'driver.test',ROOT/'driver_test.go',ROOT/'wrapper.py',ROOT/'relay.py',ROOT/'run.py',ROOT/'offline_probe.py',ROOT/'frozen.py']}
+ return {p.name:digest(p) for p in [ROOT/'driver.test',ROOT/'driver_test.go',ROOT/'wrapper.py',ROOT/'relay.py',ROOT/'run.py',ROOT/'offline_probe.py',ROOT/'frozen.py',ROOT/'prompt_variant.py']}
 def write(path,value):path.write_text(json.dumps(value,indent=2,sort_keys=True)+'\n');path.chmod(0o600)
 def normalized(body,item_ids=None):
  # Only normal fresh-session identity is normalized, never arbitrary input fields.
@@ -130,7 +131,7 @@ def offline_gate(binary,out,identity):
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'FCF: only input changes to the exact standalone original user task; all other JSON fields and headers remain equal','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'ABBA: prepend factual synthetic-marker context to one original user task; all other wire bytes and headers remain equal','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
 def capture_initial(binary,out,offline,arm):
  frozen=FrozenReplay()
@@ -159,25 +160,25 @@ def main():
   offline_gate(binary,out,identity)
   try:
    full=capture_initial(binary,out,True,'A')
-   write(out/'context-proof.json',prepare_context(full))
+   write(out/'prompt-proof.json',prepare_prompt(full)[1])
   except Exception:
    (out/'proof.json').unlink(missing_ok=True)
    raise
-  proof=json.loads((out/'proof.json').read_text());proof['full_initial_capture_passed']=True;proof['context_input_gate_passed']=True;write(out/'proof.json',proof)
+  proof=json.loads((out/'proof.json').read_text());proof['full_initial_capture_passed']=True;proof['prompt_only_gate_passed']=True;write(out/'proof.json',proof)
   return
  proof=json.loads(args.offline_proof.read_text()) if args.offline_proof else {}
- if proof.get('passed') is not True or proof.get('full_initial_capture_passed') is not True or proof.get('context_input_gate_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
+ if proof.get('passed') is not True or proof.get('full_initial_capture_passed') is not True or proof.get('prompt_only_gate_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
  if not os.environ.get('GROK_API_KEY'):raise ValueError('credential_unavailable')
  full=capture_initial(binary,out,False,'A')
- write(out/'context-proof.json',prepare_context(full))
+ write(out/'prompt-proof.json',prepare_prompt(full)[1])
  report={}
- try:run_fcf(full,report,enabled=True)
+ try:run_abba(full,report,enabled=True)
  finally:
   write(out/'replay.json',report)
   write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6',
-   'experiment':'full_context_full','request_limit':3,'previous_real_requests':24,
-   'cumulative_real_requests':24+report.get('sent',0),'source_files':identity,
-   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; input-context bundle association only; HTTP acceptance is not complete tool-task success'})
+   'experiment':'prompt_synthetic_context_abba','request_limit':4,'previous_real_requests':27,
+   'cumulative_real_requests':27+report.get('sent',0),'source_files':identity,
+   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; synthetic-context prompt association only; HTTP acceptance is not complete tool-task success'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:
