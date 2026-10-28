@@ -23,15 +23,18 @@ class Tests(unittest.TestCase):
             self.assertEqual(headers['Authorization'],'Bearer '+CANARY)
             return 200,{'x-request-id':'safe-123','x-secret':CANARY},b'data: {"type":"response.completed"}\n\n'
         with mock.patch('http.client.HTTPSConnection',side_effect=AssertionError('offline network')), Relay(offline_transport=transport) as relay:
-            for i,effort in enumerate((None,'high','high',None),1):
-                relay.begin_arm(str(i)+('-A' if effort is None else '-B'),effort)
+            with self.assertRaises(ValueError): relay.begin_arm('1-A','high')
+            for i,arm in enumerate(('A','B'),1):
+                effort = None
+                relay.begin_arm(str(i)+'-'+arm,effort)
                 self.assertEqual(send(relay,effort)[0],200)
                 self.assertEqual(send(relay,effort,continuation=True)[0],200)
                 self.assertEqual(send(relay,effort)[0],409)
                 relay.end_arm()
-            self.assertEqual(relay.summary()['sent'],8)
-            self.assertEqual(len(calls),8)
+            self.assertEqual(relay.summary()['sent'],4)
+            self.assertEqual(len(calls),4)
             self.assertNotIn(CANARY,json.dumps(relay.summary()))
+            with self.assertRaises(ValueError): relay.begin_arm('3-A',None)
             with self.assertRaises(ValueError): relay.begin_arm('1-A',None)
 
     def test_failure_redirect_and_timeout_never_resend(self):
@@ -53,7 +56,7 @@ class Tests(unittest.TestCase):
 
     def test_invalid_route_effort_and_offline_default(self):
         with Relay() as relay:
-            relay.begin_arm('1-A',None)
+            relay.begin_arm('3-A',None)
             self.assertEqual(send(relay,path='/v1/models')[0],400)
             self.assertEqual(send(relay,'high')[0],400)
             self.assertEqual(relay.summary()['sent'],0)

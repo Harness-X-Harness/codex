@@ -1,10 +1,13 @@
-"""One temporary experiment; no configurable model, upstream, or request budget."""
+"""One temporary prompt experiment; no configurable model, upstream, or request budget."""
 import argparse,hashlib,json,os,re,subprocess,tempfile,signal
 from pathlib import Path
 from relay import Relay
 from offline_probe import sse
 ROOT=Path(__file__).resolve().parent
 RUNTIME_SHA='47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16'
+
+PROMPT_A='Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable.'
+PROMPT_B=PROMPT_A.replace('reason about its returned token','copy its returned token')
 
 def digest(path):
  with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
@@ -15,8 +18,10 @@ def normalized(body,item_ids=None):
  # Only normal fresh-session identity is normalized, never arbitrary input fields.
  body=json.loads(json.dumps(body));body.pop('prompt_cache_key',None)
  if item_ids is None:item_ids={}
- body.setdefault('reasoning',{}).pop('effort',None)
  for item in body.get('input',[]):
+  if item.get('type')=='message' and item.get('role')=='user':
+   for part in item.get('content',[]):
+    if part.get('type')=='input_text' and part.get('text')==PROMPT_B:part['text']=PROMPT_A
   # Runtime-created item identities, not tool call_id or semantic payload.
   prefix={'message':'msg','function_call_output':'fco'}.get(item.get('type'))
   value=item.get('id')
@@ -33,7 +38,7 @@ def normalized(body,item_ids=None):
   return v
  return walk(body)
 def run_arm(relay,arm,ordinal,binary,out,offline=False):
- relay.begin_arm(f'{ordinal}-{arm}',None if arm=='A' else 'high')
+ relay.begin_arm(f'{ordinal}-{arm}',None)
  result=out/f'arm-{ordinal}-{arm}.json';env=os.environ.copy()
  env.update(GROK_EFFORT_ARM=arm,GROK_EFFORT_BASE_URL=relay.url,GROK_EFFORT_WRAPPER=str(ROOT/'wrapper.py'),GROK_EFFORT_RESULT=str(result),GROK_EFFORT_REAL_BINARY=str(binary),GROK_EFFORT_REAL_SHA256=RUNTIME_SHA)
  if offline:env['GROK_API_KEY']='offline-fixture-key'
@@ -101,7 +106,7 @@ def offline_gate(binary,out,identity):
   checks['roundtrips']=all(report['arms'][arm].get('passed') and len(requests[arm])==2 for arm in ['A','B'])
   checks['cleanup']=all(not report['arms'][arm].get('cleanup_pending',True) for arm in ['A','B']) and not denial.get('cleanup_pending',True)
   checks['zero_retry']=len(denied)==1 and not denial.get('passed') and denial.get('failure',{}).get('http_status')==403
-  report['comparisons']=[];continuations=[];efforts=[]
+  report['comparisons']=[];continuations=[];efforts=[];prompts=[]
   item_ids={'A':{},'B':{}}
   for index in range(min(len(requests['A']),len(requests['B']))):
    a,b=requests['A'][index],requests['B'][index]
@@ -110,18 +115,22 @@ def offline_gate(binary,out,identity):
    except Exception:comparison['normalization_error']='unexpected_tool_token_shape'
    report['comparisons'].append(comparison)
   for arm in ['A','B']:
-   for req in requests[arm]:efforts.append(req.get('reasoning',{}).get('effort')==(None if arm=='A' else 'high'))
+   for req in requests[arm]:
+    efforts.append('effort' not in req.get('reasoning',{}))
+    expected=PROMPT_A if arm=='A' else PROMPT_B
+    prompts.append(sum(part.get('type')=='input_text' and part.get('text')==expected for item in req.get('input',[]) if item.get('type')=='message' and item.get('role')=='user' for part in item.get('content',[]))==1)
    if len(requests[arm])==2:
     req=requests[arm][1];calls=[x for x in req['input'] if x.get('type')=='function_call'];outputs=[x for x in req['input'] if x.get('type')=='function_call_output'];reasons=[x for x in req['input'] if x.get('type')=='reasoning']
     continuations.append(len(calls)==1 and len(outputs)==1 and calls[0]['call_id']==outputs[0]['call_id'] and any(x.get('encrypted_content')=='opaque-offline-cipher' for x in reasons))
-  checks['effort']=len(efforts)==4 and all(efforts)
+  checks['effort_unset']=len(efforts)==4 and all(efforts)
+  checks['prompt_binding']=len(prompts)==4 and all(prompts)
   checks['continuations']=len(continuations)==2 and all(continuations)
-  checks['only_effort_delta']=len(report['comparisons'])==2 and all(c.get('normalized',{}).get('count')==0 for c in report['comparisons'])
+  checks['only_prompt_delta']=len(report['comparisons'])==2 and all(c.get('normalized',{}).get('count')==0 for c in report['comparisons'])
   report['passed']=all(checks.values())
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'effort only after fresh-session cache key, temporary cwd, runtime msg/fco UUID identity graph and fresh tool token normalization','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'exact user prompt phrase only after fresh-session cache key, temporary cwd, runtime msg/fco UUID identity graph and fresh tool token normalization','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()
@@ -141,12 +150,8 @@ def main():
    for arm in ['A','B']:
     results.append(run_arm(relay,arm,len(results)+1,binary,out))
     if not clean(results[-1]):break
-   if len(results)==2 and all(clean(r) for r in results) and bool(results[0].get('passed')) != bool(results[1].get('passed')):
-    for arm in ['B','A']:
-     results.append(run_arm(relay,arm,len(results)+1,binary,out))
-     if not clean(results[-1]):break
   finally:write(out/'relay.json',relay.summary())
- write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
+ write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'prompt_ab','request_limit':4,'results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:

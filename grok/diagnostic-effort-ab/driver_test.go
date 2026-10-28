@@ -42,7 +42,12 @@ func TestEffortExperimentFirstTurn(t *testing.T) {
 		Model: "grok-4.6", BaseURL: endpoint.String(), APIKey: os.Getenv("GROK_API_KEY"),
 		Subject: Subject{Binary: wrapper, SHA256: hex.EncodeToString(sum[:]), Target: "x86_64-unknown-linux-musl", Environment: "effort-experiment", LocalUnverified: true},
 	}, arm)
+	variant := "reason"
+	if arm == "B" {
+		variant = "copy"
+	}
 	result := map[string]any{
+		"experiment": "prompt_ab", "prompt_variant": variant,
 		"arm": arm, "model": "grok-4.6", "stage": evidence.Stage,
 		"first_turn_completed": evidence.FirstCompleted,
 		"first_token_matches":  evidence.FirstRecall,
@@ -93,14 +98,15 @@ func effortExperimentFirstTurn(ctx context.Context, options Options, arm string)
 			defer observer.mu.Unlock()
 			*evidence = observer.observations
 		}()
+		prompt := "Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable."
+		if arm == "B" {
+			prompt = "Call grok_history_probe, copy its returned token, then return JSON with the exact token as the token field, or null if unavailable."
+		}
 		turn := protocolv2.TurnStartParams{
 			OutputSchema: &schema,
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-				Text: "Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable.",
+				Text: prompt,
 			})},
-		}
-		if arm == "B" {
-			turn.Effort = protocolv2.Value(protocolv2.ReasoningEffort("high"))
 		}
 		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
 		experimental := true

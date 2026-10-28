@@ -1,61 +1,41 @@
-# Temporary effort A/B diagnostic — never merge
+# Temporary prompt A/B diagnostic — never merge
 
-This dispatch-only branch is an authorized, bounded experiment, not a change to the
-formal Live oracle. The registered grok-live workflow is overridden on this branch
-only. Do not merge this branch or rerun its workflow.
+Dispatch-only experiment branch; no formal Live oracle or version branch changes.
+This revision tests only the first user prompt phrase. A says `reason about its
+returned token`; B says `copy its returned token`. All other words, model, tool,
+strict token schema, profile and permissions stay unchanged. Both arms omit effort.
+The model is grok-4.6. Fixed binary artifact 12769806175 has runtime SHA-256
+47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16;
+harness is e3c0812c7d47c567d42a181c921a30aa3c35cdc0.
 
-Fixed subject: artifact 12769806175, runtime SHA-256
-47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16,
-harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0, model grok-4.6.
-A leaves effort unset; B sets high. The original first-turn task, strict token
-schema, dynamic tool and isolated profile remain identical. This is not the
-second-turn history recall acceptance test.
+Exactly A then B, at most two HTTP requests each and four total; no reverse pair,
+automatic retries or redirects. Reservations occur before sending; errors never
+refund budget. Second sends must be paired tool results, not initial-request
+retries. Unknown failures, timeout or incomplete cleanup stop the experiment.
+A 403 is an observed response, not proof of a particular internal policy.
+Do not rerun or start another dispatch without authorization.
 
-The first CI stage has no backend secret. It validates the fixed package, compiles
-the driver, runs unit tests and uses the actual binary against a synthetic loopback
-server. Both initial and tool-continuation requests must differ only in effort,
-after explicitly normalizing fresh-session cache keys, temporary working directory
-and fresh random tool token. It also checks that a 403 causes exactly one request.
-Only an exact source/runtime-bound passing offline proof permits the secret step.
-Local unit tests pass; the actual-binary loopback gate cannot run in the local
-sandbox because its daemon directory is policy-restricted. CI must establish it.
+Before the backend secret is available, CI validates the fixed package and uses
+the actual binary against a synthetic loopback server. Both arms and the separate
+403/zero-retry check run before aggregation. The gate requires the exact prompt
+variant, effort absent and all other request fields equal after explicit fresh
+identity normalization: session cache key, temporary cwd, random tool token, and
+runtime message/msg_UUID or function_call_output/fco_UUID identities. ID mappings
+are per arm and shared across both requests, preserving replay identity relations.
+Call IDs, server IDs, arbitrary unknown IDs, cipher and all other content are not
+normalized. Only the exact B user-message text maps to A for comparison; outgoing
+requests are never rewritten. Any unknown difference prevents real execution.
 
-Real order is A/B, then B/A only if the first pair differs in success. At most four
-arms, two HTTP sends per arm and eight total; reservations happen before sending.
-No redirects or automatic retries. A second send must be the paired tool result,
-not an initial-request retry. HTTP errors lock the arm. Unknown/transport/cleanup
-failures stop the experiment; they are not evidence of model refusal. No reruns.
+Safe artifacts include all arm outcomes, cleanup, initial/continuation shapes,
+UTC/status/request IDs, schema digest, cipher presence/length and comparison JSON
+paths/types/lengths/hashes/structural markers. No credential, request text, private
+reasoning or ciphertext is stored. Offline reports are written even on failure.
+Only exact runtime/source-bound offline proof permits the subsequent secret step.
+The relay buffers SSE with a 90-second socket timeout: these shared experimental
+transport changes limit extrapolation and a transport failure is not a model 403.
 
-The fixed loopback relay forwards to the existing same-upstream proxy endpoint.
-It buffers SSE and has a 90-second socket timeout; these shared transport changes
-limit extrapolation to production. Safe evidence contains counters, statuses,
-request IDs and semantic result summaries, never credentials, raw requests,
-private reasoning or ciphertext. Only explicitly listed JSON files are uploaded.
-A single successful arm does not prove causality. No production assertion changes.
-
-## Offline diagnostic completeness
-
-Run 40609515160 verified the package and both actual-binary loopback tool rounds,
-but stopped on a non-effort body difference before the real step (zero real
-requests). Its old comparison did not retain the differing paths; the cause is
-not yet established. The updated gate records both request pairs, safe raw and
-normalized difference summaries (paths, types, sizes, hashes and structural
-markers, never text contents), arm cleanup and an independent denial/retry check
-before aggregating. Unknown differences still fail closed; no additional fields
-are silently normalized. The real relay records per-send UTC, phase, bounded safe
-request shape, status and request IDs. An HTTP status alone does not establish the
-reason for a refusal. Execute a new dispatch only when explicitly directed; the
-eight-send limit is per run, not a cross-run authorization ledger.
-
-Run 40610351031 established the remaining difference precisely: only locally
-created `input[*].id` values differed after the documented normalization. All
-other comparisons, tool continuation, cleanup and the single-request denial check
-passed; real requests remained zero. The comparison now maps only typed
-`message`/`msg_UUID` and `function_call_output`/`fco_UUID` identities, with one map
-per arm shared across both HTTP requests. This preserves the identity/replay graph.
-It does not remove arbitrary IDs, alter call_id, mutate outgoing requests, or
-normalize model-provided reasoning/cipher content. Source authority is
-`core/src/session/mod.rs::assign_missing_response_item_id`,
-`protocol/src/response_item_id.rs`, base-instruction IDs in `core/src/client.rs`,
-and the preserved item-ID projection in `codex-api/src/grok_request.rs` at the
-fixed binary source f6086acf.
+Prior effort experiment 40610902144 completed its offline gate and sent exactly
+two real requests: unset and high both received initial HTTP403. Its two earlier
+preparation runs made zero real requests. This prompt experiment is separately
+authorized for at most four requests; unused old budget is not silently reused.
+The branch reuses the registered workflow path but must never be merged.

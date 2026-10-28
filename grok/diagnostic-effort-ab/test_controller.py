@@ -16,12 +16,18 @@ class ControllerTests(unittest.TestCase):
    self.assertEqual(calls,want)
    self.assertNotIn('CREDENTIAL_CANARY',(root/'out'/'summary.json').read_text())
  def test_both_denied_stop_after_pair(self):self.check([{'passed':False,'failure':{'http_status':403}}]*2,['A','B'])
- def test_difference_reverses_once(self):self.check([{'passed':False,'failure':{'http_status':403}},{'passed':True},{'passed':True},{'passed':False,'failure':{'http_status':403}}],['A','B','B','A'])
+ def test_difference_stops_after_pair(self):self.check([{'passed':False,'failure':{'http_status':403}},{'passed':True}],['A','B'])
  def test_unknown_stops_immediately(self):self.check([{'passed':False,'failure':{'code':'driver_timeout'}}],['A'])
  def test_only_explicit_ephemera_normalized(self):
   a={'prompt_cache_key':'a','reasoning':{},'input':[{'type':'function_call_output','output':'a'*64},{'text':'/tmp/grok-live-123/workspace'}]}
-  b={'prompt_cache_key':'b','reasoning':{'effort':'high'},'input':[{'type':'function_call_output','output':'b'*64},{'text':'/tmp/grok-live-456/workspace'}]}
+  b={'prompt_cache_key':'b','reasoning':{},'input':[{'type':'function_call_output','output':'b'*64},{'text':'/tmp/grok-live-456/workspace'}]}
   self.assertEqual(run.normalized(a),run.normalized(b));b['extra']='different';self.assertNotEqual(run.normalized(a),run.normalized(b))
+ def test_only_exact_user_phrase_is_normalized_effort_is_not(self):
+  a={'reasoning':{},'input':[{'type':'message','role':'user','content':[{'type':'input_text','text':run.PROMPT_A}]}]}
+  b={'reasoning':{},'input':[{'type':'message','role':'user','content':[{'type':'input_text','text':run.PROMPT_B}]}]}
+  self.assertEqual(run.normalized(a),run.normalized(b))
+  b['reasoning']['effort']='high';self.assertNotEqual(run.normalized(a),run.normalized(b))
+  b['reasoning']={};b['input'][0]['role']='developer';self.assertNotEqual(run.normalized(a),run.normalized(b))
 class OfflineDiagnosticsTests(unittest.TestCase):
  def test_difference_report_does_not_dump_values(self):
   report=run.difference_report({'input':[{'text':'SECRET_CANARY grok-live-123'}]}, {'input':[{'text':'PRIVATE_CIPHER_CANARY'}]})
@@ -46,7 +52,7 @@ class OfflineDiagnosticsTests(unittest.TestCase):
    calls.append(ordinal)
    if ordinal==3:
     relay.transport({},{});return {'passed':False,'cleanup_pending':False,'failure':{'http_status':403}}
-   body={'model':'grok-4.6','reasoning':{} if name=='A' else {'effort':'high'},'input':[{'type':'message','text':'DIFFERENT_PRIVATE_'+name}]}
+   body={'model':'grok-4.6','reasoning':{},'input':[{'type':'message','text':'DIFFERENT_PRIVATE_'+name}]}
    # Capture shape without relying on SSE, which is not part of this unit test.
    relay.transport(body,{})
    second={**body,'input':[{'type':'function_call','call_id':'x'},{'type':'function_call_output','call_id':'x','output':'a'*64},{'type':'reasoning','encrypted_content':'opaque-offline-cipher'}]}
@@ -57,6 +63,6 @@ class OfflineDiagnosticsTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'offline_gate_failed'):run.offline_gate(Path('/unused'),out,{})
    report=json.loads((out/'offline-report.json').read_text())
    self.assertEqual(calls,[1,2,3]);self.assertTrue(report['checks']['zero_retry'])
-   self.assertFalse(report['checks']['only_effort_delta']);self.assertEqual(len(report['comparisons']),2)
+   self.assertFalse(report['checks']['only_prompt_delta']);self.assertEqual(len(report['comparisons']),2)
    self.assertNotIn('DIFFERENT_PRIVATE',json.dumps(report));self.assertFalse((out/'proof.json').exists())
 if __name__=='__main__':unittest.main()

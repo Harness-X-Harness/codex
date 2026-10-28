@@ -88,9 +88,9 @@ class Relay:
 
     def begin_arm(self, label, effort):
         with self.lock:
-            if (self.active is not None or label in self.arms or len(self.arms) >= 4
+            if (self.active is not None or label in self.arms or len(self.arms) >= 2
                     or not re.fullmatch(r'[1-4]-[AB]', label)
-                    or effort != (None if label.endswith('-A') else 'high')):
+                    or effort is not None):
                 raise ValueError('invalid arm transition')
             self.arms[label] = {'effort': effort, 'sent': 0, 'failed': False, 'busy': False}
             self.active = label
@@ -152,7 +152,7 @@ class Relay:
             label = self.active
             arm = self.arms.get(label)
             observed['phase'] = 'continuation' if arm and arm['sent'] else 'initial'
-            if (arm is None or arm['busy'] or arm['failed'] or arm['sent'] >= 2 or self.total >= 8):
+            if (arm is None or arm['busy'] or arm['failed'] or arm['sent'] >= 2 or self.total >= 4):
                 self.events.append({**observed, 'arm': label, 'state': 'blocked', 'status': 409, 'send_attempted': False})
                 return self.reject()
             items = body.get('input')
