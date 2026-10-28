@@ -1,9 +1,11 @@
 //! Regression coverage for retry advice carried by failed Responses events.
 
 use super::process_responses_event;
-use super::spawn_response_stream;
+use super::spawn_response_stream_with_search;
 use crate::api_bridge::map_api_error;
 use crate::common::ResponseEvent;
+use crate::common::SearchActivityAdmission;
+use crate::provider::ApiDialect;
 use bytes::Bytes;
 use codex_client::StreamResponse;
 use codex_http_client::RetryAfter;
@@ -33,7 +35,7 @@ async fn flex_failure_with_retry_header_ends_stream_immediately() {
             "data: {failure}\n\ndata: {completed}\n\n"
         )))])
         .chain(stream::pending());
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             StreamResponse {
                 status: StatusCode::OK,
                 headers: HeaderMap::new(),
@@ -42,6 +44,8 @@ async fn flex_failure_with_retry_header_ends_stream_immediately() {
             Duration::from_secs(60),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         let error = loop {
             match stream.next().await {

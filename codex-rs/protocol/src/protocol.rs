@@ -1659,6 +1659,8 @@ pub enum EventMsg {
     #[ts(skip)]
     PrivateSessionEvent(PrivateSessionEvent),
 
+    /// Live search presentation only; never creates a canonical item.
+    SearchActivity(crate::SearchActivityEvent),
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
     HookStarted(HookStartedEvent),

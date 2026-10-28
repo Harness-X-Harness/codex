@@ -85,10 +85,10 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
     let maximum = effective_input_token_limit(turn.model_info(), turn.config.model_context_window)
         .saturating_sub(super::request_budget::INPUT_TOKEN_MARGIN);
     let mut context = pending.0.clone();
-    let history = session
-        .clone_history()
-        .await
-        .for_prompt_annotated(&turn.model_info().input_modalities);
+    let history = session.clone_history().await.for_prompt_annotated(
+        &turn.model_info().input_modalities,
+        turn.provider.api_dialect(),
+    );
     context.retain_new_instructions(&history);
     context
         .retain_new_agent_messages(&history)
@@ -151,7 +151,8 @@ pub(crate) async fn finalize(
         ));
     }
     let history_version = history.history_version();
-    let history = history.for_prompt_annotated(&model.input_modalities);
+    let history =
+        history.for_prompt_annotated(&model.input_modalities, step.turn.provider.api_dialect());
     // Use the history that will actually reach the model. Recompute after every
     // compaction retry; evidence removed by compaction must be delivered again.
     context.retain_new_instructions(&history);

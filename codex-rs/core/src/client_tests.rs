@@ -1089,6 +1089,79 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
     Ok(())
 }
 
+#[test]
+fn responses_lite_tool_shape_follows_explicit_dialect() -> anyhow::Result<()> {
+    let tools = vec![codex_tools::ToolSpec::Function(
+        codex_tools::ResponsesApiTool {
+            name: "lookup".to_string(),
+            description: "Look up a value.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
+            output_schema: None,
+        },
+    )];
+    let prompt = Prompt {
+        tools: tools.clone().into(),
+        // Keep this tool-shape fixture independent of the stock instruction prefix.
+        base_instructions: BaseInstructions {
+            text: String::new(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut model = test_model_info();
+    model.use_responses_lite = true;
+    for wire_api in [WireApi::Responses, WireApi::GrokResponses] {
+        let mut client = test_model_client(SessionSource::Cli);
+        Arc::get_mut(&mut client.state)
+            .expect("test client should have unique session state")
+            .provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Grok".to_string(),
+                base_url: Some("https://api.x.ai/v1".to_string()),
+                wire_api,
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+        let request = client.build_responses_request(
+            &prompt,
+            &model,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &test_responses_metadata_for_client(
+                &client,
+                /*turn_id*/ None,
+                format!("{}:0", client.state.thread_id),
+                /*parent_thread_id*/ None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            /*include_internal*/ false,
+        )?;
+        let [ResponseItem::AdditionalTools { tools: actual, .. }] = request.input.as_slice() else {
+            panic!("expected a Responses-lite tool prefix");
+        };
+        let expected = match wire_api {
+            WireApi::Responses => codex_tools::create_tools_json_for_responses_lite(&tools)?,
+            WireApi::GrokResponses => {
+                let (flat, _) =
+                    codex_tools::project_flat_function_tools(&tools).map_err(anyhow::Error::msg)?;
+                codex_tools::create_tools_json_for_responses_api(&flat)?
+            }
+        };
+        assert_eq!(actual.as_ref(), expected.as_slice());
+        assert_eq!(prompt.tools.as_ref(), tools.as_slice());
+        assert!(request.tools.is_none());
+    }
+    Ok(())
+}
+
 #[test_case::test_case(false; "standard")]
 #[test_case::test_case(true; "responses_lite")]
 fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<()> {
@@ -2237,6 +2310,9 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
     Ok(())
 }
+
+#[path = "client_retired_history_tests.rs"]
+mod retired_history_tests;
 
 #[tokio::test]
 async fn inference_tools_changes_follow_full_specs_across_turns() {

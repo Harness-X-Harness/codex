@@ -18,6 +18,7 @@ mod turn_lookup;
 
 pub(super) use read::list_items;
 pub(super) use read::list_turns;
+pub(super) use read::validate_supported_lineage;
 pub(super) use realtime::list_timeline;
 pub(super) use search::search_thread_occurrences;
 pub(super) use turn_lookup::find_source_turn;
