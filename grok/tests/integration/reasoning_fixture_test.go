@@ -22,12 +22,12 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 		{"summary_omitted", "encrypted_history_changed"},
 		{"summary_null", "encrypted_history_changed"},
 		{"summary_nonempty", "encrypted_history_changed"},
-		{"changed_token", "tool_result_replay_changed"},
+		{"changed_price", "tool_result_replay_changed"},
 		{"changed_cipher", "encrypted_history_changed"},
 		{"wrong_call", "tool_result_binding"},
 		{"schema_omitted", "output_schema_changed"},
 		{"schema_extra", "output_schema_changed"},
-		{"schema_expected_token", "output_schema_changed"},
+		{"schema_expected_amount", "output_schema_changed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			integrationObservation(t)
@@ -39,8 +39,8 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 				t.Helper()
 				body, err := json.Marshal(map[string]any{"model": fixture.model, "stream": true, "store": false,
 					"include": []string{"reasoning.encrypted_content"}, "input": input,
-					"text":  map[string]any{"format": map[string]any{"type": "json_schema", "name": "history", "strict": true, "schema": json.RawMessage(reasoningTokenSchema)}},
-					"tools": []any{map[string]any{"type": "function", "name": "emitted-probe-name", "description": "Call this function directly to invoke `grok_history_probe`. Do not invoke it through another tool.\n\n" + integrationfixture.HistoryProbeDescription}}})
+					"text":  map[string]any{"format": map[string]any{"type": "json_schema", "name": "history", "strict": true, "schema": json.RawMessage(reasoningAmountSchema)}},
+					"tools": []any{map[string]any{"type": "function", "name": "emitted-probe-name", "description": "Call this function directly to invoke `apple_price_lookup`. Do not invoke it through another tool.\n\n" + integrationfixture.HistoryProbeDescription}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -54,7 +54,7 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 						if tc.name == "schema_extra" {
 							schema["additionalProperties"] = true
 						} else {
-							schema["properties"].(map[string]any)["token"].(map[string]any)["const"] = strings.Repeat("a", 64)
+							schema["properties"].(map[string]any)["amount"].(map[string]any)["const"] = 14
 						}
 					}
 					body, _ = json.Marshal(changed)
@@ -69,30 +69,30 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 				fixture.ServeHTTP(w, r)
 				return w
 			}
-			input := []any{message("user", "Call grok_history_probe, then return its token.")}
+			input := []any{message("user", reasoningFirstPrompt)}
 			if request(input).Code != http.StatusOK {
 				t.Fatal("fixture did not issue probe")
 			}
-			token := strings.Repeat("a", 64)
+			priceResult := `{"unit_price_yuan":7}`
 			reasoning := map[string]any{"type": "reasoning", "encrypted_content": reasoningHTTPCipher, "summary": []any{}}
-			output := map[string]any{"type": "function_call_output", "call_id": reasoningHTTPCall, "output": token}
+			output := map[string]any{"type": "function_call_output", "call_id": reasoningHTTPCall, "output": priceResult}
 			input = append(input, reasoning,
 				map[string]any{"type": "function_call", "call_id": reasoningHTTPCall, "name": "emitted-probe-name", "arguments": "{}"}, output)
 			if request(input).Code != http.StatusOK {
 				t.Fatal("fixture did not accept paired tool result")
 			}
-			input = append(input, message("assistant", reasoningTokenReply(token)), message("user", "Recall the exact token returned by the tool in the previous turn without another tool."))
+			input = append(input, message("assistant", reasoningAmountReply(priceResult, 2)), message("user", reasoningContinuationPrompt))
 			switch tc.name {
 			case "equivalent_json_string":
-				output["output"] = json.RawMessage(`"\u0061` + strings.Repeat("a", 63) + `"`)
+				output["output"] = json.RawMessage(`"\u007b\"unit_price_yuan\":7}"`)
 			case "summary_omitted":
 				delete(reasoning, "summary")
 			case "summary_null":
 				reasoning["summary"] = nil
 			case "summary_nonempty":
 				reasoning["summary"] = []any{map[string]any{"type": "summary_text", "text": "unexpected summary"}}
-			case "changed_token":
-				output["output"] = strings.Repeat("b", 64)
+			case "changed_price":
+				output["output"] = `{"unit_price_yuan":8}`
 			case "changed_cipher":
 				reasoning["encrypted_content"] = "different-opaque-cipher"
 			case "wrong_call":

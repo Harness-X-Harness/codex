@@ -9,7 +9,7 @@ import (
 // MessagePhase is owned by protocol/src/models.rs: commentary and partial are
 // nonterminal; missing phase keeps the provider's legacy compatibility path.
 func TestHistoryReplyPhaseSelection(t *testing.T) {
-	const token = "controlled-history-result"
+	const token = `{"unit_price_yuan":7}`
 	item := func(id, phase, text string) historyItem {
 		return historyItem{Type: "agentMessage", ID: id, Phase: phase, Text: historyTestJSON(text)}
 	}
@@ -39,7 +39,7 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 				name = "summary"
 			}
 			t.Run(tc.name+"/"+name, func(t *testing.T) {
-				probe := historyProbe{token: token}
+				probe := historyProbe{unitPrice: 7, toolResult: token}
 				reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 				if summary {
 					if err := probe.completedTurn(historyTurn{Status: "completed", Items: tc.items}, &reply); err != nil {
@@ -67,7 +67,7 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 		{item("summary", "commentary", token)},
 		{item("summary", "", "wrong")},
 	} {
-		probe := historyProbe{token: token}
+		probe := historyProbe{unitPrice: 7, toolResult: token}
 		reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 		if err := probe.completedItem(item("earlier", "final_answer", token), &reply); err != nil {
 			t.Fatal(err)
@@ -82,8 +82,8 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 }
 
 func TestHistoryReplyPhaseIdentityConflict(t *testing.T) {
-	const token = "controlled-history-result"
-	probe := historyProbe{token: token}
+	const token = `{"unit_price_yuan":7}`
+	probe := historyProbe{unitPrice: 7, toolResult: token}
 	reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 	for _, item := range []historyItem{
 		{Type: "agentMessage", ID: "a", Phase: "final_answer", Text: historyTestJSON(token)},
@@ -108,14 +108,14 @@ func TestHistoryReplyPhaseIdentityConflict(t *testing.T) {
 }
 
 func TestHistoryEmptyReplyIdentity(t *testing.T) {
-	const token = "controlled-history-result"
+	const token = `{"unit_price_yuan":7}`
 	for _, summary := range []bool{false, true} {
 		name := "items"
 		if summary {
 			name = "summary"
 		}
 		t.Run("missing_identity/"+name, func(t *testing.T) {
-			probe := historyProbe{token: token}
+			probe := historyProbe{unitPrice: 7, toolResult: token}
 			reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 			item := historyItem{Type: "agentMessage", Phase: "final_answer"}
 			var err error
@@ -131,7 +131,7 @@ func TestHistoryEmptyReplyIdentity(t *testing.T) {
 	}
 	for _, kind := range []string{"content", "phase"} {
 		t.Run("same_id_"+kind+"_conflict", func(t *testing.T) {
-			probe := historyProbe{token: token}
+			probe := historyProbe{unitPrice: 7, toolResult: token}
 			reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 			empty := historyItem{Type: "agentMessage", ID: "empty", Phase: "final_answer"}
 			changed := empty
@@ -152,10 +152,21 @@ func TestHistoryEmptyReplyIdentity(t *testing.T) {
 	}
 }
 
-func historyTestJSON(token string) string {
+func historyTestJSON(token string, quantities ...int) string {
+	quantity := 2
+	if len(quantities) != 0 {
+		quantity = quantities[0]
+	}
 	if token == "" || token == " \n " {
 		return token
 	}
-	data, _ := json.Marshal(map[string]string{"token": token})
+	var price struct {
+		UnitPrice int `json:"unit_price_yuan"`
+	}
+	if json.Unmarshal([]byte(token), &price) == nil && price.UnitPrice > 0 {
+		data, _ := json.Marshal(map[string]int{"amount": quantity * price.UnitPrice})
+		return string(data)
+	}
+	data, _ := json.Marshal(map[string]string{"amount": token})
 	return string(data)
 }
