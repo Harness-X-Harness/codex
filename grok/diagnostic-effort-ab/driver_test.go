@@ -38,16 +38,23 @@ func TestEffortExperimentFirstTurn(t *testing.T) {
 	sum := sha256.Sum256(contents)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
+	if arm == "B" {
+		ctx, err = integrationfixture.WithShippedProfile(ctx, endpoint.String())
+		if err != nil {
+			t.Fatal("shipped endpoint configuration failed")
+		}
+	}
 	evidence, cause := effortExperimentFirstTurn(ctx, Options{
-		Model: "grok-4.6", BaseURL: endpoint.String(), APIKey: os.Getenv("GROK_API_KEY"),
+		shippedProfile: arm == "B",
+		Model:          "grok-4.6", BaseURL: endpoint.String(), APIKey: os.Getenv("GROK_API_KEY"),
 		Subject: Subject{Binary: wrapper, SHA256: hex.EncodeToString(sum[:]), Target: "x86_64-unknown-linux-musl", Environment: "effort-experiment", LocalUnverified: true},
 	}, arm)
-	variant := "reason"
+	variant := "isolated"
 	if arm == "B" {
-		variant = "copy"
+		variant = "shipped"
 	}
 	result := map[string]any{
-		"experiment": "prompt_ab", "prompt_variant": variant,
+		"experiment": "profile_control", "profile": variant, "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
 		"arm": arm, "model": "grok-4.6", "stage": evidence.Stage,
 		"first_turn_completed": evidence.FirstCompleted,
 		"first_token_matches":  evidence.FirstRecall,
@@ -99,9 +106,6 @@ func effortExperimentFirstTurn(ctx context.Context, options Options, arm string)
 			*evidence = observer.observations
 		}()
 		prompt := "Call grok_history_probe, reason about its returned token, then return JSON with the exact token as the token field, or null if unavailable."
-		if arm == "B" {
-			prompt = "Call grok_history_probe, copy its returned token, then return JSON with the exact token as the token field, or null if unavailable."
-		}
 		turn := protocolv2.TurnStartParams{
 			OutputSchema: &schema,
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{

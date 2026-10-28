@@ -1,4 +1,4 @@
-name: Temporary bounded reasoning prompt A-B diagnostic
+name: Temporary bounded reasoning profile control
 on:
   workflow_dispatch:
 permissions:

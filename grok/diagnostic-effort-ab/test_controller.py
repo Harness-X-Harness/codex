@@ -6,7 +6,7 @@ class FakeRelay:
  def __init__(self,**kwargs):pass
  def __enter__(self):return self
  def __exit__(self,*args):pass
- def summary(self):return {'real_http_requests':0}
+ def summary(self):return {'sent':0}
 class ControllerTests(unittest.TestCase):
  def check(self,results,want):
   with tempfile.TemporaryDirectory() as t:
@@ -22,9 +22,9 @@ class ControllerTests(unittest.TestCase):
   a={'prompt_cache_key':'a','reasoning':{},'input':[{'type':'function_call_output','output':'a'*64},{'text':'/tmp/grok-live-123/workspace'}]}
   b={'prompt_cache_key':'b','reasoning':{},'input':[{'type':'function_call_output','output':'b'*64},{'text':'/tmp/grok-live-456/workspace'}]}
   self.assertEqual(run.normalized(a),run.normalized(b));b['extra']='different';self.assertNotEqual(run.normalized(a),run.normalized(b))
- def test_only_exact_user_phrase_is_normalized_effort_is_not(self):
+ def test_prompt_and_effort_are_not_normalized(self):
   a={'reasoning':{},'input':[{'type':'message','role':'user','content':[{'type':'input_text','text':run.PROMPT_A}]}]}
-  b={'reasoning':{},'input':[{'type':'message','role':'user','content':[{'type':'input_text','text':run.PROMPT_B}]}]}
+  b={'reasoning':{},'input':[{'type':'message','role':'user','content':[{'type':'input_text','text':run.PROMPT_A}]}]}
   self.assertEqual(run.normalized(a),run.normalized(b))
   b['reasoning']['effort']='high';self.assertNotEqual(run.normalized(a),run.normalized(b))
   b['reasoning']={};b['input'][0]['role']='developer';self.assertNotEqual(run.normalized(a),run.normalized(b))
@@ -63,6 +63,6 @@ class OfflineDiagnosticsTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'offline_gate_failed'):run.offline_gate(Path('/unused'),out,{})
    report=json.loads((out/'offline-report.json').read_text())
    self.assertEqual(calls,[1,2,3]);self.assertTrue(report['checks']['zero_retry'])
-   self.assertFalse(report['checks']['only_prompt_delta']);self.assertEqual(len(report['comparisons']),2)
+   self.assertFalse(report['checks']['profile_binding']);self.assertEqual(len(report['comparisons']),2)
    self.assertNotIn('DIFFERENT_PRIVATE',json.dumps(report));self.assertFalse((out/'proof.json').exists())
 if __name__=='__main__':unittest.main()

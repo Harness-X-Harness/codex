@@ -11,7 +11,7 @@ def send(relay, effort=None, path='/v1/responses', continuation=False):
     url=urlsplit(relay.url)
     conn=http.client.HTTPConnection(url.hostname,url.port,timeout=5)
     body={'model':'grok-4.6','reasoning':{} if effort is None else {'effort':effort},'input':[{'type':'function_call','call_id':'call-1'},{'type':'function_call_output','call_id':'call-1','output':CANARY}] if continuation else []}
-    conn.request('POST',path,json.dumps(body),{'Authorization':'Bearer '+CANARY,'Content-Type':'application/json'})
+    conn.request('POST',path,json.dumps(body),{'Authorization':'Bearer '+CANARY,'Content-Type':'application/json','x-codex-turn-metadata':'PRIVATE_HEADER_VALUE'})
     response=conn.getresponse(); data=response.read(); conn.close()
     return response.status,data
 
@@ -23,9 +23,9 @@ class Tests(unittest.TestCase):
             self.assertEqual(headers['Authorization'],'Bearer '+CANARY)
             return 200,{'x-request-id':'safe-123','x-secret':CANARY},b'data: {"type":"response.completed"}\n\n'
         with mock.patch('http.client.HTTPSConnection',side_effect=AssertionError('offline network')), Relay(offline_transport=transport) as relay:
-            with self.assertRaises(ValueError): relay.begin_arm('1-A','high')
+            with self.assertRaises(ValueError): relay.begin_arm('1-A','unsupported')
             for i,arm in enumerate(('A','B'),1):
-                effort = None
+                effort = None if arm == 'A' else 'high'
                 relay.begin_arm(str(i)+'-'+arm,effort)
                 self.assertEqual(send(relay,effort)[0],200)
                 self.assertEqual(send(relay,effort,continuation=True)[0],200)
@@ -34,6 +34,11 @@ class Tests(unittest.TestCase):
             self.assertEqual(relay.summary()['sent'],4)
             self.assertEqual(len(calls),4)
             self.assertNotIn(CANARY,json.dumps(relay.summary()))
+            event=relay.summary()['events'][0]
+            self.assertIn('authorization',event['headers']['incoming'])
+            self.assertIn('authorization',event['headers']['forwarded'])
+            self.assertIn('x-codex-turn-metadata',event['headers']['dropped'])
+            self.assertNotIn('PRIVATE_HEADER_VALUE',json.dumps(relay.summary()))
             with self.assertRaises(ValueError): relay.begin_arm('3-A',None)
             with self.assertRaises(ValueError): relay.begin_arm('1-A',None)
 

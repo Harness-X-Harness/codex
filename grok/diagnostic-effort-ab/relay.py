@@ -90,7 +90,7 @@ class Relay:
         with self.lock:
             if (self.active is not None or label in self.arms or len(self.arms) >= 2
                     or not re.fullmatch(r'[1-4]-[AB]', label)
-                    or effort is not None):
+                    or effort not in (None, 'high')):
                 raise ValueError('invalid arm transition')
             self.arms[label] = {'effort': effort, 'sent': 0, 'failed': False, 'busy': False}
             self.active = label
@@ -120,7 +120,13 @@ class Relay:
         return status, {'Content-Type': 'application/json'}, b'{"error":"experiment relay rejected request"}'
 
     def handle(self, request):
-        observed = {'utc': datetime.now(timezone.utc).isoformat()}
+        known_headers = {'authorization','content-type','accept','accept-encoding','content-length','host','connection','user-agent','session-id','thread-id','originator','version','x-client-request-id','x-codex-beta-features','x-codex-guardian','x-codex-installation-id','x-codex-parent-thread-id','x-codex-routing-hint','x-codex-turn-metadata','x-codex-turn-state','x-codex-window-id','x-codex-ws-stream-request-start-ms','x-openai-internal-codex-responses-lite','x-openai-memgen-request','x-openai-subagent','x-responsesapi-include-timing-metrics'}
+        all_names = {name.lower() for name in request.headers}
+        names = sorted(all_names & known_headers)
+        observed = {'utc': datetime.now(timezone.utc).isoformat(),
+                    'headers': {'incoming': names[:64], 'forwarded': [], 'dropped': names[:64],
+                                'names_truncated': len(names) > 64, 'unknown_name_count':len(all_names-known_headers),
+                                'invalid_name_count': sum(not (len(name) <= 64 and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', name)) for name in request.headers)}}
         # Parse locally before reserving; malformed or unrelated routes never reach upstream.
         try:
             if request.path != PATH or request.headers.get('Transfer-Encoding') is not None:
@@ -146,6 +152,9 @@ class Relay:
             for name in ('User-Agent', 'session-id', 'thread-id', 'x-client-request-id', 'originator', 'version'):
                 if request.headers.get(name):
                     headers[name] = request.headers[name]
+            forwarded = sorted(name.lower() for name in headers)
+            observed['headers']['forwarded'] = forwarded
+            observed['headers']['dropped'] = [name for name in names if name not in forwarded][:64]
         except (ValueError, OSError, RecursionError, TypeError):
             return self.record_rejection('parse_or_read', 400, observed)
         with self.lock:
