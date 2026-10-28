@@ -34,7 +34,7 @@ def main():
         raise ValueError("relay")
     if provider["base_url"] != os.environ["GROK_EFFORT_BASE_URL"]:
         raise ValueError("relay_identity")
-    expected_model = {"A": "grok-4.6", "B": "grok-4.7"}[os.environ["GROK_EFFORT_ARM"]]
+    expected_model = "grok-4.7"
     if config["model"] != expected_model or config["model_provider"] != "grok":
         raise ValueError("model")
     if "request_max_retries" in provider or "stream_max_retries" in provider:

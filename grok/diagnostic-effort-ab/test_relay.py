@@ -104,6 +104,32 @@ class Tests(unittest.TestCase):
             self.assertTrue(all(e['utc'].endswith('+00:00') and e['status']==400 and not e['send_attempted'] for e in events))
             self.assertNotIn(CANARY,json.dumps(events))
 
+    def test_header_treatment_only_changes_three_headers_not_body(self):
+        captured=[]
+        special=('x-codex-beta-features','x-codex-turn-metadata','x-codex-window-id')
+        def transport(body,headers):
+            captured.append((body,dict(headers)))
+            return 200,{},b'data: {"type":"response.completed"}\n\n'
+        with Relay(offline_transport=transport) as relay:
+            for label in ('1-A','2-B'):
+                relay.begin_arm(label,'high')
+                url=urlsplit(relay.url)
+                conn=http.client.HTTPConnection(url.hostname,url.port,timeout=5)
+                headers={'Authorization':'Bearer '+CANARY,'Content-Type':'application/json',
+                         **{name:CANARY for name in special}, 'x-unapproved':CANARY}
+                conn.request('POST','/v1/responses',json.dumps({'model':'grok-4.6','reasoning':{'effort':'high'},'input':[]}),headers)
+                response=conn.getresponse();response.read();conn.close()
+                self.assertEqual(response.status,200)
+                relay.end_arm()
+            self.assertEqual(captured[0][0],captured[1][0])
+            for name in special:
+                self.assertNotIn(name,captured[0][1])
+                self.assertEqual(captured[1][1][name],CANARY)
+                self.assertIn(name,relay.summary()['events'][0]['headers']['dropped'])
+                self.assertIn(name,relay.summary()['events'][1]['headers']['forwarded'])
+            self.assertNotIn('x-unapproved',captured[1][1])
+            self.assertNotIn(CANARY,json.dumps(relay.summary()))
+
     def test_concurrent_reservation_cannot_bypass_arm(self):
         entered=threading.Event();release=threading.Event();calls=[]
         def transport(body,headers):

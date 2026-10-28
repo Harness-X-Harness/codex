@@ -1,38 +1,36 @@
-# Temporary same-time profile control — never merge
+# Temporary native-header A/B control — never merge
 
-Dispatch-only experiment. A uses the isolated reasoning fixture; B uses the
-original shipped profile/catalog with the existing controlled-endpoint helper.
-Both use grok-4.6, the original first-turn history-probe prompt, the same strict
-token schema and dynamic probe. Neither explicitly overrides effort. The shipped
-catalog defaults to high, whereas isolated has no effort. This is an intentional
-multi-variable positive control, not evidence that any one profile field causes
-an outcome. Sandbox/approval settings are not elevated or changed.
+Both arms use the original shipped profile/catalog, grok-4.6 thread, original
+first-turn history-probe prompt, strict token schema and dynamic probe. Neither
+overrides effort (shipped defaults to high). Sandbox and approval are unchanged.
+A keeps the previous relay header policy. B additionally forwards exactly three
+observed native headers: x-codex-beta-features, x-codex-turn-metadata and
+x-codex-window-id. Values go only to the same fixed endpoint and are never logged.
+This tests the header group, not the causality of any individual header.
 
 Fixed binary artifact 12769806175, runtime SHA-256
 47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16,
-harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0. Shipped's config default model
-4.7 is preserved, but the actual thread and outgoing request must be 4.6.
+harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0. Config default 4.7 remains
+unchanged, while actual thread and outgoing request must be 4.6.
 
-Only A/B, at most four real HTTP requests (two per arm). No reverse pair, automatic
-retries or redirects. Errors never refund budget. A second request must be the
-paired tool result. Unknown failure or incomplete cleanup stops the batch.
+Only A/B; at most four real HTTP sends (two per arm), no reverse pair, retries or
+redirects. Errors never refund budget. A second request must be the paired tool
+result. Unknown failure or incomplete cleanup stops the batch. Before backend
+secret injection, actual-binary loopback verifies both profiles, same task/schema,
+expected effort, tool rounds, cleanup, 403 zero-retry and the header policy.
+Normalized body equality allows only previously proven fresh-session cache key,
+temporary cwd, random probe token and typed msg/fco identity mapping across both
+requests. Call IDs, arbitrary IDs, prompt text and cipher remain untouched.
+Unknown body differences prevent real execution.
 
-Before the backend secret is available, actual-binary loopback checks verify each
-profile, matching task/schema, expected effort, both tool rounds, cleanup and a
-separate single-request 403. All request differences are reported safely, but the
-control does not require unlike profiles to have identical bodies. The exact
-runtime/source-bound passing proof gates backend access. Actual request model
-and the hard relay budget remain enforced during the real phase.
+All checks run before aggregation; safe reports survive failure. Evidence retains
+header names only from a fixed vocabulary, unknown-name count, bounded request
+shape, digest, status, UTC and request IDs. No credentials, private reasoning,
+ciphertext or complete message text is saved. Host and Content-Length are rebuilt
+by the HTTP library, not omitted upstream. SSE buffering and 90-second socket
+timeout remain shared transport limitations.
 
-Header audit records known incoming/forwarded/dropped header names without values;
-the forwarding policy is unchanged in this batch. JSON diagnostics contain bounded
-shape, types, sizes, hashes, request IDs, UTC and outcomes, never private reasoning,
-ciphertext, credentials or full message content. SSE is buffered with a 90-second
-socket timeout. These shared transport changes limit production extrapolation.
-Do not infer upstream receipt solely from send_attempted=true.
-
-Prior effort and prompt experiments each used two real requests and both arms
-received initial 403. This separately bounded batch tests whether shipped still
-succeeds concurrently through the same relay. Native-direct experimentation is
-not implemented: cancelling an SDK cursor does not necessarily cancel a native
-turn, so it would not by itself enforce a one-request budget.
+Previous batches: effort A/B 2 sends, prompt A/B 2, concurrent isolated/shipped
+control 2; all initial HTTP403. The last batch proved both profiles lost precisely
+the three headers above. Cumulative real requests before this batch: 6. The
+workflow is temporary/dispatch-only; never merge or modify the formal Live oracle.

@@ -1,4 +1,4 @@
-name: Temporary bounded reasoning profile control
+name: Temporary bounded native header control
 on:
   workflow_dispatch:
 permissions:

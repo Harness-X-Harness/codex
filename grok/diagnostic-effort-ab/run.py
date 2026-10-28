@@ -1,4 +1,4 @@
-"""One temporary profile control; no configurable model, upstream, or request budget."""
+"""One temporary header control; no configurable model, upstream, or request budget."""
 import argparse,hashlib,json,os,re,subprocess,tempfile,signal
 from pathlib import Path
 from relay import Relay
@@ -34,7 +34,7 @@ def normalized(body,item_ids=None):
   return v
  return walk(body)
 def run_arm(relay,arm,ordinal,binary,out,offline=False):
- relay.begin_arm(f'{ordinal}-{arm}',None if arm=='A' else 'high')
+ relay.begin_arm(f'{ordinal}-{arm}','high')
  result=out/f'arm-{ordinal}-{arm}.json';env=os.environ.copy()
  env.update(GROK_EFFORT_ARM=arm,GROK_EFFORT_BASE_URL=relay.url,GROK_EFFORT_WRAPPER=str(ROOT/'wrapper.py'),GROK_EFFORT_RESULT=str(result),GROK_EFFORT_REAL_BINARY=str(binary),GROK_EFFORT_REAL_SHA256=RUNTIME_SHA)
  if offline:env['GROK_API_KEY']='offline-fixture-key'
@@ -112,7 +112,7 @@ def offline_gate(binary,out,identity):
    report['comparisons'].append(comparison)
   for arm in ['A','B']:
    for req in requests[arm]:
-    efforts.append(req.get('reasoning',{}).get('effort')==(None if arm=='A' else 'high'))
+    efforts.append(req.get('reasoning',{}).get('effort')=='high')
     expected=PROMPT_A
     prompts.append(sum(part.get('type')=='input_text' and part.get('text')==expected for item in req.get('input',[]) if item.get('type')=='message' and item.get('role')=='user' for part in item.get('content',[]))==1)
    if len(requests[arm])==2:
@@ -122,12 +122,15 @@ def offline_gate(binary,out,identity):
   checks['prompt_binding']=len(prompts)==4 and all(prompts)
   checks['continuations']=len(continuations)==2 and all(continuations)
   checks['same_schema']=len(requests['A'])==2 and len(requests['B'])==2 and all(a.get('text')==b.get('text') for a,b in zip(requests['A'],requests['B']))
-  checks['profile_binding']=report['arms']['A'].get('profile')=='isolated' and report['arms']['B'].get('profile')=='shipped' and report['arms']['B'].get('shipped_catalog') is True
+  checks['profile_binding']=all(report['arms'][arm].get('profile')=='shipped' and report['arms'][arm].get('shipped_catalog') is True for arm in ['A','B'])
+  checks['same_body']=len(report['comparisons'])==2 and all(c.get('normalized',{}).get('count')==0 for c in report['comparisons'])
+  native_headers={'x-codex-beta-features','x-codex-turn-metadata','x-codex-window-id'}
+  checks['header_policy']=all(len(report['arms'][arm]['relay']['events'])==2 and all(native_headers.issubset(set(e.get('headers',{}).get('incoming',[]))) and native_headers.issubset(set(e.get('headers',{}).get('dropped' if arm=='A' else 'forwarded',[]))) for e in report['arms'][arm]['relay']['events']) for arm in ['A','B'])
   report['passed']=all(checks.values())
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'profile control: same task/schema, intended profile differences reported, not single-variable causality','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'header control: same normalized body/profile, only three native header forwarding policy differs','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()
@@ -148,7 +151,7 @@ def main():
     results.append(run_arm(relay,arm,len(results)+1,binary,out))
     if not clean(results[-1]):break
   finally:write(out/'relay.json',relay.summary())
- write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'profile_control','request_limit':4,'previous_real_requests':4,'cumulative_real_requests':4+relay.summary()['sent'],'results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
+ write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'header_control','request_limit':4,'previous_real_requests':6,'cumulative_real_requests':6+relay.summary()['sent'],'results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:

@@ -120,6 +120,8 @@ class Relay:
         return status, {'Content-Type': 'application/json'}, b'{"error":"experiment relay rejected request"}'
 
     def handle(self, request):
+        with self.lock:
+            request_arm = self.active
         known_headers = {'authorization','content-type','accept','accept-encoding','content-length','host','connection','user-agent','session-id','thread-id','originator','version','x-client-request-id','x-codex-beta-features','x-codex-guardian','x-codex-installation-id','x-codex-parent-thread-id','x-codex-routing-hint','x-codex-turn-metadata','x-codex-turn-state','x-codex-window-id','x-codex-ws-stream-request-start-ms','x-openai-internal-codex-responses-lite','x-openai-memgen-request','x-openai-subagent','x-responsesapi-include-timing-metrics'}
         all_names = {name.lower() for name in request.headers}
         names = sorted(all_names & known_headers)
@@ -161,7 +163,7 @@ class Relay:
             label = self.active
             arm = self.arms.get(label)
             observed['phase'] = 'continuation' if arm and arm['sent'] else 'initial'
-            if (arm is None or arm['busy'] or arm['failed'] or arm['sent'] >= 2 or self.total >= 4):
+            if (label != request_arm or arm is None or arm['busy'] or arm['failed'] or arm['sent'] >= 2 or self.total >= 4):
                 self.events.append({**observed, 'arm': label, 'state': 'blocked', 'status': 409, 'send_attempted': False})
                 return self.reject()
             items = body.get('input')
@@ -177,6 +179,14 @@ class Relay:
                 self.events.append({**observed, 'arm': label, 'state': 'effort_mismatch', 'status': 400, 'send_attempted': False})
                 arm['failed'] = True
                 return self.reject(400)
+            # Bind the fixed header treatment to the same arm as this reservation.
+            if label.endswith('-B'):
+                for name in ('x-codex-beta-features', 'x-codex-turn-metadata', 'x-codex-window-id'):
+                    if request.headers.get(name):
+                        headers[name] = request.headers[name]
+            forwarded = sorted(name.lower() for name in headers)
+            observed['headers']['forwarded'] = forwarded
+            observed['headers']['dropped'] = [name for name in names if name not in forwarded][:64]
             # Atomic reservation includes timeouts and all failed upstream sends. Never refunded.
             self.total += 1
             arm['sent'] += 1

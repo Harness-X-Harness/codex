@@ -38,23 +38,21 @@ func TestEffortExperimentFirstTurn(t *testing.T) {
 	sum := sha256.Sum256(contents)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	if arm == "B" {
-		ctx, err = integrationfixture.WithShippedProfile(ctx, endpoint.String())
-		if err != nil {
-			t.Fatal("shipped endpoint configuration failed")
-		}
+	ctx, err = integrationfixture.WithShippedProfile(ctx, endpoint.String())
+	if err != nil {
+		t.Fatal("shipped endpoint configuration failed")
 	}
 	evidence, cause := effortExperimentFirstTurn(ctx, Options{
-		shippedProfile: arm == "B",
+		shippedProfile: true,
 		Model:          "grok-4.6", BaseURL: endpoint.String(), APIKey: os.Getenv("GROK_API_KEY"),
 		Subject: Subject{Binary: wrapper, SHA256: hex.EncodeToString(sum[:]), Target: "x86_64-unknown-linux-musl", Environment: "effort-experiment", LocalUnverified: true},
 	}, arm)
-	variant := "isolated"
+	variant := "Alegacy"
 	if arm == "B" {
-		variant = "shipped"
+		variant = "Bnative_three"
 	}
 	result := map[string]any{
-		"experiment": "profile_control", "profile": variant, "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
+		"experiment": "header_control", "profile": "shipped", "header_policy": variant, "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
 		"arm": arm, "model": "grok-4.6", "stage": evidence.Stage,
 		"first_turn_completed": evidence.FirstCompleted,
 		"first_token_matches":  evidence.FirstRecall,
