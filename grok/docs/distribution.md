@@ -31,8 +31,7 @@ must be verified against **that branch's** current workflow; neither this
 document nor workflow YAML alone proves a job was invoked or passed.
 
 - The ordinary applicable Go/Rust/native/Integration checks support
-  development decisions on the actual changed HEAD. A branch name or
-  separately named release/canonical phase is not proof.
+  development decisions on the actual changed HEAD.
 - Backend-only `grok-facts.yml` remains independent of Codex binary and
   package availability. Real backend observation is not necessarily a
   required paid run for an unrelated code change.
@@ -50,7 +49,7 @@ document nor workflow YAML alone proves a job was invoked or passed.
 
 The current version branch's `grok/TESTING.md` owns exact local commands,
 opt-ins, evidence formats and selection flags. The Go scenario catalog
-owns formal/Smoke/diagnostic selection, not a stage label or copied YAML list.
+owns formal/Smoke/diagnostic selection; workflows consume that catalog.
 
 ## Complete package and honest delivery
 
@@ -68,9 +67,9 @@ performed on its source. Conversely, a successful artifact build does not
 authorize a claim of real backend success, publication or release.
 
 Support target-specific builds when users need them, and reuse the same-run
-artifact for dependent trusted Live when configured. No automatic rebuild
-to hide a failure, blind retry of non-idempotent operations, RC/promotion
-branch or second release-state ledger. Publication is a separately
+artifact for dependent trusted Live when configured. Preserve original build
+failures and check residual effects before retrying non-idempotent operations.
+Publication is a separately
 authorized operation using the existing release workflow and its actual
 security and permissions.
 

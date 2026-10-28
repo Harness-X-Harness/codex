@@ -8,34 +8,30 @@ description: Route Grok stock-version adoption, ordinary contract- and test-driv
 Read `grok/main:grok/docs/carry-forward.md` as the single current development
 policy. Read `review.md` in that directory for review, and
 `distribution.md` for real-backend evidence, packages or publication. This
-skill routes to authorities; it is **not** another stage plan or acceptance
-contract.
+skill routes to those owners.
 
-Resolve only the relevant exact upstream stock input, current target/source
-HEAD, Story/Issue, actual code/test owner and applicable CI before acting.
+Resolve the current target/source HEAD, Story/Issue, code/test owner and
+applicable CI before acting. For stock upgrades, pin old stock, formal old
+Grok HEAD and new stock; first follow the complete-net-delta temporary commit
+and cherry-pick procedure in `carry-forward.md`, then adapt and verify.
 The selected product branch's `grok/TESTING.md` and
 `grok/docs/stories/README.md` own local test commands and current consumer
-claims. Earlier carry versions, C0–C8, Green Prefix and old canonical
-certifications are historical context, **not** prerequisites.
+claims.
 
 For each requested change, identify its observable contract, affected stock
 and product behavior, direct technical dependencies, and nearest executable
 tests. Prefer a focused failing test for a new regression, and preserve
 material positive/negative tests through refactoring. Keep owned generated
 outputs and consumers with the implementation; use actual Rust/Go/native/
-Integration/paid-backend tiers according to impact. Do not build a second
-test runner, proof ledger or fixed milestone sequence.
+Integration/paid-backend tiers according to impact.
 
-Apply [#233](https://github.com/Harness-X-Harness/codex/issues/233):
-accept only the **actual tested HEAD** with all applicable required CI
-settled successful. Distinguish PR synthetic merge, source HEAD, final
-commit, runtime binary/digest and optional artifact/backend evidence.
-Normal merge/rebase/squash obeys configured GitHub rules; there is no
-extra post-merge Green Prefix ceremony. Never relabel a mock, compile-only
-test, skipped suite or historic run as product Live proof.
+Apply the acceptance and evidence rules in `carry-forward.md`. Identify the
+actual tested source and distinguish it from a PR merge subject, runtime
+binary and optional artifact/backend evidence. Use `review.md` to inspect
+the applicable checks and configured repository rules.
 
-Use genuine technical prerequisites to split work, not arbitrary C stages;
-old issues may supply context without changing current requirements.
+Use genuine technical prerequisites or independently testable outcomes to
+split work.
 When tests or Actions are incomplete, report exact run/attempt/subject and
 unresolved evidence rather than assigning an acceptance status.
 
