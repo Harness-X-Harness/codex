@@ -48,7 +48,7 @@ func TestEffortExperimentFirstTurn(t *testing.T) {
 		Subject: Subject{Binary: wrapper, SHA256: hex.EncodeToString(sum[:]), Target: "x86_64-unknown-linux-musl", Environment: "effort-experiment", LocalUnverified: true},
 	}, arm)
 	result := map[string]any{
-		"experiment": "frozen_identity_capture", "profile": "shipped", "header_policy": "native_three", "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
+		"experiment": "full_initial_capture", "profile": "shipped", "header_policy": "native_three", "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
 		"arm": arm, "model": "grok-4.6", "stage": evidence.Stage,
 		"first_turn_completed": evidence.FirstCompleted,
 		"first_token_matches":  evidence.FirstRecall,

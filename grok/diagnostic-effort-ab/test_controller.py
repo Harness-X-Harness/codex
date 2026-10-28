@@ -8,37 +8,20 @@ class FakeRelay:
  def __exit__(self,*args):pass
  def summary(self):return {'sent':0}
 class ControllerTests(unittest.TestCase):
- def test_main_only_runs_one_abba_pair_and_reports_budget(self):
+ def test_main_only_runs_one_mfm_batch_and_reports_budget(self):
   with tempfile.TemporaryDirectory() as t:
-   root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'identity_pair_passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
-   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_pair',return_value=('a','b')) as capture,patch.object(run,'run_pair',side_effect=lambda a,b,report,**kw:report.update(sent=4)) as pair,patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
-   self.assertEqual(capture.call_count,1);pair.assert_called_once_with('a','b',{'sent':4},enabled=True)
+   root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'full_initial_capture_passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
+   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_initial',return_value='full') as capture,patch.object(run,'run_mfm',side_effect=lambda full,report,**kw:report.update(sent=3)) as pair,patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
+   self.assertEqual(capture.call_count,1);pair.assert_called_once_with('full',{'sent':3},enabled=True)
    summary=json.loads((root/'out'/'summary.json').read_text())
-   self.assertEqual(summary['request_limit'],4);self.assertEqual(summary['cumulative_real_requests'],21)
+   self.assertEqual(summary['request_limit'],3);self.assertEqual(summary['cumulative_real_requests'],24)
    self.assertNotIn('CREDENTIAL_CANARY',json.dumps(summary))
  def test_missing_capture_gate_stops_before_any_capture(self):
   with tempfile.TemporaryDirectory() as t:
    root=Path(t);proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA}))
-   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_pair') as capture:
+   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'capture_initial') as capture:
     with self.assertRaisesRegex(ValueError,'offline_proof_binding'):run.main()
    capture.assert_not_called()
- def test_header_identity_graph_and_semantics_not_erased(self):
-  a='11111111-1111-1111-1111-111111111111';b='22222222-2222-2222-2222-222222222222'
-  def headers(identity,stamp):
-   turn='33333333-3333-3333-3333-333333333333' if identity==a else '44444444-4444-4444-4444-444444444444'
-   return {'Authorization':'secret','session-id':identity,'thread-id':identity,'x-codex-window-id':identity+':0','x-codex-turn-metadata':json.dumps({'session_id':identity,'thread_id':identity,'window_id':identity+':0','turn_id':turn,'root_turn_id':turn,'turn_started_at_unix_ms':stamp,'sandbox_mode':'read-only'})}
-  left=headers(a,123);right=headers(b,456)
-  self.assertEqual(run.comparable_headers(left),run.comparable_headers(right))
-  right['thread-id']=a
-  self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
-  right=headers(b,456);metadata=json.loads(right['x-codex-turn-metadata']);metadata['sandbox_mode']='workspace-write';right['x-codex-turn-metadata']=json.dumps(metadata)
-  self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
-  right=headers(b,456);right['x-codex-window-id']=b+':1'
-  self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
-  right=headers(b,456);metadata=json.loads(right['x-codex-turn-metadata']);metadata['root_turn_id']=a;right['x-codex-turn-metadata']=json.dumps(metadata)
-  self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
-  right=headers(b,True)
-  with self.assertRaises(ValueError):run.comparable_headers(right)
  def test_only_explicit_ephemera_normalized(self):
   a={'prompt_cache_key':'a','reasoning':{},'input':[{'type':'function_call_output','output':'a'*64},{'text':'/tmp/grok-live-123/workspace'}]}
   b={'prompt_cache_key':'b','reasoning':{},'input':[{'type':'function_call_output','output':'b'*64},{'text':'/tmp/grok-live-456/workspace'}]}

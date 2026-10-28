@@ -1,4 +1,4 @@
-name: Temporary bounded frozen identity ABBA
+name: Temporary bounded minimal-full-minimal control
 on:
   workflow_dispatch:
 permissions:

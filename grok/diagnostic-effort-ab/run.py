@@ -2,7 +2,7 @@
 import argparse,hashlib,json,os,re,subprocess,tempfile,signal,time
 from pathlib import Path
 from relay import Relay
-from frozen import FrozenReplay, run_pair
+from frozen import FrozenReplay, run_mfm
 from offline_probe import sse
 ROOT=Path(__file__).resolve().parent
 RUNTIME_SHA='47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16'
@@ -131,7 +131,7 @@ def offline_gate(binary,out,identity):
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'frozen ABBA: two comparable fresh-identity initial requests, each replayed twice; no tool continuation','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'MFM: minimal standard HTTP positive control surrounding one frozen native initial request; no tool continuation','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
 def capture_initial(binary,out,offline,arm):
  frozen=FrozenReplay()
@@ -151,64 +151,6 @@ def capture_initial(binary,out,offline,arm):
   write(out/f'capture-{arm}.json',{'result':result,'loopback':safe,'frozen':frozen.summary(),
                          'local_denial_not_upstream':True,'real_http_requests':0})
 
-def comparable_headers(headers):
- headers={k.lower():v for k,v in headers.items()}
- identities={}
- def identity(value):
-  if isinstance(value,str) and re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',value):
-   if value not in identities:identities[value]='SESSION_ID_'+str(len(identities))
-   return identities[value]
-  return value
- def window(value):
-  if isinstance(value,str):
-   match=re.fullmatch(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9]+)',value)
-   if match:return identity(match[1])+':'+match[2]
-  return value
- for name in ('session-id','thread-id','x-client-request-id'):
-  if name in headers:headers[name]=identity(headers[name])
- if 'x-codex-window-id' in headers:headers['x-codex-window-id']=window(headers['x-codex-window-id'])
- if 'x-codex-turn-metadata' in headers:
-  metadata=json.loads(headers['x-codex-turn-metadata'])
-  if not isinstance(metadata,dict):raise ValueError('identity_pair_mismatch')
-  for key in ('installation_id','session_id','thread_id','turn_id','root_turn_id','context_window_id'):
-   if key in metadata:metadata[key]=identity(metadata[key])
-  if 'window_id' in metadata:metadata['window_id']=window(metadata['window_id'])
-  if 'turn_started_at_unix_ms' in metadata:
-   value=metadata['turn_started_at_unix_ms']
-   if type(value) is not int or value<=0:raise ValueError('identity_pair_mismatch')
-   metadata['turn_started_at_unix_ms']=0
-  # Only the existing fixture-root ephemeron, not arbitrary metadata values.
-  def path(value):return re.sub(r'/tmp/grok-live-[A-Za-z0-9_-]+','/tmp/grok-live-SESSION',value)
-  def walk(value):
-   if isinstance(value,str):return path(value)
-   if isinstance(value,list):return [walk(v) for v in value]
-   if isinstance(value,dict):return {path(k):walk(v) for k,v in value.items()}
-   return value
-  headers['x-codex-turn-metadata']=walk(metadata)
- return headers
-
-def capture_pair(binary,out,offline):
- a=capture_initial(binary,out,offline,'A');b=capture_initial(binary,out,offline,'B')
- body_diff=difference_report(normalized(a.body()),normalized(b.body()))
- left,right=a.headers(),b.headers()
- left={k.lower():v for k,v in left.items()};right={k.lower():v for k,v in right.items()}
- report={'normalized_body':body_diff,'header_values_compared_without_retention':True,
-         'changed_header_names':[k for k in sorted(set(left)|set(right)) if left.get(k)!=right.get(k)],
-         'distinct_thread_id':left.get('thread-id')!=right.get('thread-id'),
-         'distinct_raw_body':a.summary()['body_sha256']!=b.summary()['body_sha256'],
-         'headers_comparable':False,'passed':False,'real_http_requests':0}
- try:
-  normalized_left,normalized_right=comparable_headers(left),comparable_headers(right)
-  report['headers_comparable']=normalized_left==normalized_right
-  # Authorization participates in equality but never in diagnostics, even hashed.
-  safe_left={k:v for k,v in normalized_left.items() if k!='authorization'}
-  safe_right={k:v for k,v in normalized_right.items() if k!='authorization'}
-  report['normalized_header_difference']=difference_report(safe_left,safe_right)
-  report['passed']=body_diff['count']==0 and report['headers_comparable'] and report['distinct_thread_id'] and report['distinct_raw_body']
- finally:write(out/'identity-pair.json',report)
- if not report['passed']:raise ValueError('identity_pair_mismatch')
- return a,b
-
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()
  binary=args.binary.resolve();out=args.output.resolve();out.mkdir(mode=0o700,parents=True,exist_ok=False);os.chmod(ROOT/'wrapper.py',0o755)
@@ -216,27 +158,27 @@ def main():
  identity=source_identity()
  if args.offline:
   offline_gate(binary,out,identity)
-  try:capture_pair(binary,out,True)
+  try:capture_initial(binary,out,True,'A')
   except Exception:
    (out/'proof.json').unlink(missing_ok=True)
    raise
-  proof=json.loads((out/'proof.json').read_text());proof['identity_pair_passed']=True;write(out/'proof.json',proof)
+  proof=json.loads((out/'proof.json').read_text());proof['full_initial_capture_passed']=True;write(out/'proof.json',proof)
   return
  proof=json.loads(args.offline_proof.read_text()) if args.offline_proof else {}
- if proof.get('passed') is not True or proof.get('identity_pair_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
+ if proof.get('passed') is not True or proof.get('full_initial_capture_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
  if not os.environ.get('GROK_API_KEY'):raise ValueError('credential_unavailable')
- a,b=capture_pair(binary,out,False)
+ full=capture_initial(binary,out,False,'A')
  report={}
- try:run_pair(a,b,report,enabled=True)
+ try:run_mfm(full,report,enabled=True)
  finally:
   write(out/'replay.json',report)
   write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6',
-   'experiment':'frozen_identity_abba','request_limit':4,'previous_real_requests':17,
-   'cumulative_real_requests':17+report.get('sent',0),'source_files':identity,
-   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; identity bundle, deduplication/cache and temporal effects are not individually identified'})
+   'experiment':'minimal_full_minimal','request_limit':3,'previous_real_requests':21,
+   'cumulative_real_requests':21+report.get('sent',0),'source_files':identity,
+   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; minimal positive control versus complete native request is a multi-feature comparison, not individual-field causality'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:
-  safe_codes={'offline_gate_failed','runtime_identity','offline_roundtrip','offline_effort','offline_non_effort_delta','offline_zero_retry','offline_tool_token','offline_continuation','offline_proof_binding','credential_unavailable','initial_capture_failed','identity_pair_mismatch'}
+  safe_codes={'offline_gate_failed','runtime_identity','offline_roundtrip','offline_effort','offline_non_effort_delta','offline_zero_retry','offline_tool_token','offline_continuation','offline_proof_binding','credential_unavailable','initial_capture_failed'}
   code=str(exc) if type(exc) is ValueError and str(exc) in safe_codes else 'experiment_failure'
   print('bounded experiment stopped: '+code);raise SystemExit(1)

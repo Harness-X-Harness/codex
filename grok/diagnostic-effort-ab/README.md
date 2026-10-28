@@ -1,41 +1,38 @@
-# Temporary frozen identity ABBA — never merge
+# Temporary minimal-full-minimal control — never merge
 
-This observes initial HTTP acceptance only, not a completed Live task. Two new
-native sessions A/B use identical shipped profile, grok-4.6 thread, high effort,
-original prompt, strict token schema, tool definitions and native header policy.
-Fixed artifact 12769806175, runtime SHA256
-47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16;
-harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0.
+One batch observes M-F-M initial HTTP requests on the same grok-4.6 model, fixed
+https://grok.trustedtunnel.app/v1/responses endpoint and existing repository API
+credential. M is a direct minimal standard request: one user text "Reply exactly
+OK.", stream:true, store:false, necessary Authorization/Content-Type/Accept.
+It omits tools, schema, large native instructions, effort and optional native
+headers. F is the frozen actual-binary initial request using the existing shipped
+profile/high effort/native headers/task/schema. This is a multi-feature positive
+control, not a single-variable causal test or a product-oracle change.
 
-Each actual-binary capture talks only to loopback and receives a synthetic local
-403. It must stop with zero executed tools and confirmed cleanup. Raw request
-bytes and forwarded headers remain only in memory. Before any upstream send,
-bodies must compare equal with only the previously proven cache key, typed msg/fco
-identities, temporary cwd and random tool-token normalization. Header comparisons
-allow only explicit native UUID identity fields (one mapping per session preserves
-relationships), native window IDs as UUID:windowNumber with the number preserved,
-positive integer turn start time, and the same temporary paths.
-All other fields, including sandbox, request kind and tool configuration, must
-remain equal. Unknown differences stop with zero upstream requests. A/B must have
-distinct thread IDs and raw bodies; each retains its own bytes for exact replay.
+F uses artifact12769806175/runtime SHA256
+47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16,
+harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0. Before any backend access, the
+actual binary generates F only against loopback, receives a synthetic local403,
+and must stop with zero tools and confirmed cleanup. Raw F bytes and header values
+stay in memory. That local403 is not an upstream observation.
 
-A single sender and process-wide batch guard issue at most four HTTP requests in
-A-B-B-A order. Each response is fully received and connection closed before a
-monotonic wait of at least 60 seconds. No retries, redirects, tool execution or
-continuations. Responses never return to the native driver. Only HTTP200/403
-permit the next observation; unknown transport failures stop. Reservations occur
-before connection and are never refunded. All-identical outcomes stop this
-exploration branch rather than triggering more calls.
+The only sender has one process-wide batch guard, at most3 reservations, M-F-M
+order, and at least60 monotonic seconds after each response completes and closes.
+No retries, redirects, output-tool execution, continuations or additional batches.
+Unknown transport failures stop. Only HTTP200/403 permit the next planned request.
+Responses never return to the native driver. Both M sends use identical bytes.
 
-Evidence contains raw-body SHA256, safe shape, header names but no values or
-authentication hashes, exact per-request identity label/status/request ID/timing,
-and bounded SSE event names. No raw body, secret, private reasoning or ciphertext
-is persisted. All existing offline checks and the actual-binary identity-pair
-gate run before backend secrets; source/runtime hashes bind execution.
+M evidence retains only bounded public assistant output_text (at most256 characters,
+with truncation explicit), public completion/failure status and event type names;
+there is no exact OK/case/punctuation assertion. HTTP200 alone is not model success.
+F retains no output text. No raw request/response, credential value/auth hash,
+private reasoning or ciphertext is persisted. Record body hashes, safe shapes,
+header names, request IDs and actual timing. Safe partial ledger survives errors.
 
-Interpretation is limited: within-A or within-B status changes reject a purely
-deterministic fixed-payload refusal. Stable different outcomes between A/B only
-suggest identity/context-bundle association; caching, deduplication and time/order
-remain confounded. No individual identity field is identified. HTTP200 is not a
-completed business result. Cumulative count before this batch is17, maximum4 more.
-This branch is temporary; never merge or modify formal Live assertions or retries.
+Offline unit tests plus actual-binary loopback source/runtime/capture gates run
+before backend secrets. Two successful M controls with rejected F would show a
+working basic path at those times and associate refusal with the complete request
+family, not identify a particular field. If controls fail or disagree, don't blame
+Live complexity or assume low-probability noise. Cumulative calls before this batch:
+21, at most3 additional calls. Formal Live assertions, retries and permissions are
+unchanged. This diagnostic branch must never be merged.
