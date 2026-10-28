@@ -2,6 +2,9 @@ use codex_protocol::models::ImageReference;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub const GROK_IMAGE_MODEL: &str = "grok-imagine-image-2.0";
+pub const GROK_MAX_EDIT_IMAGES: usize = 3;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ImageGenerationRequest {
     pub prompt: String,

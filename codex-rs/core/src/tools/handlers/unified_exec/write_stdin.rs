@@ -14,6 +14,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::WriteStdinInteractionEvent;
 use crate::unified_exec::WriteStdinRequest;
+use codex_protocol::json_whole_number;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
@@ -25,9 +26,12 @@ use super::post_unified_exec_tool_use_payload;
 struct WriteStdinArgs {
     #[serde(default)]
     chars: String,
-    #[serde(default = "super::default_write_stdin_yield_time_ms")]
+    #[serde(
+        default = "super::default_write_stdin_yield_time_ms",
+        deserialize_with = "json_whole_number::deserialize"
+    )]
     yield_time_ms: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     max_output_tokens: Option<usize>,
 }
 
@@ -155,3 +159,7 @@ impl CoreToolRuntime for WriteStdinHandler {
         post_unified_exec_tool_use_payload(invocation, result)
     }
 }
+
+#[cfg(test)]
+#[path = "write_stdin_numeric_tests.rs"]
+mod numeric_tests;

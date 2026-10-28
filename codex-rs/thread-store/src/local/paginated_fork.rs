@@ -74,7 +74,7 @@ pub(super) async fn prepare(
 
     let history_base = history_base_at_boundary(store, thread_id, boundary, &lineage).await?;
     drop(source_writer_guard);
-    let model_context = Arc::new(model_context::load_for_fork(lineage, history_base).await?);
+    let model_context = Arc::new(model_context::load_for_fork(store, lineage, history_base).await?);
 
     Ok(PreparedFork::new(
         thread_id,

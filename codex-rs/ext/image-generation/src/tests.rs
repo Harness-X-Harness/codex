@@ -1,4 +1,5 @@
 use base64::Engine;
+use codex_api::ApiDialect;
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
@@ -30,12 +31,12 @@ use super::GeneratedImageOutput;
 use super::ImageRequest;
 use super::ImagegenArgs;
 use super::PreparedImageRequest;
-use super::imagegen_tool_spec;
 use super::request_for_call_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
+use crate::policy::ImagePolicy;
 
 const RESULT: &str = "cG5n";
 
@@ -71,38 +72,42 @@ async fn referenced_files_record_the_exact_bytes_read_for_each_request() {
     for first_bytes in [png([255, 0, 0, 255]), png([255, 255, 0, 255])] {
         std::fs::write(first.as_path(), &first_bytes).expect("write first image");
         let inputs = [(&second, &second_bytes), (&first, &first_bytes)];
-        let expected = PreparedImageRequest {
-            request: ImageRequest::Edit(ImageEditRequest {
-                images: inputs
+        for dialect in [ApiDialect::OpenAi, ApiDialect::Grok] {
+            let policy = ImagePolicy::for_dialect(dialect);
+            let stock = dialect == ApiDialect::OpenAi;
+            let expected = PreparedImageRequest {
+                request: ImageRequest::Edit(ImageEditRequest {
+                    images: inputs
+                        .iter()
+                        .map(|(_, bytes)| ImageReference::Inline {
+                            image_url: format!(
+                                "data:image/png;base64,{}",
+                                base64::engine::general_purpose::STANDARD.encode(bytes)
+                            ),
+                        })
+                        .collect(),
+                    prompt: args.prompt.clone(),
+                    background: stock.then_some(ImageBackground::Opaque),
+                    model: policy.model.to_string(),
+                    n: None,
+                    quality: stock.then_some(ImageQuality::Auto),
+                    size: stock.then(|| "auto".to_string()),
+                }),
+                input_images: inputs
                     .iter()
-                    .map(|(_, bytes)| ImageReference::Inline {
-                        image_url: format!(
-                            "data:image/png;base64,{}",
-                            base64::engine::general_purpose::STANDARD.encode(bytes)
-                        ),
+                    .map(|(path, bytes)| ImageGenerationInputImage {
+                        path: (*path).clone(),
+                        sha256: format!("{:x}", Sha256::digest(bytes)),
                     })
                     .collect(),
-                prompt: args.prompt.clone(),
-                background: Some(ImageBackground::Opaque),
-                model: "gpt-image-2".to_string(),
-                n: None,
-                quality: Some(ImageQuality::Auto),
-                size: Some("auto".to_string()),
-            }),
-            input_images: inputs
-                .iter()
-                .map(|(path, bytes)| ImageGenerationInputImage {
-                    path: (*path).clone(),
-                    sha256: format!("{:x}", Sha256::digest(bytes)),
-                })
-                .collect(),
-        };
-        assert_eq!(
-            request_for_call_args(&args, &[], std::slice::from_ref(&environment))
-                .await
-                .expect("edit request"),
-            expected
-        );
+            };
+            assert_eq!(
+                request_for_call_args(&args, &[], std::slice::from_ref(&environment), policy,)
+                    .await
+                    .expect("edit request"),
+                expected
+            );
+        }
     }
 }
 
@@ -123,9 +128,14 @@ async fn unreadable_or_invalid_reference_does_not_build_an_edit_request() {
             num_last_images_to_include: None,
         };
         assert!(
-            request_for_call_args(&args, &[], std::slice::from_ref(&environment))
-                .await
-                .is_err()
+            request_for_call_args(
+                &args,
+                &[],
+                std::slice::from_ref(&environment),
+                ImagePolicy::for_dialect(ApiDialect::OpenAi),
+            )
+            .await
+            .is_err()
         );
     }
 }
@@ -145,7 +155,7 @@ fn artifact_path_sanitizes_session_and_call_ids() {
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
-    let ToolSpec::Namespace(spec) = imagegen_tool_spec() else {
+    let ToolSpec::Namespace(spec) = ImagePolicy::for_dialect(ApiDialect::OpenAi).tool_spec() else {
         panic!("imagegen should advertise a namespace tool");
     };
     assert_eq!(spec.name, IMAGE_GEN_NAMESPACE);
@@ -167,6 +177,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
             },
             &[],
             &[],
+            ImagePolicy::for_dialect(ApiDialect::OpenAi),
         )
         .await
         .expect("generation request should build"),
@@ -266,6 +277,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
             },
             &history,
             &[],
+            ImagePolicy::for_dialect(ApiDialect::OpenAi),
         )
         .await
         .expect("history-backed edit request should build"),
@@ -306,6 +318,7 @@ async fn recent_image_fallback_passes_file_backed_image_to_edit_request() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect("a selected file-backed image should be passed through");
@@ -364,6 +377,7 @@ async fn recent_image_fallback_passes_file_backed_tool_output_to_edit_request() 
             },
         ],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect("a selected file-backed tool output should be passed through");
@@ -402,6 +416,7 @@ async fn conflicting_image_selectors_return_tool_error() {
         },
         &[],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect_err("conflicting selectors should fail");
@@ -431,6 +446,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
         },
         &[],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect_err("too many paths should fail before reading files");
@@ -460,6 +476,7 @@ async fn recent_image_fallback_requires_requested_count() {
             internal_chat_message_metadata_passthrough: None,
         }],
         &[],
+        ImagePolicy::for_dialect(ApiDialect::OpenAi),
     )
     .await
     .expect_err("history-backed edit should require the requested image count");

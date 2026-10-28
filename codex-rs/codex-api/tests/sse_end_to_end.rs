@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used)]
+mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -199,3 +200,6 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
 
     Ok(())
 }
+
+#[path = "sse/grok_responses_tests.rs"]
+mod grok_responses_tests;

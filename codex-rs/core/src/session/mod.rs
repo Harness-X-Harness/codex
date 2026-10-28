@@ -256,6 +256,7 @@ mod guardian_checkpoint;
 mod handlers;
 mod inject;
 mod reasoning_effort;
+pub(crate) mod search_activity;
 mod submission;
 pub(crate) use reasoning_effort::RequestEffortUsage;
 pub(crate) use submission::Submission;
@@ -2809,6 +2810,10 @@ impl Session {
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
+        // Hosted starts without retention must remain reusable after failed attempts.
+        if !matches!(item, TurnItem::WebSearch(_)) {
+            search_activity::record_canonical_identity(turn_context, item);
+        }
         let started_at_ms = turn_context
             .turn_timing_state
             .record_item_started(item.id(), now_unix_timestamp_ms())
@@ -2830,6 +2835,7 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
+        search_activity::record_canonical_identity(turn_context, &item);
         record_turn_ttfm_metric(turn_context, &item).await;
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor

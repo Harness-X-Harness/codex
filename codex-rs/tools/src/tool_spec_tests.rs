@@ -11,8 +11,10 @@ use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
 use crate::create_tools_json_for_responses_lite;
 use crate::create_tools_raw_json_for_responses_api;
+use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
+use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
 use codex_protocol::config_types::WebSearchUserLocationType;
 use pretty_assertions::assert_eq;
@@ -92,9 +94,11 @@ fn web_search_config_converts_to_responses_api_types() {
     assert_eq!(
         ResponsesApiWebSearchFilters::from(ConfigWebSearchFilters {
             allowed_domains: Some(vec!["example.com".to_string()]),
+            excluded_domains: None,
         }),
         ResponsesApiWebSearchFilters {
             allowed_domains: Some(vec!["example.com".to_string()]),
+            excluded_domains: None,
         }
     );
     assert_eq!(
@@ -345,6 +349,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
             indexed_web_access: Some(true),
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
+                excluded_domains: None,
             }),
             user_location: Some(ResponsesApiWebSearchUserLocation {
                 r#type: WebSearchUserLocationType::Approximate,
@@ -410,4 +415,45 @@ fn tool_search_tool_spec_serializes_expected_wire_shape() {
             },
         })
     );
+}
+
+#[test]
+fn web_search_domain_config_reaches_wire_without_empty_exclusions() {
+    for (configured, expected) in [
+        (json!({}), json!({"type": "web_search"})),
+        (
+            json!({"excluded_domains": ["excluded.example"]}),
+            json!({
+                "type": "web_search",
+                "filters": {"excluded_domains": ["excluded.example"]},
+            }),
+        ),
+        (
+            json!({"excluded_domains": []}),
+            json!({"type": "web_search"}),
+        ),
+        (
+            json!({"allowed_domains": ["allowed.example"], "excluded_domains": []}),
+            json!({
+                "type": "web_search",
+                "filters": {"allowed_domains": ["allowed.example"]},
+            }),
+        ),
+    ] {
+        let tool_config: WebSearchToolConfig =
+            serde_json::from_value(configured).expect("parse web search config");
+        let config = WebSearchConfig::from(tool_config);
+        let spec = ToolSpec::WebSearch {
+            external_web_access: None,
+            indexed_web_access: None,
+            filters: config.filters.map(Into::into),
+            user_location: config.user_location.map(Into::into),
+            search_context_size: config.search_context_size,
+            search_content_types: None,
+        };
+        assert_eq!(
+            create_tools_json_for_responses_api(&[spec]).expect("serialize configured web search"),
+            vec![expected]
+        );
+    }
 }
