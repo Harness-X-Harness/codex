@@ -46,3 +46,16 @@ are silently normalized. The real relay records per-send UTC, phase, bounded saf
 request shape, status and request IDs. An HTTP status alone does not establish the
 reason for a refusal. Execute a new dispatch only when explicitly directed; the
 eight-send limit is per run, not a cross-run authorization ledger.
+
+Run 40610351031 established the remaining difference precisely: only locally
+created `input[*].id` values differed after the documented normalization. All
+other comparisons, tool continuation, cleanup and the single-request denial check
+passed; real requests remained zero. The comparison now maps only typed
+`message`/`msg_UUID` and `function_call_output`/`fco_UUID` identities, with one map
+per arm shared across both HTTP requests. This preserves the identity/replay graph.
+It does not remove arbitrary IDs, alter call_id, mutate outgoing requests, or
+normalize model-provided reasoning/cipher content. Source authority is
+`core/src/session/mod.rs::assign_missing_response_item_id`,
+`protocol/src/response_item_id.rs`, base-instruction IDs in `core/src/client.rs`,
+and the preserved item-ID projection in `codex-api/src/grok_request.rs` at the
+fixed binary source f6086acf.

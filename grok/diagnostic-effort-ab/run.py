@@ -11,11 +11,18 @@ def digest(path):
 def source_identity():
  return {p.name:digest(p) for p in [ROOT/'driver.test',ROOT/'driver_test.go',ROOT/'wrapper.py',ROOT/'relay.py',ROOT/'run.py',ROOT/'offline_probe.py']}
 def write(path,value):path.write_text(json.dumps(value,indent=2,sort_keys=True)+'\n');path.chmod(0o600)
-def normalized(body):
+def normalized(body,item_ids=None):
  # Only normal fresh-session identity is normalized, never arbitrary input fields.
  body=json.loads(json.dumps(body));body.pop('prompt_cache_key',None)
+ if item_ids is None:item_ids={}
  body.setdefault('reasoning',{}).pop('effort',None)
  for item in body.get('input',[]):
+  # Runtime-created item identities, not tool call_id or semantic payload.
+  prefix={'message':'msg','function_call_output':'fco'}.get(item.get('type'))
+  value=item.get('id')
+  if prefix and isinstance(value,str) and re.fullmatch(prefix+r'_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',value):
+   if value not in item_ids:item_ids[value]=prefix+'_SESSION_ITEM_'+str(len(item_ids))
+   item['id']=item_ids[value]
   if item.get('type')=='function_call_output':
    if not re.fullmatch(r'[0-9a-f]{64}',item.get('output','')):raise ValueError('offline_tool_token')
    item['output']='FRESH_RANDOM_TOKEN'
@@ -95,10 +102,11 @@ def offline_gate(binary,out,identity):
   checks['cleanup']=all(not report['arms'][arm].get('cleanup_pending',True) for arm in ['A','B']) and not denial.get('cleanup_pending',True)
   checks['zero_retry']=len(denied)==1 and not denial.get('passed') and denial.get('failure',{}).get('http_status')==403
   report['comparisons']=[];continuations=[];efforts=[]
+  item_ids={'A':{},'B':{}}
   for index in range(min(len(requests['A']),len(requests['B']))):
    a,b=requests['A'][index],requests['B'][index]
    comparison={'request':index+1,'raw':difference_report(a,b)}
-   try:comparison['normalized']=difference_report(normalized(a),normalized(b))
+   try:comparison['normalized']=difference_report(normalized(a,item_ids['A']),normalized(b,item_ids['B']))
    except Exception:comparison['normalization_error']='unexpected_tool_token_shape'
    report['comparisons'].append(comparison)
   for arm in ['A','B']:
@@ -113,7 +121,7 @@ def offline_gate(binary,out,identity):
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'effort only after fresh-session cache key, temporary cwd and fresh tool token normalization','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'effort only after fresh-session cache key, temporary cwd, runtime msg/fco UUID identity graph and fresh tool token normalization','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()

@@ -28,6 +28,16 @@ class OfflineDiagnosticsTests(unittest.TestCase):
   encoded=json.dumps(report)
   self.assertEqual(report['count'],1);self.assertEqual(report['differences'][0]['path'],'/input/0/text')
   self.assertNotIn('SECRET_CANARY',encoded);self.assertNotIn('PRIVATE_CIPHER_CANARY',encoded)
+ def test_item_identity_normalization_preserves_replay_graph_and_call_id(self):
+  a={'input':[{'type':'message','id':'msg_11111111-1111-1111-1111-111111111111'}]}
+  b={'input':[{'type':'message','id':'msg_22222222-2222-2222-2222-222222222222'}]}
+  left={};right={}
+  self.assertEqual(run.normalized(a,left),run.normalized(b,right))
+  self.assertEqual(run.normalized(a,left),run.normalized(b,right))
+  b['input'][0]['id']='msg_33333333-3333-3333-3333-333333333333'
+  self.assertNotEqual(run.normalized(a,left),run.normalized(b,right))
+  self.assertNotEqual(run.normalized({'input':[{'type':'function_call','call_id':'a'}]}),run.normalized({'input':[{'type':'function_call','call_id':'b'}]}))
+  self.assertNotEqual(run.normalized({'input':[{'type':'message','id':'unrecognized-a'}]}),run.normalized({'input':[{'type':'message','id':'unrecognized-b'}]}))
  def test_failed_comparison_still_records_denial_and_all_checks(self):
   calls=[]
   class LocalRelay(FakeRelay):
