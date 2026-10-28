@@ -175,7 +175,14 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 				}
 				return observationFailure(err)
 			case <-clientDone:
-				return observationFailure(codexsdk.ErrClientClosed)
+				// Callback cancellation can precede publication of the SDK's
+				// authoritative failure. Join that publication under the existing
+				// caller deadline instead of replacing its cause with client closed.
+				_, err := stream.Wait(ctx)
+				if err == nil {
+					err = codexsdk.ErrClientClosed
+				}
+				return observationFailure(err)
 			case <-ctx.Done():
 				return observationFailure(ctx.Err())
 			}
