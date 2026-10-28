@@ -1,40 +1,33 @@
-# Temporary 60-second session interval control — never merge
+# Temporary frozen initial-request replay — never merge
 
-Both arms use the original shipped profile/catalog, grok-4.6 thread, original
-first-turn history-probe prompt, strict token schema and dynamic probe. Neither
-overrides effort (shipped defaults to high). Sandbox and approval are unchanged.
-Both sessions forward the same three observed native headers:
-x-codex-beta-features, x-codex-turn-metadata and x-codex-window-id.
-Values go only to the same fixed endpoint and are never logged.
-After the first session completes and cleanup is confirmed, the controller waits
-at least 60 seconds measured with a monotonic clock before starting session two.
-The safe summary records the measured interval. This probes interval association,
-not a proven rate limit or a causal explanation of HTTP403.
+This observes initial HTTP acceptance only, not a completed Live task. It captures
+a newly generated initial request from the same fixed binary, shipped profile,
+grok-4.6 thread, high effort, original prompt, strict schema and native headers
+that have previously succeeded. It does not claim to retain any old successful raw
+request. Runtime artifact 12769806175, SHA256
+47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16;
+harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0.
 
-Fixed binary artifact 12769806175, runtime SHA-256
-47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16,
-harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0. Config default 4.7 remains
-unchanged, while actual thread and outgoing request must be 4.6.
+Actual binary first talks only to a loopback capture, which returns a local 403.
+The driver must stop with no tools executed and confirmed cleanup. This synthetic
+403 is not an upstream observation. Raw request bytes and forwarded header values
+remain solely in memory. The independent sender then sends exactly the same
+initial bytes and headers at most twice, separated by at least 60 monotonic seconds.
+It never gives upstream responses to the driver, never executes output tools, and
+never submits continuation requests. No retries, redirects, alternate endpoint,
+or extra probe. Unknown transport failures stop; only HTTP200/403 permit the
+second planned observation. Requests consume budget before attempting connection.
 
-This follow-up executes only A then B with identical settings; at most four real HTTP sends (two per arm), no further pair, retries or
-redirects. Errors never refund budget. A second request must be the paired tool
-result. Unknown failure or incomplete cleanup stops the batch. Before backend
-secret injection, actual-binary loopback verifies both profiles, same task/schema,
-expected effort, tool rounds, cleanup, 403 zero-retry and the header policy.
-Normalized body equality allows only previously proven fresh-session cache key,
-temporary cwd, random probe token and typed msg/fco identity mapping across both
-requests. Call IDs, arbitrary IDs, prompt text and cipher remain untouched.
-Unknown body differences prevent real execution.
+Proof records unnormalized body SHA256, safe shape, header names but no values,
+request IDs, status, bounded SSE event type names and measured timing. No raw
+request/response, credential, cipher or private reasoning content is retained.
+Two sends with identical body/header values do not imply stateless upstream:
+request/session IDs and prompt cache key may affect deduplication or routing.
+403 then200 disproves deterministic rejection of this fixed payload; other
+outcomes do not identify caching, rate limiting, or a specific backend cause.
 
-All checks run before aggregation; safe reports survive failure. Evidence retains
-header names only from a fixed vocabulary, unknown-name count, bounded request
-shape, digest, status, UTC and request IDs. No credentials, private reasoning,
-ciphertext or complete message text is saved. Host and Content-Length are rebuilt
-by the HTTP library, not omitted upstream. SSE buffering and 90-second socket
-timeout remain shared transport limitations.
-
-Previous batches used 12 real sends in total. In the two latest header pairs,
-whichever policy ran first succeeded, while the immediately following session
-received initial403. This group changes to two native-header sessions separated
-by 60 seconds; it is exploratory, not proof of rate limiting. The workflow is
-temporary/dispatch-only; never merge or modify the formal Live oracle.
+Before secrets are injected, existing actual-binary loopback roundtrip/schema/
+header/zero-retry checks plus first-request-only capture must pass. Captured source
+files and runtime bind this gate to execution. The current batch is at most two
+real HTTP requests; cumulative count before it is 15. Formal oracles and permission
+settings are unchanged. This branch is temporary and must never be merged.

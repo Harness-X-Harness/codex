@@ -2,6 +2,7 @@
 import argparse,hashlib,json,os,re,subprocess,tempfile,signal,time
 from pathlib import Path
 from relay import Relay
+from frozen import FrozenReplay
 from offline_probe import sse
 ROOT=Path(__file__).resolve().parent
 RUNTIME_SHA='47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16'
@@ -11,7 +12,7 @@ PROMPT_A='Call grok_history_probe, reason about its returned token, then return 
 def digest(path):
  with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 def source_identity():
- return {p.name:digest(p) for p in [ROOT/'driver.test',ROOT/'driver_test.go',ROOT/'wrapper.py',ROOT/'relay.py',ROOT/'run.py',ROOT/'offline_probe.py']}
+ return {p.name:digest(p) for p in [ROOT/'driver.test',ROOT/'driver_test.go',ROOT/'wrapper.py',ROOT/'relay.py',ROOT/'run.py',ROOT/'offline_probe.py',ROOT/'frozen.py']}
 def write(path,value):path.write_text(json.dumps(value,indent=2,sort_keys=True)+'\n');path.chmod(0o600)
 def normalized(body,item_ids=None):
  # Only normal fresh-session identity is normalized, never arbitrary input fields.
@@ -130,14 +131,25 @@ def offline_gate(binary,out,identity):
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'interval control: same normalized body/profile/native headers; real sessions separated by at least 60 seconds','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'frozen initial replay: actual-binary capture, then identical raw bytes and forwarded headers sent at most twice; no tool continuation','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
 
-def wait_interval():
- start=time.monotonic()
- while True:
-  elapsed=time.monotonic()-start
-  if elapsed>=60:return {'minimum_seconds':60,'measured_seconds':elapsed,'origin':'prior_session_completed_and_cleanup_confirmed'}
-  time.sleep(60-elapsed)
+def capture_initial(binary,out,offline):
+ frozen=FrozenReplay()
+ def deny(body,headers):return 403,{'Content-Type':'application/json'},b'{"code":"local_capture_complete"}'
+ result={};safe={}
+ try:
+  with Relay(mode='offline',offline_transport=deny,raw_capture=frozen.capture) as relay:
+   try:result=run_arm(relay,'A',1,binary,out,offline)
+   finally:safe=relay.summary()
+  passed=(safe.get('sent')==1 and result.get('failure',{}).get('http_status')==403
+          and result.get('cleanup_pending') is False and result.get('tool_calls')==0
+          and result.get('completed_tools')==0 and result.get('profile')=='shipped'
+          and result.get('shipped_catalog') is True and result.get('model')=='grok-4.6')
+  if not passed:raise ValueError('initial_capture_failed')
+  return frozen
+ finally:
+  write(out/'capture.json',{'result':result,'loopback':safe,'frozen':frozen.summary(),
+                         'local_denial_not_upstream':True,'real_http_requests':0})
 
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()
@@ -146,23 +158,28 @@ def main():
  identity=source_identity()
  if args.offline:
   offline_gate(binary,out,identity)
+  try:capture_initial(binary,out,True)
+  except Exception:
+   (out/'proof.json').unlink(missing_ok=True)
+   raise
+  proof=json.loads((out/'proof.json').read_text());proof['initial_capture_passed']=True;write(out/'proof.json',proof)
   return
  proof=json.loads(args.offline_proof.read_text()) if args.offline_proof else {}
- if proof.get('passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
+ if proof.get('passed') is not True or proof.get('initial_capture_passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
  if not os.environ.get('GROK_API_KEY'):raise ValueError('credential_unavailable')
- results=[];interval=None
- with Relay(mode='real') as relay:
-  try:
-   def clean(r):return r.get('cleanup_pending') is False and (r.get('passed') is True or r.get('failure',{}).get('http_status')==403)
-   for arm in ['A','B']:
-    if results:interval=wait_interval()
-    results.append(run_arm(relay,arm,len(results)+1,binary,out))
-    if not clean(results[-1]):break
-  finally:write(out/'relay.json',relay.summary())
- write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'session_interval_60s','request_limit':4,'previous_real_requests':12,'cumulative_real_requests':12+relay.summary()['sent'],'results':results,'interval':interval,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
+ frozen=capture_initial(binary,out,False)
+ try:
+  frozen.run(enabled=True)
+ finally:
+  report=frozen.summary()
+  write(out/'replay.json',report)
+  write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6',
+   'experiment':'frozen_initial_replay','request_limit':2,'previous_real_requests':15,
+   'cumulative_real_requests':15+report.get('sent',0),'source_files':identity,
+   'complete_task_validation':False,'causal_conclusion':'initial HTTP acceptance only; server deduplication/cache/session effects remain unknown'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:
-  safe_codes={'offline_gate_failed','runtime_identity','offline_roundtrip','offline_effort','offline_non_effort_delta','offline_zero_retry','offline_tool_token','offline_continuation','offline_proof_binding','credential_unavailable'}
+  safe_codes={'offline_gate_failed','runtime_identity','offline_roundtrip','offline_effort','offline_non_effort_delta','offline_zero_retry','offline_tool_token','offline_continuation','offline_proof_binding','credential_unavailable','initial_capture_failed'}
   code=str(exc) if type(exc) is ValueError and str(exc) in safe_codes else 'experiment_failure'
   print('bounded experiment stopped: '+code);raise SystemExit(1)

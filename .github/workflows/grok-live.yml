@@ -1,4 +1,4 @@
-name: Temporary bounded 60-second session interval
+name: Temporary bounded frozen initial request replay
 on:
   workflow_dispatch:
 permissions:
@@ -48,7 +48,7 @@ jobs:
           cd harness/grok
           go test -c -o "$GITHUB_WORKSPACE/experiment-source/grok/diagnostic-effort-ab/driver.test" ./live
           cd "$GITHUB_WORKSPACE/experiment-source/grok/diagnostic-effort-ab"
-          python3 -m unittest -v test_relay.py test_controller.py
+          python3 -m unittest -v test_relay.py test_controller.py test_frozen.py
           python3 run.py --offline --binary "$RUNNER_TEMP/ab-package/package/bin/grok-bin" --output "$RUNNER_TEMP/ab-offline"
       - name: Execute the authorized bounded experiment once
         working-directory: experiment-source/grok/diagnostic-effort-ab

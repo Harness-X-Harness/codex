@@ -44,12 +44,12 @@ def safe_shape(body):
 
 
 class Relay:
-    def __init__(self, mode='offline', offline_transport=None):
+    def __init__(self, mode='offline', offline_transport=None, raw_capture=None):
         if mode not in ('offline', 'real'):
             raise ValueError('invalid mode')
-        if mode == 'real' and offline_transport is not None:
+        if mode == 'real' and (offline_transport is not None or raw_capture is not None):
             raise ValueError('real transport cannot be replaced')
-        self.mode, self.transport = mode, offline_transport
+        self.mode, self.transport, self.raw_capture = mode, offline_transport, raw_capture
         self.lock = threading.Lock()
         self.arms, self.active, self.total, self.events = {}, None, 0, []
 
@@ -194,6 +194,8 @@ class Relay:
         status, response_headers = None, {}
         try:
             if self.mode == 'offline':
+                if self.raw_capture is not None:
+                    self.raw_capture(raw, dict(headers))
                 if self.transport is None:
                     raise ValueError('offline transport is required')
                 status, response_headers, data = self.transport(body, headers)
