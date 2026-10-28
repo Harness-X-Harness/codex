@@ -1,4 +1,4 @@
-name: Temporary bounded native header control
+name: Temporary bounded 60-second session interval
 on:
   workflow_dispatch:
 permissions:

@@ -1,5 +1,5 @@
 """One temporary header control; no configurable model, upstream, or request budget."""
-import argparse,hashlib,json,os,re,subprocess,tempfile,signal
+import argparse,hashlib,json,os,re,subprocess,tempfile,signal,time
 from pathlib import Path
 from relay import Relay
 from offline_probe import sse
@@ -84,7 +84,7 @@ def offline_gate(binary,out,identity):
  requests={}
  try:
   # Independent loopback arms/checks all run before aggregation. No real transport.
-  for ordinal,arm in enumerate(['B','A'],1):
+  for ordinal,arm in enumerate(['A','B'],1):
    seen=[]
    def scripted(body,headers):
     seen.append(body);return 200,{'Content-Type':'text/event-stream'},sse(body,len(seen))
@@ -125,12 +125,19 @@ def offline_gate(binary,out,identity):
   checks['profile_binding']=all(report['arms'][arm].get('profile')=='shipped' and report['arms'][arm].get('shipped_catalog') is True for arm in ['A','B'])
   checks['same_body']=len(report['comparisons'])==2 and all(c.get('normalized',{}).get('count')==0 for c in report['comparisons'])
   native_headers={'x-codex-beta-features','x-codex-turn-metadata','x-codex-window-id'}
-  checks['header_policy']=all(len(report['arms'][arm]['relay']['events'])==2 and all(native_headers.issubset(set(e.get('headers',{}).get('incoming',[]))) and native_headers.issubset(set(e.get('headers',{}).get('dropped' if arm=='A' else 'forwarded',[]))) for e in report['arms'][arm]['relay']['events']) for arm in ['A','B'])
+  checks['header_policy']=all(len(report['arms'][arm]['relay']['events'])==2 and all(native_headers.issubset(set(e.get('headers',{}).get('incoming',[]))) and native_headers.issubset(set(e.get('headers',{}).get('forwarded',[]))) for e in report['arms'][arm]['relay']['events']) for arm in ['A','B'])
   report['passed']=all(checks.values())
  except Exception:report['capture_failure']='offline_capture_exception'
  finally:write(out/'offline-report.json',report)
  if not report['passed']:raise ValueError('offline_gate_failed')
- write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'header control: same normalized body/profile, only three native header forwarding policy differs','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'interval control: same normalized body/profile/native headers; real sessions separated by at least 60 seconds','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+
+def wait_interval():
+ start=time.monotonic()
+ while True:
+  elapsed=time.monotonic()-start
+  if elapsed>=60:return {'minimum_seconds':60,'measured_seconds':elapsed,'origin':'prior_session_completed_and_cleanup_confirmed'}
+  time.sleep(60-elapsed)
 
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()
@@ -143,15 +150,16 @@ def main():
  proof=json.loads(args.offline_proof.read_text()) if args.offline_proof else {}
  if proof.get('passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
  if not os.environ.get('GROK_API_KEY'):raise ValueError('credential_unavailable')
- results=[]
+ results=[];interval=None
  with Relay(mode='real') as relay:
   try:
-   def clean(r):return not r.get('cleanup_pending',False) and (r.get('passed') is True or r.get('failure',{}).get('http_status')==403)
-   for arm in ['B','A']:
+   def clean(r):return r.get('cleanup_pending') is False and (r.get('passed') is True or r.get('failure',{}).get('http_status')==403)
+   for arm in ['A','B']:
+    if results:interval=wait_interval()
     results.append(run_arm(relay,arm,len(results)+1,binary,out))
     if not clean(results[-1]):break
   finally:write(out/'relay.json',relay.summary())
- write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'header_control_reverse','request_limit':4,'previous_real_requests':9,'cumulative_real_requests':9+relay.summary()['sent'],'results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
+ write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'session_interval_60s','request_limit':4,'previous_real_requests':12,'cumulative_real_requests':12+relay.summary()['sent'],'results':results,'interval':interval,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:

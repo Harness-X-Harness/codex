@@ -12,12 +12,19 @@ class ControllerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as t:
    root=Path(t); proof=root/'proof.json';proof.write_text(json.dumps({'passed':True,'source_files':{},'runtime_sha256':run.RUNTIME_SHA})); calls=[]
    def arm(relay,name,*args):calls.append(name);return results[len(calls)-1]
-   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'Relay',FakeRelay),patch.object(run,'run_arm',side_effect=arm),patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
+   with patch.object(sys,'argv',['run.py','--execute','--binary',str(root/'unused'),'--output',str(root/'out'),'--offline-proof',str(proof)]),patch.object(run,'digest',return_value=run.RUNTIME_SHA),patch.object(run,'source_identity',return_value={}),patch.object(run,'Relay',FakeRelay),patch.object(run,'run_arm',side_effect=arm),patch.object(run,'wait_interval',return_value={'measured_seconds':60}) as wait,patch.dict(os.environ,{'GROK_API_KEY':'CREDENTIAL_CANARY'}):run.main()
    self.assertEqual(calls,want)
+   self.assertEqual(wait.call_count, int(len(want)==2))
    self.assertNotIn('CREDENTIAL_CANARY',(root/'out'/'summary.json').read_text())
- def test_both_denied_stop_after_pair(self):self.check([{'passed':False,'failure':{'http_status':403}}]*2,['B','A'])
- def test_difference_stops_after_pair(self):self.check([{'passed':False,'failure':{'http_status':403}},{'passed':True}],['B','A'])
- def test_unknown_stops_immediately(self):self.check([{'passed':False,'failure':{'code':'driver_timeout'}}],['B'])
+ def test_both_denied_stop_after_pair(self):self.check([{'passed':False,'cleanup_pending':False,'failure':{'http_status':403}}]*2,['A','B'])
+ def test_difference_stops_after_pair(self):self.check([{'passed':False,'cleanup_pending':False,'failure':{'http_status':403}},{'passed':True,'cleanup_pending':False}],['A','B'])
+ def test_unknown_stops_immediately(self):self.check([{'passed':False,'failure':{'code':'driver_timeout'}}],['A'])
+ def test_monotonic_wait_survives_early_wakeup(self):
+  with patch.object(run.time,'monotonic',side_effect=[100,100,130,160.25]),patch.object(run.time,'sleep') as sleep:
+   report=run.wait_interval()
+  self.assertEqual([c.args[0] for c in sleep.call_args_list],[60,30])
+  self.assertEqual(report['measured_seconds'],60.25)
+ def test_pending_cleanup_stops_without_wait(self):self.check([{'passed':True,'cleanup_pending':True}],['A'])
  def test_only_explicit_ephemera_normalized(self):
   a={'prompt_cache_key':'a','reasoning':{},'input':[{'type':'function_call_output','output':'a'*64},{'text':'/tmp/grok-live-123/workspace'}]}
   b={'prompt_cache_key':'b','reasoning':{},'input':[{'type':'function_call_output','output':'b'*64},{'text':'/tmp/grok-live-456/workspace'}]}

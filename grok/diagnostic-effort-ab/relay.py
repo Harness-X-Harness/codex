@@ -179,11 +179,10 @@ class Relay:
                 self.events.append({**observed, 'arm': label, 'state': 'effort_mismatch', 'status': 400, 'send_attempted': False})
                 arm['failed'] = True
                 return self.reject(400)
-            # Bind the fixed header treatment to the same arm as this reservation.
-            if label.endswith('-B'):
-                for name in ('x-codex-beta-features', 'x-codex-turn-metadata', 'x-codex-window-id'):
-                    if request.headers.get(name):
-                        headers[name] = request.headers[name]
+            # Same observed native headers for both sessions.
+            for name in ('x-codex-beta-features', 'x-codex-turn-metadata', 'x-codex-window-id'):
+                if request.headers.get(name):
+                    headers[name] = request.headers[name]
             forwarded = sorted(name.lower() for name in headers)
             observed['headers']['forwarded'] = forwarded
             observed['headers']['dropped'] = [name for name in names if name not in forwarded][:64]

@@ -37,7 +37,7 @@ class Tests(unittest.TestCase):
             event=relay.summary()['events'][0]
             self.assertIn('authorization',event['headers']['incoming'])
             self.assertIn('authorization',event['headers']['forwarded'])
-            self.assertIn('x-codex-turn-metadata',event['headers']['dropped'])
+            self.assertIn('x-codex-turn-metadata',event['headers']['forwarded'])
             self.assertNotIn('PRIVATE_HEADER_VALUE',json.dumps(relay.summary()))
             with self.assertRaises(ValueError): relay.begin_arm('3-A',None)
             with self.assertRaises(ValueError): relay.begin_arm('1-A',None)
@@ -104,7 +104,7 @@ class Tests(unittest.TestCase):
             self.assertTrue(all(e['utc'].endswith('+00:00') and e['status']==400 and not e['send_attempted'] for e in events))
             self.assertNotIn(CANARY,json.dumps(events))
 
-    def test_header_treatment_only_changes_three_headers_not_body(self):
+    def test_same_native_headers_for_both_sessions(self):
         captured=[]
         special=('x-codex-beta-features','x-codex-turn-metadata','x-codex-window-id')
         def transport(body,headers):
@@ -123,9 +123,9 @@ class Tests(unittest.TestCase):
                 relay.end_arm()
             self.assertEqual(captured[0][0],captured[1][0])
             for name in special:
-                self.assertNotIn(name,captured[0][1])
+                self.assertEqual(captured[0][1][name],CANARY)
                 self.assertEqual(captured[1][1][name],CANARY)
-                self.assertIn(name,relay.summary()['events'][0]['headers']['dropped'])
+                self.assertIn(name,relay.summary()['events'][0]['headers']['forwarded'])
                 self.assertIn(name,relay.summary()['events'][1]['headers']['forwarded'])
             self.assertNotIn('x-unapproved',captured[1][1])
             self.assertNotIn(CANARY,json.dumps(relay.summary()))

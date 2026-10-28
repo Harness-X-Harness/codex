@@ -47,12 +47,8 @@ func TestEffortExperimentFirstTurn(t *testing.T) {
 		Model:          "grok-4.6", BaseURL: endpoint.String(), APIKey: os.Getenv("GROK_API_KEY"),
 		Subject: Subject{Binary: wrapper, SHA256: hex.EncodeToString(sum[:]), Target: "x86_64-unknown-linux-musl", Environment: "effort-experiment", LocalUnverified: true},
 	}, arm)
-	variant := "Alegacy"
-	if arm == "B" {
-		variant = "Bnative_three"
-	}
 	result := map[string]any{
-		"experiment": "header_control", "profile": "shipped", "header_policy": variant, "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
+		"experiment": "session_interval_60s", "profile": "shipped", "header_policy": "native_three", "prompt_variant": "reason", "shipped_catalog": evidence.ShippedCatalog,
 		"arm": arm, "model": "grok-4.6", "stage": evidence.Stage,
 		"first_turn_completed": evidence.FirstCompleted,
 		"first_token_matches":  evidence.FirstRecall,
