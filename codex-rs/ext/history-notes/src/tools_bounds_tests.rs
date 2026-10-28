@@ -28,6 +28,8 @@ fn history_tool_specs_keep_declared_count_and_offset_bounds() {
             ),
             "thread".to_string(),
             "agent".to_string(),
+            /*history_messages*/ None,
+            /*notes_messages*/ None,
         );
         let wire = serde_json::to_value(tool.spec()).expect("history spec");
         assert_eq!(
