@@ -651,6 +651,7 @@ other non-default provider fields are not supported"
             aws: None,
             capabilities: None,
             wire_api: WireApi::Responses,
+            x_search: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
