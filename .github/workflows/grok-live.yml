@@ -1,169 +1,70 @@
-name: grok-live
-
-# A shared execution owner for automatic line acceptance and explicit diagnostics.
+name: Temporary bounded reasoning effort A-B diagnostic
 on:
-  workflow_call:
-    inputs:
-      binary_artifact_id:
-        type: string
-        required: true
-      suite:
-        type: string
-        default: diagnostic
-      scenario:
-        type: string
-        required: true
-      formal_line:
-        type: string
-        required: true
-    secrets:
-      GROK_API_KEY:
-        required: true
   workflow_dispatch:
-    inputs:
-      binary_artifact_id:
-        description: Exact immutable Linux package artifact ID from a trusted successful producer.
-        type: string
-        required: true
-      suite:
-        description: Diagnostic runs one named case; smoke/full run their complete Go-owned selection.
-        type: choice
-        required: true
-        default: diagnostic
-        options: [diagnostic, smoke, full]
-      scenario:
-        description: Required for diagnostic; ignored for smoke/full. Names come from grok-scenarios.
-        type: string
-        required: false
-        default: basic-primary
-
 permissions:
   contents: read
   actions: read
   pull-requests: read
-
 concurrency:
-  group: grok-live-${{ github.run_id }}-${{ inputs.formal_line && inputs.scenario || 'diagnostic' }}
+  group: temporary-effort-ab-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
-  diagnostic:
-    name: Live execution
-    if: ${{ github.repository == 'Harness-X-Harness/codex' && (!inputs.formal_line || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/grok/rust-v') && github.ref_name == inputs.formal_line)) }}
+  experiment:
+    if: ${{ github.repository == 'Harness-X-Harness/codex' && github.ref == 'refs/heads/diagnostic/grok-effort-ab-20261028' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.formal_line && 25 || 110 }}
+    timeout-minutes: 20
     steps:
-      - name: Initialize Live evidence before setup
-        run: |
-          mkdir -p "$RUNNER_TEMP/live-evidence"
-          printf '{"harness_sha":"%s","run_id":"%s","attempt":"%s","state":"started"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/live-evidence/workflow.json"
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          path: experiment-source
           persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          python-version: "3.12"
-      - name: Bind the harness subject
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git diff --exit-code "$GITHUB_WORKFLOW_SHA" HEAD -- .github/workflows/grok-live.yml
-      - name: Fetch and verify the explicit package
+          ref: e3c0812c7d47c567d42a181c921a30aa3c35cdc0
+          path: harness
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: harness/grok/go.mod
+          cache: false
+      - name: Verify the fixed package before backend access
+        working-directory: harness
         env:
           GH_TOKEN: ${{ github.token }}
-          BINARY_ARTIFACT_ID: ${{ inputs.binary_artifact_id }}
-          FORMAL_LINE: ${{ inputs.formal_line }}
         run: |
-          set -euo pipefail
-          source_args=()
-          if [[ -n "$FORMAL_LINE" ]]; then
-            source_args+=(--expected-line "$FORMAL_LINE")
-          elif [[ "$GITHUB_REF" != refs/heads/grok/rust-v* ]]; then
-            source_args+=(--harness-ref "$GITHUB_REF_NAME")
-          fi
-          python3 grok/package/fetch_artifact.py --artifact-id "$BINARY_ARTIFACT_ID" \
-            --harness-sha "$GITHUB_SHA" "${source_args[@]}" --output "$RUNNER_TEMP/live-package"
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: grok/go.mod
-          cache: false
-      - name: Validate the explicit Go-owned selection before backend use
-        working-directory: grok
+          test "$(git rev-parse HEAD)" = e3c0812c7d47c567d42a181c921a30aa3c35cdc0
+          python3 grok/package/fetch_artifact.py --artifact-id 12769806175 \
+            --harness-sha e3c0812c7d47c567d42a181c921a30aa3c35cdc0 \
+            --expected-line grok/rust-v0.164.0 --output "$RUNNER_TEMP/ab-package"
+      - name: Compile temporary driver and verify offline budget and wire difference
         env:
-          SUITE: ${{ inputs.suite }}
-          SCENARIO: ${{ inputs.scenario }}
+          GOTOOLCHAIN: local
         run: |
-          set -euo pipefail
-          args=(--family live --suite "$SUITE")
-          if [[ "$SUITE" == diagnostic ]]; then
-            test -n "$SCENARIO"
-            args+=(--scenario "$SCENARIO")
-          fi
-          mkdir -p "$RUNNER_TEMP/live-evidence"
-          go run ./cmd/grok-scenarios "${args[@]}" > "$RUNNER_TEMP/live-evidence/selected.json"
-      - name: Prepare the hosted Linux sandbox for Live
-        run: bash grok/package/prepare_linux_sandbox_ci.sh
-      - name: Execute the explicit Go Live selection once
-        id: live_execution
-        working-directory: grok
-        env:
-          GROK_LIVE: "1"
-          GROK_LIVE_DIAGNOSTICS_DIR: ${{ runner.temp }}/live-evidence/scenarios
-          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
-          GROK_CODEX_BIN: ${{ runner.temp }}/live-package/package/bin/grok-bin
-          LIVE_TIMEOUT: ${{ inputs.formal_line && '10m' || '100m' }}
-          LIVE_ENVIRONMENT: ${{ inputs.formal_line && 'github-actions' || 'github-actions-diagnostic' }}
-          SUITE: ${{ inputs.suite }}
-          SCENARIO: ${{ inputs.scenario }}
-        run: |
-          set -euo pipefail
-          cp "$RUNNER_TEMP/live-package/selection.json" "$RUNNER_TEMP/live-evidence/"
-          cp "$RUNNER_TEMP/live-package/verified.json" "$RUNNER_TEMP/live-evidence/"
-          source="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["source_sha"])')"
-          digest="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["runtime_sha256"])')"
-          selection=(-grok-live-suite "$SUITE")
-          if [[ "$SUITE" == diagnostic ]]; then selection+=(-grok-live-scenario "$SCENARIO"); fi
-          mapfile -t names < <(python3 -c 'import json,os; print("\n".join(json.load(open(os.environ["RUNNER_TEMP"]+"/live-evidence/selected.json"))))')
-          required=()
-          for name in "${names[@]}"; do
-            required+=(--require "github.com/Harness-X-Harness/codex/grok/tests/live:TestLive/$name")
-          done
-          test "${#required[@]}" -gt 0
-          status=0
-          go test -tags=live -count=1 -timeout="$LIVE_TIMEOUT" -json ./tests/live -args \
-            "${selection[@]}" -grok-live-verified-subject -grok-live-binary-sha256 "$digest" \
-            -grok-live-source-sha "$source" -grok-live-harness-sha "$GITHUB_SHA" \
-            -grok-live-target x86_64-unknown-linux-musl -grok-live-environment "$LIVE_ENVIRONMENT" \
-            > "$RUNNER_TEMP/live-evidence/tests.json" 2> "$RUNNER_TEMP/live-runner-stderr" || status=$?
-          go run ./cmd/grok-test-results --input "$RUNNER_TEMP/live-evidence/tests.json" \
-            "${required[@]}" > "$RUNNER_TEMP/live-evidence/summary.json" || status=1
-          cat "$RUNNER_TEMP/live-evidence/summary.json"
-          exit "$status"
-      - name: Preserve bounded runner errors after execution
-        if: ${{ always() && contains(fromJSON('["success","failure","cancelled"]'), steps.live_execution.outcome) }}
+          cp experiment-source/grok/diagnostic-effort-ab/driver_test.go harness/grok/live/zz_effort_experiment_test.go
+          cd harness/grok
+          go test -c -o "$GITHUB_WORKSPACE/experiment-source/grok/diagnostic-effort-ab/driver.test" ./live
+          cd "$GITHUB_WORKSPACE/experiment-source/grok/diagnostic-effort-ab"
+          python3 -m unittest -v test_relay.py test_controller.py
+          python3 run.py --offline --binary "$RUNNER_TEMP/ab-package/package/bin/grok-bin" --output "$RUNNER_TEMP/ab-offline"
+      - name: Execute the authorized bounded experiment once
+        working-directory: experiment-source/grok/diagnostic-effort-ab
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
-          if test -f "$RUNNER_TEMP/live-runner-stderr"; then
-            python3 grok/package/live_diagnostics.py --stderr "$RUNNER_TEMP/live-runner-stderr" --output "$RUNNER_TEMP/live-evidence/runner-stderr.json"
-          fi
-      - name: Finalize available Live evidence
+          python3 run.py --execute --binary "$RUNNER_TEMP/ab-package/package/bin/grok-bin" \
+            --offline-proof "$RUNNER_TEMP/ab-offline/proof.json" --output "$RUNNER_TEMP/ab-evidence"
+      - name: Retain only allowlisted safe experiment evidence
         if: ${{ always() }}
-        env:
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/live-evidence"
-          printf '{"harness_sha":"%s","run_id":"%s","attempt":"%s","state":"%s"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$JOB_STATUS" > "$RUNNER_TEMP/live-evidence/workflow.json"
-          for name in selection.json verified.json; do
-            if test -f "$RUNNER_TEMP/live-package/$name"; then cp "$RUNNER_TEMP/live-package/$name" "$RUNNER_TEMP/live-evidence/"; fi
-          done
-      - name: Retain the bounded diagnostic result
-        if: ${{ always() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: grok-live-${{ inputs.formal_line && inputs.scenario || 'diagnostic' }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/live-evidence
+          name: bounded-effort-ab-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ab-evidence/*.json
+            ${{ runner.temp }}/ab-offline/*.json
+            ${{ runner.temp }}/ab-package/verified.json
           if-no-files-found: warn
-          retention-days: 30
-
+          retention-days: 7
