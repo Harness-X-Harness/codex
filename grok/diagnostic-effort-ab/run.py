@@ -170,7 +170,7 @@ def comparable_headers(headers):
  if 'x-codex-turn-metadata' in headers:
   metadata=json.loads(headers['x-codex-turn-metadata'])
   if not isinstance(metadata,dict):raise ValueError('identity_pair_mismatch')
-  for key in ('installation_id','session_id','thread_id','turn_id','context_window_id'):
+  for key in ('installation_id','session_id','thread_id','turn_id','root_turn_id','context_window_id'):
    if key in metadata:metadata[key]=identity(metadata[key])
   if 'window_id' in metadata:metadata['window_id']=window(metadata['window_id'])
   if 'turn_started_at_unix_ms' in metadata:

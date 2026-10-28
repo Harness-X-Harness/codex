@@ -24,7 +24,9 @@ class ControllerTests(unittest.TestCase):
    capture.assert_not_called()
  def test_header_identity_graph_and_semantics_not_erased(self):
   a='11111111-1111-1111-1111-111111111111';b='22222222-2222-2222-2222-222222222222'
-  def headers(identity,stamp):return {'Authorization':'secret','session-id':identity,'thread-id':identity,'x-codex-window-id':identity+':0','x-codex-turn-metadata':json.dumps({'session_id':identity,'thread_id':identity,'window_id':identity+':0','turn_started_at_unix_ms':stamp,'sandbox_mode':'read-only'})}
+  def headers(identity,stamp):
+   turn='33333333-3333-3333-3333-333333333333' if identity==a else '44444444-4444-4444-4444-444444444444'
+   return {'Authorization':'secret','session-id':identity,'thread-id':identity,'x-codex-window-id':identity+':0','x-codex-turn-metadata':json.dumps({'session_id':identity,'thread_id':identity,'window_id':identity+':0','turn_id':turn,'root_turn_id':turn,'turn_started_at_unix_ms':stamp,'sandbox_mode':'read-only'})}
   left=headers(a,123);right=headers(b,456)
   self.assertEqual(run.comparable_headers(left),run.comparable_headers(right))
   right['thread-id']=a
@@ -32,6 +34,8 @@ class ControllerTests(unittest.TestCase):
   right=headers(b,456);metadata=json.loads(right['x-codex-turn-metadata']);metadata['sandbox_mode']='workspace-write';right['x-codex-turn-metadata']=json.dumps(metadata)
   self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
   right=headers(b,456);right['x-codex-window-id']=b+':1'
+  self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
+  right=headers(b,456);metadata=json.loads(right['x-codex-turn-metadata']);metadata['root_turn_id']=a;right['x-codex-turn-metadata']=json.dumps(metadata)
   self.assertNotEqual(run.comparable_headers(left),run.comparable_headers(right))
   right=headers(b,True)
   with self.assertRaises(ValueError):run.comparable_headers(right)
