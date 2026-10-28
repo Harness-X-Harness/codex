@@ -389,7 +389,7 @@ measurements and remaining unrun boundaries belong in the review/run record.
 
 Applicable existing turns carry formal SDK OutputSchema values: image propositions
 use a boolean; attached images use nullable color/shape; reasoning uses a nullable
-tool token; the delegation parent uses a nullable child nonce; Web uses bounded
+price-based amount; the delegation parent uses a nullable child nonce; Web uses bounded
 headline/URL articles and summary, then a summary continuation. Their values are
 checked against the existing actual-result authority, not schema validity alone.
 Offline regressions reject malformed/multiple JSON values, duplicate/unknown or

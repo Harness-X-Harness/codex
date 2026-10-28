@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -21,11 +22,10 @@ import (
 
 const historyCanary = "PRIVATE_HISTORY_CANARY"
 
-var historyNonce = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var historyTokenShape = regexp.MustCompile(`[0-9a-f]{64}`)
+var historyPriceShape = regexp.MustCompile(`unit_price_yuan`)
 
 // This child speaks only public stdio. Its trace contains static assertion markers,
-// never the fresh token, prompts, identifiers, reasoning, ciphertext or raw frames.
+// never the fresh price, prompts, identifiers, reasoning, ciphertext or raw frames.
 func fakeHistoryServer() {
 	var script struct{ Mode, Trace string }
 	if json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script) != nil {
@@ -64,7 +64,8 @@ func fakeHistoryServer() {
 	send := func(v any) { _ = output.Encode(v) }
 	reply := func(p packet, result any) { send(map[string]any{"id": p.ID, "result": result}) }
 	mode := strings.TrimPrefix(script.Mode, "history:")
-	phase, token, firstPrompt := 0, "", ""
+	phase, priceResult, firstPrompt := 0, "", ""
+	replyJSON := func(value string) string { return historyReplyJSON(value, phase+1) }
 	var boundThread map[string]any
 	for {
 		p, ok := read()
@@ -95,7 +96,7 @@ func fakeHistoryServer() {
 			}
 			tool, _ := tools[0].(map[string]any)
 			schema, _ := tool["inputSchema"].(map[string]any)
-			if tool["type"] != "function" || tool["name"] != "grok_history_probe" || schema["type"] != "object" {
+			if tool["type"] != "function" || tool["name"] != "apple_price_lookup" || schema["type"] != "object" {
 				return
 			}
 			cwd, _ := os.Getwd()
@@ -121,7 +122,7 @@ func fakeHistoryServer() {
 			reply(p, boundThread)
 		case "thread/resume":
 			mark("thread/resume")
-			if phase != 1 || boundThread == nil || len(p.Params) != 5 || p.Params["threadId"] != "PRIVATE_THREAD" || p.Params["model"] != boundThread["model"] || p.Params["modelProvider"] != "grok" || p.Params["cwd"] != boundThread["cwd"] || p.Params["excludeTurns"] != true || token != "" && strings.Contains(p.raw, token) {
+			if phase != 1 || boundThread == nil || len(p.Params) != 5 || p.Params["threadId"] != "PRIVATE_THREAD" || p.Params["model"] != boundThread["model"] || p.Params["modelProvider"] != "grok" || p.Params["cwd"] != boundThread["cwd"] || p.Params["excludeTurns"] != true || priceResult != "" && strings.Contains(p.raw, priceResult) {
 				return
 			}
 			mark("resume_valid")
@@ -132,7 +133,7 @@ func fakeHistoryServer() {
 			_, effortPresent := p.Params["effort"]
 			schema, _ := p.Params["outputSchema"].(map[string]any)
 			encodedSchema, _ := json.Marshal(schema)
-			effortValid := !effortPresent && len(p.Params) == 3 && string(encodedSchema) == `{"additionalProperties":false,"properties":{"token":{"type":["string","null"]}},"required":["token"],"type":"object"}`
+			effortValid := !effortPresent && len(p.Params) == 3 && string(encodedSchema) == `{"additionalProperties":false,"properties":{"amount":{"type":["number","null"]}},"required":["amount"],"type":"object"}`
 			if phase > 2 || p.Params["threadId"] != "PRIVATE_THREAD" || !effortValid || p.Params["summary"] != nil || p.Params["environments"] != nil {
 				return
 			}
@@ -142,15 +143,15 @@ func fakeHistoryServer() {
 			}
 			prompt, _ := items[0].(map[string]any)
 			text, _ := prompt["text"].(string)
-			if prompt["type"] != "text" || strings.TrimSpace(text) == "" || strings.Contains(text, historyCanary) || token != "" && strings.Contains(p.raw, token) {
+			if prompt["type"] != "text" || strings.TrimSpace(text) == "" || strings.Contains(text, historyCanary) || priceResult != "" && strings.Contains(p.raw, priceResult) {
 				return
 			}
 			if phase == 1 {
 				firstPrompt = text
-				if !strings.Contains(text, "grok_history_probe") || !strings.Contains(strings.ToLower(text), "reason") {
+				if text != "Look up the price per kilogram of apples. How much would two kilograms cost?" {
 					return
 				}
-			} else if text == firstPrompt || !strings.Contains(strings.ToLower(text), "history") {
+			} else if text != "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again." {
 				return
 			}
 			mark("turn_valid")
@@ -182,7 +183,7 @@ func fakeHistoryServer() {
 				_, _ = io.WriteString(os.Stdout, historyCanary+"\n")
 				return
 			}
-			toolItem := map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL", "tool": "grok_history_probe", "namespace": nil, "arguments": map[string]any{}, "status": "completed", "success": true}
+			toolItem := map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL", "tool": "apple_price_lookup", "namespace": nil, "arguments": map[string]any{}, "status": "completed", "success": true}
 			calls := 0
 			if phase == 1 && scenario != "no_request" || phase == 2 && scenario == "denial" {
 				calls = 1
@@ -194,7 +195,7 @@ func fakeHistoryServer() {
 				calls = 4097
 			}
 			for call := 0; call < calls; call++ {
-				params := map[string]any{"threadId": "PRIVATE_THREAD", "turnId": turn, "callId": "PRIVATE_CALL", "tool": "grok_history_probe", "namespace": nil, "arguments": map[string]any{}}
+				params := map[string]any{"threadId": "PRIVATE_THREAD", "turnId": turn, "callId": "PRIVATE_CALL", "tool": "apple_price_lookup", "namespace": nil, "arguments": map[string]any{}}
 				if call == 1 {
 					params["callId"] = "PRIVATE_REPEAT"
 				}
@@ -234,7 +235,7 @@ func fakeHistoryServer() {
 					return
 				}
 				if scenario == "tool_identity_overflow" && call == 4096 {
-					if result.Result.Success == nil || *result.Result.Success || result.Error.Code != 0 || strings.Contains(result.raw, token) || historyTokenShape.MatchString(result.raw) {
+					if result.Result.Success == nil || *result.Result.Success || result.Error.Code != 0 || strings.Contains(result.raw, priceResult) || historyPriceShape.MatchString(result.raw) {
 						return
 					}
 					mark("tool_identity_refused")
@@ -247,14 +248,14 @@ func fakeHistoryServer() {
 				if strings.HasPrefix(scenario, "request_") || scenario == "empty_call" || scenario == "unsupported" || scenario == "early_unsupported" {
 					// A typed denial or an RPC refusal must never return success or
 					// create a secret. Exact transport error codes are SDK-owned.
-					if (result.Error.Code != 0 || result.Result.Success != nil && !*result.Result.Success || result.Result.Decision == "decline" || result.Result.Decision == "cancel") && (result.Result.Success == nil || !*result.Result.Success) && !historyTokenShape.MatchString(result.raw) && token == "" {
+					if (result.Error.Code != 0 || result.Result.Success != nil && !*result.Result.Success || result.Result.Decision == "decline" || result.Result.Decision == "cancel") && (result.Result.Success == nil || !*result.Result.Success) && !historyPriceShape.MatchString(result.raw) && priceResult == "" {
 						mark("request_refused")
 					}
-					if scenario == "request_turn" && result.Result.Success != nil && *result.Result.Success && result.Error.Code == 0 && len(result.Result.ContentItems) == 1 && result.Result.ContentItems[0].Type == "inputText" && historyNonce.MatchString(result.Result.ContentItems[0].Text) && !strings.Contains(firstPrompt, result.Result.ContentItems[0].Text) {
+					if scenario == "request_turn" && result.Result.Success != nil && *result.Result.Success && result.Error.Code == 0 && len(result.Result.ContentItems) == 1 && result.Result.ContentItems[0].Type == "inputText" && validHistoryPrice(result.Result.ContentItems[0].Text) && !strings.Contains(firstPrompt, result.Result.ContentItems[0].Text) {
 						// A concurrent SDK callback can run before turn/start's
 						// response becomes application-visible. The provisional
 						// identity must then fail reconciliation with the actual turn.
-						mark("provisional_token_valid")
+						mark("provisional_price_valid")
 					}
 					if early {
 						reply(p, started)
@@ -268,7 +269,7 @@ func fakeHistoryServer() {
 					return
 				}
 				if phase == 2 {
-					if result.Result.Success == nil || *result.Result.Success || len(result.Result.ContentItems) != 1 || result.Result.ContentItems[0].Type != "inputText" || result.Result.ContentItems[0].Text == "" || strings.Contains(result.raw, token) || result.Error.Code != 0 {
+					if result.Result.Success == nil || *result.Result.Success || len(result.Result.ContentItems) != 1 || result.Result.ContentItems[0].Type != "inputText" || result.Result.ContentItems[0].Text == "" || strings.Contains(result.raw, priceResult) || result.Error.Code != 0 {
 						return
 					}
 					mark("denial_valid")
@@ -278,13 +279,13 @@ func fakeHistoryServer() {
 					return
 				}
 				value := result.Result.ContentItems[0].Text
-				if !historyNonce.MatchString(value) || strings.Contains(firstPrompt, value) || token != "" && token != value {
+				if !validHistoryPrice(value) || strings.Contains(firstPrompt, value) || priceResult != "" && priceResult != value {
 					return
 				}
-				token = value
+				priceResult = value
 				toolItem["id"] = params["callId"]
-				toolItem["contentItems"] = []any{map[string]any{"type": "inputText", "text": token}}
-				mark("token_valid")
+				toolItem["contentItems"] = []any{map[string]any{"type": "inputText", "text": priceResult}}
+				mark("price_valid")
 			}
 			if scenario == "provisional_mismatch" {
 				started["turn"].(map[string]any)["id"] = historyCanary
@@ -361,18 +362,21 @@ func fakeHistoryServer() {
 			if scenario == "wrong_output" {
 				toolItem["contentItems"] = []any{map[string]any{"type": "inputText", "text": historyCanary}}
 			}
-			agent := map[string]any{"type": "agentMessage", "id": "PRIVATE_REPLY", "phase": "final_answer", "text": historyReplyJSON(token)}
+			agent := map[string]any{"type": "agentMessage", "id": "PRIVATE_REPLY", "phase": "final_answer", "text": replyJSON(priceResult)}
 			if scenario == "legacy" || scenario == "legacy_superseded" || scenario == "legacy_replaced" || scenario == "legacy_commentary" {
 				delete(agent, "phase")
 			}
 			if scenario == "no_reply" || scenario == "delta" {
 				agent["text"] = ""
 			}
+			if scenario == "stale_amount" {
+				agent["text"] = historyReplyJSON(priceResult, 2)
+			}
 			if scenario == "wrong_reply" || scenario == "legacy_replaced" {
 				agent["text"] = historyCanary
 			}
 			if scenario == "delta" {
-				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": eventTurn, "itemId": "PRIVATE_REPLY", "delta": token}})
+				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": threadID, "turnId": eventTurn, "itemId": "PRIVATE_REPLY", "delta": priceResult}})
 			}
 			if scenario == "commentary" {
 				agent["phase"] = "commentary"
@@ -405,7 +409,7 @@ func fakeHistoryServer() {
 			if strings.HasPrefix(scenario, "legacy_") || scenario == "summary_replay" {
 				last := map[string]any{"type": "agentMessage", "id": "PRIVATE_LAST_REPLY", "text": historyCanary}
 				if scenario == "legacy_replaced" {
-					last["text"] = historyReplyJSON(token)
+					last["text"] = replyJSON(priceResult)
 				}
 				if scenario == "legacy_commentary" {
 					last["phase"] = "commentary"
@@ -426,7 +430,7 @@ func fakeHistoryServer() {
 				}
 				terminalItems = []any{}
 				assistant := func(id, phase, text string) map[string]any {
-					item := map[string]any{"type": "agentMessage", "id": id, "text": historyReplyJSON(text)}
+					item := map[string]any{"type": "agentMessage", "id": id, "text": replyJSON(text)}
 					if phase != "" {
 						item["phase"] = phase
 					}
@@ -439,27 +443,27 @@ func fakeHistoryServer() {
 					if scenario == "identity_replay_final" {
 						phase = "final_answer"
 					}
-					emit("item/completed", assistant(a, phase, token))
+					emit("item/completed", assistant(a, phase, priceResult))
 					emit("item/completed", assistant(b, phase, historyCanary))
 					// Leave the child connected after this post-terminal replay so
 					// the replay cannot double-count the earlier eligible result.
-					afterTerminal = assistant(a, phase, token)
+					afterTerminal = assistant(a, phase, priceResult)
 				case "identity_delayed_final":
-					emit("item/completed", assistant(a, "commentary", token))
-					afterTerminal = assistant(b, "final_answer", token)
+					emit("item/completed", assistant(a, "commentary", priceResult))
+					afterTerminal = assistant(b, "final_answer", priceResult)
 				case "identity_duplicate":
-					emit("item/completed", assistant(a, "final_answer", token))
+					emit("item/completed", assistant(a, "final_answer", priceResult))
 					// The fingerprint is unchanged despite a different text size.
-					emit("item/completed", assistant(a, "final_answer", token+historyCanary))
+					emit("item/completed", assistant(a, "final_answer", priceResult+historyCanary))
 				case "identity_conflict_phase":
-					emit("item/completed", assistant(a, "final_answer", token))
-					emit("item/completed", assistant(a, "", token))
+					emit("item/completed", assistant(a, "final_answer", priceResult))
+					emit("item/completed", assistant(a, "", priceResult))
 					emit("item/completed", assistant(b, "", historyCanary))
 				case "identity_conflict_recall":
 					emit("item/completed", assistant(a, "final_answer", historyCanary))
-					emit("item/completed", assistant(a, "final_answer", token))
+					emit("item/completed", assistant(a, "final_answer", priceResult))
 				case "identity_conflict_new_final", "identity_conflict_eligibility":
-					phase, text := "final_answer", token
+					phase, text := "final_answer", priceResult
 					if scenario == "identity_conflict_eligibility" {
 						// Both occurrences do not recall; eligibility alone conflicts.
 						phase, text = "commentary", historyCanary
@@ -468,14 +472,14 @@ func fakeHistoryServer() {
 					emit("item/completed", assistant(a, "final_answer", historyCanary))
 					// A new recalling candidate cannot clear an earlier identity conflict.
 					if scenario == "identity_conflict_new_final" {
-						afterTerminal = assistant(b, "final_answer", token)
+						afterTerminal = assistant(b, "final_answer", priceResult)
 					} else {
-						emit("item/completed", assistant(b, "final_answer", token))
+						emit("item/completed", assistant(b, "final_answer", priceResult))
 					}
 				case "identity_authority_duplicate_recall", "identity_authority_changed_recall", "identity_authority_duplicate_no_recall", "identity_authority_changed_no_recall", "identity_authority_last_recall", "identity_authority_last_no_recall":
-					initial, changed, final := token, historyCanary, token
+					initial, changed, final := priceResult, historyCanary, priceResult
 					if scenario == "identity_authority_changed_recall" || scenario == "identity_authority_duplicate_no_recall" {
-						initial, changed = historyCanary, token
+						initial, changed = historyCanary, priceResult
 					}
 					if strings.HasSuffix(scenario, "no_recall") {
 						final = historyCanary
@@ -486,12 +490,12 @@ func fakeHistoryServer() {
 					if strings.Contains(scenario, "_last_") {
 						other := historyCanary
 						if final == historyCanary {
-							other = token
+							other = priceResult
 						}
 						terminalItems = []any{assistant(a, "final_answer", other), assistant(b, "final_answer", final)}
 					}
 				case "identity_missing_item", "identity_empty_item", "identity_missing_summary", "identity_empty_summary":
-					missing := assistant("", "final_answer", token)
+					missing := assistant("", "final_answer", priceResult)
 					if strings.Contains(scenario, "_missing_") {
 						delete(missing, "id")
 					}
@@ -506,17 +510,17 @@ func fakeHistoryServer() {
 					}
 				case "identity_turn_reset":
 					if phase == 1 {
-						emit("item/completed", assistant(a, "final_answer", token))
+						emit("item/completed", assistant(a, "final_answer", priceResult))
 					} else {
 						// Reusing A with a changed phase requires a fresh per-turn identity map.
 						// Commentary must not corrupt B's structured final answer.
 						emit("item/completed", assistant(a, "commentary", historyCanary))
-						emit("item/completed", assistant(b, "final_answer", token))
+						emit("item/completed", assistant(b, "final_answer", priceResult))
 					}
 				case "identity_summary_composition":
 					emit("item/completed", assistant(a, "final_answer", historyCanary))
 					emit("item/completed", assistant(b, "final_answer", historyCanary))
-					terminalItems = []any{assistant("PRIVATE_SUMMARY_"+turn, "final_answer", token)}
+					terminalItems = []any{assistant("PRIVATE_SUMMARY_"+turn, "final_answer", priceResult)}
 				}
 			}
 			completed := map[string]any{"id": eventTurn, "status": "completed", "error": nil, "items": terminalItems}
@@ -531,7 +535,7 @@ func fakeHistoryServer() {
 			}
 			if scenario == "inline" || scenario == "inline_conflict" || scenario == "inline_missing_item" {
 				if scenario == "inline_missing_item" {
-					emit("item/completed", map[string]any{"type": "agentMessage", "id": "", "phase": "final_answer", "text": historyReplyJSON(token)})
+					emit("item/completed", map[string]any{"type": "agentMessage", "id": "", "phase": "final_answer", "text": replyJSON(priceResult)})
 				}
 				if scenario == "inline_conflict" {
 					send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": map[string]any{"id": turn, "status": "failed", "error": map[string]any{"message": historyCanary}, "items": []any{}}}})
@@ -578,7 +582,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 	modes := []string{"final_then_commentary", "next_final_then_commentary", "final_then_partial", "next_final_then_partial", "final_then_commentary_items", "next_final_then_commentary_items", "next_legacy_commentary", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy",
 		"wrong_model", "wrong_provider", "wrong_thread_provider", "request_thread", "request_turn", "request_namespace", "request_empty_namespace", "request_tool", "empty_call", "unsupported", "early_unsupported", "inline_conflict", "inline_missing_item", "provisional_mismatch", "wrong_thread", "wrong_turn",
 		"no_reason", "no_cipher", "missing_cipher", "cipher_missing_identity", "cipher_empty_identity", "cipher_wrong_thread", "cipher_wrong_turn", "no_request", "no_tool", "tool_failed", "tool_partial", "tool_namespace", "tool_empty_namespace", "tool_wrong_thread", "tool_wrong_turn", "tool_wrong_call", "tool_identity_limit", "tool_identity_overflow", "reply_wrong_thread", "reply_wrong_turn", "wrong_tool", "wrong_output", "no_reply", "missing_reply", "wrong_reply", "commentary", "delta", "legacy_superseded", "legacy_commentary", "summary_replay", "no_terminal", "failed", "partial", "error", "eof", "malformed", "hang",
-		"next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict", "next_inline_missing_item"}
+		"next_stale_amount", "next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict", "next_inline_missing_item"}
 	for _, mode := range []string{
 		"identity_replay", "identity_replay_final", "identity_delayed_final", "identity_duplicate",
 		"identity_conflict_phase", "identity_conflict_recall", "identity_conflict_new_final", "identity_conflict_eligibility",
@@ -631,8 +635,8 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 				safe := string(encoded)
 				if err != nil {
 					safe += err.Error()
-					if historyTokenShape.MatchString(err.Error()) {
-						t.Fatal("token-shaped error escaped")
+					if historyPriceShape.MatchString(err.Error()) {
+						t.Fatal("price-result-shaped error escaped")
 					}
 				}
 				for _, secret := range []string{historyCanary, "PRIVATE_THREAD", "PRIVATE_SESSION", "PRIVATE_TURN", "PRIVATE_CALL", "PRIVATE_REPEAT", "PRIVATE_UNREQUESTED_CALL", "PRIVATE_APPROVAL", "PRIVATE_REPLY", "PRIVATE_LAST_REPLY", "PRIVATE_REASONING", "PRIVATE_CIPHER", options.APIKey, options.Subject.Binary, options.BaseURL} {
@@ -681,14 +685,14 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 				}
 				if mode == "request_turn" {
 					wantCode := "history_tool_request_unattributed"
-					if counts["provisional_token_valid"] == 1 {
+					if counts["provisional_price_valid"] == 1 {
 						wantCode = "turn_identity_missing"
 					}
-					if counts["request_refused"]+counts["provisional_token_valid"] != 1 || counts["request_input_closed"] != 1 || got.ToolCalls != counts["provisional_token_valid"] || got.CompletedTools != 0 || got.FirstCompleted || got.FirstRecall || got.Completed || got.Recalled || live.DescribeFailure(err).Code != wantCode || ctx.Err() != nil {
+					if counts["request_refused"]+counts["provisional_price_valid"] != 1 || counts["request_input_closed"] != 1 || got.ToolCalls != counts["provisional_price_valid"] || got.CompletedTools != 0 || got.FirstCompleted || got.FirstRecall || got.Completed || got.Recalled || live.DescribeFailure(err).Code != wantCode || ctx.Err() != nil {
 						t.Fatal("mistaken provisional tool turn was not reconciled before proof or deadline")
 					}
 				}
-				if strings.HasPrefix(mode, "next_") && (!got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 76 || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1) {
+				if strings.HasPrefix(mode, "next_") && (!got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 13 || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1) {
 					t.Fatal("continuation failure corrupted the completed first-turn proof")
 				}
 				if mode == "no_terminal" || mode == "next_no_terminal" {
@@ -698,21 +702,21 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 					}
 					// The fixture emits one raw and one typed reasoning occurrence
 					// and one completed tool. Failure recovery must not add replays.
-					if live.DescribeFailure(err).Code != "deadline_exceeded" || got.ReasoningItems != 2 || got.EncryptedItems != 1 || got.CompletedTools != 1 || got.ToolCalls != 1 || completed || !recall || replyBytes != 76 {
+					if live.DescribeFailure(err).Code != "deadline_exceeded" || got.ReasoningItems != 2 || got.EncryptedItems != 1 || got.CompletedTools != 1 || got.ToolCalls != 1 || completed || !recall || replyBytes != 13 {
 						t.Fatal("failure recovery duplicated or lost real partial evidence")
 					}
 				}
 				if mode == "cipher_missing_identity" || mode == "cipher_empty_identity" {
 					// Raw reasoning permits an absent ID on the wire, but cannot
 					// establish encrypted-history authority without that identity.
-					if live.DescribeFailure(err).Code != "deadline_exceeded" || ctx.Err() == nil || got.EncryptedItems != 0 || got.ReasoningItems != 1 || got.ToolCalls != 1 || got.CompletedTools != 1 || counts["token_valid"] != 1 || !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 76 || got.Completed || got.Recalled || got.ReplyBytes != 0 || got.Stage == "first_turn_proven" {
+					if live.DescribeFailure(err).Code != "deadline_exceeded" || ctx.Err() == nil || got.EncryptedItems != 0 || got.ReasoningItems != 1 || got.ToolCalls != 1 || got.CompletedTools != 1 || counts["price_valid"] != 1 || !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 13 || got.Completed || got.Recalled || got.ReplyBytes != 0 || got.Stage == "first_turn_proven" {
 						t.Fatalf("raw reasoning without identity falsely established encrypted history: evidence=%+v failure=%+v", got, live.DescribeFailure(err))
 					}
 				}
-				if mode == "tool_wrong_call" && (got.CompletedTools != 0 || got.ToolCalls != 1 || counts["token_valid"] != 1) {
+				if mode == "tool_wrong_call" && (got.CompletedTools != 0 || got.ToolCalls != 1 || counts["price_valid"] != 1) {
 					t.Fatal("completed tool output without an accepted request identity was credited")
 				}
-				if mode == "tool_identity_overflow" && (live.DescribeFailure(err).Code != "history_tool_identity_budget_exceeded" || ctx.Err() != nil || got.ToolCalls != 4096 || counts["token_valid"] != 4096 || counts["tool_identity_overflow_sent"] != 1 || counts["tool_identity_refused"] != 1 || counts["tool_identity_input_closed"] != 1 || got.FirstCompleted || got.FirstRecall || got.CompletedTools != 0) {
+				if mode == "tool_identity_overflow" && (live.DescribeFailure(err).Code != "history_tool_identity_budget_exceeded" || ctx.Err() != nil || got.ToolCalls != 4096 || counts["price_valid"] != 4096 || counts["tool_identity_overflow_sent"] != 1 || counts["tool_identity_refused"] != 1 || counts["tool_identity_input_closed"] != 1 || got.FirstCompleted || got.FirstRecall || got.CompletedTools != 0) {
 					t.Fatalf("tool identity budget did not deny before EOF or deadline: markers=%v evidence=%+v failure=%+v", counts, got, live.DescribeFailure(err))
 				}
 				if scenario := strings.TrimPrefix(mode, "next_"); strings.HasPrefix(scenario, "identity_") {
@@ -745,7 +749,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 						recalled := got.FirstRecall
 						if strings.HasPrefix(mode, "next_") {
 							recalled = got.Recalled
-							if !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 76 {
+							if !got.FirstCompleted || !got.FirstRecall || got.FirstReplyBytes != 13 {
 								t.Fatal("continuation failure corrupted first-turn proof")
 							}
 						}
@@ -773,7 +777,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 					if mode == "next_denial" {
 						denied = 1
 					}
-					firstBytes, replyBytes := 76, 76
+					firstBytes, replyBytes := 13, 13
 					if scenario := strings.TrimPrefix(mode, "next_"); strings.HasPrefix(scenario, "identity_authority_last_") || scenario == "identity_replay" || scenario == "identity_replay_final" || scenario == "legacy_superseded" || scenario == "legacy_replaced" {
 						if strings.HasPrefix(mode, "next_") {
 							replyBytes += len(historyCanary)
@@ -781,7 +785,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 							firstBytes += len(historyCanary)
 						}
 					}
-					if got.Stage != "history_recalled" || !got.Bound || !got.FirstCompleted || !got.FirstRecall || !got.Completed || !got.Recalled || got.FirstReplyBytes != firstBytes || got.ReplyBytes != replyBytes || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.ToolCalls != calls || got.CompletedTools < 1 || got.DeniedToolCalls != denied || counts["token_valid"] != calls || counts["denial_valid"] != denied {
+					if got.Stage != "history_recalled" || !got.Bound || !got.FirstCompleted || !got.FirstRecall || !got.Completed || !got.Recalled || got.FirstReplyBytes != firstBytes || got.ReplyBytes != replyBytes || got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.ToolCalls != calls || got.CompletedTools < 1 || got.DeniedToolCalls != denied || counts["price_valid"] != calls || counts["denial_valid"] != denied {
 						t.Fatal("missing complete history proof or causal tool validation")
 					}
 				} else if got.Stage == "history_recalled" {
@@ -792,7 +796,21 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 	}
 }
 
-func historyReplyJSON(token string) string {
-	data, _ := json.Marshal(map[string]string{"token": token})
+func validHistoryPrice(value string) bool {
+	var result struct {
+		UnitPrice int `json:"unit_price_yuan"`
+	}
+	return json.Unmarshal([]byte(value), &result) == nil && result.UnitPrice >= 5 && result.UnitPrice <= 19 && value == fmt.Sprintf(`{"unit_price_yuan":%d}`, result.UnitPrice)
+}
+
+func historyReplyJSON(value string, kilograms int) string {
+	var result struct {
+		UnitPrice int `json:"unit_price_yuan"`
+	}
+	var amount any = value
+	if validHistoryPrice(value) && json.Unmarshal([]byte(value), &result) == nil {
+		amount = result.UnitPrice * kilograms
+	}
+	data, _ := json.Marshal(map[string]any{"amount": amount})
 	return string(data)
 }

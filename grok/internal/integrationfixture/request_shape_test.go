@@ -30,9 +30,9 @@ func TestFirstRequestHistoryDeclaration(t *testing.T) {
 		tools []json.RawMessage
 		want  bool
 	}{
-		{"flat", []json.RawMessage{json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "Call this function directly to invoke `grok_history_probe`. Do not invoke it through another tool.\\n\\n"+HistoryProbeDescription, 1))}, true},
+		{"flat", []json.RawMessage{json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "Call this function directly to invoke `apple_price_lookup`. Do not invoke it through another tool.\\n\\n"+HistoryProbeDescription, 1))}, true},
 		{"retired_hosted", []json.RawMessage{json.RawMessage(valid), json.RawMessage(`{"type":"x_search"}`)}, false},
-		{"canonical", []json.RawMessage{json.RawMessage(strings.Replace(valid, "emitted_probe_name", "grok_history_probe", 1))}, true},
+		{"canonical", []json.RawMessage{json.RawMessage(strings.Replace(valid, "emitted_probe_name", "apple_price_lookup", 1))}, true},
 		{"wrong_capability", []json.RawMessage{json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "unrelated capability", 1))}, false},
 		{"ambiguous_name", []json.RawMessage{json.RawMessage(valid), json.RawMessage(strings.Replace(valid, HistoryProbeDescription, "unrelated capability", 1))}, false},
 		{"duplicate", []json.RawMessage{json.RawMessage(valid), json.RawMessage(valid)}, false},
@@ -47,12 +47,12 @@ func TestFirstRequestHistoryDeclaration(t *testing.T) {
 }
 
 func TestFirstRequestShapeSummary(t *testing.T) {
-	data := []byte(`{"model":"grok-4.6","stream":true,"include":["reasoning.encrypted_content"],"instructions":"PRIVATE_PROMPT","input":[{"type":"message","content":[{"text":"PRIVATE_INPUT"}]}],"tools":[{"name":"grok_history_probe","description":"PRIVATE_DESCRIPTION","parameters":{"secret":"PRIVATE_SCHEMA"}}],"reasoning":{"effort":"medium"},"prompt_cache_key":"PRIVATE_ID"}`)
+	data := []byte(`{"model":"grok-4.6","stream":true,"include":["reasoning.encrypted_content"],"instructions":"PRIVATE_PROMPT","input":[{"type":"message","content":[{"text":"PRIVATE_INPUT"}]}],"tools":[{"name":"apple_price_lookup","description":"PRIVATE_DESCRIPTION","parameters":{"secret":"PRIVATE_SCHEMA"}}],"reasoning":{"effort":"medium"},"prompt_cache_key":"PRIVATE_ID"}`)
 	shape, ok := SummarizeFirstRequest(data)
 	encoded, err := json.Marshal(shape)
 	if !ok || err != nil || strings.Contains(string(encoded), "PRIVATE_") ||
 		shape.Model != "grok-4.6" || shape.Effort != "medium" || shape.InstructionsBytes != len("PRIVATE_PROMPT") ||
-		shape.InputTypes["message"] != 1 || !ContainsShapeValue(shape.Tools, "grok_history_probe") {
+		shape.InputTypes["message"] != 1 || !ContainsShapeValue(shape.Tools, "apple_price_lookup") {
 		t.Fatal("shape summary must retain structural metadata without content")
 	}
 	// Missing optional fields and an explicit store value are observations, not

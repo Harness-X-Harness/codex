@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -60,7 +59,7 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	var actualSchema, expectedSchema any
 	_ = json.Unmarshal(body.Text.Format.Schema, &actualSchema)
-	_ = json.Unmarshal([]byte(reasoningTokenSchema), &expectedSchema)
+	_ = json.Unmarshal([]byte(reasoningAmountSchema), &expectedSchema)
 	if body.Text.Format.Type != "json_schema" || !body.Text.Format.Strict || !reflect.DeepEqual(actualSchema, expectedSchema) {
 		fail("output_schema_changed")
 		return
@@ -117,35 +116,35 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 		case "function_call_output":
 			outputs++
 			outputAt = index
-			var token string
-			if item.CallID != reasoningHTTPCall || json.Unmarshal(item.Output, &token) != nil || !historyNonce.MatchString(token) {
+			var priceResult string
+			if item.CallID != reasoningHTTPCall || json.Unmarshal(item.Output, &priceResult) != nil || !validReasoningPrice(priceResult) {
 				fail("tool_result_binding")
 				return
 			}
-			if fixture.token == "" {
-				fixture.token = token
-			} else if fixture.token != token {
+			if fixture.priceResult == "" {
+				fixture.priceResult = priceResult
+			} else if fixture.priceResult != priceResult {
 				fail("tool_result_replay_changed")
 				return
 			}
 		case "message":
 			for _, part := range item.Content {
-				if item.Role == "user" && fixture.token != "" && strings.Contains(part.Text, fixture.token) {
+				if item.Role == "user" && fixture.priceResult != "" && strings.Contains(part.Text, fixture.priceResult) {
 					fail("user_secret_inserted")
 					return
 				}
-				if item.Role == "user" && strings.HasPrefix(part.Text, "Call grok_history_probe,") {
+				if item.Role == "user" && part.Text == reasoningFirstPrompt {
 					firstPrompts++
 				}
-				if item.Role == "user" && strings.HasPrefix(part.Text, "Recall the exact token returned by the tool in the previous turn") {
+				if item.Role == "user" && part.Text == reasoningContinuationPrompt {
 					continuations++
 					continuationAt = index
-					if fixture.token == "" || strings.Contains(part.Text, fixture.token) || strings.Contains(part.Text, reasoningHTTPCipher) {
+					if fixture.priceResult == "" || strings.Contains(part.Text, fixture.priceResult) || strings.Contains(part.Text, reasoningHTTPCipher) {
 						fail("continuation_secret_inserted")
 						return
 					}
 				}
-				if item.Role == "assistant" && fixture.token != "" && part.Text == reasoningTokenReply(fixture.token) {
+				if item.Role == "assistant" && fixture.priceResult != "" && part.Text == reasoningAmountReply(fixture.priceResult, 2) {
 					firstFinals++
 					finalAt = index
 				}
@@ -192,19 +191,19 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 	} else {
 		message := map[string]any{"type": "message", "id": responseID + "_message", "role": "assistant", "phase": "final_answer", "content": []any{}}
 		emit(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": message})
-		emit(map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": reasoningTokenReply(fixture.token)})
-		message["status"], message["content"] = "completed", []any{map[string]any{"type": "output_text", "text": reasoningTokenReply(fixture.token)}}
+		emit(map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": reasoningAmountReply(fixture.priceResult, fixture.requests)})
+		message["status"], message["content"] = "completed", []any{map[string]any{"type": "output_text", "text": reasoningAmountReply(fixture.priceResult, fixture.requests)}}
 		emit(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": message})
 	}
 	emit(map[string]any{"type": "response.completed", "response": map[string]any{"id": responseID}})
 }
 
 type reasoningHTTP struct {
-	mu                               sync.Mutex
-	model, threadID, toolName, token string
-	failure                          string
-	requests                         int
-	replayed, continued              bool
+	mu                                     sync.Mutex
+	model, threadID, toolName, priceResult string
+	failure                                string
+	requests                               int
+	replayed, continued                    bool
 }
 
 const reasoningHTTPCall = "controlled_history_call"
@@ -234,7 +233,7 @@ func TestReasoningHistoryFixture(t *testing.T) {
 			got, err := live.ReasoningHistory(ctx, live.Options{Subject: subject, Model: tc.model, BaseURL: backend.URL + "/v1", APIKey: "fixture-key"})
 			fixture.mu.Lock()
 			defer fixture.mu.Unlock()
-			// Evidence and structural failure markers never contain token, raw
+			// Evidence and structural failure markers never contain priceResult, raw
 			// prompts, identifiers, private reasoning or encrypted content.
 			encoded, _ := json.Marshal(got)
 			failure := live.FailureInfo{}
@@ -242,11 +241,11 @@ func TestReasoningHistoryFixture(t *testing.T) {
 				failure = live.DescribeFailure(err)
 			}
 			t.Logf("controlled reasoning: evidence=%s requests=%d paired_result=%t encrypted_replay=%t continuation=%t wire_failure=%s failure=%+v",
-				encoded, fixture.requests, fixture.token != "", fixture.replayed, fixture.continued, fixture.failure, failure)
+				encoded, fixture.requests, fixture.priceResult != "", fixture.replayed, fixture.continued, fixture.failure, failure)
 			if err != nil || fixture.failure != "" || fixture.requests != 3 || !fixture.replayed || !fixture.continued {
 				t.Fatal("native reasoning/tool/history composition was not proven")
 			}
-			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 76 || got.ReplyBytes != 76 {
+			if got.ReasoningItems < 1 || got.EncryptedItems < 1 || got.CompletedTools < 1 || got.FirstReplyBytes != 13 || got.ReplyBytes != 13 {
 				t.Fatal("completed encrypted reasoning, paired tool and final recall evidence missing")
 			}
 			if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 || got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
@@ -259,11 +258,23 @@ func TestReasoningHistoryFixture(t *testing.T) {
 	}
 }
 
-var historyNonce = regexp.MustCompile(`^[0-9a-f]{64}$`)
+const reasoningFirstPrompt = "Look up the price per kilogram of apples. How much would two kilograms cost?"
+const reasoningContinuationPrompt = "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again."
 
-const reasoningTokenSchema = `{"type":"object","properties":{"token":{"type":["string","null"]}},"required":["token"],"additionalProperties":false}`
+const reasoningAmountSchema = `{"type":"object","properties":{"amount":{"type":["number","null"]}},"required":["amount"],"additionalProperties":false}`
 
-func reasoningTokenReply(token string) string {
-	data, _ := json.Marshal(map[string]string{"token": token})
+func validReasoningPrice(value string) bool {
+	var result struct {
+		UnitPrice int `json:"unit_price_yuan"`
+	}
+	return json.Unmarshal([]byte(value), &result) == nil && result.UnitPrice >= 5 && result.UnitPrice <= 19 && value == fmt.Sprintf(`{"unit_price_yuan":%d}`, result.UnitPrice)
+}
+
+func reasoningAmountReply(value string, kilograms int) string {
+	var result struct {
+		UnitPrice int `json:"unit_price_yuan"`
+	}
+	_ = json.Unmarshal([]byte(value), &result)
+	data, _ := json.Marshal(map[string]int{"amount": result.UnitPrice * kilograms})
 	return string(data)
 }
