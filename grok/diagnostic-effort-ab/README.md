@@ -1,33 +1,40 @@
-# Temporary frozen initial-request replay — never merge
+# Temporary frozen identity ABBA — never merge
 
-This observes initial HTTP acceptance only, not a completed Live task. It captures
-a newly generated initial request from the same fixed binary, shipped profile,
-grok-4.6 thread, high effort, original prompt, strict schema and native headers
-that have previously succeeded. It does not claim to retain any old successful raw
-request. Runtime artifact 12769806175, SHA256
+This observes initial HTTP acceptance only, not a completed Live task. Two new
+native sessions A/B use identical shipped profile, grok-4.6 thread, high effort,
+original prompt, strict token schema, tool definitions and native header policy.
+Fixed artifact 12769806175, runtime SHA256
 47de14909531f35f7eacee71c1040bcb5d228ca1405ea2935327efef549e4c16;
 harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0.
 
-Actual binary first talks only to a loopback capture, which returns a local 403.
-The driver must stop with no tools executed and confirmed cleanup. This synthetic
-403 is not an upstream observation. Raw request bytes and forwarded header values
-remain solely in memory. The independent sender then sends exactly the same
-initial bytes and headers at most twice, separated by at least 60 monotonic seconds.
-It never gives upstream responses to the driver, never executes output tools, and
-never submits continuation requests. No retries, redirects, alternate endpoint,
-or extra probe. Unknown transport failures stop; only HTTP200/403 permit the
-second planned observation. Requests consume budget before attempting connection.
+Each actual-binary capture talks only to loopback and receives a synthetic local
+403. It must stop with zero executed tools and confirmed cleanup. Raw request
+bytes and forwarded headers remain only in memory. Before any upstream send,
+bodies must compare equal with only the previously proven cache key, typed msg/fco
+identities, temporary cwd and random tool-token normalization. Header comparisons
+allow only explicit native UUID identity fields (one mapping per session preserves
+relationships), positive integer turn start time, and the same temporary paths.
+All other fields, including sandbox, request kind and tool configuration, must
+remain equal. Unknown differences stop with zero upstream requests. A/B must have
+distinct thread IDs and raw bodies; each retains its own bytes for exact replay.
 
-Proof records unnormalized body SHA256, safe shape, header names but no values,
-request IDs, status, bounded SSE event type names and measured timing. No raw
-request/response, credential, cipher or private reasoning content is retained.
-Two sends with identical body/header values do not imply stateless upstream:
-request/session IDs and prompt cache key may affect deduplication or routing.
-403 then200 disproves deterministic rejection of this fixed payload; other
-outcomes do not identify caching, rate limiting, or a specific backend cause.
+A single sender and process-wide batch guard issue at most four HTTP requests in
+A-B-B-A order. Each response is fully received and connection closed before a
+monotonic wait of at least 60 seconds. No retries, redirects, tool execution or
+continuations. Responses never return to the native driver. Only HTTP200/403
+permit the next observation; unknown transport failures stop. Reservations occur
+before connection and are never refunded. All-identical outcomes stop this
+exploration branch rather than triggering more calls.
 
-Before secrets are injected, existing actual-binary loopback roundtrip/schema/
-header/zero-retry checks plus first-request-only capture must pass. Captured source
-files and runtime bind this gate to execution. The current batch is at most two
-real HTTP requests; cumulative count before it is 15. Formal oracles and permission
-settings are unchanged. This branch is temporary and must never be merged.
+Evidence contains raw-body SHA256, safe shape, header names but no values or
+authentication hashes, exact per-request identity label/status/request ID/timing,
+and bounded SSE event names. No raw body, secret, private reasoning or ciphertext
+is persisted. All existing offline checks and the actual-binary identity-pair
+gate run before backend secrets; source/runtime hashes bind execution.
+
+Interpretation is limited: within-A or within-B status changes reject a purely
+deterministic fixed-payload refusal. Stable different outcomes between A/B only
+suggest identity/context-bundle association; caching, deduplication and time/order
+remain confounded. No individual identity field is identified. HTTP200 is not a
+completed business result. Cumulative count before this batch is17, maximum4 more.
+This branch is temporary; never merge or modify formal Live assertions or retries.

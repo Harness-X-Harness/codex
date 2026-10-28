@@ -1,4 +1,4 @@
-name: Temporary bounded frozen initial request replay
+name: Temporary bounded frozen identity ABBA
 on:
   workflow_dispatch:
 permissions:
