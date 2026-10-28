@@ -32,3 +32,17 @@ limit extrapolation to production. Safe evidence contains counters, statuses,
 request IDs and semantic result summaries, never credentials, raw requests,
 private reasoning or ciphertext. Only explicitly listed JSON files are uploaded.
 A single successful arm does not prove causality. No production assertion changes.
+
+## Offline diagnostic completeness
+
+Run 40609515160 verified the package and both actual-binary loopback tool rounds,
+but stopped on a non-effort body difference before the real step (zero real
+requests). Its old comparison did not retain the differing paths; the cause is
+not yet established. The updated gate records both request pairs, safe raw and
+normalized difference summaries (paths, types, sizes, hashes and structural
+markers, never text contents), arm cleanup and an independent denial/retry check
+before aggregating. Unknown differences still fail closed; no additional fields
+are silently normalized. The real relay records per-send UTC, phase, bounded safe
+request shape, status and request IDs. An HTTP status alone does not establish the
+reason for a refusal. Execute a new dispatch only when explicitly directed; the
+eight-send limit is per run, not a cross-run authorization ledger.

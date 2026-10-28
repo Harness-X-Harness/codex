@@ -4,7 +4,7 @@ import threading
 import unittest
 from unittest import mock
 from urllib.parse import urlsplit
-from relay import Relay
+from relay import Relay, safe_shape
 
 CANARY='CREDENTIAL_PRIVATE_CANARY'
 def send(relay, effort=None, path='/v1/responses', continuation=False):
@@ -73,6 +73,28 @@ class Tests(unittest.TestCase):
             self.assertEqual(send(relay)[0],400)
             self.assertEqual(len(calls),1)
             self.assertTrue(relay.summary()['arms']['1-A']['failed'])
+
+    def test_safe_shape_and_all_rejections_have_diagnostics(self):
+        shape=safe_shape({'model':'grok-4.6','reasoning':{},CANARY:CANARY,
+            'text':{'format':{'schema':{'type':'object'}}},
+            'input':[{'type':'reasoning','encrypted_content':CANARY},
+                     {'type':'function_call','call_id':CANARY},
+                     {'type':'function_call_output','call_id':CANARY,'output':CANARY},
+                     {'type':CANARY,'content':CANARY}]})
+        self.assertNotIn(CANARY,json.dumps(shape))
+        self.assertEqual(shape['unknown_topkey_count'],1)
+        self.assertEqual(shape['cipher_lengths'],[len(CANARY)])
+        self.assertTrue(shape['outputs_paired'])
+        self.assertEqual(len(shape['schema_sha256']),64)
+        self.assertEqual(shape['input_types'],['reasoning','function_call','function_call_output','other'])
+        with Relay() as relay:
+            relay.begin_arm('1-A',None)
+            self.assertEqual(send(relay,path='/'+CANARY)[0],400)
+            self.assertEqual(send(relay,'high')[0],400)
+            events=relay.summary()['events']
+            self.assertEqual(len(events),2)
+            self.assertTrue(all(e['utc'].endswith('+00:00') and e['status']==400 and not e['send_attempted'] for e in events))
+            self.assertNotIn(CANARY,json.dumps(events))
 
     def test_concurrent_reservation_cannot_bypass_arm(self):
         entered=threading.Event();release=threading.Event();calls=[]

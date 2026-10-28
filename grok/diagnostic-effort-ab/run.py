@@ -39,30 +39,90 @@ def run_arm(relay,arm,ordinal,binary,out,offline=False):
   os.killpg(p.pid,signal.SIGKILL);p.communicate();result_data={'passed':False,'failure':{'code':'driver_timeout'}}
  relay.end_arm();write(result,result_data);return result_data
 
+def value_summary(value):
+ data=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+ summary={'type':type(value).__name__,'json_bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+ if isinstance(value,(str,list,dict)):summary['length']=len(value)
+ if isinstance(value,str):
+  summary['known_markers']=[x for x in ['grok-live-','<cwd>','<current_date>','<timezone>','<session_id>','<thread_id>','<current_time_reminder>'] if x in value]
+ return summary
+
+def difference_report(a,b,path=''):
+ differences=[]
+ def walk(a,b,path):
+  if type(a) is type(b) and isinstance(a,dict):
+   for key in sorted(set(a)|set(b)):
+    pointer=path+'/'+str(key).replace('~','~0').replace('/','~1')
+    if key not in a or key not in b:
+     differences.append({'path':pointer,'left_present':key in a,'right_present':key in b})
+    else:walk(a[key],b[key],pointer)
+  elif type(a) is type(b) and isinstance(a,list) and len(a)==len(b):
+   for index,(left,right) in enumerate(zip(a,b)):walk(left,right,path+'/'+str(index))
+  elif a!=b or type(a) is not type(b):
+   entry={'path':path,'left':value_summary(a),'right':value_summary(b)}
+   if isinstance(a,str) and isinstance(b,str):
+    prefix=0
+    while prefix<min(len(a),len(b)) and a[prefix]==b[prefix]:prefix+=1
+    suffix=0
+    while suffix<min(len(a),len(b))-prefix and a[len(a)-1-suffix]==b[len(b)-1-suffix]:suffix+=1
+    entry['common_prefix_chars']=prefix;entry['common_suffix_chars']=suffix
+    entry['changed_chars']=[len(a)-prefix-suffix,len(b)-prefix-suffix]
+   differences.append(entry)
+ walk(a,b,path)
+ return {'count':len(differences),'differences':differences[:128],'truncated':len(differences)>128}
+
+def offline_gate(binary,out,identity):
+ report={'passed':False,'real_http_requests':0,'arms':{},'checks':{},'source_files':identity,'runtime_sha256':RUNTIME_SHA,'temporary_directory_is_tmp':tempfile.gettempdir()=='/tmp'}
+ requests={}
+ try:
+  # Independent loopback arms/checks all run before aggregation. No real transport.
+  for ordinal,arm in enumerate(['A','B'],1):
+   seen=[]
+   def scripted(body,headers):
+    seen.append(body);return 200,{'Content-Type':'text/event-stream'},sse(body,len(seen))
+   with Relay(mode='offline',offline_transport=scripted) as relay:
+    try:report['arms'][arm]=run_arm(relay,arm,ordinal,binary,out,True)
+    except Exception:report['arms'][arm]={'passed':False,'failure':{'code':'offline_arm_exception'}}
+    finally:report['arms'][arm]['relay']=relay.summary();requests[arm]=list(seen)
+  denied=[]
+  def deny(body,headers):denied.append(1);return 403,{'Content-Type':'application/json'},b'{"code":"fixture_denied"}'
+  with Relay(mode='offline',offline_transport=deny) as relay:
+   try:denial=run_arm(relay,'A',3,binary,out,True)
+   except Exception:denial={'passed':False,'failure':{'code':'offline_denial_exception'}}
+   finally:report['denial']={'result':denial,'requests':len(denied),'relay':relay.summary()}
+  checks=report['checks']
+  checks['roundtrips']=all(report['arms'][arm].get('passed') and len(requests[arm])==2 for arm in ['A','B'])
+  checks['cleanup']=all(not report['arms'][arm].get('cleanup_pending',True) for arm in ['A','B']) and not denial.get('cleanup_pending',True)
+  checks['zero_retry']=len(denied)==1 and not denial.get('passed') and denial.get('failure',{}).get('http_status')==403
+  report['comparisons']=[];continuations=[];efforts=[]
+  for index in range(min(len(requests['A']),len(requests['B']))):
+   a,b=requests['A'][index],requests['B'][index]
+   comparison={'request':index+1,'raw':difference_report(a,b)}
+   try:comparison['normalized']=difference_report(normalized(a),normalized(b))
+   except Exception:comparison['normalization_error']='unexpected_tool_token_shape'
+   report['comparisons'].append(comparison)
+  for arm in ['A','B']:
+   for req in requests[arm]:efforts.append(req.get('reasoning',{}).get('effort')==(None if arm=='A' else 'high'))
+   if len(requests[arm])==2:
+    req=requests[arm][1];calls=[x for x in req['input'] if x.get('type')=='function_call'];outputs=[x for x in req['input'] if x.get('type')=='function_call_output'];reasons=[x for x in req['input'] if x.get('type')=='reasoning']
+    continuations.append(len(calls)==1 and len(outputs)==1 and calls[0]['call_id']==outputs[0]['call_id'] and any(x.get('encrypted_content')=='opaque-offline-cipher' for x in reasons))
+  checks['effort']=len(efforts)==4 and all(efforts)
+  checks['continuations']=len(continuations)==2 and all(continuations)
+  checks['only_effort_delta']=len(report['comparisons'])==2 and all(c.get('normalized',{}).get('count')==0 for c in report['comparisons'])
+  report['passed']=all(checks.values())
+ except Exception:report['capture_failure']='offline_capture_exception'
+ finally:write(out/'offline-report.json',report)
+ if not report['passed']:raise ValueError('offline_gate_failed')
+ write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'effort only after fresh-session cache key, temporary cwd and fresh tool token normalization','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0})
+
 def main():
  parser=argparse.ArgumentParser();mode=parser.add_mutually_exclusive_group(required=True);mode.add_argument('--offline',action='store_true');mode.add_argument('--execute',action='store_true');parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);parser.add_argument('--offline-proof',type=Path);args=parser.parse_args()
  binary=args.binary.resolve();out=args.output.resolve();out.mkdir(mode=0o700,parents=True,exist_ok=False);os.chmod(ROOT/'wrapper.py',0o755)
  if digest(binary)!=RUNTIME_SHA:raise ValueError('runtime_identity')
  identity=source_identity()
  if args.offline:
-  seen=[]
-  def scripted(body,headers):
-   seen.append(body);return 200,{'Content-Type':'text/event-stream'},sse(body,len(seen))
-  with Relay(mode='offline',offline_transport=scripted) as relay:
-   seen.clear();a=run_arm(relay,'A',1,binary,out,True);a_req=list(seen)
-   seen.clear();b=run_arm(relay,'B',2,binary,out,True);b_req=list(seen)
-   if not a.get('passed') or not b.get('passed') or len(a_req)!=2 or len(b_req)!=2:raise ValueError('offline_roundtrip')
-   if a_req[0].get('reasoning',{}).get('effort') is not None or b_req[0].get('reasoning',{}).get('effort')!='high':raise ValueError('offline_effort')
-   if any(normalized(a)!=normalized(b) for a,b in zip(a_req,b_req)):raise ValueError('offline_non_effort_delta')
-   for req in [a_req[1],b_req[1]]:
-    calls=[x for x in req['input'] if x.get('type')=='function_call'];outputs=[x for x in req['input'] if x.get('type')=='function_call_output'];reasons=[x for x in req['input'] if x.get('type')=='reasoning']
-    if len(calls)!=1 or len(outputs)!=1 or calls[0]['call_id']!=outputs[0]['call_id'] or not any(x.get('encrypted_content')=='opaque-offline-cipher' for x in reasons):raise ValueError('offline_continuation')
-  denied=[]
-  def deny(body,headers):denied.append(1);return 403,{'Content-Type':'application/json'},b'{"code":"fixture_denied"}'
-  with Relay(mode='offline',offline_transport=deny) as relay:
-   result=run_arm(relay,'A',3,binary,out,True)
-   if len(denied)!=1 or result.get('passed') or result.get('failure',{}).get('http_status')!=403:raise ValueError('offline_zero_retry')
-  write(out/'proof.json',{'passed':True,'runtime_sha256':RUNTIME_SHA,'source_files':identity,'request_delta':'effort only after fresh-session cache key, temporary cwd and fresh tool token normalization','loopback_roundtrip_requests':4,'loopback_denial_requests':1,'real_http_requests':0});return
+  offline_gate(binary,out,identity)
+  return
  proof=json.loads(args.offline_proof.read_text()) if args.offline_proof else {}
  if proof.get('passed') is not True or proof.get('source_files')!=identity or proof.get('runtime_sha256')!=RUNTIME_SHA:raise ValueError('offline_proof_binding')
  if not os.environ.get('GROK_API_KEY'):raise ValueError('credential_unavailable')
@@ -82,6 +142,6 @@ def main():
 if __name__=='__main__':
  try:main()
  except Exception as exc:
-  safe_codes={'runtime_identity','offline_roundtrip','offline_effort','offline_non_effort_delta','offline_zero_retry','offline_tool_token','offline_continuation','offline_proof_binding','credential_unavailable'}
+  safe_codes={'offline_gate_failed','runtime_identity','offline_roundtrip','offline_effort','offline_non_effort_delta','offline_zero_retry','offline_tool_token','offline_continuation','offline_proof_binding','credential_unavailable'}
   code=str(exc) if type(exc) is ValueError and str(exc) in safe_codes else 'experiment_failure'
   print('bounded experiment stopped: '+code);raise SystemExit(1)

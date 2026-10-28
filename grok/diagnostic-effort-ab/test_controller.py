@@ -22,4 +22,31 @@ class ControllerTests(unittest.TestCase):
   a={'prompt_cache_key':'a','reasoning':{},'input':[{'type':'function_call_output','output':'a'*64},{'text':'/tmp/grok-live-123/workspace'}]}
   b={'prompt_cache_key':'b','reasoning':{'effort':'high'},'input':[{'type':'function_call_output','output':'b'*64},{'text':'/tmp/grok-live-456/workspace'}]}
   self.assertEqual(run.normalized(a),run.normalized(b));b['extra']='different';self.assertNotEqual(run.normalized(a),run.normalized(b))
+class OfflineDiagnosticsTests(unittest.TestCase):
+ def test_difference_report_does_not_dump_values(self):
+  report=run.difference_report({'input':[{'text':'SECRET_CANARY grok-live-123'}]}, {'input':[{'text':'PRIVATE_CIPHER_CANARY'}]})
+  encoded=json.dumps(report)
+  self.assertEqual(report['count'],1);self.assertEqual(report['differences'][0]['path'],'/input/0/text')
+  self.assertNotIn('SECRET_CANARY',encoded);self.assertNotIn('PRIVATE_CIPHER_CANARY',encoded)
+ def test_failed_comparison_still_records_denial_and_all_checks(self):
+  calls=[]
+  class LocalRelay(FakeRelay):
+   def __init__(self,**kwargs):self.transport=kwargs['offline_transport']
+  def arm(relay,name,ordinal,*args):
+   calls.append(ordinal)
+   if ordinal==3:
+    relay.transport({},{});return {'passed':False,'cleanup_pending':False,'failure':{'http_status':403}}
+   body={'model':'grok-4.6','reasoning':{} if name=='A' else {'effort':'high'},'input':[{'type':'message','text':'DIFFERENT_PRIVATE_'+name}]}
+   # Capture shape without relying on SSE, which is not part of this unit test.
+   relay.transport(body,{})
+   second={**body,'input':[{'type':'function_call','call_id':'x'},{'type':'function_call_output','call_id':'x','output':'a'*64},{'type':'reasoning','encrypted_content':'opaque-offline-cipher'}]}
+   relay.transport(second,{})
+   return {'passed':True,'cleanup_pending':False}
+  with tempfile.TemporaryDirectory() as tmp,patch.object(run,'Relay',LocalRelay),patch.object(run,'run_arm',side_effect=arm),patch.object(run,'sse',return_value=b''):
+   out=Path(tmp)
+   with self.assertRaisesRegex(ValueError,'offline_gate_failed'):run.offline_gate(Path('/unused'),out,{})
+   report=json.loads((out/'offline-report.json').read_text())
+   self.assertEqual(calls,[1,2,3]);self.assertTrue(report['checks']['zero_retry'])
+   self.assertFalse(report['checks']['only_effort_delta']);self.assertEqual(len(report['comparisons']),2)
+   self.assertNotIn('DIFFERENT_PRIVATE',json.dumps(report));self.assertFalse((out/'proof.json').exists())
 if __name__=='__main__':unittest.main()
