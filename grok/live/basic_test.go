@@ -274,8 +274,16 @@ func fakeAppServer() {
 				time.Sleep(time.Hour)
 				return
 			case "retention_budget":
-				agent["text"] = strings.Repeat("x", 3<<20)
-				_ = output.Encode(item)
+				// Exact Run retains correlated deltas, while Basic's completion
+				// callback ignores them. Cross the SDK's 512-slot retention bound
+				// without making multi-megabyte JSON parsing race the test deadline.
+				// This proves Basic preserves the SDK's generic retention failure;
+				// the pinned SDK's retention tests own count/byte accounting.
+				for range 513 {
+					_ = output.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{
+						"threadId": "thread", "turnId": "turn", "itemId": "message", "delta": "x",
+					}})
+				}
 				time.Sleep(time.Hour)
 				return
 			case "request":
@@ -523,7 +531,7 @@ func TestBasicRejectsInsufficientEvidence(t *testing.T) {
 				t.Fatal("application callback overload was not bounded")
 			}
 			if mode == "retention_budget" && live.DescribeFailure(err).Code != "notification_retention_exceeded" {
-				t.Fatal("SDK retention overload was not bounded")
+				t.Fatalf("SDK retention overload was not bounded: failure=%s stage=%s", live.DescribeFailure(err).Code, got.Stage)
 			}
 			encoded, _ := json.Marshal(got)
 			if strings.Contains(string(encoded)+err.Error(), "PRIVATE_CANARY") || strings.Contains(string(encoded)+err.Error(), options.Subject.Binary) || strings.Contains(string(encoded)+err.Error(), options.BaseURL) {
