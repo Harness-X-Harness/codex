@@ -84,7 +84,7 @@ def offline_gate(binary,out,identity):
  requests={}
  try:
   # Independent loopback arms/checks all run before aggregation. No real transport.
-  for ordinal,arm in enumerate(['A','B'],1):
+  for ordinal,arm in enumerate(['B','A'],1):
    seen=[]
    def scripted(body,headers):
     seen.append(body);return 200,{'Content-Type':'text/event-stream'},sse(body,len(seen))
@@ -147,11 +147,11 @@ def main():
  with Relay(mode='real') as relay:
   try:
    def clean(r):return not r.get('cleanup_pending',False) and (r.get('passed') is True or r.get('failure',{}).get('http_status')==403)
-   for arm in ['A','B']:
+   for arm in ['B','A']:
     results.append(run_arm(relay,arm,len(results)+1,binary,out))
     if not clean(results[-1]):break
   finally:write(out/'relay.json',relay.summary())
- write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'header_control','request_limit':4,'previous_real_requests':6,'cumulative_real_requests':6+relay.summary()['sent'],'results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
+ write(out/'summary.json',{'runtime_sha256':RUNTIME_SHA,'artifact_id':12769806175,'model':'grok-4.6','experiment':'header_control_reverse','request_limit':4,'previous_real_requests':9,'cumulative_real_requests':9+relay.summary()['sent'],'results':results,'source_files':identity,'causal_conclusion':'exploratory only; no production oracle changed'})
 if __name__=='__main__':
  try:main()
  except Exception as exc:

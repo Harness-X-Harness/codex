@@ -13,7 +13,7 @@ Fixed binary artifact 12769806175, runtime SHA-256
 harness e3c0812c7d47c567d42a181c921a30aa3c35cdc0. Config default 4.7 remains
 unchanged, while actual thread and outgoing request must be 4.6.
 
-Only A/B; at most four real HTTP sends (two per arm), no reverse pair, retries or
+This follow-up executes only B then A; at most four real HTTP sends (two per arm), no further pair, retries or
 redirects. Errors never refund budget. A second request must be the paired tool
 result. Unknown failure or incomplete cleanup stops the batch. Before backend
 secret injection, actual-binary loopback verifies both profiles, same task/schema,
@@ -32,5 +32,5 @@ timeout remain shared transport limitations.
 
 Previous batches: effort A/B 2 sends, prompt A/B 2, concurrent isolated/shipped
 control 2; all initial HTTP403. The last batch proved both profiles lost precisely
-the three headers above. Cumulative real requests before this batch: 6. The
+the three headers above. The first header pair used 3 sends: A passed its tool round, B received initial403. This follow-up only reverses order; cumulative real requests before it: 9. The
 workflow is temporary/dispatch-only; never merge or modify the formal Live oracle.
