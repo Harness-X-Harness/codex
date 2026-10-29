@@ -147,6 +147,13 @@ remains suitable for logs; the attached diagnostic bundle intentionally includes
 synthetic task content and public backend responses and shares Actions artifact
 access/30-day retention. Do not use it for arbitrary private user uploads.
 
+Streaming delta diagnostics retain at most 128 events and one quarter of the
+configured event/byte budget, with an explicit omitted-delta count. This leaves
+room for terminal results, oracle decisions and cleanup under a delta flood;
+it does not change the business verdict or increase the overall limits.
+Missing price lookup is reported separately from an incorrect calculated amount.
+Web failure stages distinguish the first search from its continuation.
+
 Capture limits are explicit rather than silent: 4096 events, 64 KiB per event,
 32 attachments of at most 32 MiB each, 128 MiB total. Oversized events are marked,
 not treated as complete evidence. Capture failure is reported independently in the

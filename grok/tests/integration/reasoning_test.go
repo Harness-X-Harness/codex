@@ -258,7 +258,7 @@ func TestReasoningHistoryFixture(t *testing.T) {
 	}
 }
 
-const reasoningFirstPrompt = "Look up the price per kilogram of apples. How much would two kilograms cost?"
+const reasoningFirstPrompt = "Check the shop’s current apple price using the price lookup, then calculate the cost of two kilograms."
 const reasoningContinuationPrompt = "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again."
 
 const reasoningAmountSchema = `{"type":"object","properties":{"amount":{"type":["number","null"]}},"required":["amount"],"additionalProperties":false}`
