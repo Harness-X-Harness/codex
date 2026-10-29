@@ -191,6 +191,9 @@ func (p *searchProbe) complete(value turn) error {
 	}
 	p.terminal = true
 	p.evidence.Stage = "search_turn_completed"
+	if p.previousID != "" {
+		p.evidence.Stage = "search_continuation_completed"
+	}
 	return nil
 }
 
