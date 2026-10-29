@@ -115,3 +115,20 @@ func TestSearchFailureStageIdentifiesContinuation(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchCompletedStageIdentifiesContinuation(t *testing.T) {
+	for _, previous := range []string{"", "first"} {
+		evidence := Evidence{FirstCompleted: previous != ""}
+		probe := searchProbe{turnID: "current", previousID: previous, evidence: &evidence}
+		if err := probe.complete(turn{ID: "current", Status: "completed"}); err != nil {
+			t.Fatal(err)
+		}
+		want := "search_turn_completed"
+		if previous != "" {
+			want = "search_continuation_completed"
+		}
+		if evidence.Stage != want || !probe.terminal || evidence.Completed || evidence.FirstCompleted != (previous != "") {
+			t.Fatalf("terminal stage lost or manufactured full proof: %+v", evidence)
+		}
+	}
+}
