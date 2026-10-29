@@ -17,7 +17,7 @@ func ContainsShapeValue(tools []string, want string) bool {
 
 // HistoryProbeDescription is the controlled capability registered by this
 // scenario. Its emitted function name belongs to the product's tool projection.
-const HistoryProbeDescription = "Return the current price of apples in yuan per kilogram."
+const HistoryProbeDescription = "Look up the shop’s current apple price in yuan per kilogram."
 
 // HistoryProbeDeclaration identifies the capability, not schema validity.
 // The actual tool call and returned price prove callability in the history run.

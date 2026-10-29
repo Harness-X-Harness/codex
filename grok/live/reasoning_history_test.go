@@ -148,7 +148,7 @@ func fakeHistoryServer() {
 			}
 			if phase == 1 {
 				firstPrompt = text
-				if text != "Look up the price per kilogram of apples. How much would two kilograms cost?" {
+				if text != "Check the shop’s current apple price using the price lookup, then calculate the cost of two kilograms." {
 					return
 				}
 			} else if text != "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again." {

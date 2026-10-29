@@ -44,7 +44,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 		turn := protocolv2.TurnStartParams{
 			OutputSchema: &schema,
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-				Text: "Look up the price per kilogram of apples. How much would two kilograms cost?",
+				Text: "Check the shop’s current apple price using the price lookup, then calculate the cost of two kilograms.",
 			})},
 		}
 		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
@@ -175,12 +175,16 @@ func observeSDKHistoryTurn[R any](ctx context.Context, observer *sdkHistoryObser
 			(fenced || observer.inlineTerminal)
 		settledReply := observer.reply.completed && observer.reply.authoritative && (fenced || observer.inlineTerminal)
 		formatValid, recalled := observer.reply.formatValid, observer.reply.recall
+		lookupMissing := observer.probe.previousID == "" && observer.probe.unitPrice == 0
 		observer.mu.Unlock()
 		if cause != nil {
 			return cause
 		}
 		if settledReply && !formatValid {
 			return failedObservation("history_reply_invalid", "live: history reply is not a valid structured result")
+		}
+		if settledReply && !recalled && lookupMissing {
+			return failedObservation("history_lookup_not_observed", "live: required price lookup was not observed")
 		}
 		if settledReply && !recalled {
 			return failedObservation("history_amount_mismatch", "live: history amount did not match the price-based calculation")

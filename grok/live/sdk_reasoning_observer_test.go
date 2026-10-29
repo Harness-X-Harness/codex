@@ -346,3 +346,32 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 		})
 	}
 }
+
+func TestSDKHistoryLookupFailureClassification(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"no_lookup", "history_lookup_not_observed"},
+		{"wrong_amount", "history_reply_not_recalled"},
+		{"correct_amount", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observer := newSDKHistoryObserver()
+			observer.probe.threadID, observer.probe.turnID = "thread", "turn"
+			text := `{"amount":16}`
+			if tc.name != "no_lookup" {
+				observer.probe.unitPrice, observer.probe.toolResult = 9, `{"unit_price_yuan":9}`
+				if tc.name == "correct_amount" {
+					text = `{"amount":18}`
+				}
+			}
+			err := observer.accept(sdkHistoryObservation{ThreadID: "thread", Method: "turn/completed", Turn: historyTurn{
+				ID: "turn", Status: "completed", Items: []historyItem{{ID: "answer", Type: "agentMessage", Phase: "final_answer", Text: text}},
+			}})
+			if (err == nil) != (tc.want == "") || err != nil && DescribeFailure(err).Code != tc.want || observer.reply.recall != (tc.want == "") {
+				t.Fatalf("wrong classification or recall: error=%v recall=%v", err, observer.reply.recall)
+			}
+			if observer.observations.CompletedTools != 0 {
+				t.Fatal("reply manufactured tool completion")
+			}
+		})
+	}
+}

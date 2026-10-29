@@ -274,6 +274,9 @@ func (observer *sdkHistoryObserver) accept(observation sdkHistoryObservation) er
 		return observer.reject(err)
 	}
 	if observer.reply.authoritative && !observer.reply.recall {
+		if observer.probe.previousID == "" && observer.probe.unitPrice == 0 {
+			return observer.reject(failedObservation("history_lookup_not_observed", "live: required price lookup was not observed"))
+		}
 		return observer.reject(failedObservation("history_reply_not_recalled", "live: final reply did not calculate the expected amount"))
 	}
 	observer.signal()
