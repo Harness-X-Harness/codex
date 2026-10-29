@@ -477,7 +477,7 @@ func finalProductReply(turn productTurn) (string, error) {
 		}
 		size += len(text)
 		if size > 4096 {
-			return "", errors.New("live: product reply budget exceeded")
+			return "", failedObservation("product_reply_budget_exceeded", "live: product reply budget exceeded")
 		}
 		if phase == "final_answer" {
 			final = append(final, text)

@@ -2,6 +2,7 @@ package live
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -104,5 +105,27 @@ func TestChildStreamAssistantTextContributions(t *testing.T) {
 				t.Fatalf("assistant projection changed causal result: got=%v want_proven=%v", got, test.valid)
 			}
 		})
+	}
+}
+
+func TestFinalProductReplyBudgetClassification(t *testing.T) {
+	for _, size := range []int{4096, 4097, 19970} {
+		text := strings.Repeat("x", size)
+		got, err := finalProductReply(productTurn{Items: []protocolv2.ThreadItem{
+			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "answer", Text: text, Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)}),
+		}})
+		if size == 4096 {
+			if err != nil || got != text {
+				t.Fatal("existing reply boundary changed")
+			}
+			continue
+		}
+		if err == nil || got != "" || DescribeFailure(err).Code != "product_reply_budget_exceeded" {
+			t.Fatalf("oversized reply lost typed rejection: %v", err)
+		}
+		encoded, _ := json.Marshal(DescribeFailure(err))
+		if strings.Contains(string(encoded), text) {
+			t.Fatal("failure exported answer content")
+		}
 	}
 }

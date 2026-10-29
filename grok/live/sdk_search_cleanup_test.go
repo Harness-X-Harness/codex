@@ -1,6 +1,7 @@
 package live
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -94,6 +95,40 @@ func TestSearchCleanupRevalidatesRetainedTypedWithoutNewCredit(t *testing.T) {
 					t.Fatal("retained cleanup mutated evidence, result, calls, probe state, or observed queue")
 				}
 			})
+		}
+	}
+}
+
+func TestSearchFailureStageIdentifiesContinuation(t *testing.T) {
+	for _, previous := range []string{"", "first"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		evidence := Evidence{FirstCompleted: previous != ""}
+		probe := searchProbe{server: &sdkProductObserver{ctx: ctx}, evidence: &evidence, previousID: previous}
+		err := probe.observeStarted(protocolv2.Turn{ID: "current", Status: protocolv2.TurnStatusInProgress})
+		want := "search_turn_submitted"
+		if previous != "" {
+			want = "search_continuation_submitted"
+		}
+		if err == nil || evidence.Stage != want || evidence.FirstCompleted != (previous != "") {
+			t.Fatalf("lost failure stage: %+v err=%v", evidence, err)
+		}
+	}
+}
+
+func TestSearchCompletedStageIdentifiesContinuation(t *testing.T) {
+	for _, previous := range []string{"", "first"} {
+		evidence := Evidence{FirstCompleted: previous != ""}
+		probe := searchProbe{turnID: "current", previousID: previous, evidence: &evidence}
+		if err := probe.complete(turn{ID: "current", Status: "completed"}); err != nil {
+			t.Fatal(err)
+		}
+		want := "search_turn_completed"
+		if previous != "" {
+			want = "search_continuation_completed"
+		}
+		if evidence.Stage != want || !probe.terminal || evidence.Completed || evidence.FirstCompleted != (previous != "") {
+			t.Fatalf("terminal stage lost or manufactured full proof: %+v", evidence)
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 const (
 	diagnosticsMaxEvents        = 4096
+	diagnosticsMaxDeltaEvents   = 128
 	diagnosticsMaxEventBytes    = 64 << 10
 	diagnosticsMaxArtifactBytes = 32 << 20
 	diagnosticsMaxArtifacts     = 32
@@ -34,19 +35,22 @@ type Diagnostics struct {
 	secrets             []string
 	status              DiagnosticsStatus
 	maxEvents, maxBytes int
+	deltaEvents         int
+	deltaBytes          int
 	manifestOwned       bool
 	artifactNames       map[string]string
 	artifactDigests     map[string]string
 }
 
 type DiagnosticsStatus struct {
-	Enabled       bool     `json:"enabled"`
-	Closed        bool     `json:"closed"`
-	Events        int      `json:"events"`
-	Artifacts     int      `json:"artifacts"`
-	Bytes         int      `json:"bytes"`
-	Truncated     bool     `json:"truncated"`
-	CaptureErrors []string `json:"capture_errors,omitempty"`
+	Enabled            bool     `json:"enabled"`
+	Closed             bool     `json:"closed"`
+	Events             int      `json:"events"`
+	OmittedDeltaEvents int      `json:"omitted_delta_events,omitempty"`
+	Artifacts          int      `json:"artifacts"`
+	Bytes              int      `json:"bytes"`
+	Truncated          bool     `json:"truncated"`
+	CaptureErrors      []string `json:"capture_errors,omitempty"`
 }
 
 func NewDiagnostics(dir string, secrets ...string) *Diagnostics {
@@ -116,6 +120,15 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 		d.limit("event_limit")
 		return
 	}
+	// Per-token events must not consume the terminal/oracle/cleanup budget.
+	// Keep a bounded prefix and count omissions in the existing manifest.
+	method, _ := fields["method"].(string)
+	delta := kind == "public_event" && strings.HasSuffix(strings.ToLower(method), "delta")
+	if delta && d.deltaEvents >= min(diagnosticsMaxDeltaEvents, d.maxEvents/4) {
+		d.status.OmittedDeltaEvents++
+		d.limit("delta_event_limit")
+		return
+	}
 	cleaned := d.clean(fields, 0)
 	if len(kind) > 128 {
 		d.limit("kind_size_limit")
@@ -132,6 +145,11 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 		data, _ = json.Marshal(map[string]any{"kind": d.cleanString(kind), "truncated": true, "original_bytes": len(data)})
 	}
 	data = append(data, '\n')
+	if delta && d.deltaBytes+len(data) > d.maxBytes/4 {
+		d.status.OmittedDeltaEvents++
+		d.limit("delta_byte_limit")
+		return
+	}
 	if d.status.Bytes+len(data) > d.maxBytes {
 		d.limit("total_byte_limit")
 		return
@@ -143,6 +161,10 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 		return
 	}
 	d.status.Events++
+	if delta {
+		d.deltaEvents++
+		d.deltaBytes += n
+	}
 }
 
 var diagnosticName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,95}\.(png|txt|diff)$`)

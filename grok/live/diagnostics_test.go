@@ -269,3 +269,64 @@ func TestDiagnosticsPublicImagesAreSavedBeforeFailedTurnAndDeduplicated(t *testi
 		t.Fatal("public evidence missing")
 	}
 }
+
+func TestDiagnosticsDeltaFloodPreservesResults(t *testing.T) {
+	for _, mode := range []string{"events", "bytes"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			d := NewDiagnostics(dir)
+			d.maxEvents = 32
+			delta := "Done"
+			if mode == "bytes" {
+				d.maxBytes = 8192
+				delta = strings.Repeat("x", 2000)
+			}
+			for i := 0; i < 100; i++ {
+				d.Record("public_event", map[string]any{"method": "item/agentMessage/delta", "delta": delta})
+			}
+			for _, kind := range []string{"public_event", "oracle_result", "sdk_cleanup"} {
+				d.Record(kind, map[string]any{"method": "turn/completed", "result": "retained"})
+			}
+			d.Close()
+			status := d.Status()
+			if status.OmittedDeltaEvents == 0 || !status.Truncated || status.Events > d.maxEvents || status.Bytes > d.maxBytes {
+				t.Fatalf("unbounded or silent omission: %+v", status)
+			}
+			manifest, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+			var persisted DiagnosticsStatus
+			if err != nil || json.Unmarshal(manifest, &persisted) != nil || persisted.OmittedDeltaEvents != status.OmittedDeltaEvents {
+				t.Fatal("omitted delta count was not persisted")
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, marker := range []string{"turn/completed", "oracle_result", "sdk_cleanup"} {
+				if !bytes.Contains(data, []byte(marker)) {
+					t.Fatalf("flood lost %s", marker)
+				}
+			}
+		})
+	}
+}
+
+func TestDiagnosticsConcurrentDeltaFlood(t *testing.T) {
+	d := NewDiagnostics(t.TempDir())
+	var workers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for j := 0; j < 100; j++ {
+				d.Record("public_event", map[string]any{"method": "item/agentMessage/delta", "delta": "Done"})
+			}
+		}()
+	}
+	d.Record("oracle_result", map[string]any{"recall": false})
+	workers.Wait()
+	d.Record("sdk_cleanup", map[string]any{"process_reaped": true})
+	d.Close()
+	if got := d.Status(); got.Events != diagnosticsMaxDeltaEvents+2 || got.OmittedDeltaEvents != 400-diagnosticsMaxDeltaEvents || !got.Closed {
+		t.Fatalf("concurrent capture lost accounting: %+v", got)
+	}
+}
