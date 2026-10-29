@@ -52,8 +52,8 @@ func TestReasoningStructuredPersistedEvidence(t *testing.T) {
 			if err := json.Unmarshal(event.Fields["output_schema"], &schema); err != nil {
 				t.Fatal(err)
 			}
-			if schema.Properties["token"] == nil || len(schema.Required) != 1 || schema.Required[0] != "token" || schema.Additional {
-				t.Fatal("actual token schema not retained")
+			if schema.Properties["amount"] == nil || len(schema.Required) != 1 || schema.Required[0] != "amount" || schema.Additional {
+				t.Fatal("actual amount schema not retained")
 			}
 			schemas++
 		case "oracle_result":
@@ -61,12 +61,15 @@ func TestReasoningStructuredPersistedEvidence(t *testing.T) {
 			if err := json.Unmarshal(event.Fields["reply"], &raw); err != nil {
 				t.Fatal(err)
 			}
-			var result struct{ Token string }
+			var result struct{ Amount int }
+			var price struct {
+				UnitPrice int `json:"unit_price_yuan"`
+			}
 			if err := json.Unmarshal([]byte(raw), &result); err != nil {
 				t.Fatal("raw structured reply lost")
 			}
-			if toolValue == "" || result.Token != toolValue {
-				t.Fatal("actual synthetic token not retained")
+			if json.Unmarshal([]byte(toolValue), &price) != nil || price.UnitPrice == 0 || result.Amount != (replies+2)*price.UnitPrice {
+				t.Fatal("actual task amount not retained")
 			}
 			replies++
 		}

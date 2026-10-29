@@ -2,7 +2,6 @@ package live
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"strconv"
@@ -32,9 +31,12 @@ func historyObserverFixture(t *testing.T) (*sdkHistoryObserver, string) {
 	observer := newSDKHistoryObserver()
 	observer.active, observer.probe.threadID = true, "private_thread"
 	response, err := observer.request(context.Background(), historyObserverRequest("private_call_0"))
-	token := observer.probe.token
-	decoded, decodeErr := hex.DecodeString(token)
-	if err != nil || decodeErr != nil || len(decoded) != 32 || !reflect.DeepEqual(response, historyObserverResponse(token, true)) {
+	token := observer.probe.toolResult
+	var price struct {
+		UnitPrice int `json:"unit_price_yuan"`
+	}
+	decodeErr := json.Unmarshal([]byte(token), &price)
+	if err != nil || decodeErr != nil || price.UnitPrice < 5 || price.UnitPrice > 19 || !reflect.DeepEqual(response, historyObserverResponse(token, true)) {
 		t.Fatal("authorized provisional request did not return a fresh tool result")
 	}
 	return observer, token
@@ -43,7 +45,7 @@ func historyObserverFixture(t *testing.T) (*sdkHistoryObserver, string) {
 func historyObserverTool(callID, token string) protocolv2.ThreadItem {
 	return protocolv2.NewThreadItemDynamicToolCall(protocolv2.ThreadItemDynamicToolCall{
 		ID: callID, Tool: historyTool, Arguments: protocolv2.JSONObject(map[string]protocolv2.JSONValue{}), Status: protocolv2.DynamicToolCallStatusCompleted, Success: protocolv2.Value(true),
-		ContentItems: protocolv2.Value([]protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: historyTestJSON(token)})}),
+		ContentItems: protocolv2.Value([]protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: token})}),
 	})
 }
 
@@ -78,7 +80,7 @@ func TestSDKHistoryObserverProvisionalReconciliation(t *testing.T) {
 			observer.finishTurn()
 			want := Evidence{ToolCalls: 1}
 			if actualID == "private_turn" {
-				want = Evidence{Stage: "first_turn_completed", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 76}
+				want = Evidence{Stage: "first_turn_completed", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 13}
 			} else if DescribeFailure(err).Code != "turn_identity_missing" {
 				t.Fatal("mismatched actual turn did not reject provisional authority")
 			}
@@ -122,7 +124,7 @@ func TestSDKHistoryObserverFailurePrefixRecovery(t *testing.T) {
 	}
 	observer.recoverNotifications(notifications)
 	observer.finishTurn()
-	if !reflect.DeepEqual(observer.observations, Evidence{Stage: "turn_submitted", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstRecall: true, FirstReplyBytes: 76}) {
+	if !reflect.DeepEqual(observer.observations, Evidence{Stage: "turn_submitted", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstRecall: true, FirstReplyBytes: 13}) {
 		t.Fatal("failure recovery duplicated partial evidence or invented terminal completion")
 	}
 }
@@ -142,7 +144,7 @@ func TestSDKHistoryObserverCallCapacity(t *testing.T) {
 	denied, err := observer.request(context.Background(), historyObserverRequest("private_new_call"))
 	failure := observer.failure(context.DeadlineExceeded)
 	observer.finishTurn()
-	if err != nil || !reflect.DeepEqual(denied, historyObserverResponse("History probe is unavailable during continuation.", false)) || !reflect.DeepEqual(DescribeFailure(failure), FailureInfo{Code: "history_tool_identity_budget_exceeded"}) || !reflect.DeepEqual(observer.observations, Evidence{ToolCalls: 4097}) {
+	if err != nil || !reflect.DeepEqual(denied, historyObserverResponse("Price lookup is unavailable during continuation.", false)) || !reflect.DeepEqual(DescribeFailure(failure), FailureInfo{Code: "history_tool_identity_budget_exceeded"}) || !reflect.DeepEqual(observer.observations, Evidence{ToolCalls: 4097}) {
 		t.Fatal("new identity at capacity was not safely denied without false completion")
 	}
 	safe, marshalErr := json.Marshal(struct {
@@ -220,10 +222,10 @@ func TestSDKHistoryFinishedTurnIgnoresUnrelatedInvalidItem(t *testing.T) {
 func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) {
 	observer, token := historyObserverFixture(t)
 	observer.probe.previousID = "private_previous"
-	observer.observations = Evidence{FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 76, Turns: 2}
+	observer.observations = Evidence{FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 13, Turns: 2}
 	if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{
 		ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
-			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: historyTestJSON(token)}),
+			protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "private_valid", Text: historyTestJSON(token, 3)}),
 		},
 	}}); err != nil {
 		t.Fatal(err)
@@ -233,7 +235,7 @@ func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) 
 	copied := observer.observations
 	// Force the exact schedule: inline proof and returned evidence copy precede
 	// a semantically invalid callback admitted before SDK cleanup joins it.
-	late := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: historyTestJSON(token)}))
+	late := historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: historyTestJSON(token, 3)}))
 	if err := observer.typedNotification(context.Background(), late); DescribeFailure(err).Code != "assistant_identity_missing" {
 		t.Fatal("late invalid item was not rejected")
 	}
@@ -275,7 +277,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 					t.Fatal(err)
 				}
 				item := func(id, text string) protocolv2.ThreadItem {
-					return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: id, Text: historyTestJSON(text), Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})
+					return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: id, Text: historyTestJSON(text, turn+2), Phase: protocolv2.Value(protocolv2.MessagePhaseFinalAnswer)})
 				}
 				send := func(id, text string) error {
 					return observer.typedNotification(context.Background(), protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: protocolv2.ItemCompletedNotification{
@@ -340,6 +342,35 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 				if strings.HasPrefix(mode, "summary_") && !observer.reply.authoritative {
 					t.Fatal("terminal summary at capacity lost authority")
 				}
+			}
+		})
+	}
+}
+
+func TestSDKHistoryLookupFailureClassification(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"no_lookup", "history_lookup_not_observed"},
+		{"wrong_amount", "history_reply_not_recalled"},
+		{"correct_amount", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			observer := newSDKHistoryObserver()
+			observer.probe.threadID, observer.probe.turnID = "thread", "turn"
+			text := `{"amount":16}`
+			if tc.name != "no_lookup" {
+				observer.probe.unitPrice, observer.probe.toolResult = 9, `{"unit_price_yuan":9}`
+				if tc.name == "correct_amount" {
+					text = `{"amount":18}`
+				}
+			}
+			err := observer.accept(sdkHistoryObservation{ThreadID: "thread", Method: "turn/completed", Turn: historyTurn{
+				ID: "turn", Status: "completed", Items: []historyItem{{ID: "answer", Type: "agentMessage", Phase: "final_answer", Text: text}},
+			}})
+			if (err == nil) != (tc.want == "") || err != nil && DescribeFailure(err).Code != tc.want || observer.reply.recall != (tc.want == "") {
+				t.Fatalf("wrong classification or recall: error=%v recall=%v", err, observer.reply.recall)
+			}
+			if observer.observations.CompletedTools != 0 {
+				t.Fatal("reply manufactured tool completion")
 			}
 		})
 	}

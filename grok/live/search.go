@@ -74,6 +74,9 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 		return errors.New("live: search turn identity unavailable")
 	}
 	p.turnID, p.evidence.Stage = started.ID, "search_turn_submitted"
+	if p.previousID != "" {
+		p.evidence.Stage = "search_continuation_submitted"
+	}
 	if p.calls == nil {
 		p.calls = map[string]map[string]bool{}
 	}
@@ -188,6 +191,9 @@ func (p *searchProbe) complete(value turn) error {
 	}
 	p.terminal = true
 	p.evidence.Stage = "search_turn_completed"
+	if p.previousID != "" {
+		p.evidence.Stage = "search_continuation_completed"
+	}
 	return nil
 }
 

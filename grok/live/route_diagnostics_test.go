@@ -46,8 +46,8 @@ func TestTextRoutePersistedDiagnostics(t *testing.T) {
 	}{
 		{"basic-success", "turn", false, false, []string{"turn_input", "short confirmation", "oracle_reply"}},
 		{"basic-admission-failure", "wrong_model", false, true, []string{"turn_input", "short confirmation"}},
-		{"reasoning-success", "history:turn", true, false, []string{"history_tool_input", "history_tool_output", "oracle_reply_fragment", "oracle_result", "Recall the exact token"}},
-		{"reasoning-admission-failure", "history:wrong_model", true, true, []string{"turn_input", "Call grok_history_probe"}},
+		{"reasoning-success", "history:turn", true, false, []string{"history_tool_input", "history_tool_output", "oracle_reply_fragment", "oracle_result", "Using the price we already checked"}},
+		{"reasoning-admission-failure", "history:wrong_model", true, true, []string{"turn_input", "Check the shop’s current apple price"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			options := fixtureOptions(t, tc.mode)

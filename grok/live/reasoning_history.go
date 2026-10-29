@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-const historyTool = "grok_history_probe"
+const historyTool = "apple_price_lookup"
 
-const historyOutputSchema = `{"type":"object","properties":{"token":{"type":["string","null"]}},"required":["token"],"additionalProperties":false}`
+const historyOutputSchema = `{"type":"object","properties":{"amount":{"type":["number","null"]}},"required":["amount"],"additionalProperties":false}`
 
 // This bounds replay evidence, not product tool calls or retries.
 const historyAssistantLimit = 4096
@@ -22,13 +22,14 @@ func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
 	return sdkReasoningHistory(ctx, options)
 }
 
-// Only the token, current turn identities and bounded reply evidence survive frames.
+// Only the unit price and tool result, current turn identities and bounded reply evidence survive frames.
 // Repeated internal calls are counted, never accumulated in a call-ID/event map.
 type historyProbe struct {
 	diagnostics                  *Diagnostics
 	evidence                     *Evidence
 	threadID, turnID, previousID string
-	token                        string
+	unitPrice                    int
+	toolResult                   string
 }
 
 type historyItem struct {
@@ -153,9 +154,9 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 	if item.Type == "reasoning" {
 		probe.evidence.ReasoningItems++
 	}
-	if item.Type == "dynamicToolCall" && item.ID != "" && item.Namespace == nil && item.Tool == historyTool && item.Status == "completed" && item.Success && probe.token != "" {
+	if item.Type == "dynamicToolCall" && item.ID != "" && item.Namespace == nil && item.Tool == historyTool && item.Status == "completed" && item.Success && probe.unitPrice > 0 && probe.toolResult != "" {
 		for _, content := range item.ContentItems {
-			if content.Type == "inputText" && strings.Contains(content.Text, probe.token) {
+			if content.Type == "inputText" && strings.Contains(content.Text, probe.toolResult) {
 				probe.evidence.CompletedTools++
 				break
 			}
@@ -184,11 +185,15 @@ func (probe *historyProbe) addReplyFragment(item historyItem, reply *historyRepl
 		}
 	}
 	var result struct {
-		Token *string `json:"token"`
+		Amount *float64 `json:"amount"`
 	}
-	err := parseStructuredReply(reply.text, &result, "token")
+	err := parseStructuredReply(reply.text, &result, "amount")
 	reply.formatValid = err == nil
-	reply.recall = err == nil && result.Token != nil && probe.token != "" && *result.Token == probe.token
+	quantity := 2
+	if probe.previousID != "" {
+		quantity = 3
+	}
+	reply.recall = err == nil && result.Amount != nil && probe.unitPrice > 0 && *result.Amount == float64(quantity*probe.unitPrice)
 	reply.explicitFinal = item.Phase == "final_answer"
 }
 

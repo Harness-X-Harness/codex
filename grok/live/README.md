@@ -21,7 +21,7 @@ A digest proves bytes, not independently verified release provenance.
 - `Basic` uses an isolated text-only profile/catalog from
   [providerfixture](../internal/providerfixture), independent of shipped assets.
 - `ReasoningHistory` adds fresh authorized tool output, completed encrypted
-  reasoning and a token-free same-thread continuation.
+  reasoning and a same-thread apple-price follow-up without a new lookup.
 - `StructuredEdit`, `StructuredEditApprovalDeclined`,
   `StructuredEditPinnedPreviousModel` and `StructuredEditReplaceAll` observe
   exact authorized filesystem effects and effective approval denial.
@@ -55,8 +55,9 @@ Valid unauthorized requests are denied without effect. Malformed requests may
 be wire-rejected; the observer still needs every positive result criterion.
 
 - [Reasoning](reasoning_history.go) requires a completed authorized named tool,
-  fresh result, opaque completed reasoning and recall in both whole eligible
-  final responses using a required nullable `token` string matched to the actual tool result. A later final fragment does not erase earlier final content;
+  per-run apple price, opaque completed reasoning and price-based totals in both
+  whole eligible final responses using a required nullable numeric `amount`
+  matched to two and three kilograms respectively. A later final fragment does not erase earlier final content;
   commentary cannot substitute for final recall. The controlled Integration
   owner separately verifies unchanged encrypted replay.
 - [Editing](sdk_edit_observer.go) checks successful terminal/final responses and
@@ -95,7 +96,7 @@ be wire-rejected; the observer still needs every positive result criterion.
   execution proof.
 
 Task result schemas are supplied explicitly on each applicable turn. Attached-image
-results contain nullable `color`/`shape` fields; reasoning uses nullable `token`;
+results contain nullable `color`/`shape` fields; reasoning uses nullable numeric `amount`;
 the child parent uses nullable `child_nonce`; Web uses an article array and nullable
 summary, followed by a summary object. These are task-neutral shapes, not schemas
 containing expected fixture answers. One complete bounded JSON value is required;
@@ -145,6 +146,13 @@ only the selected operation's public observations. The existing verdict summary
 remains suitable for logs; the attached diagnostic bundle intentionally includes
 synthetic task content and public backend responses and shares Actions artifact
 access/30-day retention. Do not use it for arbitrary private user uploads.
+
+Streaming delta diagnostics retain at most 128 events and one quarter of the
+configured event/byte budget, with an explicit omitted-delta count. This leaves
+room for terminal results, oracle decisions and cleanup under a delta flood;
+it does not change the business verdict or increase the overall limits.
+Missing price lookup is reported separately from an incorrect calculated amount.
+Web failure stages distinguish the first search from its continuation.
 
 Capture limits are explicit rather than silent: 4096 events, 64 KiB per event,
 32 attachments of at most 32 MiB each, 128 MiB total. Oversized events are marked,

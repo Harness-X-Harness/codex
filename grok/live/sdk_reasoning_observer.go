@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/ronhuafeng/llm-go/codexsdk"
@@ -51,7 +51,7 @@ func newSDKHistoryObserver() *sdkHistoryObserver {
 }
 
 // beginContinuation owns the per-turn proof reset. The same observer retains
-// prior-turn contradiction checks and the tool token, not prior reply credit.
+// prior-turn contradiction checks and the tool price, not prior reply credit.
 func (observer *sdkHistoryObserver) beginContinuation() string {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
@@ -114,7 +114,7 @@ func (observer *sdkHistoryObserver) request(_ context.Context, request protocolv
 	params := call.Params
 	observer.probe.diagnostics.Record("history_tool_input", map[string]any{"turn_id": params.TurnID, "call_id": params.CallID, "tool": params.Tool, "arguments": params.Arguments})
 	arguments, object := params.Arguments.AsObject()
-	text, success := "History probe is unavailable during continuation.", false
+	text, success := "Price lookup is unavailable during continuation.", false
 	valid := observer.active && params.ThreadID == observer.probe.threadID && params.TurnID != "" && params.TurnID != observer.probe.previousID &&
 		(observer.probe.turnID == "" || params.TurnID == observer.probe.turnID) && params.CallID != "" &&
 		(params.Namespace == nil || params.Namespace.Value == nil) && params.Tool == historyTool && object && len(arguments) == 0
@@ -129,17 +129,18 @@ func (observer *sdkHistoryObserver) request(_ context.Context, request protocolv
 		if !seen && len(observer.acceptedCalls) == historyToolIdentityLimit {
 			observer.reject(failedObservation("history_tool_identity_budget_exceeded", "live: history tool identity evidence budget exceeded"))
 		} else {
-			if observer.probe.token == "" {
-				var nonce [32]byte
-				if _, err := rand.Read(nonce[:]); err != nil {
-					return codexsdk.ServerRequestResponse{}, observer.reject(failedObservation("history_token_unavailable", "live: fresh tool result unavailable"))
+			if observer.probe.unitPrice == 0 {
+				var sample [1]byte
+				if _, err := rand.Read(sample[:]); err != nil {
+					return codexsdk.ServerRequestResponse{}, observer.reject(failedObservation("history_price_unavailable", "live: tool price unavailable"))
 				}
-				observer.probe.token = hex.EncodeToString(nonce[:])
+				observer.probe.unitPrice = 5 + int(sample[0]%15)
+				observer.probe.toolResult = fmt.Sprintf(`{"unit_price_yuan":%d}`, observer.probe.unitPrice)
 			}
 			observer.probe.turnID = params.TurnID
 			observer.acceptedCalls[identity] = struct{}{}
 			observer.observations.ToolCalls++
-			text, success = observer.probe.token, true
+			text, success = observer.probe.toolResult, true
 		}
 	}
 	observer.probe.diagnostics.Record("history_tool_output", map[string]any{"turn_id": params.TurnID, "call_id": params.CallID, "success": success, "text": text})
@@ -273,7 +274,10 @@ func (observer *sdkHistoryObserver) accept(observation sdkHistoryObservation) er
 		return observer.reject(err)
 	}
 	if observer.reply.authoritative && !observer.reply.recall {
-		return observer.reject(failedObservation("history_reply_not_recalled", "live: final reply did not recall tool result"))
+		if observer.probe.previousID == "" && observer.probe.unitPrice == 0 {
+			return observer.reject(failedObservation("history_lookup_not_observed", "live: required price lookup was not observed"))
+		}
+		return observer.reject(failedObservation("history_reply_not_recalled", "live: final reply did not calculate the expected amount"))
 	}
 	observer.signal()
 	return nil
