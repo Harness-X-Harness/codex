@@ -694,6 +694,7 @@ fn whole_number_stdin_replay_joins_runtime_sessions_and_preserves_limits() -> an
         writer.append_with_context(
             trace_context("turn-1"),
             RawTraceEventPayload::ToolCallRuntimeStarted {
+                kind: ToolCallKind::ExecCommand,
                 tool_call_id: "tool-exec".to_string(),
                 runtime_payload,
             },
