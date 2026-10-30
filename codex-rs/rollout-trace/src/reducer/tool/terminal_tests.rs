@@ -926,18 +926,44 @@ fn whole_number_stdin_replay_rejects_invalid_limits_and_missing_session_keys() -
         let temp = TempDir::new()?;
         let writer = create_started_writer(&temp)?;
         start_turn(&writer, "turn-1")?;
-        append_dispatch_stdin(
+        let payloads = append_dispatch_stdin(
             &writer,
             "stdin-invalid",
             &arguments,
             ExecutionStatus::Failed,
             json!({"type": "error", "error": "invalid stdin arguments"}),
         )?;
-        let error = replay_bundle(temp.path()).expect_err(&arguments);
-        assert!(
-            format!("{error:#}").contains("parse terminal invocation payload"),
-            "{arguments}: {error:#}",
+        // Invalid model arguments are failed calls, not corrupt traces. They
+        // must not fabricate a terminal operation or discard the raw evidence.
+        let rollout = replay_bundle(temp.path())?;
+        assert_eq!(rollout.tool_calls.len(), 1, "{arguments}");
+        let call = &rollout.tool_calls["stdin-invalid"];
+        assert_eq!(call.kind, ToolCallKind::WriteStdin, "{arguments}");
+        assert_eq!(
+            call.execution.status,
+            ExecutionStatus::Failed,
+            "{arguments}"
         );
+        assert_eq!(call.summary, generic_summary("write_stdin"), "{arguments}");
+        assert_eq!(call.terminal_operation_id, None, "{arguments}");
+        assert!(rollout.terminal_operations.is_empty(), "{arguments}");
+        assert!(rollout.terminal_sessions.is_empty(), "{arguments}");
+        assert_eq!(
+            (&call.raw_invocation_payload_id, &call.raw_result_payload_id),
+            (
+                &Some(payloads[0].0.raw_payload_id.clone()),
+                &Some(payloads[1].0.raw_payload_id.clone()),
+            ),
+            "{arguments}",
+        );
+        for (reference, original) in payloads {
+            assert_eq!(rollout.raw_payloads[&reference.raw_payload_id], reference);
+            assert_eq!(
+                std::fs::read(temp.path().join(&reference.path))?,
+                serde_json::to_vec_pretty(&original)?,
+                "{arguments}",
+            );
+        }
     }
     Ok(())
 }
