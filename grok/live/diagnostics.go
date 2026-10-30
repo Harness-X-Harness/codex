@@ -23,10 +23,27 @@ const (
 	diagnosticsMaxArtifactBytes = 32 << 20
 	diagnosticsMaxArtifacts     = 32
 	diagnosticsMaxBytes         = 128 << 20
+	diagnosticsQueueSize        = 128
+	diagnosticsFlushTimeout     = 2 * time.Second
+	diagnosticsMaxErrors        = 32
 )
 
+type diagnosticWrite struct {
+	name string // Empty for an event; otherwise a validated artifact basename.
+	data []byte // Immutable, sanitized before admission.
+}
+
+// Tests use these cut points to hold filesystem work without holding mu.
+type diagnosticWriterHooks struct {
+	beforeWrite    func(string)
+	beforeManifest func(DiagnosticsStatus)
+	flushTimeout   time.Duration
+}
+
 // Diagnostics is optional, task-scoped evidence. Capture failure never changes
-// the business result. Call Close after the business result has been recorded.
+// the business result. Record and Artifact do bounded admission, not filesystem
+// I/O. Their caller-owned inputs must not be mutated concurrently with the call.
+// Call Close after recording the business result; Close bounds its flush wait.
 type Diagnostics struct {
 	mu                  sync.Mutex
 	root                *os.Root
@@ -37,30 +54,60 @@ type Diagnostics struct {
 	manifestOwned       bool
 	artifactNames       map[string]string
 	artifactDigests     map[string]string
+	queue               chan diagnosticWrite
+	wake                chan struct{}
+	stop                chan struct{}
+	done                chan struct{}
+	hooks               diagnosticWriterHooks
+	admittedEvents      int
+	admittedBytes       int
+	flushSettled        bool
 }
 
 type DiagnosticsStatus struct {
-	Enabled       bool     `json:"enabled"`
-	Closed        bool     `json:"closed"`
-	Events        int      `json:"events"`
-	Artifacts     int      `json:"artifacts"`
-	Bytes         int      `json:"bytes"`
-	Truncated     bool     `json:"truncated"`
-	CaptureErrors []string `json:"capture_errors,omitempty"`
+	Enabled          bool     `json:"enabled"`
+	Closed           bool     `json:"closed"`
+	Events           int      `json:"events"`
+	Artifacts        int      `json:"artifacts"`
+	Bytes            int      `json:"bytes"`
+	PendingWrites    int      `json:"pending_writes"`
+	DroppedEvents    int      `json:"dropped_events"`
+	DroppedArtifacts int      `json:"dropped_artifacts"`
+	FlushTimedOut    bool     `json:"flush_timed_out"`
+	Truncated        bool     `json:"truncated"`
+	CaptureErrors    []string `json:"capture_errors,omitempty"`
 }
 
 func NewDiagnostics(dir string, secrets ...string) *Diagnostics {
-	d := &Diagnostics{maxEvents: diagnosticsMaxEvents, maxBytes: diagnosticsMaxBytes, artifactNames: map[string]string{}, artifactDigests: map[string]string{}}
+	return newDiagnostics(dir, diagnosticWriterHooks{}, secrets...)
+}
+
+func newDiagnostics(dir string, hooks diagnosticWriterHooks, secrets ...string) *Diagnostics {
+	if hooks.flushTimeout <= 0 {
+		hooks.flushTimeout = diagnosticsFlushTimeout
+	}
+	d := &Diagnostics{
+		maxEvents: diagnosticsMaxEvents, maxBytes: diagnosticsMaxBytes,
+		artifactNames: map[string]string{}, artifactDigests: map[string]string{},
+		queue: make(chan diagnosticWrite, diagnosticsQueueSize), wake: make(chan struct{}, 1),
+		stop: make(chan struct{}), done: make(chan struct{}), hooks: hooks,
+	}
 	for _, secret := range secrets {
 		if secret != "" {
 			d.secrets = append(d.secrets, secret)
 		}
 	}
+	started := false
+	defer func() {
+		if !started {
+			close(d.done)
+		}
+	}()
 	if dir == "" {
 		return d
 	}
 	d.status.Enabled = true
-	// A caller-owned directory may exist, but existing evidence is never replaced.
+	// Initialization may perform I/O. Existing evidence is never replaced.
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		d.captureError("directory_unavailable")
 		return d
@@ -80,40 +127,74 @@ func NewDiagnostics(dir string, secrets ...string) *Diagnostics {
 		d.captureError("events_unavailable")
 	}
 	d.initManifest()
+	started = true
+	go d.writeLoop()
 	return d
 }
 
+// The caller holds mu, except during initialization before publication.
 func (d *Diagnostics) captureError(code string) {
 	for _, prior := range d.status.CaptureErrors {
 		if prior == code {
 			return
 		}
 	}
-	d.status.CaptureErrors = append(d.status.CaptureErrors, code)
+	if len(d.status.CaptureErrors) < diagnosticsMaxErrors {
+		d.status.CaptureErrors = append(d.status.CaptureErrors, code)
+	}
 }
+
 func (d *Diagnostics) limit(code string) { d.status.Truncated = true; d.captureError(code) }
 
-// Record writes an event immediately, without retaining raw protocol traffic.
+func incrementDiagnosticCount(value *int) {
+	if *value < int(^uint(0)>>1) {
+		*value++
+	}
+}
+
+func (d *Diagnostics) changed() {
+	select {
+	case d.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (d *Diagnostics) drop(artifact bool, code string, truncated bool) {
+	if artifact {
+		incrementDiagnosticCount(&d.status.DroppedArtifacts)
+	} else {
+		incrementDiagnosticCount(&d.status.DroppedEvents)
+	}
+	if truncated {
+		d.limit(code)
+	} else {
+		d.captureError(code)
+	}
+}
+
+// Record snapshots a sanitized event, then tries the bounded queue once. It
+// never waits for a queue slot or a filesystem write. Counts describe written
+// evidence, not merely admitted jobs.
 func (d *Diagnostics) Record(kind string, fields map[string]any) {
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	defer d.persistStatus()
+	defer d.changed()
 	if !d.status.Enabled {
 		return
 	}
 	if d.status.Closed {
-		d.captureError("record_after_close")
+		d.drop(false, "record_after_close", false)
 		return
 	}
 	if d.events == nil {
-		d.captureError("events_unavailable")
+		d.drop(false, "events_unavailable", false)
 		return
 	}
-	if d.status.Events >= d.maxEvents {
-		d.limit("event_limit")
+	if d.admittedEvents >= d.maxEvents {
+		d.drop(false, "event_limit", true)
 		return
 	}
 	cleaned := d.clean(fields, 0)
@@ -124,7 +205,7 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 	event := map[string]any{"kind": d.cleanString(kind), "at": time.Now().UTC().Format(time.RFC3339Nano), "fields": cleaned}
 	data, err := json.Marshal(event)
 	if err != nil {
-		d.captureError("event_encoding_failed")
+		d.drop(false, "event_encoding_failed", false)
 		return
 	}
 	if len(data) > diagnosticsMaxEventBytes {
@@ -132,68 +213,71 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 		data, _ = json.Marshal(map[string]any{"kind": d.cleanString(kind), "truncated": true, "original_bytes": len(data)})
 	}
 	data = append(data, '\n')
-	if d.status.Bytes+len(data) > d.maxBytes {
-		d.limit("total_byte_limit")
+	if d.admittedBytes+len(data) > d.maxBytes {
+		d.drop(false, "total_byte_limit", true)
 		return
 	}
-	n, err := d.events.Write(data)
-	d.status.Bytes += n
-	if err != nil || n != len(data) {
-		d.captureError("event_write_failed")
-		return
+	select {
+	case d.queue <- diagnosticWrite{data: data}:
+		d.admittedEvents++
+		d.admittedBytes += len(data)
+		d.status.PendingWrites++
+	default:
+		d.drop(false, "queue_full", true)
 	}
-	d.status.Events++
 }
 
 var diagnosticName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,95}\.(png|txt|diff)$`)
 
-// Artifact preserves PNG pixels, or sanitized task text, under a fixed basename.
-// It returns no path on failure; the manifest records capture failure separately.
+// Artifact queues an immutable PNG or sanitized task text under a fixed
+// basename. A returned reference means admitted, not durably written; Status
+// and the manifest report asynchronous capture failure separately.
 func (d *Diagnostics) Artifact(name string, data []byte) string {
 	if d == nil {
 		return ""
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	defer d.persistStatus()
+	defer d.changed()
 	if !d.status.Enabled {
 		return ""
 	}
 	if d.status.Closed {
-		d.captureError("artifact_after_close")
+		d.drop(true, "artifact_after_close", false)
 		return ""
 	}
 	if d.root == nil {
-		d.captureError("directory_unavailable")
+		d.drop(true, "directory_unavailable", false)
 		return ""
 	}
 	if !diagnosticName.MatchString(name) || filepath.Base(name) != name {
-		d.captureError("unsafe_artifact_name")
+		d.drop(true, "unsafe_artifact_name", false)
 		return ""
 	}
 	if len(data) > diagnosticsMaxArtifactBytes {
-		d.limit("artifact_size_limit")
+		d.drop(true, "artifact_size_limit", true)
 		return ""
 	}
 	if strings.HasSuffix(name, ".png") {
 		cfg, err := png.DecodeConfig(bytes.NewReader(data))
 		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > diagnosticsMaxArtifactBytes/8 {
-			d.captureError("invalid_png_artifact")
+			d.drop(true, "invalid_png_artifact", false)
 			return ""
 		}
 		if _, err := png.Decode(bytes.NewReader(data)); err != nil {
-			d.captureError("invalid_png_artifact")
+			d.drop(true, "invalid_png_artifact", false)
 			return ""
 		}
 		for _, secret := range d.secrets {
 			if bytes.Contains(data, []byte(secret)) {
-				d.captureError("artifact_contains_secret")
+				d.drop(true, "artifact_contains_secret", false)
 				return ""
 			}
 		}
+		data = bytes.Clone(data)
 	} else {
 		if !utf8.Valid(data) {
-			d.captureError("invalid_text_artifact")
+			d.drop(true, "invalid_text_artifact", false)
 			return ""
 		}
 		data = []byte(d.cleanString(string(data)))
@@ -201,36 +285,31 @@ func (d *Diagnostics) Artifact(name string, data []byte) string {
 	digestBytes := sha256.Sum256(data)
 	digest := hex.EncodeToString(digestBytes[:])
 	if prior, exists := d.artifactNames[name]; exists && prior != digest {
-		d.captureError("artifact_name_conflict")
+		d.drop(true, "artifact_name_conflict", false)
 		return ""
 	}
 	if prior, exists := d.artifactDigests[digest]; exists {
 		return prior
 	}
-	if d.status.Artifacts >= diagnosticsMaxArtifacts {
-		d.limit("artifact_count_limit")
+	if len(d.artifactNames) >= diagnosticsMaxArtifacts {
+		d.drop(true, "artifact_count_limit", true)
 		return ""
 	}
-	if len(data) > diagnosticsMaxArtifactBytes || d.status.Bytes+len(data) > d.maxBytes {
-		d.limit("total_byte_limit")
+	if len(data) > diagnosticsMaxArtifactBytes || d.admittedBytes+len(data) > d.maxBytes {
+		d.drop(true, "total_byte_limit", true)
 		return ""
 	}
-	file, err := d.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		d.captureError("artifact_unavailable")
+	select {
+	case d.queue <- diagnosticWrite{name: name, data: data}:
+		d.admittedBytes += len(data)
+		d.status.PendingWrites++
+		d.artifactNames[name] = digest
+		d.artifactDigests[digest] = name
+		return name
+	default:
+		d.drop(true, "queue_full", true)
 		return ""
 	}
-	n, err := file.Write(data)
-	d.status.Bytes += n
-	closeErr := file.Close()
-	if err != nil || n != len(data) || closeErr != nil {
-		d.captureError("artifact_write_failed")
-		return ""
-	}
-	d.status.Artifacts++
-	d.artifactNames[name] = digest
-	d.artifactDigests[digest] = name
-	return name
 }
 
 func (d *Diagnostics) Status() DiagnosticsStatus {
@@ -239,6 +318,10 @@ func (d *Diagnostics) Status() DiagnosticsStatus {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	return d.snapshot()
+}
+
+func (d *Diagnostics) snapshot() DiagnosticsStatus {
 	result := d.status
 	result.CaptureErrors = append([]string(nil), result.CaptureErrors...)
 	return result
@@ -249,29 +332,122 @@ func (d *Diagnostics) Close() {
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.status.Closed {
-		return
+	if !d.status.Closed {
+		d.status.Closed = true
+		close(d.stop)
 	}
-	d.status.Closed = true
-	if d.events != nil && d.events.Close() != nil {
-		d.captureError("events_close_failed")
-	}
-	if d.root == nil {
-		return
-	}
-	d.persistStatus()
-	if d.root.Close() != nil {
-		d.captureError("directory_close_failed")
+	d.mu.Unlock()
+	timer := time.NewTimer(d.hooks.flushTimeout)
+	defer timer.Stop()
+	select {
+	case <-d.done:
+	case <-timer.C:
+		d.mu.Lock()
+		// Prefer a completed drain if the timer and completion became ready
+		// together. Once final persistence settles, only handle cleanup remains.
+		if !d.flushSettled {
+			select {
+			case <-d.done:
+			default:
+				d.status.FlushTimedOut = true
+				d.captureError("flush_timeout")
+			}
+		}
+		d.mu.Unlock()
 	}
 }
 
-// An initial open manifest survives interrupted collection. Status updates are
-// atomic and independent of evidence limits; they never overwrite another run.
-func (d *Diagnostics) initManifest() {
-	if d.root == nil {
-		return
+func (d *Diagnostics) writeLoop() {
+	defer close(d.done)
+	for {
+		select {
+		case job := <-d.queue:
+			d.write(job)
+			d.persistStatus()
+		case <-d.wake:
+			d.persistStatus()
+		case <-d.stop:
+			// Admission stopped under mu before stop closed. No sender can add
+			// a job after this finite drain.
+			for {
+				select {
+				case job := <-d.queue:
+					d.write(job)
+				default:
+					d.finish()
+					return
+				}
+			}
+		}
 	}
+}
+
+func (d *Diagnostics) write(job diagnosticWrite) {
+	if d.hooks.beforeWrite != nil {
+		d.hooks.beforeWrite(job.name)
+	}
+	var n int
+	var code string
+	if job.name == "" {
+		var err error
+		n, err = d.events.Write(job.data)
+		if err != nil || n != len(job.data) {
+			code = "event_write_failed"
+		}
+	} else {
+		file, err := d.root.OpenFile(job.name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			code = "artifact_unavailable"
+		} else {
+			n, err = file.Write(job.data)
+			closeErr := file.Close()
+			if err != nil || n != len(job.data) || closeErr != nil {
+				code = "artifact_write_failed"
+			}
+		}
+	}
+	d.mu.Lock()
+	d.status.Bytes += n
+	d.status.PendingWrites--
+	if code != "" {
+		d.captureError(code)
+	} else if job.name == "" {
+		d.status.Events++
+	} else {
+		d.status.Artifacts++
+	}
+	d.mu.Unlock()
+}
+
+func (d *Diagnostics) finish() {
+	if d.events != nil && d.events.Close() != nil {
+		d.mu.Lock()
+		d.captureError("events_close_failed")
+		d.mu.Unlock()
+	}
+	// A timeout may occur while the final manifest write is blocked. Republish
+	// once if that sticky bit changed; do not loop on unbounded late Record calls.
+	for {
+		written := d.persistStatus()
+		d.mu.Lock()
+		if d.status.FlushTimedOut && !written.FlushTimedOut {
+			d.mu.Unlock()
+			continue
+		}
+		d.flushSettled = true
+		d.mu.Unlock()
+		break
+	}
+	if d.root.Close() != nil {
+		d.mu.Lock()
+		d.captureError("directory_close_failed")
+		d.mu.Unlock()
+	}
+}
+
+// An initial open manifest survives interruption. The single writer alone
+// replaces owned manifests; callers never do filesystem work while holding mu.
+func (d *Diagnostics) initManifest() {
 	file, err := d.root.OpenFile("manifest.json", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		d.captureError("manifest_unavailable")
@@ -286,27 +462,34 @@ func (d *Diagnostics) initManifest() {
 		d.captureError("manifest_write_failed")
 	}
 }
-func (d *Diagnostics) persistStatus() {
+
+func (d *Diagnostics) persistStatus() DiagnosticsStatus {
+	snapshot := d.Status()
 	if d.root == nil || !d.manifestOwned {
-		return
+		return snapshot
+	}
+	if d.hooks.beforeManifest != nil {
+		d.hooks.beforeManifest(snapshot)
 	}
 	file, err := d.root.OpenFile("manifest.pending", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	code := ""
 	if err != nil {
-		d.captureError("manifest_unavailable")
-		return
+		code = "manifest_unavailable"
+	} else {
+		data, _ := json.MarshalIndent(snapshot, "", "  ")
+		n, writeErr := file.Write(append(data, '\n'))
+		closeErr := file.Close()
+		if writeErr != nil || n != len(data)+1 || closeErr != nil || d.root.Rename("manifest.pending", "manifest.json") != nil {
+			code = "manifest_write_failed"
+			_ = d.root.Remove("manifest.pending")
+		}
 	}
-	data, _ := json.MarshalIndent(d.status, "", "  ")
-	n, writeErr := file.Write(append(data, '\n'))
-	closeErr := file.Close()
-	if writeErr != nil || n != len(data)+1 || closeErr != nil {
-		d.captureError("manifest_write_failed")
-		_ = d.root.Remove("manifest.pending")
-		return
+	if code != "" {
+		d.mu.Lock()
+		d.captureError(code)
+		d.mu.Unlock()
 	}
-	if d.root.Rename("manifest.pending", "manifest.json") != nil {
-		d.captureError("manifest_write_failed")
-		_ = d.root.Remove("manifest.pending")
-	}
+	return snapshot
 }
 
 func sensitiveDiagnosticField(key string) bool {
@@ -418,7 +601,7 @@ func (d *Diagnostics) noteError(code string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.captureError(code)
-	d.persistStatus()
+	d.changed()
 }
 
 func (d *Diagnostics) Item(source string, raw json.RawMessage) {

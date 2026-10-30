@@ -12,7 +12,19 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func waitDiagnostic(t *testing.T, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !ready() {
+		if time.Now().After(deadline) {
+			t.Fatal("diagnostic writer did not reach expected state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
 
 func diagnosticFiles(t *testing.T, dir string) string {
 	t.Helper()
@@ -49,10 +61,10 @@ func TestDiagnosticsIncrementalSanitizedPublicEvidence(t *testing.T) {
 		"signed_url":             "https://example.com/a?sig=SIGNED_CANARY&safe=yes",
 		"defaultReasoningEffort": "high", "supportedReasoningEfforts": []string{"low", "high"}, "token": "business-token",
 	})
-	data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
-	if err != nil || !bytes.Contains(data, []byte("Draw a dog")) {
-		t.Fatalf("not incremental: %v", err)
-	}
+	waitDiagnostic(t, func() bool {
+		data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+		return err == nil && bytes.Contains(data, []byte("Draw a dog"))
+	})
 	d.Item("turn", json.RawMessage(`{"type":"reasoning","id":"r","summary":"REASONING_CANARY","encryptedContent":"OPAQUE_CANARY"}`))
 	d.Item("turn", json.RawMessage(`{"type":"newPrivateItem","id":"x","payload":"UNKNOWN_CANARY"}`))
 	d.Item("turn", json.RawMessage(`{"type":"commandExecution","id":"c","aggregatedOutput":"completed file edit","exitCode":0}`))
@@ -86,10 +98,6 @@ func TestDiagnosticsPNGAndTextArtifacts(t *testing.T) {
 	if got := d.Artifact("generated-1.png", buffer.Bytes()); got != "generated-1.png" {
 		t.Fatalf("PNG missing: %s %+v", got, d.Status())
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, "generated-1.png"))
-	if !bytes.Equal(data, buffer.Bytes()) {
-		t.Fatal("pixels re-encoded or changed")
-	}
 	if got := d.Artifact("edit-before.txt", []byte("before TEXT_CANARY password=OTHER_CANARY")); got == "" {
 		t.Fatal("text missing")
 	}
@@ -100,6 +108,10 @@ func TestDiagnosticsPNGAndTextArtifacts(t *testing.T) {
 		t.Fatal("valid empty text artifact rejected")
 	}
 	d.Close()
+	data, _ := os.ReadFile(filepath.Join(dir, "generated-1.png"))
+	if !bytes.Equal(data, buffer.Bytes()) {
+		t.Fatal("pixels re-encoded or changed")
+	}
 	text, _ := os.ReadFile(filepath.Join(dir, "edit-before.txt"))
 	if bytes.Contains(text, []byte("CANARY")) {
 		t.Fatal("text secret exported")
@@ -165,11 +177,15 @@ func TestDiagnosticsFailuresAndSymlinksDoNotReplaceEvidence(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "linked.txt")); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"../outside.txt", "linked.txt", "arbitrary.json"} {
+	for _, name := range []string{"../outside.txt", "arbitrary.json"} {
 		if d.Artifact(name, []byte("overwrite")) != "" {
 			t.Fatal("unsafe artifact accepted")
 		}
 	}
+	// A syntactically safe name can be admitted before the writer discovers
+	// a preexisting symlink. That capture failure must not follow or replace it.
+	d.Artifact("linked.txt", []byte("overwrite"))
+	waitDiagnostic(t, func() bool { return d.Status().PendingWrites == 0 })
 	data, _ = os.ReadFile(outside)
 	if string(data) != "preserve" {
 		t.Fatal("symlink followed")
@@ -231,11 +247,13 @@ func TestDiagnosticsManifestIsIncrementalAndSurvivesMissingClose(t *testing.T) {
 		t.Fatalf("initial manifest: %+v", got)
 	}
 	d.Record("partial", map[string]any{"text": "visible partial answer"})
+	waitDiagnostic(t, func() bool { return read().Events == 1 })
 	if got := read(); got.Events != 1 || got.Closed {
 		t.Fatalf("partial manifest: %+v", got)
 	}
 	d.maxEvents = 1
 	d.Record("overflow", nil)
+	waitDiagnostic(t, func() bool { return read().Truncated })
 	if got := read(); !got.Truncated || got.Closed {
 		t.Fatalf("limit manifest: %+v", got)
 	}

@@ -79,6 +79,41 @@ the subject is explicitly local/unverified; dirty development work is not
 represented by invented SHA values. CI continues to bind native runs to the
 exact `GITHUB_SHA`; package tests retain their exact source, target and digest.
 
+### Optional asynchronous diagnostics
+
+Diagnostic persistence is not an acceptance oracle. `Record` serializes a
+sanitized snapshot and `Artifact` copies approved task artifacts before trying
+a bounded 128-entry queue once; neither waits for filesystem I/O or a queue slot.
+The single writer preserves admitted order. The 128 MiB run payload budget
+includes queued, in-flight and already-written event/artifact bytes; the bounded
+manifest is separate. A returned artifact basename means admission, not proof
+of persistence. Event/artifact success counts advance only after their writes
+succeed, with pending writes, dropped records and capture errors reported
+separately.
+
+`Close` stops admission and waits at most two seconds for draining. `closed`
+means capture stopped, not that the writer joined; `flush_timed_out` is sticky
+if final persistence has not settled at the deadline. A late final manifest
+retains a timeout that occurred while its earlier snapshot was being written.
+Filesystem failure or process loss can still prevent the latest manifest from
+being saved; an artifact's absence is diagnostic incompleteness, not a changed
+business verdict. Calls made after `Close` are rejected; if the writer has
+already joined, their late drop/error counters exist only in `Status`, not in
+the previously saved manifest. Initialization and snapshot/sanitization work are synchronous;
+this is not a lock-free or real-time scheduling guarantee.
+
+Focused offline validation:
+
+```sh
+go -C grok test -race -count=1 -timeout=5m \
+  -run '^(TestDiagnostics|TestPublicProtocolDiagnostics|TestBasicDiagnosticFailureDoesNotChangeOutcome)' ./live
+```
+
+The controlled tests cover mutable caller inputs, in-flight budget reservation,
+queue overflow, concurrent capture/close, and a deliberately blocked final
+manifest. These are implementation tests, not provider Live evidence or a TLA+
+model-checking result.
+
 The private snapshot protects execution from replacement of the original input
 path, including replacement followed by restoration between digest checks. Its
 files are non-writable. Successful joins remove the copy; unproved startup or
