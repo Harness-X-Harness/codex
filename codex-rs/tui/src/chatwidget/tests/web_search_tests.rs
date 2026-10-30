@@ -1,6 +1,7 @@
 //! Canonical Web items drive live and replay presentation through the public protocol.
 
 use super::*;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::WebSearchAction;
 use codex_app_server_protocol::WebSearchItem;
 use pretty_assertions::assert_eq;

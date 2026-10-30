@@ -15,6 +15,7 @@ async fn closed_turn_input_returns_snapshot_and_rejects_later_appends() {
         client_id: Some("client-input".to_string()),
         metadata: UserInputMetadata {
             acceptance_order: Some(7),
+            response_item_uuid: None,
             origin: codex_history::UserInputOrigin::Heartbeat,
         },
     };

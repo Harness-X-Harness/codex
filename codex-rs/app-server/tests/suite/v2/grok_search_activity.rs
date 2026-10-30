@@ -9,6 +9,7 @@ use axum::body::Body;
 use axum::routing::post;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;

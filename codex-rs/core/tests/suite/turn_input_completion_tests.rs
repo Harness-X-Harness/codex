@@ -404,6 +404,7 @@ async fn start_or_steer_preserves_payload_while_old_completion_finishes() -> any
         (
             "application_context".to_string(),
             AdditionalContextEntry {
+                name: None,
                 value: "replacement application context".to_string(),
                 kind: AdditionalContextKind::Application,
             },
@@ -411,6 +412,7 @@ async fn start_or_steer_preserves_payload_while_old_completion_finishes() -> any
         (
             "untrusted_context".to_string(),
             AdditionalContextEntry {
+                name: None,
                 value: "replacement untrusted context".to_string(),
                 kind: AdditionalContextKind::Untrusted,
             },

@@ -971,6 +971,7 @@ async fn closed_running_queue_rejects_before_consuming_steer_or_hook_input() {
                     "late-context".to_string(),
                     AdditionalContextEntry {
                         value: "Must remain available to the fallback.".to_string(),
+                        name: None,
                         kind: codex_protocol::protocol::AdditionalContextKind::Application,
                     },
                 )]),
@@ -983,7 +984,10 @@ async fn closed_running_queue_rejects_before_consuming_steer_or_hook_input() {
                     )])),
                     ..Default::default()
                 },
-                UserInputOrigin::Heartbeat,
+                UserInputMetadata {
+                    origin: UserInputOrigin::Heartbeat,
+                    ..Default::default()
+                },
             )
             .await,
         Err(NotSubmittedReason::NoActiveTurn)
