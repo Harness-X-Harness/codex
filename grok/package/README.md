@@ -11,6 +11,7 @@ python3 grok/package/stage.py \
   --target x86_64-unknown-linux-musl \
   --runtime /build/codex \
   --code-mode-host /build/codex-code-mode-host \
+  --exec-server /build/codex-exec-server \
   --rg /dependencies/rg \
   --bwrap /build/bwrap \
   --output /existing-parent/new-package
@@ -51,13 +52,13 @@ The branch-local `grok.yml` selects an existing compatible package or runs the
 Linux musl build on PR and version-line events; version-line pushes independently
 select or build macOS ARM. Package reuse follows the complete Git input diff,
 not whether a source commit was produced before or after PR merge. The `build-grok` action builds each
-target's runtime and Code Mode host once with the locked stock release profile,
+target's runtime, Code Mode host and standalone executor once with the locked stock release profile,
 uses the stock helper layout/resolvers, and stages the resulting complete
 package. Linux embeds the final stripped `bwrap` digest before building Codex.
 Stock pinned V8 artifacts and their checksum validation remain in use.
 
 Each target executes the staged launcher and runtime, checks the reported version
-against package metadata, starts the Code Mode host's help path, exercises its
+against package metadata, starts the Code Mode host and standalone executor help paths, exercises its
 packaged `rg` and Linux `bwrap`, and runs the existing nonempty
 tagged `./tests/integration` selection through the packaged launcher:
 `TestBasicFixture`, `TestShippedCatalog`,

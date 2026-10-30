@@ -55,7 +55,7 @@ class StageTests(unittest.TestCase):
         ).strip()
         self.inputs = self.root / "inputs"
         self.inputs.mkdir()
-        for name in ("runtime", "code-mode-host", "rg", "bwrap"):
+        for name in ("runtime", "code-mode-host", "exec-server", "rg", "bwrap"):
             path = self.inputs / name
             path.write_text(
                 "#!/usr/bin/env python3\nimport json,os,sys\nprint(json.dumps([os.environ.get('CODEX_HOME'),sys.argv[1:]]))\n# fixture "
@@ -76,7 +76,7 @@ class StageTests(unittest.TestCase):
             "--output",
             str(self.output),
         ]
-        for name in ("runtime", "code-mode-host", "rg"):
+        for name in ("runtime", "code-mode-host", "exec-server", "rg"):
             command += ["--" + name, str(self.inputs / name)]
         if target == LINUX:
             command += ["--bwrap", str(self.inputs / "bwrap")]
@@ -97,6 +97,7 @@ class StageTests(unittest.TestCase):
             "bin/grok",
             "bin/grok-bin",
             "bin/codex-code-mode-host",
+            "bin/codex-exec-server",
             "codex-path/rg",
             "codex-resources/bwrap",
             "codex-package.json",
@@ -140,6 +141,7 @@ class StageTests(unittest.TestCase):
                 "target": LINUX,
                 "variant": "grok",
                 "entrypoint": "bin/grok-bin",
+                "execServer": "bin/codex-exec-server",
                 "resourcesDir": "codex-resources",
                 "pathDir": "codex-path",
             },
@@ -152,6 +154,7 @@ class StageTests(unittest.TestCase):
         for source, destination in {
             "runtime": "bin/grok-bin",
             "code-mode-host": "bin/codex-code-mode-host",
+            "exec-server": "bin/codex-exec-server",
             "rg": "codex-path/rg",
             "bwrap": "codex-resources/bwrap",
         }.items():
@@ -169,6 +172,7 @@ class StageTests(unittest.TestCase):
         self.assertEqual(metadata["target"], MAC)
         self.assertNotIn("codex-resources/bwrap", metadata["files"])
         self.assertIn("bin/codex-code-mode-host", metadata["files"])
+        self.assertIn("bin/codex-exec-server", metadata["files"])
         self.assertIn("codex-path/rg", metadata["files"])
         self.assertFalse((self.output / "codex-resources/bwrap").exists())
 
@@ -217,20 +221,23 @@ class StageTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_rejects_missing_empty_symlink_or_nonexecutable_input(self):
-        path = self.inputs / "rg"
-        path.unlink()
-        for state in ("missing", "empty", "symlink", "nonexecutable"):
-            with self.subTest(state=state):
-                if state == "empty":
-                    path.touch(mode=0o755)
-                elif state == "symlink":
-                    path.unlink()
-                    path.symlink_to(self.inputs / "runtime")
-                elif state == "nonexecutable":
-                    path.unlink()
-                    path.write_text("not executable")
-                self.invoke(success=False)
-                self.assertFalse(self.output.exists())
+        for name in ("rg", "exec-server"):
+            path = self.inputs / name
+            path.unlink()
+            for state in ("missing", "empty", "symlink", "nonexecutable"):
+                with self.subTest(input=name, state=state):
+                    if state == "empty":
+                        path.touch(mode=0o755)
+                    elif state == "symlink":
+                        path.unlink()
+                        path.symlink_to(self.inputs / "runtime")
+                    elif state == "nonexecutable":
+                        path.unlink()
+                        path.write_text("not executable")
+                    self.invoke(success=False)
+                    self.assertFalse(self.output.exists())
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
 
     def test_rejects_inappropriate_linux_helper_for_mac(self):
         self.invoke(MAC, extra=("--bwrap", str(self.inputs / "bwrap")), success=False)
@@ -250,7 +257,7 @@ class StageTests(unittest.TestCase):
         self.output.symlink_to(self.inputs, target_is_directory=True)
         self.invoke(success=False)
         self.assertTrue(self.output.is_symlink())
-        self.assertEqual(len(list(self.inputs.iterdir())), 4)
+        self.assertEqual(len(list(self.inputs.iterdir())), 5)
 
     def test_launcher_preserves_arguments_and_dedicated_home_without_writes(self):
         self.invoke()

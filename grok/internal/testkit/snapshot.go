@@ -45,8 +45,8 @@ type snapshotManifest struct {
 //
 // Canonical bin/grok and bin/grok-bin inputs require both package manifests; all
 // manifest-listed files retain their relative layout. Other inputs retain their
-// basename and optional adjacent codex-code-mode-host[.exe]. No arbitrary build
-// directory is copied. Symlinks within the source root are rejected; ancestor
+// basename and optional adjacent codex-code-mode-host[.exe] and
+// codex-exec-server[.exe]. No arbitrary build directory is copied. Symlinks within the source root are rejected; ancestor
 // directory aliases are allowed, with source reads confined to an opened root.
 // Files are owner-readable and non-writable, with owner execution preserved.
 // This protects against ordinary builds replacing source files, not malicious
@@ -88,6 +88,7 @@ func SnapshotExecutable(path, expectedSHA256 string) (binary string, cleanup fun
 		var fields struct {
 			LayoutVersion int    `json:"layoutVersion"`
 			Entrypoint    string `json:"entrypoint"`
+			ExecServer    string `json:"execServer"`
 			ResourcesDir  string `json:"resourcesDir"`
 			PathDir       string `json:"pathDir"`
 			Variant       string `json:"variant"`
@@ -98,7 +99,7 @@ func SnapshotExecutable(path, expectedSHA256 string) (binary string, cleanup fun
 		digest := sha256.Sum256(layout)
 		if readErr != nil || int64(len(layout)) != *identity.Size || hex.EncodeToString(digest[:]) != identity.SHA256 ||
 			snapshotJSON(layout, &fields) != nil || fields.LayoutVersion != 1 || fields.Entrypoint != "bin/grok-bin" ||
-			fields.ResourcesDir != "codex-resources" || fields.PathDir != "codex-path" || fields.Variant != "grok" ||
+			fields.ExecServer != "bin/codex-exec-server" || fields.ResourcesDir != "codex-resources" || fields.PathDir != "codex-path" || fields.Variant != "grok" ||
 			fields.Target != manifest.Target || fields.Version != manifest.Version {
 			return "", nil, errSnapshot
 		}
@@ -132,15 +133,16 @@ func SnapshotExecutable(path, expectedSHA256 string) (binary string, cleanup fun
 		if err = snapshotCopy(source, dir, selected, expectedSHA256, -1, true); err != nil {
 			return "", nil, err
 		}
-		helper := "codex-code-mode-host"
-		if runtime.GOOS == "windows" {
-			helper += ".exe"
-		}
-		if helper != selected {
-			_, statErr := source.Lstat(helper)
-			if !errors.Is(statErr, fs.ErrNotExist) {
-				if err = snapshotCopy(source, dir, helper, "", -1, true); err != nil {
-					return "", nil, err
+		for _, helper := range []string{"codex-code-mode-host", "codex-exec-server"} {
+			if runtime.GOOS == "windows" {
+				helper += ".exe"
+			}
+			if helper != selected {
+				_, statErr := source.Lstat(helper)
+				if !errors.Is(statErr, fs.ErrNotExist) {
+					if err = snapshotCopy(source, dir, helper, "", -1, true); err != nil {
+						return "", nil, err
+					}
 				}
 			}
 		}
@@ -178,7 +180,7 @@ func validateSnapshotManifest(m snapshotManifest, metadataSize int, selected, ex
 			return errSnapshot
 		}
 	}
-	required := []string{"bin/grok", "bin/grok-bin", "bin/codex-code-mode-host", "codex-package.json", "codex-path/rg"}
+	required := []string{"bin/grok", "bin/grok-bin", "bin/codex-code-mode-host", "bin/codex-exec-server", "codex-package.json", "codex-path/rg"}
 	if strings.Contains(m.Target, "linux") {
 		required = append(required, "codex-resources/bwrap")
 	}
@@ -195,7 +197,7 @@ func validateSnapshotManifest(m snapshotManifest, metadataSize int, selected, ex
 
 func snapshotRequiredExecutable(name string) bool {
 	switch name {
-	case "bin/grok", "bin/grok-bin", "bin/codex-code-mode-host", "codex-path/rg", "codex-resources/bwrap":
+	case "bin/grok", "bin/grok-bin", "bin/codex-code-mode-host", "bin/codex-exec-server", "codex-path/rg", "codex-resources/bwrap":
 		return true
 	}
 	return false

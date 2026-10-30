@@ -429,11 +429,13 @@ async fn remote_session_persists_values_forwards_delegates_and_controls_cells() 
         cell_id: stored_cell,
         content_items,
         error_text,
+        result_buffered_for,
         ..
     } = actual
     else {
         panic!("store cell must complete: {actual:?}");
     };
+    assert_eq!(result_buffered_for, Duration::ZERO);
     assert!(!stored_cell.as_str().is_empty());
     assert!(content_items.is_empty());
     assert_eq!(error_text, None);
@@ -467,11 +469,13 @@ text(result.value);
         cell_id: callback_cell,
         content_items,
         error_text,
+        result_buffered_for,
         ..
     } = actual
     else {
         panic!("callback cell must complete: {actual:?}");
     };
+    assert_eq!(result_buffered_for, Duration::ZERO);
     assert!(!callback_cell.as_str().is_empty());
     assert_ne!(callback_cell, stored_cell);
     assert_eq!(error_text, None);

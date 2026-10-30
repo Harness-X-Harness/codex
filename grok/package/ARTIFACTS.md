@@ -76,7 +76,9 @@ never become stage codes or handled acquisition error output.
 Before granting executable modes, extraction verifies the Actions ZIP size and
 SHA-256, the exact archive name, all required stock-layout members, source and
 target metadata, and every packaged file's size/digest. Links, traversal,
-duplicate or extra members and incomplete helpers are rejected. The new output
+duplicate or extra members and incomplete helpers are rejected. The standalone
+`bin/codex-exec-server` must match its manifest digest and the stock layout
+`execServer` entry before any executable permission is granted. The new output
 contains `package/`, `selection.json` and `verified.json`; an existing output is
 never replaced. Failed private extraction cannot become a runnable output.
 

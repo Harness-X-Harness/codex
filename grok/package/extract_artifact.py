@@ -18,6 +18,7 @@ EXECUTABLES = {
     "bin/grok",
     "bin/grok-bin",
     "bin/codex-code-mode-host",
+    "bin/codex-exec-server",
     "codex-path/rg",
     "codex-resources/bwrap",
 }
@@ -133,6 +134,7 @@ def extract(archive: Path, selected: dict, output: Path) -> dict:
         "target": TARGET,
         "variant": "grok",
         "entrypoint": "bin/grok-bin",
+        "execServer": "bin/codex-exec-server",
         "resourcesDir": "codex-resources",
         "pathDir": "codex-path",
     }:

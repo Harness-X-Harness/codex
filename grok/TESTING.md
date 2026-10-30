@@ -90,7 +90,7 @@ tests conservatively retain their snapshot on failure; expected-negative tests
 also require a proven join before passing. Canonical Grok
 packages retain their manifest-listed launcher, runtime, helpers and resources
 at the same relative paths. Raw development executables retain their basename
-and an optional adjacent `codex-code-mode-host`; arbitrary build directories are
+and optional adjacent `codex-code-mode-host` and `codex-exec-server` helpers; arbitrary build directories are
 not copied. Admission rejects invalid manifests, path traversal, source-root
 symlinks and special files, with limits of 128 files, 1 GiB per file, 2 GiB total
 and 1 MiB metadata. Subject digests and caller-established provenance do not

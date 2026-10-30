@@ -52,6 +52,7 @@ class FetchCommandTests(unittest.TestCase):
                 "target": TARGET,
                 "variant": "grok",
                 "entrypoint": "bin/grok-bin",
+                "execServer": "bin/codex-exec-server",
                 "resourcesDir": "codex-resources",
                 "pathDir": "codex-path",
             }

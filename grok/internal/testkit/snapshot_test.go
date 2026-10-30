@@ -42,13 +42,14 @@ func snapshotTestPackage(t *testing.T) (string, map[string]any) {
 	root := t.TempDir()
 	files := map[string]string{
 		"bin/grok":                 "#!/bin/sh\nexec \"$(dirname \"$0\")/grok-bin\"\n",
-		"bin/grok-bin":             "#!/bin/sh\nd=$(dirname \"$0\")\nprintf 'runtime-A/'\n\"$d/codex-code-mode-host\"\n\"$d/../codex-path/rg\"\n\"$d/../codex-resources/bwrap\"\ncat \"$d/../codex-resources/data\"\n",
+		"bin/grok-bin":             "#!/bin/sh\nd=$(dirname \"$0\")\nprintf 'runtime-A/'\n\"$d/codex-code-mode-host\"\n\"$d/codex-exec-server\"\n\"$d/../codex-path/rg\"\n\"$d/../codex-resources/bwrap\"\ncat \"$d/../codex-resources/data\"\n",
 		"bin/codex-code-mode-host": "#!/bin/sh\nprintf 'helper-A/'\n",
+		"bin/codex-exec-server":    "#!/bin/sh\nprintf 'executor-A/'\n",
 		"codex-path/rg":            "#!/bin/sh\nprintf 'path-A/'\n",
 		"codex-resources/bwrap":    "#!/bin/sh\nprintf 'resource-A/'\n",
 		"codex-resources/data":     "data-A\n",
 		"LICENSE":                  "fixture license\n",
-		"codex-package.json":       `{"layoutVersion":1,"version":"0.1.0","target":"x86_64-unknown-linux-musl","variant":"grok","entrypoint":"bin/grok-bin","resourcesDir":"codex-resources","pathDir":"codex-path"}`,
+		"codex-package.json":       `{"layoutVersion":1,"version":"0.1.0","target":"x86_64-unknown-linux-musl","variant":"grok","entrypoint":"bin/grok-bin","execServer":"bin/codex-exec-server","resourcesDir":"codex-resources","pathDir":"codex-path"}`,
 	}
 	identities := map[string]any{}
 	for name, content := range files {
@@ -91,61 +92,65 @@ func snapshotTestRejected(t *testing.T, path, digest string) {
 }
 
 func TestSnapshotExecutableReplacementAndCleanup(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(root, "codex")
-	helper := "codex-code-mode-host"
-	if runtime.GOOS == "windows" {
-		helper += ".exe"
-	}
-	a := []byte("#!/bin/sh\nprintf 'A/'\n\"$(dirname \"$0\")/codex-code-mode-host\"\n")
-	helperA := []byte("#!/bin/sh\nprintf 'helper-A\\n'\n")
-	snapshotTestWrite(t, source, a, 0700)
-	snapshotTestWrite(t, filepath.Join(root, helper), helperA, 0700)
-	snapshotTestWrite(t, filepath.Join(root, "unrelated-build-output"), []byte("do not copy"), 0600)
-	binary, cleanup, err := SnapshotExecutable(source, snapshotTestDigest(a))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cleanup)
-	if binary == source || filepath.Base(binary) != "codex" {
-		t.Fatal("snapshot did not retain an independent executable basename")
-	}
-	for _, name := range []string{"codex", helper} {
-		info, err := os.Stat(filepath.Join(filepath.Dir(binary), name))
-		if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0500) {
-			t.Fatal("snapshot executable must be owner-readable/executable and non-writable")
-		}
-	}
-	if info, err := os.Stat(filepath.Dir(binary)); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0700) {
-		t.Fatal("snapshot directory must be private")
-	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "unrelated-build-output")); !os.IsNotExist(err) {
-		t.Fatal("raw snapshot copied unrelated build output")
-	}
-	// Reproduce the pre-hash / replace-B / invoke / restore-A / post-hash gap.
-	snapshotTestWrite(t, source, []byte("#!/bin/sh\nprintf 'B\\n'\n"), 0700)
-	snapshotTestWrite(t, filepath.Join(root, helper), []byte("#!/bin/sh\nprintf 'helper-B\\n'\n"), 0700)
-	if runtime.GOOS != "windows" {
-		snapshotTestRun(t, source, "B\n")
-		snapshotTestRun(t, binary, "A/helper-A\n")
-	}
-	for name, want := range map[string][]byte{"codex": a, helper: helperA} {
-		got, err := os.ReadFile(filepath.Join(filepath.Dir(binary), name))
-		if err != nil || string(got) != string(want) {
-			t.Fatal("source replacement changed snapshotted bytes")
-		}
-	}
-	snapshotTestWrite(t, source, a, 0700)
-	if digest, err := ExecutableSHA256(source); err != nil || digest != snapshotTestDigest(a) {
-		t.Fatal("replacement control failed to restore the original digest")
-	}
-	cleanup()
-	cleanup()
-	if _, err := os.Stat(filepath.Dir(binary)); !os.IsNotExist(err) {
-		t.Fatal("snapshot cleanup did not remove its owned directory")
-	}
-	if data, err := os.ReadFile(source); err != nil || string(data) != string(a) {
-		t.Fatal("snapshot cleanup changed source files")
+	for _, base := range []string{"codex-code-mode-host", "codex-exec-server"} {
+		t.Run(base, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "codex")
+			helper := base
+			if runtime.GOOS == "windows" {
+				helper += ".exe"
+			}
+			a := []byte(fmt.Sprintf("#!/bin/sh\nprintf 'A/'\n\"$(dirname \"$0\")/%s\"\n", base))
+			helperA := []byte("#!/bin/sh\nprintf 'helper-A\\n'\n")
+			snapshotTestWrite(t, source, a, 0700)
+			snapshotTestWrite(t, filepath.Join(root, helper), helperA, 0700)
+			snapshotTestWrite(t, filepath.Join(root, "unrelated-build-output"), []byte("do not copy"), 0600)
+			binary, cleanup, err := SnapshotExecutable(source, snapshotTestDigest(a))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(cleanup)
+			if binary == source || filepath.Base(binary) != "codex" {
+				t.Fatal("snapshot did not retain an independent executable basename")
+			}
+			for _, name := range []string{"codex", helper} {
+				info, err := os.Stat(filepath.Join(filepath.Dir(binary), name))
+				if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0500) {
+					t.Fatal("snapshot executable must be owner-readable/executable and non-writable")
+				}
+			}
+			if info, err := os.Stat(filepath.Dir(binary)); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0700) {
+				t.Fatal("snapshot directory must be private")
+			}
+			if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "unrelated-build-output")); !os.IsNotExist(err) {
+				t.Fatal("raw snapshot copied unrelated build output")
+			}
+			// Reproduce the pre-hash / replace-B / invoke / restore-A / post-hash gap.
+			snapshotTestWrite(t, source, []byte("#!/bin/sh\nprintf 'B\\n'\n"), 0700)
+			snapshotTestWrite(t, filepath.Join(root, helper), []byte("#!/bin/sh\nprintf 'helper-B\\n'\n"), 0700)
+			if runtime.GOOS != "windows" {
+				snapshotTestRun(t, source, "B\n")
+				snapshotTestRun(t, binary, "A/helper-A\n")
+			}
+			for name, want := range map[string][]byte{"codex": a, helper: helperA} {
+				got, err := os.ReadFile(filepath.Join(filepath.Dir(binary), name))
+				if err != nil || string(got) != string(want) {
+					t.Fatal("source replacement changed snapshotted bytes")
+				}
+			}
+			snapshotTestWrite(t, source, a, 0700)
+			if digest, err := ExecutableSHA256(source); err != nil || digest != snapshotTestDigest(a) {
+				t.Fatal("replacement control failed to restore the original digest")
+			}
+			cleanup()
+			cleanup()
+			if _, err := os.Stat(filepath.Dir(binary)); !os.IsNotExist(err) {
+				t.Fatal("snapshot cleanup did not remove its owned directory")
+			}
+			if data, err := os.ReadFile(source); err != nil || string(data) != string(a) {
+				t.Fatal("snapshot cleanup changed source files")
+			}
+		})
 	}
 }
 
@@ -187,7 +192,7 @@ func TestSnapshotExecutablePackageLayout(t *testing.T) {
 				t.Fatal(err)
 			}
 			if runtime.GOOS != "windows" {
-				snapshotTestRun(t, binary, "runtime-A/helper-A/path-A/resource-A/data-A\n")
+				snapshotTestRun(t, binary, "runtime-A/helper-A/executor-A/path-A/resource-A/data-A\n")
 			}
 		})
 	}
@@ -265,8 +270,8 @@ func TestSnapshotExecutableFailureCleanup(t *testing.T) {
 
 func TestSnapshotExecutableRejectsPackageMutations(t *testing.T) {
 	for _, change := range []string{
-		"missing-manifest", "missing-layout", "missing-helper", "malformed-manifest", "oversized-manifest", "duplicate-key", "duplicate-path", "trailing-json", "deep-json", "wrong-layout",
-		"traversal", "absolute", "backslash", "unclean", "case-collision", "self-manifest", "missing-size", "negative-size", "oversized-file", "oversized-total", "too-many-files", "invalid-digest", "wrong-selected-digest", "tamper-selected", "tamper-helper", "size-mismatch",
+		"missing-manifest", "missing-layout", "missing-helper", "missing-exec-server", "unlisted-exec-server", "nonexecutable-exec-server", "wrong-exec-server-layout", "malformed-manifest", "oversized-manifest", "duplicate-key", "duplicate-path", "trailing-json", "deep-json", "wrong-layout",
+		"traversal", "absolute", "backslash", "unclean", "case-collision", "self-manifest", "missing-size", "negative-size", "oversized-file", "oversized-total", "too-many-files", "invalid-digest", "wrong-selected-digest", "tamper-selected", "tamper-helper", "tamper-exec-server", "size-mismatch",
 	} {
 		t.Run(change, func(t *testing.T) {
 			root, manifest := snapshotTestPackage(t)
@@ -276,8 +281,8 @@ func TestSnapshotExecutableRejectsPackageMutations(t *testing.T) {
 			digest := selected["sha256"].(string)
 			manifestPath := filepath.Join(root, "grok-package.json")
 			switch change {
-			case "missing-manifest", "missing-layout", "missing-helper":
-				name := map[string]string{"missing-manifest": "grok-package.json", "missing-layout": "codex-package.json", "missing-helper": "bin/codex-code-mode-host"}[change]
+			case "missing-manifest", "missing-layout", "missing-helper", "missing-exec-server":
+				name := map[string]string{"missing-manifest": "grok-package.json", "missing-layout": "codex-package.json", "missing-helper": "bin/codex-code-mode-host", "missing-exec-server": "bin/codex-exec-server"}[change]
 				if err := os.Remove(filepath.Join(root, filepath.FromSlash(name))); err != nil {
 					t.Fatal(err)
 				}
@@ -305,15 +310,32 @@ func TestSnapshotExecutableRejectsPackageMutations(t *testing.T) {
 					data = []byte(strings.Replace(string(data), `"files": {`, `"files": {"bin/grok": {},`, 1))
 				}
 				snapshotTestWrite(t, manifestPath, data, 0600)
-			case "wrong-layout":
+			case "nonexecutable-exec-server":
+				if runtime.GOOS == "windows" {
+					t.Skip("Unix executable mode")
+				}
+				if err := os.Chmod(filepath.Join(root, "bin", "codex-exec-server"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong-layout", "wrong-exec-server-layout":
 				data := []byte(`{"layoutVersion":2}`)
+				if change == "wrong-exec-server-layout" {
+					original, err := os.ReadFile(filepath.Join(root, "codex-package.json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					data = []byte(strings.Replace(string(original), "bin/codex-exec-server", "bin/grok-bin", 1))
+				}
 				snapshotTestWrite(t, filepath.Join(root, "codex-package.json"), data, 0600)
 				files["codex-package.json"] = map[string]any{"size": len(data), "sha256": snapshotTestDigest(data)}
 				snapshotTestJSON(t, manifestPath, manifest)
-			case "tamper-selected", "tamper-helper", "size-mismatch":
+			case "tamper-selected", "tamper-helper", "tamper-exec-server", "size-mismatch":
 				name := "bin/grok"
 				if change == "tamper-helper" {
 					name = "bin/codex-code-mode-host"
+				}
+				if change == "tamper-exec-server" {
+					name = "bin/codex-exec-server"
 				}
 				data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
 				if err != nil {
@@ -329,6 +351,8 @@ func TestSnapshotExecutableRejectsPackageMutations(t *testing.T) {
 				case "traversal", "absolute", "backslash", "unclean", "case-collision", "self-manifest":
 					name := map[string]string{"traversal": "../PRIVATE", "absolute": "/PRIVATE", "backslash": `bin\PRIVATE`, "unclean": "bin/./PRIVATE", "case-collision": "BIN/GROK", "self-manifest": "grok-package.json"}[change]
 					files[name] = selected
+				case "unlisted-exec-server":
+					delete(files, "bin/codex-exec-server")
 				case "missing-size":
 					delete(selected, "size")
 				case "negative-size":

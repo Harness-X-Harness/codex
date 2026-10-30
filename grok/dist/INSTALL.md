@@ -21,6 +21,7 @@ LICENSE
 bin/grok                    # user entrypoint
 bin/grok-bin                # actual runtime / app-server entrypoint
 bin/codex-code-mode-host
+bin/codex-exec-server
 codex-path/rg
 codex-resources/bwrap        # Linux only
 ```
@@ -44,7 +45,7 @@ deliberately. Do not overwrite an unrelated Home.
 Restore executable permissions if the download format discarded them:
 
 ```sh
-chmod +x bin/grok bin/grok-bin bin/codex-code-mode-host codex-path/rg
+chmod +x bin/grok bin/grok-bin bin/codex-code-mode-host bin/codex-exec-server codex-path/rg
 [ ! -f codex-resources/bwrap ] || chmod +x codex-resources/bwrap
 CODEX_HOME=/absolute/path/to/the/dedicated-home ./bin/grok
 ```

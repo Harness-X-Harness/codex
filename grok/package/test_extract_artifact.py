@@ -31,6 +31,7 @@ class ExtractTests(unittest.TestCase):
                 "target": TARGET,
                 "variant": "grok",
                 "entrypoint": "bin/grok-bin",
+                "execServer": "bin/codex-exec-server",
                 "resourcesDir": "codex-resources",
                 "pathDir": "codex-path",
             }
@@ -143,12 +144,14 @@ class ExtractTests(unittest.TestCase):
                 self.assertFalse((self.root / "escaped").exists())
 
     def test_missing_helper_is_not_a_complete_package(self):
-        contents = dict(self.contents)
-        del contents["codex-resources/bwrap"]
-        path, selected, _ = self.bundle(contents)
-        with self.assertRaises(ValueError):
-            extract(path, selected, self.output)
-        self.assertFalse(self.output.exists())
+        for helper in ("codex-resources/bwrap", "bin/codex-exec-server"):
+            with self.subTest(helper=helper):
+                contents = dict(self.contents)
+                del contents[helper]
+                path, selected, _ = self.bundle(contents)
+                with self.assertRaises(ValueError):
+                    extract(path, selected, self.output)
+                self.assertFalse(self.output.exists())
 
     def test_mutated_bytes_or_manifest_cannot_become_executable(self):
         for kind in (
@@ -158,15 +161,18 @@ class ExtractTests(unittest.TestCase):
             "layout",
             "version",
             "layout-version",
+            "exec-server-layout",
         ):
             with self.subTest(kind=kind):
                 contents = dict(self.contents)
                 metadata = copy.deepcopy(self.metadata)
                 if kind == "runtime":
                     contents["bin/grok-bin"] = b"modified binary"
-                elif kind in ("layout", "layout-version"):
+                elif kind in ("layout", "layout-version", "exec-server-layout"):
                     layout = json.loads(contents["codex-package.json"])
-                    if kind == "layout":
+                    if kind == "exec-server-layout":
+                        layout["execServer"] = "bin/other-executor"
+                    elif kind == "layout":
                         layout["resourcesDir"] = "elsewhere"
                     else:
                         layout["version"] = "0.163.0"

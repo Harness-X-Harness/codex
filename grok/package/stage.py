@@ -81,7 +81,7 @@ def stage(args: argparse.Namespace) -> None:
         raise ValueError("unsupported Grok package target")
     if (args.bwrap is not None) != (args.target == "x86_64-unknown-linux-musl"):
         raise ValueError("bwrap is required only for the supported Linux target")
-    inputs = [args.runtime, args.code_mode_host, args.rg]
+    inputs = [args.runtime, args.code_mode_host, args.exec_server, args.rg]
     if args.bwrap is not None:
         inputs.append(args.bwrap)
     for path in inputs:
@@ -104,6 +104,7 @@ def stage(args: argparse.Namespace) -> None:
     package_inputs = PackageInputs(
         entrypoint_bin=args.runtime,
         code_mode_host_bin=args.code_mode_host,
+        exec_server_bin=args.exec_server,
         rg_bin=args.rg,
         bwrap_bin=args.bwrap,
         codex_command_runner_bin=None,
@@ -147,7 +148,7 @@ def main() -> int:
     parser.add_argument("--target", choices=SUPPORTED_TARGETS, required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    for name in ("runtime", "code-mode-host", "rg"):
+    for name in ("runtime", "code-mode-host", "exec-server", "rg"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--bwrap", type=Path)
     args = parser.parse_args()
