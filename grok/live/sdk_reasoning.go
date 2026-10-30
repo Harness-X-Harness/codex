@@ -44,10 +44,14 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 		turn := protocolv2.TurnStartParams{
 			OutputSchema: &schema,
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-				Text: "Look up the price per kilogram of apples. How much would two kilograms cost?",
+				Text: "Check today's apple price at this shop. How much would two kilograms cost in yuan?",
 			})},
 		}
 		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
+		options.Diagnostics.Record("history_tool_declaration", map[string]any{
+			"tool": historyTool, "description": integrationfixture.HistoryProbeDescription,
+			"declared_to_sdk": true, "provider_request_observed": false,
+		})
 		experimental := true
 		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
 			Thread: protocolv2.ThreadStartParams{
@@ -63,6 +67,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 			},
 			Turn: turn,
 			AdmitTurn: func(thread protocolv2.ThreadStartResponse, _ protocolv2.TurnStartParams) error {
+				options.Diagnostics.Record("history_thread_config", map[string]any{"model": thread.Model, "provider": thread.ModelProvider, "reasoning_effort": thread.ReasoningEffort, "provider_request_observed": false})
 				if thread.Thread.ID == "" || thread.Model != options.Model || thread.ModelProvider != "grok" || thread.Thread.ModelProvider != "grok" || thread.CWD != cwd {
 					return failedObservation("fixture_binding_failed", "live: fixture binding not established")
 				}

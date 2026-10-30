@@ -9,13 +9,14 @@ Shell remains disabled; this Story does not broaden product capabilities.
 
 ## Acceptance
 
-After a natural request to replace the seeded text while preserving everything
-else, the matching turn completes successfully with a final response, and the
-actual file has the expected bytes. The main scenario asks a same-thread
+After a natural request to update the opening time in `store-hours.txt` from
+8 AM to 9 AM while preserving everything else, the matching turn completes successfully with a final response, and the
+actual file has the expected bytes. The main scenario requires both occurrences to change, then asks a same-thread
 follow-up to check the result; it must complete and leave those bytes unchanged.
-The pinned-model control checks the same outcome with the pinned model. The
-replace-all control requires both seeded occurrences to change, not a particular
-argument spelling or number of calls.
+The pinned-model control checks a single replacement with the pinned model.
+Neither requires a particular argument spelling or number of calls. The separate
+replace-all diagnostic remains selectable, but is no longer a duplicate formal
+Live invocation; its semantic requirement belongs to the main scenario.
 
 Correct results do not fail because the model uses different replacement
 boundaries, makes multiple edits, or uses available auxiliary tools. Raw internal
@@ -32,8 +33,9 @@ failed, interrupted or unrelated terminal evidence cannot complete any control.
 
 The runner binds the selected package and model, seeds a CRLF file without a
 final newline, and submits each semantic request once. The main scenario uses
-two turns on one thread; decline, pinned and replace-all each use one turn in a
-fresh invocation. Missing evidence does not trigger a paid automatic rerun.
+two turns on one thread; decline and pinned each use one turn in a fresh
+invocation. The optional replace-all diagnostic uses one turn. Exact native
+`TestStructuredEditFixture/replace_all` coverage remains required independently. Missing evidence does not trigger a paid automatic rerun.
 
 Bounded public App Server observations establish turn completion, eligible final
 responses and approval decisions. A settled thread read is correlated to the
@@ -51,7 +53,9 @@ secret-safe failure report.
 - [`TestStructuredEditScenarios` and negative controls](../../live/structured_edit_test.go)
   use an effectful fake stdio server. The [SDK observer tests](../../live/sdk_edit_observer_test.go)
   cover alternate execution paths, terminal correlation and denied approvals.
-  These are offline oracle tests, not real-backend success.
+  The `one_of_two` negative performs only one of the two real fixture writes
+  and must fail the main scenario. These are offline oracle tests, not
+  real-backend success.
 - [`TestStructuredEditFixture`](../../tests/integration/structured_edit_test.go)
   executes real Codex against controlled HTTP. Its scripted backend separately
   verifies structured tool advertisement, exact model binding, canonical paired

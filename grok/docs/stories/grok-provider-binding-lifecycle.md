@@ -1,193 +1,115 @@
-# Grok child agent inherits parent Provider authority
+# Delegate an order check and receive its invoice within Grok
 
 ## User story
 
-As a Grok user, I can delegate one bounded task from a Grok-bound parent
-Thread to a child agent, receive the child's result, and complete the parent
-task without leaving the Grok Provider boundary.
+As a Grok user, I can ask a subagent to check a small order and receive the
+checked invoice in the parent conversation, without leaving the Grok Provider
+boundary.
 
-## Real path
+## Real path and acceptance
 
-```text
-one observably Grok-bound parent Thread
-  -> one completed bounded setup Turn with a fresh random setup marker
-  -> one original natural user-level delegation task
-  -> a runtime-created default/full-history child completes a bounded task
-  -> the child result returns to the parent
-  -> the parent uses that result and completes
-```
+One shipped Grok-bound parent receives one ordinary delegation task: check an
+order of three notebooks at 4.50 and two pens at 1.25, with no tax or shipping,
+and return one importable CSV invoice. The requested columns are `item`,
+`quantity`, `unit_price`, and `line_total`; a total row has empty quantity and
+unit price. The correct line totals are 13.50 and 2.50, and the total is 16.00.
 
-## Acceptance
+Acceptance requires all of the following:
 
-**Given** one parent Thread that visibly reports its Grok Provider binding,
-**when** the user submits one natural task that requires bounded delegation,
-**then**:
+- A real child is durably bound to this parent and the Grok Provider, using an
+  allowed shipped Grok model.
+- The child completes its own successful turn with the correct complete invoice.
+- That child's invoice actually enters the current parent turn through the
+  stock collaboration input path.
+- A subsequent durable parent terminal answer contains the correct complete
+  invoice, with its message identity witnessed after that delivery.
+- The owned process/callback cleanup completes, and no admitted contradiction
+  invalidates the credited result.
 
-- at least one runtime-created default/full-history child is visible under the
-  parent and reports the expected Grok Provider;
-- the deterministic stock inheritance contract establishes that an
-  unoverridden natural spawn uses the expected default/full-history child model
-  class;
-- the child correctly recalls the setup marker from inherited parent context;
-  the runner does not include the marker value in the delegation task, and no
-  later child input or alternate tool lookup may supply it;
-- a delegated child produces a fresh, safe bounded result that was not known to
-  the parent before that child's Started activity;
-- that result is delivered to the parent through the stock collaboration
-  lifecycle;
-- the parent reaches a visible terminal result that contains the same fresh
-  child result; and
-- the accepted child and parent result cannot be supplied by another Provider
-  or by an acceptance-runner replay.
+Column and row ordering, quoting, CRLF, equivalent decimal representations, and
+one CSV code block with surrounding prose are presentation choices. Missing,
+duplicate or extra rows/columns, wrong quantities or money, multiple reports,
+and a mere promise that the invoice is ready do not complete the task.
 
 ## Partial success is not completion
 
-- The parent completes without consuming a valid delegated result.
-- A result from another Provider or a second lookup path is accepted as the
-  Grok child result.
-- Only an internal child constructor or inheritance fixture is exercised.
+A correct parent-only invoice, a created child, a completed child saying
+"ready", an undelivered child invoice, or a parent answer first seen before
+child delivery does not complete this Story. A later replay of that same parent
+message identity cannot become new delivery evidence. `ChildBound` and
+`ChildCompleted` remain truthful partial facts after an ordinary invoice
+failure; observed terminal contradictions can invalidate those facts.
 
-## Material failure boundaries
+Missing evidence means NOT_PROVEN, not proof that the model never tried to
+spawn. Stock emits Started only after successful creation. Discovery can use
+started or completed public child activity, typed collaboration receiver IDs,
+or an already-observed child terminal hint, but each still requires durable
+binding. A child visible only after all available discovery hints were read can
+remain unproven; the observer does not invent an attempt or a cause.
 
-- The runner submits one natural user task and does not resubmit it.
-- No fallback to another Provider completes this Story.
-- Child count, collaboration-tool calls, Provider responses, wait lifecycle
-  events, ordering, and duration are diagnostic unless an owning stock
-  contract fixes them.
+## Proof plan and scope
 
-## What this does not prove
+The runner submits one parent task once, with the shipped defaults. There is no
+setup turn, model-facing nonce/UUID, forced JSON schema, explicit fork mode,
+child name, special reasoning effort, or fixture file write. The runner does
+not resubmit a failed or incomplete task. Product-internal orchestration and
+transport attempts are not additional runner invocations.
 
-This Story does not prove catalog refresh, cold restart, fork, compaction,
-hosted tools, ChatGPT authentication, Mini routing, or compatibility of every
-future Provider.
+The observer uses durable official text for invoice correctness. Raw callback
+text may still contain markup stripped by stock and is not an alternate answer
+oracle. The bounded consumed-input observation establishes sender/recipient
+and delivery; raw parent message IDs establish first-seen timing. Sufficient
+post-delivery message fragments are assembled in durable creation order, not
+callback completion order. Reads are not callback fences: already-generated
+missing fragments may arrive within the original deadline, without another
+turn or RPC. A completed child turn need not have an observed Started event or
+complete raw history of every input.
 
-## Proof plan
+This proves actual observable delegation and result participation, not hidden
+model computation, dependence on an otherwise unknowable value, full-fork
+history recall, or every possible future model. Exact artifact, source,
+profile, backend, environment and time delimit each Live result. An unchanged
+rerun is a new observation; it does not replace a failed earlier run.
 
-### Preconditions
+### Diagnostic evidence is not an acceptance assertion
 
-- Exact candidate artifact, one supported Grok Provider profile, one disposable
-  isolated Home with only the accepted Grok credential.
-- The Live profile does not set `agents.default_subagent_model`.
-- The parent Thread reports its Grok Provider binding before child creation.
-- The setup Turn keeps profile defaults; the delegation Turn requests logical
-  Ultra reasoning. Deterministic contracts
-  prove Ultra request mapping, immutable parent authority, child inheritance,
-  and the stock child-agent seam.
+Bounded optional diagnostics preserve stage, configuration declarations,
+candidate binding/read outcomes, own-turn status, invoice checks, delivery
+checks, terminal errors and cleanup state. Declared/effective configuration is
+not a captured provider request. Missing, dropped, unwritable or timed-out
+optional logging must not change the product proof. Required runtime witnesses
+are separate in-memory proof data, not evidence of logger health. No credential,
+opaque reasoning, arbitrary provider traffic or secret-bearing environment is
+needed. The existing sanitizer and asynchronous capture limits own retention.
 
-### Proof-run invocation budget
+## Deterministic owners
 
-One bounded seed setup Turn plus one original natural delegation task, each
-submitted once. The setup supplies a fresh 128-bit random marker only to the
-parent's setup context. The original delegation task asks the child to recall
-that marker and produce a fresh UUID; it never contains the marker value. This
-proves observable use of inherited context without requiring stock's paginated
-child UI history to repeat the parent's records. It is not a retry of the
-delegation task. No extra child task is submitted by the runner. Bound the proof
-run, not the product's valid internal orchestration.
+- [`shipped_test.go`](../../live/shipped_test.go),
+  [`child_invoice_test.go`](../../live/child_invoice_test.go), and
+  [`child_parent_reply_test.go`](../../live/child_parent_reply_test.go) own
+  invoice semantics, authentic delivery, equivalent representations, stale
+  message replay, missing evidence, terminal contradictions and partial facts.
+- `TestShippedChildFixture/delegated_invoice`,
+  `/parent_only_invoice_rejected`, and `/child_without_invoice_rejected` in
+  [`child_test.go`](../../tests/integration/child_test.go) run the actual Codex
+  binary against controlled Grok HTTP, including child execution, real result
+  delivery and parent continuation. These are not real model Live evidence.
+- Retained `inherited_spawn_history`, `delivered_result`, `output_schema_scope`
+  and `inherited_result_structured_negative` subtests are **synthetic direct
+  HTTP-handler fixtures**, not native child-composition acceptance.
+- Stock `spawn_numeric_tests::fork_turns_preserves_defaults_and_string_modes`,
+  `agent/control_tests::spawn_agent_can_fork_parent_thread_history_with_sanitized_items`
+  and `spawn_agent_fork_from_paginated_parent_uses_model_context_prefix` own
+  fork semantics. App Server [provider binding](../../../codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs)
+  and [public child listener](../../../codex-rs/app-server/tests/suite/v2/grok_child_public_listener.rs)
+  own inherited authority and listener delivery. Per-turn output-schema tests
+  own that separate protocol constraint; they are not child invoice proof.
 
-### Secret-safe evidence
+## Contract revision
 
-The callable runner returns bounded safe observation metadata only. It never
-returns prompts, responses, credentials, raw traffic, Thread IDs or child result
-values. Deterministic failure cases verify this boundary. It does not introduce
-a raw-session retention sink or establish package provenance.
-
-
-## Stock compatibility control
-
-A deterministic stock contract must prove the declared upstream child-agent
-seam without ChatGPT live authentication. Grok must inherit the already
-resolved parent authority; it must not add a lookup, fallback, or
-compatibility path to the stock child flow.
-
-## Executable contract
-
-`ShippedChildCollaboration` in `grok/live/shipped_child.go` consumes unchanged
-shipped assets and records one completed setup Turn before the single natural
-delegation task. The parent's setup must retain its successful turn identity and
-ordered user/assistant content; reconstructed item IDs and diagnostic metadata
-are not part of that conversation contract. A qualifying child must report the setup marker in its completed result, with
-complete observed own-input coverage proving that the marker was not supplied
-again before that result. Auxiliary tool activity is not itself disqualifying;
-lineage alone is still insufficient.
-
-Stock paginated subagent history intentionally omits inherited model records
-from the child's public turns. Exact public child seed item identities, content
-and order are therefore not a Live requirement. The actual App Server-to-Grok
-controlled HTTP prerequisite independently verifies the complete inherited seed
-content and order on the wire with unchanged shipped capabilities. The child
-request must contain the delegated task, but inherited tool records, normalized
-output wording and task-envelope presentation are not a unique required shape.
-That controlled prerequisite does not replace real child recall and parent result
-consumption.
-
-The runner accepts a bounded fresh UUID from a correctly bound, completed child
-turn when the parent's terminal structured reply selects it in `child_nonce`.
-Only the parent's delegation/result turn uses a native object schema with required
-`child_nonce: string | null` and no additional properties; it contains no expected
-UUID constant. The setup confirmation and child's own output remain natural
-tasks without that schema. Null is valid output but does not prove result delivery.
-The structured result is the terminal tool-free reply segment after the last
-finished public parent tool call, in creation order. A V2 spawn Started marker
-is a boundary only with an actually bound child lineage, since the runtime emits
-it after successful spawn; unrelated or completed child activity is not. Interim
-sampling messages remain diagnostic/freshness evidence, not concatenated final JSON. Null in that terminal segment is unproven,
-not a reason to recover an earlier positive answer. Malformed JSON,
-missing/duplicate/unknown fields, wrong types, and extra JSON within the terminal
-segment are rejected, not repaired. The 4096-byte result budget applies to that
-segment, while existing transport/item limits and diagnostic capture bounds
-still constrain the complete turn. Message identity conflicts remain checked
-across the whole turn. Child UUID casing, additional child UUIDs and surrounding
-child prose are not exact-output constraints. Additional orchestration and incidental
-failed/running children or spawns do not supply credit or invalidate an otherwise
-qualifying selected result. Schema conformance alone never substitutes for child
-lineage, inherited marker recall, fresh UUID, consumed-input or result-use proof.
-Diagnostics retain the schema, public parent reply and parsed nonce, plus bounded
-available child snapshots even if the parent's structured answer is invalid. It can recognize a causal
-result before a child's later follow-up. Missing or incorrect recalled markers,
-markers supplied through later child inputs, inherited
-results, mismatched Provider/model/ownership and result values already in parent
-text before that child's Started activity or supplied to the child are rejected.
-This includes the current delegation turn: a full fork can inherit a parent's
-pre-spawn final answer even when paginated public child history hides it.
-Ordinary hexadecimal letter casing does not make a supplied value fresh. This is
-a bounded proof over the observed plaintext inputs and results; it does not
-establish noninterference for arbitrary encodings or covert channels. Counts
-remain bounded observation budgets; neither setup nor delegation is resubmitted.
-The UUID is this probe's provenance witness, not a general ban on reusing parent
-results. A child provider request does not establish new internal model computation.
-
-The observer discovers children through actual public V2 `subAgentActivity`
-started items and binds their IDs/paths to public child lineage/history. The
-parent's existing `experimentalRawEvents` opt-in is inherited by child listeners.
-Ordered `rawResponseItem/completed` evidence must contain the child's consumed
-`AgentMessage` inputs and the same marker and nonce as its completed public
-result, without requiring identical surrounding prose. Every own turn through
-that result needs complete observed input/lifecycle coverage. Any pre-result supplied nonce prevents credit; later mentions, later
-unrelated turns and closure after a qualified completion do not. Observed terminal
-conflicts invalidate the exact credited child/turn, not independent candidates.
-Earlier own turns may fail if their observed terminal status and error presence
-agree with durable history; diagnostic error wording need not be identical. Only
-the credited result must complete successfully. Inherited user
-input and final assistant messages are checked for supplied values; public
-diagnostics are not treated as inherited model input.
-The setup transcript's user and assistant text is independently parent-known,
-including commentary and phase-empty replies, while item IDs/metadata are not.
-Missing/closed/partial streams or opaque encrypted input before the result remain
-NOT_PROVEN, without a retry or failure attribution. Raw content stays in memory
-within 512 event / 1 MiB bounds and is never emitted as evidence.
-Because history reads and listener delivery are independent, missing generated
-notifications may still arrive within the original deadline. The runner waits
-only for that evidence, within the same event bound, and makes no additional RPC
-or semantic invocation. Known contradictions settle without a deadline wait.
-
-[Rust provider-binding tests](../../../codex-rs/app-server/tests/suite/v2/grok_provider_binding.rs)
-and the [public child listener](../../../codex-rs/app-server/tests/suite/v2/grok_child_public_listener.rs)
-own Provider inheritance and stock listener delivery. [Offline Go scripts](../../live/shipped_test.go)
-validate the retained scenario oracle. [`TestShippedChildFixture`](../../tests/integration/child_test.go)
-executes real Codex against controlled Grok HTTP with unchanged shipped
-capabilities, checks inherited seed content/order and fresh child result plus
-parent consumption, and rejects a parent-supplied result. This is implemented
-composition coverage, not evidence of real model delegation.
-[`TestLive/shipped-child`](../../tests/live/live_test.go) requires its own
-identified package/backend run before this complete shipped Story is proven.
+The user-approved 2026-10-30 product-first revision replaces the former #387
+Live marker/UUID freshness and full-fork recall probe with this ordinary
+business outcome. The removed Live assertions remain distinct deterministic
+compatibility concerns where named above; no previous failed Live result is
+relabelled as a pass. Only a new identified package/backend run can prove this
+revised Story.

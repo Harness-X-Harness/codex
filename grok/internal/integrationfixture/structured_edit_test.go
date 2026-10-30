@@ -8,7 +8,7 @@ import (
 )
 
 func TestNativeEditFailureDetail(t *testing.T) {
-	input := "Failed to write file /tmp/grok-live-owned/workspace/structured_edit_fixture.txt\n" +
+	input := "Failed to write file /tmp/grok-live-owned/workspace/store-hours.txt\n" +
 		"fs sandbox helper failed with status exit status: 1: bwrap: setting up uid map: Permission denied (os error 13)\n" +
 		"open /proc/1234/gid_map: Operation not permitted (os error 1)\n" +
 		"GROK_\x1b[31mAPI_KEY=synthetic-do-not-publish\nAuthorization: Bearer fixture-secret\n" +
@@ -16,7 +16,7 @@ func TestNativeEditFailureDetail(t *testing.T) {
 	raw, _ := json.Marshal(input)
 	got := EditFailureDetail(raw)
 	text := got["text"].(string)
-	for _, required := range []string{"<path:structured_edit_fixture.txt>", "<path:gid_map>", "setting up uid map", "exit status: 1", "os error 13", "errno=13 exit_code=1 operation=write"} {
+	for _, required := range []string{"<path:store-hours.txt>", "<path:gid_map>", "setting up uid map", "exit status: 1", "os error 13", "errno=13 exit_code=1 operation=write"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("lost diagnostic field %q", required)
 		}
@@ -136,13 +136,13 @@ func TestNativeStructuredEditDeclaration(t *testing.T) {
 }
 
 func TestSameEditArgumentsBindsControlledOperation(t *testing.T) {
-	const expected = `{"file_path":"structured_edit_fixture.txt","old_string":"before","new_string":"after","replace_all":false}`
+	const expected = `{"file_path":"store-hours.txt","old_string":"before","new_string":"after","replace_all":false}`
 	for _, tc := range []struct {
 		name, actual string
 		want         bool
 	}{
-		{"reordered_escaped_default", ` { "new_string":"a\u0066ter", "old_string":"before", "file_path":"./structured_edit_fixture.txt" } `, true},
-		{"different_target", strings.Replace(expected, "structured_edit_fixture.txt", "other/structured_edit_fixture.txt", 1), false},
+		{"reordered_escaped_default", ` { "new_string":"a\u0066ter", "old_string":"before", "file_path":"./store-hours.txt" } `, true},
+		{"different_target", strings.Replace(expected, "store-hours.txt", "other/store-hours.txt", 1), false},
 		{"changed_old", strings.Replace(expected, "before", "other", 1), false},
 		{"changed_new", strings.Replace(expected, "after", "other", 1), false},
 		{"replace_all_true", strings.Replace(expected, "false", "true", 1), false},
@@ -150,9 +150,9 @@ func TestSameEditArgumentsBindsControlledOperation(t *testing.T) {
 		{"null_boolean", strings.Replace(expected, "false", "null", 1), false},
 		{"duplicate_key", strings.TrimSuffix(expected, "}") + `,"replace_all":false}`, false},
 		{"extra_key", strings.TrimSuffix(expected, "}") + `,"extra":false}`, false},
-		{"missing_key", `{"file_path":"structured_edit_fixture.txt","new_string":"after"}`, false},
+		{"missing_key", `{"file_path":"store-hours.txt","new_string":"after"}`, false},
 		{"null_string", strings.Replace(expected, `"before"`, "null", 1), false},
-		{"traversal", strings.Replace(expected, "structured_edit_fixture.txt", "sub/../structured_edit_fixture.txt", 1), false},
+		{"traversal", strings.Replace(expected, "store-hours.txt", "sub/../store-hours.txt", 1), false},
 		{"trailing_value", expected + `{}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

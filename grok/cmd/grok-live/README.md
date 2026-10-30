@@ -38,8 +38,9 @@ restarts a scenario or resubmits a failed semantic turn.
 One JSON result contains the selected scenario, UTC time, endpoint fingerprint
 and safe evidence returned by its owner. Exit 0 is a scoped `observed` result.
 Exit 1 is not observed or output failure, 2 is invalid configuration/subject,
-and 3 is not run without opt-in. `shipped-catalog` records catalog observation
-without inference completion. Product `x`/`x-window` are retired under #414 and
+and 3 is not run without opt-in. Diagnostic-only `shipped-catalog` records catalog
+observation without inference completion; `structured-edit-all` is also diagnostic-only.
+Formal startup and main edit own their consolidated requirements. Product `x`/`x-window` are retired under #414 and
 fail selection before process launch. Legacy `xSearch` SDK rejection is only an
 offline diagnostic, never a successful CLI or formal Live outcome. Partial facts
 remain separate from completion; failures contain static reasons and no raw

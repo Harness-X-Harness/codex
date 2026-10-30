@@ -2,17 +2,18 @@ package live
 
 import (
 	"encoding/json"
-	"errors"
-	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 	"strings"
 	"sync"
+
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-// childStream is private to the shipped child scenario. The public raw opt-in
-// carries consumed AgentMessage inputs that durable Thread history omits. Keep
-// them only in bounded memory; none are returned in Evidence or error text.
+// Only consumed collaboration input and final-message identity/order establish
+// delivery. Durable public text owns the business result. Other raw traffic is
+// optional diagnostics, not a freshness protocol or an acceptance requirement.
 type childStream struct {
 	diagnostics *Diagnostics
+	parentID    string
 	mu          sync.Mutex
 	events      []frame
 	bytes       int
@@ -29,22 +30,46 @@ const (
 	childProven
 )
 
+type childRawEvent struct {
+	ThreadID, TurnID string
+	Item             struct {
+		ID, Type, Role, Phase, Author, Recipient string
+		Content                                  []struct{ Type, Text string }
+	}
+}
+
 func (stream *childStream) observe(message frame) error {
 	stream.recordDiagnostic(message)
+	keep := message.Method == "turn/completed"
+	if message.Method == "rawResponseItem/completed" {
+		var event childRawEvent
+		if json.Unmarshal(message.Params, &event) == nil && event.ThreadID == stream.parentID {
+			keep = event.Item.Type == "agent_message" || event.Item.Type == "message" && event.Item.Role == "assistant"
+			if keep && event.Item.Type == "message" {
+				// Only identity, phase and first-seen timing are proof data. Raw
+				// text can contain hidden markup and never owns invoice semantics.
+				event.Item.Content = nil
+				message.Params, _ = json.Marshal(event)
+				message.size = len(message.Params)
+			}
+		}
+	}
+	if !keep {
+		return nil
+	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if stream.err != nil {
 		return stream.err
 	}
-	switch message.Method {
-	case "rawResponseItem/completed", "turn/started", "turn/completed", "thread/closed":
-		stream.bytes += message.size
-		if len(stream.events) >= childStreamEventLimit || stream.bytes > 1<<20 {
-			stream.err = errors.New("live: child stream budget exceeded")
-			return stream.err
-		}
-		stream.events = append(stream.events, message)
+	size := max(message.size, len(message.Params))
+	if len(stream.events) >= childStreamEventLimit || size > (1<<20)-stream.bytes {
+		stream.err = failedObservation("child_delivery_evidence_budget_exceeded", "live: child delivery evidence budget exceeded")
+		return stream.err
 	}
+	message.Params = append(json.RawMessage(nil), message.Params...)
+	stream.events = append(stream.events, message)
+	stream.bytes += size
 	return nil
 }
 
@@ -53,282 +78,146 @@ func (stream *childStream) failure() error {
 	defer stream.mu.Unlock()
 	return stream.err
 }
-
 func (stream *childStream) snapshot() []frame {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	out := make([]frame, len(stream.events))
-	copy(out, stream.events)
-	return out
+	return append([]frame(nil), stream.events...)
 }
 
-func (stream *childStream) proof(child, parent productThread, credited productTurn, nonce, setupMarker string) childProof {
-	type observedTurn struct {
-		terminalError                                      bool
-		started, ended, invalid                            bool
-		status                                             string
-		inputs                                             int
-		reply                                              productTurn
-		finalResultAt, legacyResultAt, endedAt, firstInput int
-		finalMarkerAt, legacyMarkerAt                      int
-		hasFinal                                           bool
+func (stream *childStream) terminalConflict(threadID, turnID string) bool {
+	for _, message := range stream.snapshot() {
+		value, ok := message.Notification.AsTurnCompleted()
+		if !ok || value.Params.ThreadID != threadID || value.Params.Turn.ID != turnID {
+			continue
+		}
+		turn, err := productTurnFromSDK(value.Params.Turn)
+		if err != nil || completedProductTurn(turn) != nil {
+			return true
+		}
 	}
-	turns := make(map[string]*observedTurn)
-	var order []string
-	var inputs []struct {
-		text string
-		at   int
-	}
+	return false
+}
+
+func (stream *childStream) proof(child, parent productThread, credited, current productTurn, boundChildren map[string]bool) childProof {
 	events := stream.snapshot()
-	invalidAt := len(events)
-	closedAt := len(events)
 	path := child.Source.SubAgent.ThreadSpawn.AgentPath
+	deliveredAt := -1
+	// A replay of the same pre-delivery item is not a new parent answer.
+	firstSeen := make(map[string]int)
+	phases := make(map[string]string)
 	reject := func(reason string) childProof {
 		stream.diagnostics.Record("child_proof_rejected", map[string]any{"child_id": child.ID, "turn_id": credited.ID, "reason": reason})
-		return childProof(0)
+		return childNotProven
 	}
 	for index, message := range events {
-		var event struct {
-			ThreadID, TurnID string
-			Turn             productTurn
-			Item             struct {
-				ID, Type, Role, Phase, Author, Recipient string
-				Content                                  []struct{ Type, Text string }
+		if message.Method == "turn/completed" {
+			value, ok := message.Notification.AsTurnCompleted()
+			if !ok {
+				return reject("invalid_terminal")
 			}
-		}
-		var err error
-		if message.Method == "rawResponseItem/completed" {
-			err = json.Unmarshal(message.Params, &event)
-		} else if value, ok := message.Notification.AsTurnStarted(); ok {
-			event.ThreadID = value.Params.ThreadID
-			event.Turn, err = productTurnFromSDK(value.Params.Turn)
-		} else if value, ok := message.Notification.AsTurnCompleted(); ok {
-			event.ThreadID = value.Params.ThreadID
-			event.Turn, err = productTurnFromSDK(value.Params.Turn)
-		} else if value, ok := message.Notification.AsThreadClosed(); ok {
-			event.ThreadID = value.Params.ThreadID
-		} else {
-			return reject("unsupported_event")
-		}
-		if err != nil {
-			return reject("invalid_event")
-		}
-		if event.ThreadID != child.ID {
+			relevant := value.Params.ThreadID == child.ID && value.Params.Turn.ID == credited.ID ||
+				value.Params.ThreadID == parent.ID && value.Params.Turn.ID == current.ID
+			if relevant {
+				turn, err := productTurnFromSDK(value.Params.Turn)
+				if err != nil || completedProductTurn(turn) != nil {
+					return reject("terminal_contradiction")
+				}
+			}
 			continue
 		}
-		if message.Method == "thread/closed" {
-			closedAt = min(closedAt, index)
+		var event childRawEvent
+		if json.Unmarshal(message.Params, &event) != nil {
+			return reject("invalid_delivery_event")
+		}
+		if event.ThreadID != parent.ID || event.TurnID != current.ID {
 			continue
 		}
-		id := event.TurnID
-		if message.Method != "rawResponseItem/completed" {
-			id = event.Turn.ID
+		item := event.Item
+		if item.Type == "agent_message" && item.Author == path && item.Recipient == "/root" {
+			var parts []string
+			valid := len(item.Content) != 0
+			for _, part := range item.Content {
+				valid = valid && part.Type == "input_text"
+				parts = append(parts, part.Text)
+			}
+			text := strings.Join(parts, "")
+			// The stock projection wraps the business result in an AgentMessage
+			// header. Routing authority is the typed author/recipient above.
+			if _, payload, ok := strings.Cut(text, "\nPayload:\n"); ok {
+				text = payload
+			}
+			if valid && validChildInvoice(text) && deliveredAt < 0 {
+				deliveredAt = index
+			}
 		}
-		if id == "" {
-			return reject("missing_turn_id")
-		}
-		observed := turns[id]
-		if observed == nil {
-			observed = &observedTurn{finalResultAt: -1, legacyResultAt: -1, finalMarkerAt: -1, legacyMarkerAt: -1, endedAt: -1, firstInput: -1}
-			turns[id] = observed
-		}
-		switch message.Method {
-		case "turn/started":
-			if observed.started || observed.ended || event.Turn.Status != "inProgress" {
-				observed.invalid = true
+		if item.Type == "message" && item.Role == "assistant" {
+			if item.ID == "" {
+				return reject("parent_message_identity_missing")
 			}
-			observed.started = true
-			order = append(order, id)
-		case "turn/completed":
-			var terminalError any
-			if len(event.Turn.Error) != 0 && json.Unmarshal(event.Turn.Error, &terminalError) != nil {
-				return reject("invalid_terminal_error")
+			if previous, seen := phases[item.ID]; seen && previous != item.Phase {
+				return reject("parent_message_identity_conflict")
 			}
-			if !observed.started || (observed.ended && (observed.status != event.Turn.Status || observed.terminalError != (terminalError != nil))) {
-				observed.invalid = true
-			}
-			observed.ended, observed.status = true, event.Turn.Status
-			observed.terminalError = terminalError != nil
-			if observed.endedAt < 0 {
-				observed.endedAt = index
-			}
-		case "rawResponseItem/completed":
-			if !observed.started || observed.ended {
-				observed.invalid = true
-			}
-			item := event.Item
-			switch item.Type {
-			case "agent_message":
-				if item.Author == "" || item.Recipient != path || len(item.Content) == 0 {
-					invalidAt = min(invalidAt, index)
-				}
-				var text []string
-				for _, part := range item.Content {
-					if part.Type != "input_text" {
-						invalidAt = min(invalidAt, index)
-					}
-					text = append(text, part.Text)
-				}
-				joined := strings.Join(text, "\n")
-				if strings.TrimSpace(joined) == "" {
-					invalidAt = min(invalidAt, index)
-				}
-				inputs = append(inputs, struct {
-					text string
-					at   int
-				}{joined, index})
-				observed.inputs++
-				if observed.firstInput < 0 {
-					observed.firstInput = index
-				}
-			case "message":
-				if item.Role != "assistant" {
-					// Host context is also input. It cannot newly supply either
-					// proof value before the child produces that value itself.
-					var text []string
-					for _, part := range item.Content {
-						if part.Type != "input_text" {
-							invalidAt = min(invalidAt, index)
-						}
-						text = append(text, part.Text)
-					}
-					inputs = append(inputs, struct {
-						text string
-						at   int
-					}{strings.Join(text, "\n"), index})
-				}
-				if item.Role != "assistant" || (item.Phase != "" && item.Phase != "final_answer") {
-					continue
-				}
-				var text []string
-				for _, part := range item.Content {
-					if part.Type != "output_text" && part.Type != "input_text" {
-						observed.invalid = true
-					}
-					text = append(text, part.Text)
-				}
-				joined := strings.Join(text, "")
-				public := protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: item.ID, Phase: protocolv2.Value(protocolv2.MessagePhase(item.Phase)), Text: joined})
-				observed.reply.Items = append(observed.reply.Items, public)
-				// Preserve identity for finalProductReply, but only visible content
-				// establishes final-answer priority or proof-value timing.
-				if strings.TrimSpace(joined) == "" {
-					continue
-				}
-				if item.Phase == "final_answer" {
-					observed.hasFinal = true
-					if observed.finalResultAt < 0 && containsProofValue(joined, nonce) {
-						observed.finalResultAt = index
-					}
-					if observed.finalMarkerAt < 0 && containsProofValue(joined, setupMarker) {
-						observed.finalMarkerAt = index
-					}
-				} else {
-					if observed.legacyResultAt < 0 && containsProofValue(joined, nonce) {
-						observed.legacyResultAt = index
-					}
-					if observed.legacyMarkerAt < 0 && containsProofValue(joined, setupMarker) {
-						observed.legacyMarkerAt = index
-					}
-				}
-			case "reasoning":
-				// Model reasoning is not another source of inherited context.
-			default:
-				// Tool activity is not itself failure. In the fresh fixture, the
-				// marker exists only in inherited history; reject an actual new
-				// input containing it, not an unrelated tool invocation.
+			if _, seen := firstSeen[item.ID]; !seen {
+				firstSeen[item.ID] = index
+				phases[item.ID] = item.Phase
 			}
 		}
 	}
-	selected := turns[credited.ID]
-	if selected == nil {
-		if closedAt < len(events) || invalidAt < len(events) {
-			return reject("missing_turn_before_close_or_invalid_input")
-		}
+	if deliveredAt < 0 {
 		return childPending
 	}
-	if selected.invalid || (closedAt < len(events) && (!selected.ended || closedAt < selected.endedAt)) {
-		return reject("invalid_lifecycle")
+	items, err := childTerminalItems(current, boundChildren)
+	if err != nil {
+		return reject("parent_terminal_invalid")
 	}
-	nonceAt, markerAt := selected.legacyResultAt, selected.legacyMarkerAt
-	if selected.hasFinal {
-		nonceAt, markerAt = selected.finalResultAt, selected.finalMarkerAt
-	}
-	resultAt := max(nonceAt, markerAt)
-	if invalidAt < resultAt || (resultAt < 0 && invalidAt < len(events)) {
-		return reject("invalid_input_before_result")
-	}
-	for _, input := range inputs {
-		if ((nonceAt < 0 || input.at < nonceAt) && containsProofValue(input.text, nonce)) ||
-			((markerAt < 0 || input.at < markerAt) && containsProofValue(input.text, setupMarker)) {
-			return reject("proof_value_supplied_in_input")
+	// Keep the durable terminal priority and creation order. Raw completion
+	// order can differ; raw text can still contain markup stripped by stock.
+	hasFinal := false
+	for _, item := range items {
+		if message, ok := item.AsAgentMessage(); ok && strings.TrimSpace(message.Text) != "" && message.Phase != nil && message.Phase.Value != nil && *message.Phase.Value == protocolv2.MessagePhaseFinalAnswer {
+			hasFinal = true
 		}
 	}
-	if !selected.ended {
-		return childPending
-	}
-	if selected.status != "completed" || selected.terminalError || nonceAt < 0 || markerAt < 0 || selected.firstInput < 0 || selected.firstInput >= min(nonceAt, markerAt) {
-		return reject("incomplete_result_lifecycle")
-	}
-	rawReply, err := finalProductReply(selected.reply)
-	if err != nil || !containsProofValue(rawReply, nonce) || !containsProofValue(rawReply, setupMarker) {
-		return reject("result_text_mismatch")
-	}
-	// Only this child's order is relevant. Every own durable turn through the
-	// credited turn needs its observed lifecycle and consumed input; a missed
-	// initial attachment or partial stream cannot infer freshness from history.
-	own := 0
-	for _, turn := range child.Turns {
-		inherited := false
-		for _, prior := range parent.Turns {
-			inherited = inherited || prior.ID == turn.ID
-		}
-		if inherited {
-			// The stock fork retains user input and final assistant messages.
-			// Public history also includes diagnostics that are not model input.
-			for _, value := range turn.Items {
-				if item, ok := value.AsAgentMessage(); ok && item.Phase != nil && item.Phase.Value != nil && *item.Phase.Value == protocolv2.MessagePhaseFinalAnswer && containsProofValue(item.Text, nonce) {
-					return reject("result_in_inherited_assistant")
-				}
-				if item, ok := value.AsUserMessage(); ok {
-					for _, part := range item.Content {
-						text, ok := part.AsText()
-						if !ok || containsProofValue(text.Text, nonce) {
-							return reject("result_in_inherited_input")
-						}
-					}
-				}
-			}
+	var witnessed []protocolv2.ThreadItem
+	allSeen := true
+	for _, item := range items {
+		message, ok := item.AsAgentMessage()
+		if !ok {
 			continue
 		}
-		observed := turns[turn.ID]
-		var durableError any
-		if len(turn.Error) != 0 && json.Unmarshal(turn.Error, &durableError) != nil {
-			return reject("invalid_durable_error")
+		phase := ""
+		if message.Phase != nil && message.Phase.Value != nil {
+			phase = string(*message.Phase.Value)
 		}
-		if own >= len(order) || order[own] != turn.ID || observed == nil || !observed.started || !observed.ended || observed.invalid || observed.inputs == 0 || observed.status != turn.Status || observed.terminalError != (durableError != nil) {
-			return reject("durable_stream_lifecycle_mismatch")
+		if phase != "" && phase != "final_answer" || hasFinal && phase != "final_answer" {
+			continue
 		}
-		own++
-		if turn.ID == credited.ID {
-			break
+		at, seen := firstSeen[message.ID]
+		allSeen = allSeen && seen
+		if seen && at > deliveredAt {
+			if phases[message.ID] != phase {
+				return reject("durable_message_phase_mismatch")
+			}
+			witnessed = append(witnessed, item)
 		}
 	}
-	return childProven
+	reply, err := finalProductReply(productTurn{Items: witnessed})
+	if err == nil && validChildInvoice(reply) {
+		return childProven
+	}
+	if allSeen {
+		return reject("parent_result_not_after_delivery")
+	}
+	// A thread/read response is not a fence for independently delivered raw
+	// callbacks. Missing fragments remain pending until the original deadline.
+	return childPending
 }
 
-// Retain only visible task input/result text, never raw response envelopes or reasoning.
 func (stream *childStream) recordDiagnostic(message frame) {
 	if message.Method != "rawResponseItem/completed" {
 		return
 	}
-	var event struct {
-		ThreadID, TurnID string
-		Item             struct {
-			ID, Type, Role, Phase, Author, Recipient string
-			Content                                  []struct{ Type, Text string }
-		}
-	}
+	var event childRawEvent
 	if json.Unmarshal(message.Params, &event) != nil {
 		return
 	}

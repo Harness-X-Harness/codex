@@ -74,8 +74,9 @@ func IntegrationTests() []Test {
 		{pkg, "TestShippedCatalog"},
 		{pkg, "TestShippedThreadSource"},
 		{pkg, "TestShippedChildFixture"},
-		{pkg, "TestShippedChildFixture/fresh_child_result"},
-		{pkg, "TestShippedChildFixture/parent_supplied_result_rejected"},
+		{pkg, "TestShippedChildFixture/delegated_invoice"},
+		{pkg, "TestShippedChildFixture/parent_only_invoice_rejected"},
+		{pkg, "TestShippedChildFixture/child_without_invoice_rejected"},
 		{pkg, "TestFirstRequestShape"},
 	}
 	for _, model := range []string{providerfixture.PrimaryModel, providerfixture.PinnedModel} {

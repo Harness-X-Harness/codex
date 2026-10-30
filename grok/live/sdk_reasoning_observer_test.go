@@ -336,7 +336,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 				if (err == nil) != wantRecall || !observer.reply.completed || observer.reply.recall != wantRecall || observer.reply.ambiguous {
 					t.Fatal("terminal authority or capacity result changed")
 				}
-				if !wantRecall && DescribeFailure(err).Code != "history_reply_not_recalled" {
+				if !wantRecall && DescribeFailure(err).Code != "history_reply_invalid" {
 					t.Fatal("wrong authoritative summary was not rejected as missing recall")
 				}
 				if strings.HasPrefix(mode, "summary_") && !observer.reply.authoritative {

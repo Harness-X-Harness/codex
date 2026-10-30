@@ -17,7 +17,7 @@ func sdkHostedSearch(ctx context.Context, options Options, scenario string, conf
 	if err != nil {
 		return result, err
 	}
-	prompt += " Return the found articles as headline and URL entries in articles, with an optional summary (null if unavailable)."
+	prompt += " Include each article's headline and link, and a short summary."
 	options.Diagnostics.Record("search_request", map[string]any{"scenario": scenario, "config": config, "prompt": prompt, "model": options.Model, "output_schema": schema})
 	transport := &sdkProductObserver{diagnostics: options.Diagnostics, ctx: ctx, changed: make(chan struct{}, 1)}
 	handlers := sdkFixtureHandlers{

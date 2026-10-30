@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	editFile = "structured_edit_fixture.txt"
-	editOld  = "GROK_STRUCTURED_EDIT_SEED_v1"
-	editNew  = "GROK_STRUCTURED_EDIT_REPLACED_v1"
+	editFile = "store-hours.txt"
+	editOld  = "The shop opens at 8 AM."
+	editNew  = "The shop opens at 9 AM."
 )
 
 type editFixture struct {
@@ -37,9 +37,9 @@ type StructuredEditEvidence struct {
 	BytesMatch, ContinuationUnchanged bool
 }
 
-// StructuredEdit observes one exact edit and one same-thread continuation.
+// StructuredEdit observes both requested replacements and one same-thread continuation.
 func StructuredEdit(ctx context.Context, options Options) (StructuredEditEvidence, error) {
-	return runStructuredEdit(ctx, options, editFixture{continuation: true})
+	return runStructuredEdit(ctx, options, editFixture{replaceAll: true, continuation: true})
 }
 
 // StructuredEditApprovalDeclined declines file-change approvals and requires no mutation.
@@ -59,7 +59,7 @@ func StructuredEditReplaceAll(ctx context.Context, options Options) (StructuredE
 }
 
 func runStructuredEdit(ctx context.Context, options Options, fixture editFixture) (StructuredEditEvidence, error) {
-	fixture.seed = "prefix\r\n" + editOld + "\r\nsuffix"
+	fixture.seed = "Shop notice\r\n" + editOld + "\r\nThank you."
 	if fixture.replaceAll {
 		fixture.seed += "\r\n" + editOld
 	}

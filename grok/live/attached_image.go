@@ -10,17 +10,16 @@ import (
 	"image/png"
 	"strings"
 	"sync"
-	"unicode"
 
 	"github.com/ronhuafeng/llm-go/codexsdk"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-const attachedImageFirstPrompt = "Look at the attached picture. Describe the color and shape of the object on the left in English. Return a JSON object with color as a simple English name and shape as a simple English noun (not an adjective), or null for any property you cannot determine."
-const attachedImageNextPrompt = "From the picture attached earlier in this same conversation, describe the color and shape of the object on the right in English. Return a JSON object with color as a simple English name and shape as a simple English noun (not an adjective), or null for any property you cannot determine."
+const attachedImageFirstPrompt = "Look at the attached picture. What color and shape is the object on the left?"
+const attachedImageNextPrompt = "In the picture I attached earlier, what color and shape is the object on the right?"
 
 // attachedImageURL carries the answers only in pixels, not a filename or prompt.
-// The second fact is deliberately absent from the first accepted reply.
+// Conversation text is usable context; this does not claim pixel-only recall.
 func attachedImageURL() (string, error) {
 	canvas := image.NewRGBA(image.Rect(0, 0, 480, 240))
 	draw.Draw(canvas, canvas.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
@@ -58,11 +57,6 @@ func (answer attachedImageProperties) matches(color, shape string) bool {
 		observedShape = "circle"
 	}
 	return strings.ToLower(strings.TrimSpace(*answer.Color)) == color && observedShape == shape
-}
-
-// Inspect every public message for disclosure of the continuation's target.
-func attachedImageWords(text string) []string {
-	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) })
 }
 
 // AttachedImageHistory observes real user input, not the image-generation tool.
@@ -164,11 +158,6 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 					return failedObservation("turn_history_identity_invalid", "live: submitted image turn absent or duplicated")
 				}
 			}
-			isolated := attachedImageFirstReplyIsolated(thread, turns[0])
-			options.Diagnostics.Record("attached_image_isolation", map[string]any{"turn": index + 1, "isolated": isolated})
-			if !isolated {
-				return failedObservation("visual_answer_leaked", "live: first reply disclosed more than the requested visual fact")
-			}
 			reply, err := finalProductReply(turn)
 			if err != nil {
 				return err
@@ -192,24 +181,4 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 		evidence.Completed, evidence.Stage = true, "attached_image_history_observed"
 		return nil
 	})
-}
-
-// Public commentary is also available to the continuation; it must not reveal
-// the second visual fact even when the eligible final answer is correct.
-func attachedImageFirstReplyIsolated(thread productThread, firstID string) bool {
-	for _, turn := range thread.Turns {
-		if turn.ID != firstID {
-			continue
-		}
-		for _, item := range turn.Items {
-			if reply, ok := item.AsAgentMessage(); ok {
-				for _, word := range attachedImageWords(reply.Text) {
-					if word == "blue" || word == "square" {
-						return false
-					}
-				}
-			}
-		}
-	}
-	return true
 }

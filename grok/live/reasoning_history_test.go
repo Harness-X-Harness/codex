@@ -148,7 +148,7 @@ func fakeHistoryServer() {
 			}
 			if phase == 1 {
 				firstPrompt = text
-				if text != "Look up the price per kilogram of apples. How much would two kilograms cost?" {
+				if text != "Check today's apple price at this shop. How much would two kilograms cost in yuan?" {
 					return
 				}
 			} else if text != "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again." {
@@ -185,7 +185,7 @@ func fakeHistoryServer() {
 			}
 			toolItem := map[string]any{"type": "dynamicToolCall", "id": "PRIVATE_CALL", "tool": "apple_price_lookup", "namespace": nil, "arguments": map[string]any{}, "status": "completed", "success": true}
 			calls := 0
-			if phase == 1 && scenario != "no_request" || phase == 2 && scenario == "denial" {
+			if phase == 1 && scenario != "no_request" && scenario != "no_request_amount" || phase == 2 && scenario == "denial" {
 				calls = 1
 			}
 			if scenario == "repeated" {
@@ -363,6 +363,9 @@ func fakeHistoryServer() {
 				toolItem["contentItems"] = []any{map[string]any{"type": "inputText", "text": historyCanary}}
 			}
 			agent := map[string]any{"type": "agentMessage", "id": "PRIVATE_REPLY", "phase": "final_answer", "text": replyJSON(priceResult)}
+			if scenario == "no_request_amount" {
+				agent["text"] = `{"amount":16}`
+			}
 			if scenario == "legacy" || scenario == "legacy_superseded" || scenario == "legacy_replaced" || scenario == "legacy_commentary" {
 				delete(agent, "phase")
 			}
@@ -385,7 +388,7 @@ func fakeHistoryServer() {
 			if phase == 1 && scenario != "no_reason" && scenario != "encrypted_only" {
 				terminalItems = append(terminalItems, reason)
 			}
-			if phase == 1 && scenario != "no_tool" {
+			if phase == 1 && scenario != "no_tool" && scenario != "no_request_amount" {
 				terminalItems = append(terminalItems, toolItem)
 			}
 			if scenario != "missing_reply" {
@@ -734,7 +737,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 						// bounded deadline rather than an unrelated EOF cleanup error.
 						wantCode = "deadline_exceeded"
 					case strings.HasSuffix(scenario, "no_recall") && scenario != "identity_authority_last_no_recall":
-						wantCode = "history_reply_not_recalled"
+						wantCode = "history_reply_invalid"
 					case strings.HasPrefix(scenario, "identity_missing_"):
 						// Generated DTOs reject omitted required IDs before delivery.
 						wantCode = "sdk_observation_failed"

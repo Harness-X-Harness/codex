@@ -47,6 +47,7 @@ func sdkShippedSession(ctx context.Context, options Options, observe func(*sdkPr
 			started.Thread.ID == "" || started.CWD != cwd || started.Thread.CWD != cwd {
 			return errors.New("live: fixture binding not established")
 		}
+		transport.diagnostics.Record("shipped_thread_config", map[string]any{"model": started.Model, "provider": started.ModelProvider, "reasoning_effort": started.ReasoningEffort, "multi_agent_mode": started.MultiAgentMode, "provider_request_observed": false})
 		evidence.Bound, evidence.Stage = true, "thread_bound"
 		return observe(transport, started.Thread.ID, evidence)
 	})
@@ -228,6 +229,7 @@ func (transport *sdkProductObserver) rawNotification(ctx context.Context, notifi
 		Params json.RawMessage `json:"params"`
 	}
 	if err == nil {
+		recordResponseToolEnvelopeDiagnostic(transport.diagnostics, "shipped_response_item", raw)
 		err = json.Unmarshal(raw, &envelope)
 	}
 	return transport.observeFrame(ctx, frame{Method: notification.Method, Params: envelope.Params, size: len(raw)}, err)
@@ -323,7 +325,12 @@ func (transport *sdkProductObserver) afterClose(_ string, evidence *Evidence, ca
 		observed = transport.finalize()
 	}
 	if cause != nil || observed != nil {
-		evidence.Completed, evidence.ChildCompleted, evidence.ChildResultDelivered = false, false, false
+		evidence.Completed, evidence.ChildResultDelivered = false, false
+	}
+	// A business-result failure does not erase a separately verified child
+	// completion. An admitted callback/finalization contradiction does.
+	if observed != nil {
+		evidence.ChildCompleted = false
 	}
 	return observed
 }

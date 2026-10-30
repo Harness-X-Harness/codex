@@ -21,8 +21,8 @@ func TestProductDiagnosticsRetainSuccessfulAndRejectedObservations(t *testing.T)
 	}{
 		{"catalog", "shipped:ok", "catalog", []string{"catalog_result", "actual", "expected", "grok-4.7"}, false},
 		{"catalog_mismatch", "shipped:missing_model", "catalog", []string{"catalog_result", "actual", "expected", "matches"}, true},
-		{"child", "shipped:ok", "child", []string{"child_setup", "child_candidate", "child_result_use", "child_visible_message", "product_turn_request"}, false},
-		{"child_wrong_marker", "shipped:wrong_marker", "child", []string{"child_reply_check", "marker_recalled", "child_result"}, true},
+		{"child", "shipped:ok", "child", []string{"child_candidate", "child_reply_check", "child_parent_result", "invoice_correct", "child_visible_message", "product_turn_request"}, false},
+		{"child_wrong_invoice", "shipped:child_wrong_invoice", "child", []string{"child_reply_check", "invoice_correct", "child_result"}, true},
 		{"child_wrong_binding", "shipped:child_parent", "child", []string{"child_candidate", "eligible", "PRIVATE_OTHER"}, true},
 		{"web", "search:ok:web", "web", []string{"search_request", "search_answer", "PRIVATE_HEADLINE", "PRIVATE_QUERY", "search_followup_request"}, false},
 		{"web_allowed", "search:ok:web_allowed", "web_allowed", []string{"allowed_domains", "reuters.com", "search_answer"}, false},

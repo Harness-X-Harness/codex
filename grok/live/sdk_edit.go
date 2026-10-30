@@ -101,7 +101,7 @@ func sdkStructuredEdit(ctx context.Context, options Options, fixture editFixture
 			return err
 		}
 		base.Bound, base.Stage = true, "thread_bound"
-		prompt := fmt.Sprintf("In %s, replace %s with %s, preserving all other file content. If approval is declined, leave the file unchanged.", editFile, editOld, editNew)
+		prompt := fmt.Sprintf("In %s, replace %q with %q. Preserve all other file content.", editFile, editOld, editNew)
 		if fixture.replaceAll {
 			prompt += " Replace both occurrences."
 		}

@@ -137,7 +137,7 @@ func TestCommandExecutesEveryOwnedScenario(t *testing.T) {
 		{"shipped-catalog", "shipped:catalog", "grok-4.7", 0},
 		{"shipped-startup", "shipped:startup", "grok-4.7", 1},
 		{"shipped-pinned", "history:shipped", "grok-4.6", 2},
-		{"shipped-child", "shipped:ok", "grok-4.7", 2},
+		{"shipped-child", "shipped:ok", "grok-4.7", 1},
 		{"web", "search:ok:web", "grok-4.7", 2},
 		{"web-allowed", "search:ok:web_allowed", "grok-4.7", 2},
 		{"web-excluded", "search:ok:web_excluded", "grok-4.7", 2},

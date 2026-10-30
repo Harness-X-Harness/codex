@@ -4,23 +4,18 @@ package integration_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
-	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
 func childHTTPCall(writer http.ResponseWriter, id, name string, arguments any, knownParentText ...string) {
@@ -369,8 +364,9 @@ func childHTTPDelivered(text, sender, marker, nonce string) bool {
 // Exercise the complete shipped oracle through real App Server, Grok projection,
 // tool dispatch, a child provider request and parent continuation. Only base_url changes.
 func TestShippedChildFixture(t *testing.T) {
-	t.Run("fresh_child_result", func(t *testing.T) { testNativeShippedChildFixture(t, false) })
-	t.Run("parent_supplied_result_rejected", func(t *testing.T) { testNativeShippedChildFixture(t, true) })
+	t.Run("delegated_invoice", func(t *testing.T) { testNativeShippedInvoice(t, "delegated_invoice") })
+	t.Run("parent_only_invoice_rejected", func(t *testing.T) { testNativeShippedInvoice(t, "parent_only") })
+	t.Run("child_without_invoice_rejected", func(t *testing.T) { testNativeShippedInvoice(t, "child_without_invoice") })
 	t.Run("inherited_spawn_history", testShippedChildInheritedHistory)
 	t.Run("delivered_result", testShippedChildDeliveredResult)
 	t.Run("output_schema_scope", testShippedChildOutputSchemaScope)
@@ -386,54 +382,4 @@ type shippedChildHTTP struct {
 	requests                     int
 	seed                         string
 	delegated, waited, continued bool
-}
-
-func testNativeShippedChildFixture(t *testing.T, parentSupplied bool) {
-	integrationObservation(t)
-	subject := nativeSubject(t)
-	model, _, err := dist.Defaults()
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture := &shippedChildHTTP{model: model, seedEffort: shippedDefaultEffort(t, model), parentSupplied: parentSupplied}
-	backend := httptest.NewServer(fixture)
-	defer backend.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	ctx = withShippedProfile(t, ctx, backend.URL+"/v1")
-	got, err := live.ShippedChildCollaboration(ctx, subject, "fixture-key")
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	// No request, identity, UUID or raw protocol content leaves this fixture.
-	failure := live.FailureInfo{}
-	if err != nil {
-		failure = live.DescribeFailure(err)
-	}
-	t.Logf("controlled shipped-child: stage=%s requests=%d seed=%t delegated=%t child_request=%t parent_replay=%t wire_failure=%s failure=%+v",
-		got.Stage, fixture.requests, fixture.seed != "", fixture.delegated,
-		fixture.childID != "", fixture.continued, fixture.failure, failure)
-	requests := 4
-	if fixture.waited {
-		requests++
-	}
-	if parentSupplied {
-		// Reusing a parent value is valid product behavior, but cannot establish
-		// this probe's fresh child-result provenance. The product still completes.
-		if got.CleanupPending || err == nil || failure.Code != "child_result_not_proven" ||
-			got.Stage != "product_turn_proven" || fixture.failure != "" ||
-			fixture.requests != requests || !fixture.continued {
-			t.Fatalf("native inherited-result negative did not reach the oracle: stage=%s requests=%d continued=%t error=%v", got.Stage, fixture.requests, fixture.continued, err)
-		}
-		return
-	}
-	if err != nil {
-		t.Fatalf("native shipped-child oracle: %v", err)
-	}
-	if got.LocalUnverified != subject.LocalUnverified || got.SHA256 != subject.SHA256 || got.SourceSHA != subject.SourceSHA || got.HarnessSHA != subject.HarnessSHA ||
-		got.Target != subject.Target || got.Environment != subject.Environment || got.Model != model ||
-		got.Stage != "child_result_delivered" || !got.SetupCompleted || !got.ShippedCatalog || !got.Bound ||
-		!got.Completed || !got.ChildBound || !got.ChildCompleted || !got.ChildResultDelivered || got.CleanupPending ||
-		fixture.failure != "" || fixture.requests != requests || !fixture.continued {
-		t.Fatalf("native shipped-child identity, completion or delivery evidence missing: %+v", got)
-	}
 }

@@ -17,11 +17,9 @@ color and shape. The second Turn contains only text and asks for the right
 object's color and shape from the earlier picture.
 
 Both distinct Turns must have matching successful terminal evidence and
-successful bound history readback. The first accepted final answer supplies
-the left fact without disclosing the second fact. Public assistant commentary
-may describe the work; explicit disclosure of either protected second-fact
-property would let the continuation repeat prose instead of using image context
-and cannot establish this proof.
+successful bound history readback. The first accepted final answer supplies the left fact. The continuation may
+use any legitimate conversation context, including earlier public observations;
+this Story does not require pixel-only recall or secrecy between turns.
 
 Each Turn carries a formal SDK output schema: an object with required `color`
 and `shape` properties, each string or null, and no additional properties.
@@ -30,15 +28,14 @@ the picture pixels carry the facts. The bounded strict JSON parser rejects
 malformed, duplicate-key, missing-field, extra-field and wrong-type responses.
 Null means unknown and does not pass. String facts are compared to the actual
 fixture after case/whitespace normalization, preserving the existing
-`circular`/`circle` equivalence rather than matching prose. The prompt requests
-a simple shape noun without disclosing any expected shape.
+`circular`/`circle` equivalence rather than matching prose. The prompts ask ordinary visual questions without exposing the expected answers;
+the SDK, not model-facing JSON instructions, supplies the result shape.
 
 The actual image is supplied once through UserInput.Image. Correct answers in
 the same conversation establish usable image context; no exact data URL or
 internal image representation in history is an additional acceptance condition.
 Missing the initial image input, a wrong visual answer, failed or wrong-thread
-terminals, duplicate Turn identity, and explicit second-fact disclosure in the
-first reply do not complete this Story.
+terminals or duplicate Turn identity do not complete this Story.
 An unavailable answer is not replaced by another invocation. Product-internal
 retry policy and the existing scenario deadline remain unchanged.
 
@@ -53,8 +50,8 @@ retry policy and the existing scenario deadline remain unchanged.
   requires the existing exact selected binary/snapshot, validates inline image
   provider input and formal schema on both requests and returns controlled JSON answers. It does not
   prove real-provider visual understanding.
-- The existing same-run shipped-binary prerequisite and full-suite aggregation
-  are unchanged; the original seventeen scenarios remain required.
+- The same-run shipped-binary prerequisite remains required. The accepted
+  [suite consolidation](../live-product-outcomes.md) owns the full required set.
 - Retained evidence contains only subject metadata, counts, stages, booleans,
   and reply lengths. `FirstRecall` means the first visual answer matched;
   `Recalled` means the distinct requested second fact matched in the same
@@ -69,12 +66,12 @@ retry policy and the existing scenario deadline remain unchanged.
   This Story does not prove arbitrary images, other models, generation/edit,
   cold restart, compaction, latency or absence of product-internal attempts.
 
-The public-message isolation check is not a general natural-language judge:
-it rejects either second-fact token across all public replies and commentary,
-but does not establish the
-absence of every possible paraphrase or coded disclosure. A pass must not be
-reported as proof of universal non-leakage or pixel-only recall. The controlled
-negative cases include a leaked full answer and each separately leaked property.
+The 2026-10-30 product-contract revision removes the token-isolation assertion
+against all first-turn commentary. Equivalent useful conversation context is
+not a failure. Offline controls now accept truthful commentary about the other
+object while retaining wrong-answer, invalid-schema, identity and terminal
+negative controls. This revises the claim explicitly; it does not relabel prior
+Live results or establish a new executed Live pass.
 
 Opaque/internal reasoning may retain visual observations. The outcome proves a
 usable image-bearing same-thread continuation, not that the second backend

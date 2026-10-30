@@ -26,14 +26,14 @@ A digest proves bytes, not independently verified release provenance.
   `StructuredEditPinnedPreviousModel` and `StructuredEditReplaceAll` observe
   exact authorized filesystem effects and effective approval denial.
 - `AttachedImageHistory` submits an actual user image, checks a visual answer,
-  then asks a different image-only fact in a text-only same-thread continuation.
+  then asks a different visual fact in a text-only same-thread continuation.
 - `ImageGenerationEdit` generates an image and edits it in the same Thread;
-  fresh conversations independently judge each actual result image through
+  one fresh producer-isolated judge sees both actual PNGs in order through
   the isolated image-capable fixture.
 - `ShippedCatalog`, `ShippedStartup`, `ShippedPinned` and
   `ShippedChildCollaboration` consume unchanged embedded [shipped assets](../dist).
   Catalog-only makes no inference request. Startup preserves profile defaults;
-  child delegation requests Ultra; pinned history retains the two-turn oracle.
+  child delegation uses an ordinary invoice task; pinned history retains the two-turn oracle.
 - `HostedSearch` observes supported Web with default, allowed-domain or
   excluded-domain policy. [Hosted X is retired](../docs/stories/README.md#hosted-webx-search);
   provider-only X Facts cannot complete a product Story.
@@ -65,29 +65,21 @@ be wire-rejected; the observer still needs every positive result criterion.
   boundaries, multiple edits and auxiliary tools do not fail a correct result.
   The declined control still requires a matching denial and no committed effect;
   raw call pairing and file-change counts are not the Live oracle.
-- [Images](image.go) require a completed public image and matching, fully decoded
-  saved PNG. Fresh judge Threads receive actual pixels and an explicit proposition:
-  a dog, then a dog wearing a red hat after the same-conversation edit. The SDK
-  sends the formal `{"type":"boolean"}` output schema; only a completed JSON
-  boolean `true` establishes the proposition. No producer history, word matching,
-  breed dictionary or extra judge call is used. Raw extension calls, prepared history, artifact inventories and
-  unequal hashes are not semantic proof or additional acceptance conditions.
+- [Images](image.go) require completed public images and matching fully decoded
+  saved PNGs. Generate one dog and edit to two dogs on the same thread; one
+  fresh isolated judge receives both actual images in order. The SDK supplies
+  two required boolean fields; both must be true. There is no producer history,
+  word matching or extra judge turn, and this is not an independent double judge.
   [Artifact checks](image_artifact.go) retain bounded decoding, safe saved-path
-  access and public-payload/saved-byte agreement.
-- [Child collaboration](shipped_child.go) requires inherited-marker recall,
-  complete observed own-input coverage, a fresh child result, matching lineage
-  and parent consumption through a required nullable `child_nonce` string. The
-  parent result schema is not inherited by child turns. The parent's structured
-  result is the terminal reply segment after the last finished public tool call
-  (creation order), not concatenated intermediate sampling replies or the last
-  parseable JSON. A successfully bound V2 spawn Started marker is also a tool
-  boundary; unrelated or completed child activity is not. Its 4096-byte budget
-  excludes intermediate text; full-turn identity/freshness checks and
-  bounded diagnostics remain. Terminal null/invalid/multiple objects cannot
-  fall back to an earlier positive answer. Missing/opaque coverage
-  is unproven. Natural child prose, additional child UUIDs and intermediate tool
-  activity are not failures by themselves;
-  supplied or inherited results cannot count as fresh child work.
+  access and public-payload/saved-byte agreement; unequal hashes are not semantic proof.
+- [Child collaboration](shipped_child.go) requires a real correctly bound child
+  to complete its own correct invoice, deliver it into the current parent's
+  official input, and the parent to return a subsequent correct durable invoice.
+  Parent-only answers and a child saying “ready” cannot pass. No nonce, UUID,
+  full-fork instruction or inherited parent schema is part of the ordinary task.
+  Raw identity/order establishes a delivery witness; official durable messages
+  own the invoice semantics. Started is one discovery hint, not the unique
+  oracle. Missing evidence is unproven, not proof of no delegation attempt.
 - [Web](search.go) requires completed public Web activity, successful terminals,
   structured articles (headline/URL) and a same-thread structured summary. These
   fields do not independently prove source accuracy, freshness or policy enforcement. Raw extension
@@ -97,11 +89,12 @@ be wire-rejected; the observer still needs every positive result criterion.
 
 Task result schemas are supplied explicitly on each applicable turn. Attached-image
 results contain nullable `color`/`shape` fields; reasoning uses nullable numeric `amount`;
-the child parent uses nullable `child_nonce`; Web uses an article array and nullable
+Web uses an article array and nullable
 summary, followed by a summary object. These are task-neutral shapes, not schemas
 containing expected fixture answers. One complete bounded JSON value is required;
 duplicate/unknown/missing keys, wrong types, trailing values and text fallback are
 rejected. Null records unknown information and cannot establish a required fact.
+Child uses the requested CSV invoice rather than an imposed JSON protocol.
 Business facts still come from actual images, tool results, child work and public
 search activity. Basic, startup, catalog and filesystem edit checks retain their
 direct oracles rather than gaining artificial structured answers. Diagnostics
@@ -116,8 +109,7 @@ Source constants and tests own exact observation budgets. SDK frames cap at
 16 MiB. Scenario-specific bounds remain independent: Basic completion callbacks
 are bounded; reasoning bounds accepted identities and provisional replies;
 editing bounds public observations and correlation; image observation bounds
-terminal evidence and decoded bytes/pixels; child input coverage bounds events
-and bytes; hosted search bounds public items and turn identities.
+terminal evidence and decoded bytes/pixels; child delivery/identity evidence has explicit event and byte bounds; hosted search bounds public items and turn identities.
 A budget overflow leaves the result unproven, not evidence of a product/service
 limit. Isolated image fixtures do not prove unchanged shipped-profile composition
 or require a particular optional view-image route. Controlled fixtures do not establish real-backend relevance or policy
@@ -163,3 +155,10 @@ Integration proves its exercised product composition. Rust tests own product
 semantics. Only an identified actual-backend invocation can establish the
 corresponding real-backend result. No source entrypoint, old run or green
 unrelated test supplies that evidence.
+
+The [product-outcome decision](../docs/live-product-outcomes.md) separates required
+user outcomes, NOT_PROVEN attribution and optional diagnostic completeness, and
+records the explicit formal-suite consolidations. Emitted-function diagnostics
+retain bounded shape/correlation metadata, not arbitrary arguments or outputs.
+SDK tool declarations and effective thread config are labelled as not observing
+the actual provider request. The existing SDK stderr limitation remains.

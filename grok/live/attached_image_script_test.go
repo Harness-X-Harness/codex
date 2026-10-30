@@ -29,7 +29,7 @@ func TestAttachedImageHistory(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			got, err := live.AttachedImageHistory(ctx, options)
-			success := mode == "success" || mode == "inline" || mode == "field_order" || mode == "padded_values" || mode == "harmless_commentary" || mode == "missing_image_history"
+			success := mode == "success" || mode == "inline" || mode == "field_order" || mode == "padded_values" || mode == "harmless_commentary" || mode == "missing_image_history" || mode == "commentary_leak" || mode == "color_leak" || mode == "shape_leak"
 			if success && (err != nil || !got.Completed || !got.FirstCompleted || !got.FirstRecall || !got.Recalled || got.Turns != 2 || got.Threads != 1) {
 				t.Fatalf("missing image history proof: %+v %v", got, err)
 			}
@@ -236,7 +236,7 @@ func TestAttachedImageDiagnosticsSurviveSemanticFailure(t *testing.T) {
 			defer cancel()
 			_, err := live.AttachedImageHistory(ctx, options)
 			options.Diagnostics.Close()
-			if (mode == "success") != (err == nil) {
+			if (mode == "success" || mode == "commentary_leak") != (err == nil) {
 				t.Fatalf("diagnostics changed verdict: %v", err)
 			}
 			events, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
@@ -263,7 +263,7 @@ func TestAttachedImageDiagnosticsSurviveSemanticFailure(t *testing.T) {
 			if !strings.Contains(text, "output_schema") {
 				t.Fatal("formal schema diagnostics missing")
 			}
-			if mode != "commentary_leak" && !strings.Contains(text, "attached_image_verdict") {
+			if !strings.Contains(text, "attached_image_verdict") {
 				t.Fatal("parse/semantic diagnostic missing")
 			}
 			if !strings.Contains(text, "Look at the attached picture.") {

@@ -37,19 +37,19 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	integrationObservation(t)
 	run, model := live.StructuredEdit, providerfixture.PrimaryModel
 	wantTurns, wantApprovals := 2, 0
-	wantContinuation, replaceAll, declined := true, false, false
+	wantContinuation, replaceAll, declined := true, true, false
 	switch mode {
 	case "pinned":
 		run, model = live.StructuredEditPinnedPreviousModel, providerfixture.PinnedModel
-		wantTurns, wantContinuation = 1, false
+		wantTurns, wantContinuation, replaceAll = 1, false, false
 	case "declined":
 		run = live.StructuredEditApprovalDeclined
-		wantTurns, wantApprovals, wantContinuation, declined = 1, 1, false, true
+		wantTurns, wantApprovals, wantContinuation, replaceAll, declined = 1, 1, false, false, true
 	case "replace_all":
 		run = live.StructuredEditReplaceAll
 		wantTurns, wantContinuation, replaceAll = 1, false, true
 	}
-	seed := "prefix\r\n" + editSeedToken + "\r\nsuffix"
+	seed := "Shop notice\r\n" + editSeedToken + "\r\nThank you."
 	if replaceAll {
 		seed += "\r\n" + editSeedToken
 	}
@@ -61,7 +61,7 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 		sum := sha256.Sum256([]byte(text))
 		return hex.EncodeToString(sum[:])
 	}
-	arguments, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": editSeedToken, "new_string": editReplacedToken, "replace_all": replaceAll})
+	arguments, _ := json.Marshal(map[string]any{"file_path": "store-hours.txt", "old_string": editSeedToken, "new_string": editReplacedToken, "replace_all": replaceAll})
 	subject := nativeSubject(t)
 	beforeHomes, err := filepath.Glob(filepath.Join(os.TempDir(), "grok-live-*"))
 	if err != nil {
@@ -280,5 +280,5 @@ func testNativeStructuredEditFixture(t *testing.T, mode string) {
 	}
 }
 
-const editSeedToken = "GROK_STRUCTURED_EDIT_SEED_v1"
-const editReplacedToken = "GROK_STRUCTURED_EDIT_REPLACED_v1"
+const editSeedToken = "The shop opens at 8 AM."
+const editReplacedToken = "The shop opens at 9 AM."

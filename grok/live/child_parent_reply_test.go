@@ -9,7 +9,7 @@ import (
 )
 
 func TestChildParentTerminalReply(t *testing.T) {
-	const result = `{"child_nonce":"12345678-1234-4234-8234-123456789abc"}`
+	const result = testInvoice
 	message := func(id, text string) protocolv2.ThreadItem {
 		return protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: id, Text: text})
 	}
@@ -34,16 +34,16 @@ func TestChildParentTerminalReply(t *testing.T) {
 		reply              string
 		extractOK, parseOK bool
 	}{
-		{"v2_spawn_without_wait", []protocolv2.ThreadItem{message("before_spawn", `{"child_nonce":null}`), v2spawn, good}, result, true, true},
+		{"v2_spawn_without_wait", []protocolv2.ThreadItem{message("before_spawn", `Checking the invoice.`), v2spawn, good}, result, true, true},
 		{"failed_tool_recovery", []protocolv2.ThreadItem{message("before", "pending"), failedWait, good}, result, true, true},
 		{"pending_tool_not_boundary", []protocolv2.ThreadItem{message("before", "pending"), pendingWait, good}, "pending\n" + result, true, false},
-		{"actual_tool_rounds", []protocolv2.ThreadItem{message("before_spawn", `{"child_nonce":null}`), spawn, message("before_wait", `{"child_nonce":null}`), wait, good}, result, true, true},
+		{"actual_tool_rounds", []protocolv2.ThreadItem{message("before_spawn", `Checking the invoice.`), spawn, message("before_wait", `Checking the invoice.`), wait, good}, result, true, true},
 		{"large_intermediate", []protocolv2.ThreadItem{message("large", strings.Repeat("x", 5000)), wait, good}, result, true, true},
 		{"unbound_started_after_final", []protocolv2.ThreadItem{wait, good, unboundStart}, result, true, true},
 		{"activity_after_final", []protocolv2.ThreadItem{wait, good, activity}, result, true, true},
 		{"activity_does_not_reset", []protocolv2.ThreadItem{wait, message("invalid", "not json"), activity, good}, "not json\n" + result, true, false},
 		{"posttool_invalid_no_fallback", []protocolv2.ThreadItem{good, wait, message("invalid", "not json")}, "not json", true, false},
-		{"posttool_null_no_fallback", []protocolv2.ThreadItem{good, wait, message("null", `{"child_nonce":null}`)}, `{"child_nonce":null}`, true, true},
+		{"posttool_null_no_fallback", []protocolv2.ThreadItem{good, wait, message("null", `Checking the invoice.`)}, `Checking the invoice.`, true, false},
 		{"posttool_multiple_no_fallback", []protocolv2.ThreadItem{wait, good, message("second", result)}, result + "\n" + result, true, false},
 		{"posttool_absent_no_fallback", []protocolv2.ThreadItem{good, wait}, "", false, false},
 		{"intermediate_identity_conflict", []protocolv2.ThreadItem{message("same", "a"), message("same", "b"), wait, good}, "", false, false},
@@ -58,14 +58,8 @@ func TestChildParentTerminalReply(t *testing.T) {
 			if err != nil {
 				return
 			}
-			var parsed struct {
-				Nonce *string `json:"child_nonce"`
-			}
-			if err := parseStructuredReply(reply, &parsed, "child_nonce"); (err == nil) != tc.parseOK {
-				t.Fatalf("parse outcome: %v", err)
-			}
-			if tc.name == "posttool_null_no_fallback" && parsed.Nonce != nil {
-				t.Fatal("earlier positive result replaced terminal null")
+			if validChildInvoice(reply) != tc.parseOK {
+				t.Fatalf("invoice outcome: %q", reply)
 			}
 		})
 	}

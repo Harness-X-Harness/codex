@@ -195,12 +195,14 @@ The discovery command is credential-free and prints a JSON name array. The
 catalog owns selected cases and per-case semantic-turn limits; derive those
 limits from its current entries instead of copying counts into documentation.
 Catalog-only submits zero inference turns. Diagnostic execution requires an
-explicit name. Image generation/edit uses four semantic turns across three
-fresh Threads: generation, independent recognition of its actual pixels,
-same-original-Thread edit, and independent recognition of the edited pixels.
-The independent judge sees the criterion question and actual pixels, not the
-producer conversation. Formal `{"type":"boolean"}` output is validated locally;
-only `true` establishes each proposition. Synthetic PNGs
+explicit name. `structured-edit-all` and `shipped-catalog` remain diagnostic-only:
+the main edit requires both occurrences, and shipped startup requires the complete
+catalog. Their native deterministic owners remain mandatory. The
+[product-outcome decision](docs/live-product-outcomes.md) records all dispositions.
+Image generation/edit uses three semantic turns across two Threads: generate one
+dog, edit to two dogs in the same producer Thread, then one fresh isolated judge
+receives both actual PNGs in order. Both required boolean fields must be true;
+this is one judgment, not two statistically independent judgments. Synthetic PNGs
 and scripted recognition in controlled tests prove transport and orchestration,
 not actual visual recognition. See the
 [Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
@@ -305,8 +307,8 @@ capture limits, partial-capture semantics and the pinned SDK stderr limitation.
 The result summary separately counts started/passed/failed/skipped/incomplete
 lifecycles; legacy `tests`/`packages` count successful observations, not attempts. The tagged aggregate reports
 `observed` only when every selected supported case passes its positive oracle.
-Its `completed` count counts completed cases; `shipped-catalog` remains an
-explicit zero-inference catalog case. SDK rejection diagnostics never enter the
+Its `completed` count counts completed cases; diagnostic-only `shipped-catalog`
+remains an explicit zero-inference catalog case. SDK rejection diagnostics never enter the
 formal aggregate or earn completed-case credit.
 
 ### Live failure evidence
@@ -423,12 +425,14 @@ measurements and remaining unrun boundaries belong in the review/run record.
 ### Structured Live task results
 
 Applicable existing turns carry formal SDK OutputSchema values: image propositions
-use a boolean; attached images use nullable color/shape; reasoning uses a nullable
-price-based amount; the delegation parent uses a nullable child nonce; Web uses bounded
+use two required booleans; attached images use nullable color/shape; reasoning
+uses a nullable price-based amount; Web uses bounded
 headline/URL articles and summary, then a summary continuation. Their values are
 checked against the existing actual-result authority, not schema validity alone.
 Offline regressions reject malformed/multiple JSON values, duplicate/unknown or
 missing keys, wrong types, null required facts and valid-shaped wrong results.
-Controlled native fixtures verify schema transmission and parent/child isolation.
+Controlled native fixtures verify schema transmission. The child task instead
+asks for a CSV invoice, with actual child contribution and delivery proof; old
+inheritance/schema compatibility fixtures are not its semantic oracle.
 No model calls or automatic Live retries are added. Plain conversation, catalog,
 startup and file-edit routes keep their appropriate direct oracles.

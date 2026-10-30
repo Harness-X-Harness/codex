@@ -178,6 +178,12 @@ func liveCase(name, model, policy string, turns int, smoke bool, run func(contex
 	return Scenario{Name: name, Family: "live", Model: model, Policy: policy, SemanticTurns: turns, RequiresBinary: true, RequiresBackend: turns > 0, Formal: true, Smoke: smoke, liveRun: run}
 }
 
+// Keep explicit diagnostics selectable without duplicating a formal proof run.
+func diagnosticOnly(s Scenario) Scenario {
+	s.Formal, s.Smoke = false, false
+	return s
+}
+
 func plain(run func(context.Context, live.Options) (live.Evidence, error)) func(context.Context, live.Options) (LiveResult, error) {
 	return func(ctx context.Context, options live.Options) (LiveResult, error) {
 		evidence, err := run(ctx, options)
@@ -244,14 +250,14 @@ var catalog = []Scenario{
 	liveCase("structured-edit", providerfixture.PrimaryModel, "edit", 2, false, edit(live.StructuredEdit)),
 	liveCase("structured-edit-declined", providerfixture.PrimaryModel, "edit-declined", 1, false, edit(live.StructuredEditApprovalDeclined)),
 	liveCase("structured-edit-pinned", providerfixture.PinnedModel, "edit-pinned", 1, false, edit(live.StructuredEditPinnedPreviousModel)),
-	liveCase("structured-edit-all", providerfixture.PrimaryModel, "edit-replace-all", 1, false, edit(live.StructuredEditReplaceAll)),
+	diagnosticOnly(liveCase("structured-edit-all", providerfixture.PrimaryModel, "edit-replace-all", 1, false, edit(live.StructuredEditReplaceAll))),
 	liveCase("attached-image-pinned", providerfixture.PinnedModel, "attached-image-history", 2, false, plain(live.AttachedImageHistory)),
 	liveCase("image-primary", providerfixture.PrimaryModel, "image-generate-edit", 3, false, image),
 	liveCase("image-pinned", providerfixture.PinnedModel, "image-generate-edit", 3, false, image),
-	liveCase("shipped-catalog", providerfixture.PrimaryModel, "shipped-catalog", 0, false, shipped(live.ShippedCatalog)),
+	diagnosticOnly(liveCase("shipped-catalog", providerfixture.PrimaryModel, "shipped-catalog", 0, false, shipped(live.ShippedCatalog))),
 	liveCase("shipped-startup", providerfixture.PrimaryModel, "shipped-startup", 1, false, shipped(live.ShippedStartup)),
 	liveCase("shipped-pinned", providerfixture.PinnedModel, "shipped-pinned", 2, false, shipped(live.ShippedPinned)),
-	liveCase("shipped-child", providerfixture.PrimaryModel, "shipped-child", 2, false, shipped(live.ShippedChildCollaboration)),
+	liveCase("shipped-child", providerfixture.PrimaryModel, "shipped-child", 1, false, shipped(live.ShippedChildCollaboration)),
 	liveCase("web", providerfixture.PrimaryModel, "web", 2, true, search("web")),
 	liveCase("web-allowed", providerfixture.PrimaryModel, "web_allowed", 2, false, search("web_allowed")),
 	liveCase("web-excluded", providerfixture.PrimaryModel, "web_excluded", 2, false, search("web_excluded")),

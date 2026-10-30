@@ -151,6 +151,9 @@ func (observer *sdkHistoryObserver) request(_ context.Context, request protocolv
 
 func (observer *sdkHistoryObserver) notification(_ context.Context, notification codexsdk.RawNotification) error {
 	raw, err := notification.Envelope.MarshalJSON()
+	if err == nil && notification.Method == codexsdk.RawResponseItemCompletedExtension {
+		recordResponseToolEnvelopeDiagnostic(observer.probe.diagnostics, "reasoning_response_item", raw)
+	}
 	return observer.observeEnvelope(notification.Method, raw, err)
 }
 
@@ -274,10 +277,33 @@ func (observer *sdkHistoryObserver) accept(observation sdkHistoryObservation) er
 		return observer.reject(err)
 	}
 	if observer.reply.authoritative && !observer.reply.recall {
-		return observer.reject(failedObservation("history_reply_not_recalled", "live: final reply did not calculate the expected amount"))
+		return observer.reject(observer.replyFailure())
 	}
 	observer.signal()
 	return nil
+}
+
+// Classify the failed proof, not an unobserved backend cause. The shop price
+// exists only after an accepted callback; without it there is no expected amount.
+func (observer *sdkHistoryObserver) replyFailure() error {
+	code, message := "history_reply_not_recalled", "live: continuation did not recall the checked price"
+	if !observer.reply.formatValid {
+		code, message = "history_reply_invalid", "live: final reply did not match the amount schema"
+	} else if observer.probe.previousID == "" {
+		if observer.probe.unitPrice == 0 || len(observer.acceptedCalls) == 0 {
+			code, message = "history_lookup_not_observed", "live: no accepted shop price lookup was observed"
+		} else {
+			code, message = "history_amount_mismatch", "live: final amount did not match the checked shop price"
+		}
+	}
+	observer.probe.diagnostics.Record("history_outcome", map[string]any{
+		"code": code, "stage": observer.observations.Stage,
+		"lookup_accepted":   len(observer.acceptedCalls) > 0,
+		"price_initialized": observer.probe.unitPrice > 0,
+		"format_valid":      observer.reply.formatValid,
+		"continuation":      observer.probe.previousID != "",
+	})
+	return failedObservation(code, message)
 }
 
 func (observer *sdkHistoryObserver) correlateTools(items []historyItem) {

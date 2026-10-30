@@ -85,7 +85,7 @@ func EditFailureDetail(raw json.RawMessage) map[string]any {
 			continue
 		}
 		lines[i] = paths.ReplaceAllStringFunc(line, func(path string) string {
-			for _, suffix := range []string{"/uid_map", "/gid_map", "/setgroups", "/codex-linux-sandbox", "/structured_edit_fixture.txt"} {
+			for _, suffix := range []string{"/uid_map", "/gid_map", "/setgroups", "/codex-linux-sandbox", "/store-hours.txt"} {
 				if strings.HasSuffix(path, suffix) {
 					return "<path:" + strings.TrimPrefix(suffix, "/") + ">"
 				}

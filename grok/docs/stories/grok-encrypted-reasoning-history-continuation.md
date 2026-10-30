@@ -17,7 +17,7 @@ below remains required.
 
 Given an exact binary with Provider, encrypted-history and relevant tool
 proof, an isolated fixture and a usable default execution environment, when turn
-N asks the price of apples per kilogram and the cost of two kilograms, calls
+N asks this shop's current apple price and the cost of two kilograms in yuan, calls
 the price-lookup dynamic tool and receives this run's ordinary integer unit
 price absent from its prompt, then N completes with the correct total. N+1 asks
 for the cost of three kilograms without a new lookup. Both replies use the SDK
@@ -46,6 +46,18 @@ observable history-dependent result. Rollout storage alone cannot complete the
 Story or substitute for either final reply.
 
 ## Partial success and failure boundaries
+
+The controlled capability is this shop's price list, not a request to guess a
+market-wide current price. The price is initialized only inside an accepted
+lookup callback. A valid reply without that callback is
+`history_lookup_not_observed`: no expected price was generated, so it is not
+evidence of wrong arithmetic or failed memory. Invalid output, an incorrect
+first total after lookup, and incorrect continuation have separate failure
+labels. These labels diagnose the unchanged proof requirements; they do not
+assert that the model never attempted a tool call. SDK declarations/effective
+thread config and optional emitted-call metadata are diagnostics, not proof of
+the actual provider request's tool inventory.
+
 
 One completed turn, a tool result only in storage, another thread, another
 Provider, or runner resubmission does not complete this Story. Do not constrain

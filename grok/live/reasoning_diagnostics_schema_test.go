@@ -83,3 +83,44 @@ func TestReasoningStructuredPersistedEvidence(t *testing.T) {
 		}
 	}
 }
+
+// This is a deterministic observer test. Telemetry completeness is deliberately
+// absent from the product verdict, for both successful and rejected tasks.
+func TestReasoningDiagnosticFailureDoesNotChangeOutcome(t *testing.T) {
+	for _, test := range []struct{ mode, code string }{
+		{"turn", ""}, {"no_request", "history_reply_invalid"},
+		{"no_request_amount", "history_lookup_not_observed"}, {"wrong_reply", "history_reply_invalid"},
+	} {
+		for _, sink := range []string{"disabled", "closed", "unwritable"} {
+			t.Run(test.mode+"/"+sink, func(t *testing.T) {
+				options := fixtureOptions(t, "history:"+test.mode)
+				if sink != "disabled" {
+					path := t.TempDir()
+					if sink == "unwritable" {
+						path = filepath.Join(path, "occupied")
+						if err := os.WriteFile(path, []byte("not a directory"), 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					options.Diagnostics = live.NewDiagnostics(path, options.APIKey)
+					if sink == "closed" {
+						options.Diagnostics.Close()
+					}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				got, err := live.ReasoningHistory(ctx, options)
+				options.Diagnostics.Close()
+				if (err == nil) != (test.code == "") || got.Completed != (test.code == "") {
+					t.Fatalf("sink changed product completion: %+v %v", got, err)
+				}
+				if test.mode == "no_request_amount" && (got.ToolCalls != 0 || got.CompletedTools != 0 || got.Turns != 1 || got.FirstRecall) {
+					t.Fatal("unobserved lookup invented a price, accepted call or continuation")
+				}
+				if err != nil && live.DescribeFailure(err).Code != test.code {
+					t.Fatalf("sink changed failure boundary: %+v", live.DescribeFailure(err))
+				}
+			})
+		}
+	}
+}

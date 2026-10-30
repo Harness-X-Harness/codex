@@ -37,12 +37,14 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 		"basic-primary": true, "basic-pinned": true,
 		"reasoning-primary": true, "reasoning-pinned": true,
 		"structured-edit": true, "structured-edit-declined": true,
-		"structured-edit-pinned": true, "structured-edit-all": true,
-		"attached-image-pinned": true, "image-primary": true, "image-pinned": true,
-		"shipped-catalog": true, "shipped-startup": true, "shipped-pinned": true,
+		"structured-edit-pinned": true,
+		"attached-image-pinned":  true, "image-primary": true, "image-pinned": true,
+		"shipped-startup": true, "shipped-pinned": true,
 		"shipped-child": true, "web": true, "web-allowed": true, "web-excluded": true,
 	}
-	if !maps.Equal(names(full), formal) || !maps.Equal(names(diagnostic), formal) {
+	diagnostics := maps.Clone(formal)
+	diagnostics["structured-edit-all"], diagnostics["shipped-catalog"] = true, true
+	if !maps.Equal(names(full), formal) || !maps.Equal(names(diagnostic), diagnostics) {
 		t.Fatal("formal proof identities changed")
 	}
 	for _, entry := range full {
@@ -69,7 +71,7 @@ func TestSuiteSelectionPreservesFormalAndDiagnosticBoundaries(t *testing.T) {
 }
 
 func TestSelectionRejectsUnknownExcludedAndEmptyCatalog(t *testing.T) {
-	for _, args := range [][3]string{{"", "full", ""}, {"live", "", ""}, {"live", "full", "stale"}, {"facts", "full", "reasoning-primary"}, {"live", "smoke", "basic-pinned"}} {
+	for _, args := range [][3]string{{"", "full", ""}, {"live", "", ""}, {"live", "full", "stale"}, {"facts", "full", "reasoning-primary"}, {"live", "smoke", "basic-pinned"}, {"live", "full", "structured-edit-all"}, {"live", "full", "shipped-catalog"}} {
 		if selected, err := Select(args[0], args[1], args[2]); err == nil || len(selected) != 0 {
 			t.Fatal("invalid selection succeeded")
 		}

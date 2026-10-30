@@ -47,7 +47,7 @@ func TestTextRoutePersistedDiagnostics(t *testing.T) {
 		{"basic-success", "turn", false, false, []string{"turn_input", "short confirmation", "oracle_reply"}},
 		{"basic-admission-failure", "wrong_model", false, true, []string{"turn_input", "short confirmation"}},
 		{"reasoning-success", "history:turn", true, false, []string{"history_tool_input", "history_tool_output", "oracle_reply_fragment", "oracle_result", "Using the price we already checked"}},
-		{"reasoning-admission-failure", "history:wrong_model", true, true, []string{"turn_input", "Look up the price per kilogram of apples"}},
+		{"reasoning-admission-failure", "history:wrong_model", true, true, []string{"turn_input", "Check today's apple price at this shop"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			options := fixtureOptions(t, tc.mode)

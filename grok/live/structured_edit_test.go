@@ -19,8 +19,8 @@ import (
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
-const editSeedToken = "GROK_STRUCTURED_EDIT_SEED_v1"
-const editReplacedToken = "GROK_STRUCTURED_EDIT_REPLACED_v1"
+const editSeedToken = "The shop opens at 8 AM."
+const editReplacedToken = "The shop opens at 9 AM."
 
 // This is a protocol/runner oracle. It deliberately performs the modeled file
 // effects, but is neither the native product editor nor a Grok backend.
@@ -43,7 +43,7 @@ func fakeEditServer() {
 	log("process")
 	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
 	send := func(method string, params any) { _ = output.Encode(map[string]any{"method": method, "params": params}) }
-	path, _ := filepath.Abs("structured_edit_fixture.txt")
+	path, _ := filepath.Abs("store-hours.txt")
 	seed, err := os.ReadFile(path)
 	if err != nil {
 		return
@@ -146,12 +146,12 @@ func fakeEditServer() {
 			if mode == "wire_identity" {
 				name = "local__structured_edit__deadbeefcafe"
 			}
-			args := map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": editSeedToken, "new_string": editReplacedToken}
+			args := map[string]any{"file_path": "store-hours.txt", "old_string": editSeedToken, "new_string": editReplacedToken}
 			if replaceAll {
 				args["replace_all"] = true
 			}
 			if mode == "relative_dot_path" {
-				args["file_path"] = "./structured_edit_fixture.txt"
+				args["file_path"] = "./store-hours.txt"
 			}
 			if mode == "absolute_path" {
 				args["file_path"] = path
@@ -317,7 +317,7 @@ func fakeEditServer() {
 				}
 				if (!decline || mode == "decline_changes") && mode != "false_success" {
 					count := 1
-					if replaceAll {
+					if replaceAll && mode != "one_of_two" {
 						count = -1
 					}
 					replacement := strings.Replace(string(seed), editSeedToken, editReplacedToken, count)
@@ -389,7 +389,7 @@ func fakeEditServer() {
 				return
 			}
 			if mode == "late_duplicate" {
-				arguments, _ := json.Marshal(map[string]any{"file_path": "structured_edit_fixture.txt", "old_string": "PRIVATE_CANARY", "new_string": editReplacedToken})
+				arguments, _ := json.Marshal(map[string]any{"file_path": "store-hours.txt", "old_string": "PRIVATE_CANARY", "new_string": editReplacedToken})
 				send("rawResponseItem/completed", map[string]any{"threadId": "private-thread", "turnId": "private-first", "item": map[string]any{"type": "function_call", "call_id": "private-call", "name": "structured_edit", "arguments": string(arguments)}})
 			}
 			threadID := "private-thread"
@@ -420,7 +420,7 @@ func TestStructuredEditScenarios(t *testing.T) {
 			defer cancel()
 			runner := live.StructuredEdit
 			wantTurns, wantApprovals, wantWrites := 2, 0, 1
-			seed := "prefix\r\n" + editSeedToken + "\r\nsuffix"
+			seed := "Shop notice\r\n" + editSeedToken + "\r\nThank you."
 			if mode == "duplicate_edit" {
 				wantWrites = 2
 			}
@@ -431,6 +431,8 @@ func TestStructuredEditScenarios(t *testing.T) {
 				runner, wantTurns = live.StructuredEditPinnedPreviousModel, 1
 			case "replace_all":
 				runner, wantTurns = live.StructuredEditReplaceAll, 1
+			}
+			if wantTurns == 2 || mode == "replace_all" {
 				seed += "\r\n" + editSeedToken
 			}
 			got, err := runner(ctx, options)
@@ -474,7 +476,7 @@ func TestStructuredEditScenarios(t *testing.T) {
 }
 
 func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
-	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "conflicting_change", "false_success", "wrong_bytes",
+	modes := []string{"wrong_model", "wrong_thread", "wrong_turn", "conflicting_change", "false_success", "wrong_bytes", "one_of_two",
 		"failed", "interrupted", "empty_reply", "commentary", "read_thread", "read_failed", "read_error", "continuation_read_error", "continuation_failed", "repeat_continuation", "continuation_changes",
 		"approval_thread", "approval_turn", "decline_changes", "denied_effect", "shutdown_changes", "stalled_start", "missing_terminal"}
 	for _, mode := range modes {
@@ -497,7 +499,7 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				t.Fatalf("failure retained success evidence: %+v", got)
 			}
 			switch mode {
-			case "false_success", "wrong_bytes", "read_failed", "read_error", "read_thread", "continuation_changes", "continuation_read_error", "continuation_failed":
+			case "false_success", "wrong_bytes", "one_of_two", "read_failed", "read_error", "read_thread", "continuation_changes", "continuation_read_error", "continuation_failed":
 				wantStage, wantReply, wantCurrent := "edit_turn_completed", len("Fixture complete."), true
 				if strings.HasPrefix(mode, "continuation_") {
 					wantStage = "edit_continuation_completed"
@@ -508,9 +510,11 @@ func TestStructuredEditRejectsFalseEvidence(t *testing.T) {
 				wantBytes := ""
 				switch mode {
 				case "false_success":
-					wantBytes = "prefix\r\n" + editSeedToken + "\r\nsuffix"
+					wantBytes = "Shop notice\r\n" + editSeedToken + "\r\nThank you.\r\n" + editSeedToken
+				case "one_of_two":
+					wantBytes = "Shop notice\r\n" + editReplacedToken + "\r\nThank you.\r\n" + editSeedToken
 				case "wrong_bytes":
-					wantBytes = "prefix\r\n" + editReplacedToken + "\r\nsuffix\n"
+					wantBytes = "Shop notice\r\n" + editReplacedToken + "\r\nThank you.\r\n" + editReplacedToken + "\n"
 				case "continuation_changes":
 					wantBytes = "PRIVATE_CANARY"
 				}
