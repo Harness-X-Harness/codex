@@ -18,6 +18,7 @@ use tracing::instrument::WithSubscriber;
 use tracing::trace;
 use uuid::Uuid;
 
+use crate::ConditionalWriteResult;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
 use crate::ExecServerClient;
@@ -48,6 +49,7 @@ use crate::protocol::FsReadFileParams;
 use crate::protocol::FsRemoveParams;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWriteBlockParams;
+use crate::protocol::FsWriteFileIfUnchangedParams;
 use crate::protocol::FsWriteFileParams;
 
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
@@ -152,6 +154,34 @@ impl RemoteFileSystem {
         self.lock_metadata_requests().clear();
         result.map_err(map_remote_error)?;
         Ok(())
+    }
+
+    async fn write_file_if_unchanged(
+        &self,
+        path: &PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<ConditionalWriteResult> {
+        trace!("remote fs write_file_if_unchanged");
+        let client = self.client.get().await.map_err(map_remote_error)?;
+        let result = client
+            .fs_write_file_if_unchanged(FsWriteFileIfUnchangedParams {
+                path: path.clone(),
+                expected_data_base64: STANDARD.encode(expected_contents),
+                data_base64: STANDARD.encode(contents),
+                follow_symlinks: (!options.follow_symlinks).then_some(false),
+                sandbox: sandbox.cloned(),
+            })
+            .await;
+        self.lock_metadata_requests().clear();
+        let response = result.map_err(map_remote_error)?;
+        Ok(if response.written {
+            ConditionalWriteResult::Written
+        } else {
+            ConditionalWriteResult::Conflict
+        })
     }
 
     async fn create_directory(
@@ -472,6 +502,24 @@ impl ExecutorFileSystem for RemoteFileSystem {
     ) -> ExecutorFileSystemFuture<'a, ()> {
         Box::pin(RemoteFileSystem::write_file(
             self, path, contents, options, sandbox,
+        ))
+    }
+
+    fn write_file_if_unchanged<'a>(
+        &'a self,
+        path: &'a PathUri,
+        expected_contents: Vec<u8>,
+        contents: Vec<u8>,
+        options: WriteFileOptions,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> ExecutorFileSystemFuture<'a, ConditionalWriteResult> {
+        Box::pin(RemoteFileSystem::write_file_if_unchanged(
+            self,
+            path,
+            expected_contents,
+            contents,
+            options,
+            sandbox,
         ))
     }
 

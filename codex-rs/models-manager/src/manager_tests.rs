@@ -42,6 +42,9 @@ mod model_info_overrides_tests;
 #[path = "catalog_origin_tests.rs"]
 mod catalog_origin_tests;
 
+#[path = "structured_edit_tests.rs"]
+mod structured_edit_tests;
+
 const DEFAULT_HTTP_CLIENT_FACTORY: HttpClientFactory =
     HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
 

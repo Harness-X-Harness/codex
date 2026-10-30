@@ -33,3 +33,31 @@ fn capability_overrides_preserve_unspecified_provider_defaults() {
         );
     }
 }
+
+#[test]
+fn explicit_compaction_override_stays_within_dialect_support() {
+    for (wire_api, remote_compaction) in [
+        (WireApi::Responses, RemoteCompactionSupport::V2),
+        (WireApi::GrokResponses, RemoteCompactionSupport::Unsupported),
+    ] {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                wire_api,
+                capabilities: Some(ModelProviderCapabilities {
+                    external_web_access: Some(false),
+                    remote_compaction: Some(RemoteCompactionSupport::V2),
+                }),
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                external_web_access: false,
+                remote_compaction,
+                ..ProviderCapabilities::default()
+            }
+        );
+    }
+}

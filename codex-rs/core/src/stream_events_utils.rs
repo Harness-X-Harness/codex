@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
+use crate::session::search_activity::SearchActivityScope;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -223,6 +224,8 @@ pub(crate) type InFlightFuture<'f> =
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
+    /// Identity of the completed hosted search actually emitted after contributors.
+    pub retained_search_id: Option<String>,
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
@@ -318,13 +321,30 @@ pub(crate) async fn handle_output_item_done(
     ctx: &mut HandleOutputCtx,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
+    search_activity: &SearchActivityScope,
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 
-    match ToolRouter::build_tool_call(item.clone()) {
+    if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+        && matches!(&item, ResponseItem::CustomToolCall { name, status: Some(_), .. }
+            if codex_protocol::grok_hosted::is_x_search_name(name))
+    {
+        return Err(CodexErr::Stream(
+            "Hosted X Search is retired and cannot be executed".into(),
+        ));
+    }
+    let call = if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+        && codex_protocol::grok_hosted::is_completed_web_search(&item)
+    {
+        Ok(None)
+    } else {
+        ToolRouter::build_tool_call(item.clone())
+    };
+    match call {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
+            search_activity.claim_canonical_identity(&ctx.step_context.turn, &call.call_id)?;
             call_trace::received(
                 ctx.sess.thread_id,
                 &call.tool_name,
@@ -385,6 +405,23 @@ pub(crate) async fn handle_output_item_done(
             let finalized_facts = finalized_turn_item
                 .as_ref()
                 .map(|finalized| finalized.facts.clone());
+            output.retained_search_id =
+                finalized_turn_item
+                    .as_ref()
+                    .and_then(|finalized| match &finalized.turn_item {
+                        TurnItem::WebSearch(item) => Some(item.id.clone()),
+                        TurnItem::Extension(codex_extension_items::ExtensionItem::WebSearch(
+                            item,
+                        )) => Some(item.id.clone()),
+                        _ => None,
+                    });
+            search_activity.validate_canonical(
+                &ctx.step_context.turn,
+                &item,
+                finalized_turn_item
+                    .as_ref()
+                    .map(|finalized| &finalized.turn_item),
+            )?;
             if let Some(finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
                     ctx.sess

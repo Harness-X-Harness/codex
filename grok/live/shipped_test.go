@@ -1,0 +1,884 @@
+package live_test
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Harness-X-Harness/codex/grok/dist"
+	"github.com/Harness-X-Harness/codex/grok/live"
+)
+
+func fixtureShippedCatalog() map[string]any {
+	rows := []any{}
+	for index, slug := range []string{"grok-4.7", "grok-4.6"} {
+		efforts := []any{}
+		for _, pair := range [][2]string{{"ultra", "Ultra reasoning"}, {"xhigh", "Maximum reasoning"}, {"high", "High reasoning"}, {"medium", "Medium reasoning"}, {"low", "Low reasoning"}} {
+			efforts = append(efforts, map[string]any{"reasoningEffort": pair[0], "description": pair[1]})
+		}
+		name := "Grok " + strings.TrimPrefix(slug, "grok-")
+		rows = append(rows, map[string]any{"id": slug, "model": slug, "displayName": name, "description": name + " model", "upgrade": nil, "upgradeInfo": nil, "availabilityNux": nil, "modelSpecialty": nil, "hidden": false, "supportedReasoningEfforts": efforts, "defaultReasoningEffort": "high", "inputModalities": []any{"text", "image"}, "supportsPersonality": false, "multiAgentVersion": "v2", "additionalSpeedTiers": []any{}, "serviceTiers": []any{}, "defaultServiceTier": nil, "availableAccessPrograms": nil, "isDefault": index == 0})
+	}
+	return map[string]any{"data": rows, "nextCursor": nil}
+}
+
+func shippedProtocolThread(thread map[string]any) map[string]any {
+	if thread == nil {
+		thread = map[string]any{}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = os.Getenv("CODEX_HOME")
+	}
+	defaults := map[string]any{
+		"cliVersion": "shipped-fixture", "createdAt": 1, "updatedAt": 1, "cwd": cwd,
+		"ephemeral": false, "preview": "", "projectId": nil, "sessionId": "shipped-session",
+		"status": map[string]any{"type": "idle"}, "source": "appServer", "model": "grok-4.7", "modelProvider": "grok",
+	}
+	for key, value := range defaults {
+		if _, ok := thread[key]; !ok || thread[key] == nil && key != "projectId" {
+			thread[key] = value
+		}
+	}
+	if thread["turns"] == nil {
+		thread["turns"] = []any{}
+	}
+	if turns, ok := thread["turns"].([]any); ok {
+		for _, raw := range turns {
+			turn, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if turn["items"] == nil {
+				turn["items"] = []any{}
+			}
+			if _, ok := turn["status"]; !ok {
+				turn["status"] = "completed"
+			}
+		}
+	}
+	if source, ok := thread["source"].(map[string]any); ok {
+		if sub, ok := source["subAgent"].(map[string]any); ok {
+			if spawn, ok := sub["thread_spawn"].(map[string]any); ok {
+				if _, ok := spawn["depth"]; !ok {
+					spawn["depth"] = 1
+				}
+				if _, ok := spawn["parent_thread_id"]; !ok {
+					spawn["parent_thread_id"] = "PRIVATE_PARENT"
+				}
+			}
+		}
+	}
+	return thread
+}
+
+func copiedShippedAssets() bool {
+	profile, err := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"))
+	if err != nil {
+		return false
+	}
+	catalog, err := os.ReadFile(filepath.Join(os.Getenv("CODEX_HOME"), "models.json"))
+	if err != nil {
+		return false
+	}
+	cwd, err := os.Getwd()
+	return err == nil && filepath.Dir(cwd) == os.Getenv("CODEX_HOME") && string(profile) == dist.Profile() && bytes.Equal(catalog, dist.Catalog())
+}
+
+func fakeShippedServer() {
+	var script struct{ Mode, Trace string }
+	if json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script) != nil || !copiedShippedAssets() {
+		return
+	}
+	trace, err := os.OpenFile(script.Trace, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer trace.Close()
+	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
+	mode := strings.TrimPrefix(script.Mode, "shipped:")
+	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
+	nonce, other := "12345678-1234-4234-8234-123456789abc", "87654321-1234-4234-8234-123456789abc"
+	agent := func(id, text string) map[string]any {
+		return map[string]any{"type": "agentMessage", "id": id, "phase": "final_answer", "text": text}
+	}
+	user := func(id, text string) map[string]any {
+		return map[string]any{"type": "userMessage", "id": id, "content": []any{map[string]any{"type": "text", "text": text}}}
+	}
+	clone := func(value map[string]any) map[string]any {
+		raw, _ := json.Marshal(value)
+		var copied map[string]any
+		_ = json.Unmarshal(raw, &copied)
+		return copied
+	}
+	var seed map[string]any
+	setupMarker := ""
+	childReply := func(text string) string {
+		marker := setupMarker
+		if mode == "marker_reply_uppercase" {
+			marker = strings.ToUpper(marker)
+		}
+		if mode == "missing_marker" {
+			marker = ""
+		}
+		if mode == "wrong_marker" {
+			marker = strings.Repeat("0", 32)
+			if marker == setupMarker {
+				marker = strings.Repeat("1", 32)
+			}
+		}
+		if mode == "child_nonce_uppercase" {
+			text = strings.ToUpper(text)
+		}
+		return strings.TrimSpace(marker + " " + text)
+	}
+	taskPrompt := ""
+	phase := 0
+	var rootSource any = "appServer"
+	switch mode {
+	case "root_cli":
+		rootSource = "cli"
+	case "root_vscode":
+		rootSource = "vscode"
+	case "root_exec":
+		rootSource = "exec"
+	case "root_unknown":
+		rootSource = "unknown"
+	case "root_custom":
+		rootSource = map[string]any{"custom": "fixture"}
+	case "root_invalid":
+		rootSource = "PRIVATE_INVALID_SOURCE"
+	case "root_number":
+		rootSource = 1
+	case "root_boolean":
+		rootSource = true
+	case "root_array":
+		rootSource = []any{}
+	}
+	snapshot := func(id string) any {
+		if phase == 1 && !strings.HasPrefix(mode, "startup") {
+			return map[string]any{"thread": map[string]any{"id": "PRIVATE_PARENT", "source": rootSource, "model": "grok-4.7", "modelProvider": "grok", "turns": []any{seed}}}
+		}
+		spawn := map[string]any{"type": "subAgentActivity", "id": "spawn", "kind": "started", "agentThreadId": "PRIVATE_CHILD", "agentPath": "/root/live_child"}
+		parentResult := func(value string) string {
+			encoded, _ := json.Marshal(map[string]any{"child_nonce": value})
+			return string(encoded)
+		}
+		reply := agent("reply", parentResult(nonce))
+		if mode == "parent_nonce_uppercase" {
+			reply["text"] = parentResult(strings.ToUpper(nonce))
+		}
+		if mode == "parent_prose" {
+			reply["text"] = "The delegated result is " + nonce + "."
+		}
+		if mode == "ambiguous_results" || mode == "multiple_results" {
+			reply["text"] = parentResult(nonce)
+		}
+		switch mode {
+		case "parent_null":
+			reply["text"] = `{"child_nonce":null}`
+		case "parent_missing_field":
+			reply["text"] = `{}`
+		case "parent_extra_field":
+			reply["text"] = `{"child_nonce":"` + nonce + `","extra":true}`
+		case "parent_duplicate_field":
+			reply["text"] = `{"child_nonce":"` + nonce + `","child_nonce":"` + nonce + `"}`
+		case "parent_wrong_type":
+			reply["text"] = `{"child_nonce":42}`
+		case "parent_wrong_nonce":
+			reply["text"] = parentResult(other)
+		case "parent_nonce_embedded":
+			reply["text"] = parentResult("result " + nonce)
+		case "parent_two_json":
+			reply["text"] = parentResult(nonce) + parentResult(nonce)
+		}
+		current := map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "completed", "error": nil, "items": []any{user("task-input", taskPrompt), spawn, reply}}
+		if mode == "parent_tool_rounds" || mode == "parent_large_intermediate" {
+			prefix := `{"child_nonce":null}`
+			if mode == "parent_large_intermediate" {
+				prefix = strings.Repeat("intermediate ", 500)
+			}
+			wait := map[string]any{"type": "collabAgentToolCall", "id": "wait", "tool": "wait", "status": "completed", "senderThreadId": "PRIVATE_PARENT", "receiverThreadIds": []any{}, "agentsStates": map[string]any{}}
+			current["items"] = []any{user("task-input", taskPrompt), agent("pre-spawn", prefix), spawn, agent("pre-wait", `{"child_nonce":null}`), wait, reply}
+		}
+		if mode == "reasoning_current" || mode == "reasoning_current_known" {
+			text := "A harmless planning observation."
+			if mode == "reasoning_current_known" {
+				text = nonce
+			}
+			current["items"] = []any{user("task-input", taskPrompt), map[string]any{"type": "reasoning", "id": "reasoning", "content": []string{text}}, spawn, reply}
+		}
+		childTurn := map[string]any{"id": "PRIVATE_CHILD_TURN", "status": "completed", "error": nil, "items": []any{agent("child-reply", childReply(nonce))}}
+		if mode == "empty_reply_fragments" {
+			current["items"] = append([]any{agent("parent-empty", " \n ")}, current["items"].([]any)...)
+			childTurn["items"] = append([]any{agent("child-empty", "")}, childTurn["items"].([]any)...)
+		}
+		if mode == "split_after_result_mention" || mode == "split_before_result_supplied" {
+			childTurn["items"] = []any{agent("child-reply", childReply(nonce)), agent("child-tail", "That is the result.")}
+		}
+		if strings.HasPrefix(mode, "marker_split_") {
+			childTurn["items"] = []any{agent("child-reply", nonce), agent("marker-reply", setupMarker)}
+		}
+		parentTurns := []any{current}
+		childTurns := []any{childTurn}
+		if seed != nil {
+			parentTurns = []any{clone(seed), current}
+			childTurns = []any{clone(seed), childTurn}
+			if mode == "reasoning_inherited" {
+				inherited := childTurns[0].(map[string]any)
+				inherited["items"] = append(inherited["items"].([]any), map[string]any{"type": "reasoning", "id": "inherited-reasoning", "content": []string{"A harmless planning observation."}})
+			}
+		}
+		parent := map[string]any{"id": "PRIVATE_PARENT", "source": rootSource, "model": "grok-4.7", "modelProvider": "grok", "turns": parentTurns}
+		child := map[string]any{"id": "PRIVATE_CHILD", "parentThreadId": "PRIVATE_PARENT", "forkedFromId": "PRIVATE_PARENT", "source": map[string]any{"subAgent": map[string]any{"thread_spawn": map[string]any{"agent_path": "/root/live_child"}}}, "model": "grok-4.7", "modelProvider": "grok", "turns": childTurns}
+		switch mode {
+		case "stale":
+			parent["turns"] = []any{seed}
+		case "duplicate_turn":
+			parent["turns"] = append(parentTurns, current)
+		case "missing_reply":
+			current["items"] = []any{spawn}
+		case "wrong_history_provider":
+			parent["modelProvider"] = "PRIVATE_OTHER"
+		case "wrong_history_model":
+			parent["model"] = "PRIVATE_OTHER"
+		case "parent_history_changed":
+			parentTurns[0].(map[string]any)["id"] = "PRIVATE_OTHER_SEED"
+		case "parent_history_item_id":
+			parentTurns[0].(map[string]any)["items"].([]any)[0].(map[string]any)["id"] = "reconstructed-item"
+		case "parent_history_content":
+			parentTurns[0].(map[string]any)["items"].([]any)[0] = user("changed-input", "different setup")
+		case "parent_history_order":
+			items := parentTurns[0].(map[string]any)["items"].([]any)
+			items[0], items[1] = items[1], items[0]
+		case "child_unit_source":
+			child["source"] = "appServer"
+		case "child_provider":
+			child["modelProvider"] = "PRIVATE_OTHER"
+		case "child_model":
+			child["model"] = "PRIVATE_OTHER"
+		case "child_parent":
+			child["parentThreadId"] = "PRIVATE_OTHER"
+		case "child_fresh":
+			child["forkedFromId"] = nil
+		case "child_failed":
+			childTurn["status"] = "failed"
+		case "child_interrupted":
+			childTurn["status"] = "interrupted"
+		case "child_missing":
+			child["turns"] = []any{}
+		case "child_inherited":
+			childTurn["id"] = "PRIVATE_PARENT_TURN"
+		case "child_mismatch":
+			childTurn["items"] = []any{agent("child-reply", childReply(other))}
+		case "paginated_parent_supplied", "paginated_parent_supplied_uppercase":
+			known := nonce
+			if mode == "paginated_parent_supplied_uppercase" {
+				known = strings.ToUpper(known)
+			}
+			current["items"] = []any{user("task-input", taskPrompt), agent("parent-known", known), spawn, reply}
+			child["turns"] = []any{childTurn}
+		case "child_no_history", "paginated_history":
+			child["turns"] = []any{childTurn}
+		case "child_partial_history":
+			child["turns"] = []any{map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "interrupted", "items": []any{user("task-input", taskPrompt)}}, childTurn}
+		case "inherited_supplied", "inherited_task_history", "inherited_diagnostic":
+			text := "delegating the task"
+			if mode == "inherited_supplied" {
+				text = "Use " + nonce
+			}
+			child["turns"] = []any{clone(seed), map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "interrupted", "items": []any{user("task-input", taskPrompt), agent("parent-before-spawn", text)}}, childTurn}
+			if mode == "inherited_diagnostic" {
+				child["turns"].([]any)[1].(map[string]any)["items"] = []any{map[string]any{"type": "agentMessage", "id": nonce, "phase": "commentary", "text": "diagnostic " + nonce}}
+			}
+		case "child_history_id":
+			childTurns[0].(map[string]any)["id"] = "PRIVATE_OTHER_SEED"
+		case "child_history_item_id":
+			childTurns[0].(map[string]any)["items"].([]any)[0].(map[string]any)["id"] = "PRIVATE_OTHER_INPUT"
+		case "child_history_content":
+			childTurns[0].(map[string]any)["items"].([]any)[0] = user("seed-input", "altered seed")
+		case "child_history_order":
+			items := childTurns[0].(map[string]any)["items"].([]any)
+			items[0], items[1] = items[1], items[0]
+		case "missing_activity":
+			current["items"] = []any{user("task-input", taskPrompt), reply}
+		case "child_path":
+			child["source"] = nil
+		case "activity_child":
+			spawn["agentThreadId"] = "PRIVATE_OTHER"
+		case "later_turn_supplied", "later_turn_fresh", "missing_prior_stream", "prior_failed", "prior_conflict", "prior_error_mismatch", "prior_error_missing", "marker_prior_supplied":
+			prior := map[string]any{"id": "previous-child-turn", "status": "completed", "error": nil, "items": []any{agent("previous-reply", "initial complete")}}
+			if strings.HasPrefix(mode, "prior_") {
+				prior["status"], prior["error"] = "failed", map[string]any{"message": "PRIVATE_PRIOR_ERROR"}
+			}
+			child["turns"] = []any{clone(seed), prior, childTurn}
+		case "child_later_failure":
+			child["turns"] = append(childTurns, map[string]any{"id": "later", "status": "failed", "items": []any{}})
+		case "child_later_turn":
+			child["turns"] = append(childTurns, map[string]any{"id": "later", "status": "completed", "items": []any{agent("later", other)}})
+		case "spawn_failed":
+			spawn["kind"] = "completed"
+		case "spawn_sender":
+			spawn["agentPath"] = "/root/other"
+		case "incidental_unrelated":
+			current["items"] = append(current["items"].([]any), map[string]any{"type": "subAgentActivity", "id": "other", "kind": "started", "agentThreadId": "PRIVATE_OTHER", "agentPath": "/root/other"})
+		case "unrelated_recipient":
+			current["items"] = append(current["items"].([]any), map[string]any{"type": "subAgentActivity", "id": "other", "kind": "started", "agentThreadId": "PRIVATE_OTHER", "agentPath": "/root/other"})
+			childTurn["items"] = []any{agent("child-reply", childReply(other))}
+		case "many_valid", "multiple_results", "incidental_failed", "incidental_running", "cross_binding", "first_conflict_second_valid", "conflict_during_other_read":
+			current["items"] = []any{user("task-input", taskPrompt), spawn, map[string]any{"type": "subAgentActivity", "id": "second", "kind": "started", "agentThreadId": "PRIVATE_CHILD_TWO", "agentPath": "/root/second"}, reply}
+		case "incidental_spawn_failure":
+			current["items"] = append(current["items"].([]any), map[string]any{"type": "subAgentActivity", "id": "incidental", "kind": "interrupted", "agentThreadId": "PRIVATE_OTHER", "agentPath": "/root/other"})
+		}
+		if mode == "ambiguous_results" {
+			childTurn["items"] = []any{agent("child-reply", childReply(nonce+" and "+other))}
+		}
+		if mode == "cross_binding" {
+			childTurn["items"] = []any{agent("child-reply", childReply(other))}
+		}
+		if id == "PRIVATE_PARENT" {
+			return map[string]any{"thread": parent}
+		}
+		if id == "PRIVATE_CHILD" {
+			return map[string]any{"thread": child}
+		}
+		if id == "PRIVATE_CHILD_TWO" {
+			copy := clone(child)
+			copy["id"] = "PRIVATE_CHILD_TWO"
+			copy["source"] = map[string]any{"subAgent": map[string]any{"thread_spawn": map[string]any{"agent_path": "/root/second"}}}
+			second := map[string]any{"id": "second-child-turn", "status": "completed", "error": nil, "items": []any{agent("second-result", childReply(other))}}
+			if mode == "first_conflict_second_valid" {
+				second["items"] = []any{agent("second-result", childReply(nonce))}
+			}
+			if mode == "incidental_failed" {
+				second["status"], second["items"] = "failed", []any{}
+			}
+			if mode == "incidental_running" {
+				second["status"], second["items"] = "inProgress", []any{}
+			}
+			if mode == "cross_binding" {
+				copy["modelProvider"] = "PRIVATE_OTHER"
+				second["items"] = []any{agent("second-result", childReply(nonce))}
+			}
+			copy["turns"] = []any{clone(seed), second}
+			return map[string]any{"thread": copy}
+		}
+		return map[string]any{"thread": map[string]any{"id": "PRIVATE_OTHER"}}
+	}
+	notify := func(method, id, turn string, item any) {
+		params := map[string]any{"threadId": id}
+		if method == "rawResponseItem/completed" {
+			params["turnId"], params["item"] = turn, item
+		} else if method != "thread/closed" {
+			if turnMap, ok := item.(map[string]any); ok && turnMap["items"] == nil {
+				turnMap["items"] = []any{}
+			}
+			params["turn"] = item
+		}
+		_ = output.Encode(map[string]any{"method": method, "params": params})
+	}
+	emitChild := func(id, path, turn, text string) {
+		if turn != "previous-child-turn" && !strings.HasPrefix(mode, "marker_split_") {
+			text = childReply(text)
+		}
+		if mode == "missing_stream" {
+			return
+		}
+		if mode != "missing_child_start" && mode != "delayed_out_of_order" {
+			notify("turn/started", id, turn, map[string]any{"id": turn, "status": "inProgress"})
+		}
+		inputItem := map[string]any{"type": "agent_message", "id": "raw-input", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "write a fresh UUID yourself"}}}
+		if mode == "marker_input_supplied" || (mode == "marker_prior_supplied" && turn == "previous-child-turn") {
+			inputItem["content"] = []any{map[string]any{"type": "input_text", "text": "Use " + setupMarker}}
+		}
+		if mode == "marker_input_uppercase" {
+			inputItem["content"] = []any{map[string]any{"type": "input_text", "text": "Use " + strings.ToUpper(setupMarker)}}
+		}
+		if mode == "nonce_input_uppercase" {
+			inputItem["content"] = []any{map[string]any{"type": "input_text", "text": "Use " + strings.ToUpper(nonce)}}
+		}
+		if mode == "prompt_supplied" {
+			inputItem["content"] = []any{map[string]any{"type": "input_text", "text": "Return " + nonce}}
+		}
+		if mode == "encrypted_input" {
+			inputItem["content"] = []any{map[string]any{"type": "encrypted_content", "encrypted_content": "PRIVATE_SECRET"}}
+		}
+		if mode == "input_recipient" {
+			inputItem["recipient"] = "/root/other"
+		}
+		if mode == "stream_byte_budget" {
+			inputItem["content"] = []any{map[string]any{"type": "input_text", "text": strings.Repeat("x", 1<<20)}}
+		}
+		if mode != "missing_input" && mode != "input_after_result" && mode != "delayed_missing_input" && mode != "direct_user_only" {
+			notify("rawResponseItem/completed", id, turn, inputItem)
+		}
+		if mode == "delayed_out_of_order" {
+			notify("turn/started", id, turn, map[string]any{"id": turn, "status": "inProgress"})
+		}
+		if mode == "followup_supplied" || mode == "later_turn_supplied" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "agent_message", "id": "raw-followup", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "Use " + nonce}}})
+		}
+		if mode == "marker_followup_supplied" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "agent_message", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "Use " + setupMarker}}})
+		}
+		if mode == "host_user_context" || mode == "direct_user_only" || mode == "marker_user_supplied" {
+			text := "Host environment context"
+			if mode == "marker_user_supplied" {
+				text += " " + setupMarker
+			}
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": text}}})
+		}
+		if mode == "marker_host_supplied" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text", "text": "Context " + setupMarker}}})
+		}
+		if mode == "auxiliary_tool_before_result" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "function_call", "call_id": "lookup", "name": "get_time", "arguments": "{}"})
+		}
+		rawID, rawTurn, rawText := id, turn, text
+		if mode == "raw_child" {
+			rawID = "PRIVATE_OTHER"
+		}
+		if mode == "raw_turn" {
+			rawTurn = "PRIVATE_OTHER"
+		}
+		if mode == "raw_prose" {
+			rawText = "The result is " + rawText
+		}
+		if mode == "raw_text" {
+			rawText = other
+		}
+		if mode == "split_before_result_supplied" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "message", "id": "raw-commentary", "role": "assistant", "phase": "commentary", "content": []any{map[string]any{"type": "output_text", "text": "Preparing the result."}}})
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "agent_message", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "Use " + nonce}}})
+		}
+		if mode != "missing_raw_result" {
+			notify("rawResponseItem/completed", rawID, rawTurn, map[string]any{"type": "message", "id": "raw-result-different-from-durable", "role": "assistant", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": rawText}}})
+		}
+		if strings.HasPrefix(mode, "marker_split_") {
+			if mode == "marker_split_supplied" {
+				notify("rawResponseItem/completed", id, turn, map[string]any{"type": "agent_message", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "Use " + setupMarker}}})
+			}
+			if mode == "auxiliary_tool_between_fragments" {
+				notify("rawResponseItem/completed", id, turn, map[string]any{"type": "function_call", "call_id": "lookup", "name": "get_time", "arguments": "{}"})
+			}
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "message", "id": "marker-result", "role": "assistant", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": setupMarker}}})
+		}
+		if mode == "input_after_result" {
+			notify("rawResponseItem/completed", id, turn, inputItem)
+		}
+		if mode == "after_result_mention" || mode == "split_after_result_mention" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "agent_message", "id": "raw-later", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "I received " + nonce}}})
+		}
+		if mode == "split_after_result_mention" || mode == "split_before_result_supplied" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "message", "id": "raw-tail", "role": "assistant", "phase": "final_answer", "content": []any{map[string]any{"type": "output_text", "text": "That is the result."}}})
+		}
+		if mode == "marker_after_result" {
+			notify("rawResponseItem/completed", id, turn, map[string]any{"type": "agent_message", "author": "/root", "recipient": path, "content": []any{map[string]any{"type": "input_text", "text": "Received " + setupMarker}}})
+		}
+		if mode == "closed_child" {
+			notify("thread/closed", id, "", nil)
+		}
+		if mode != "missing_child_terminal" && mode != "delayed_missing_terminal" {
+			terminal := map[string]any{"id": turn, "status": "completed", "error": nil}
+			if turn == "previous-child-turn" && strings.HasPrefix(mode, "prior_") {
+				terminal["status"], terminal["error"] = "failed", map[string]any{"message": "PRIVATE_PRIOR_ERROR"}
+				if mode == "prior_error_missing" {
+					terminal["error"] = nil
+				}
+				if mode == "prior_error_mismatch" {
+					terminal["error"] = map[string]any{"message": "PRIVATE_OTHER_ERROR"}
+				}
+			}
+			notify("turn/completed", id, turn, terminal)
+			if turn == "previous-child-turn" && mode == "prior_conflict" {
+				notify("turn/completed", id, turn, map[string]any{"id": turn, "status": "completed", "error": nil})
+			}
+		}
+		if mode == "closed_after_result" {
+			notify("thread/closed", id, "", nil)
+		}
+	}
+	emitChildren := func() {
+		if mode == "later_turn_supplied" || mode == "later_turn_fresh" || mode == "marker_prior_supplied" || strings.HasPrefix(mode, "prior_") {
+			emitChild("PRIVATE_CHILD", "/root/live_child", "previous-child-turn", "initial complete")
+		}
+		emitChild("PRIVATE_CHILD", "/root/live_child", "PRIVATE_CHILD_TURN", nonce)
+		if mode == "many_valid" || mode == "multiple_results" || mode == "first_conflict_second_valid" {
+			secondText := other
+			if mode == "first_conflict_second_valid" {
+				secondText = nonce
+			}
+			emitChild("PRIVATE_CHILD_TWO", "/root/second", "second-child-turn", secondText)
+		}
+	}
+
+	for input.Scan() {
+		var request struct {
+			ID     json.RawMessage
+			Method string
+			Params map[string]any
+		}
+		if json.Unmarshal(input.Bytes(), &request) != nil {
+			return
+		}
+		_, _ = io.WriteString(trace, request.Method+"\n")
+		var result any
+		activeID := "PRIVATE_PARENT_TURN"
+		switch request.Method {
+		case "initialize":
+			family := "unix"
+			if runtime.GOOS == "windows" {
+				family = "windows"
+			}
+			result = map[string]any{"userAgent": "fixture", "codexHome": os.Getenv("CODEX_HOME"), "platformFamily": family, "platformOs": runtime.GOOS}
+		case "initialized":
+			continue
+		case "model/list":
+			catalog := fixtureShippedCatalog()
+			rows := catalog["data"].([]any)
+			switch mode {
+			case "extra_model":
+				catalog["data"] = append(rows, rows[0])
+			case "missing_model":
+				catalog["data"] = rows[:1]
+			case "reordered":
+				catalog["data"] = []any{rows[1], rows[0]}
+			case "duplicate_model":
+				catalog["data"] = []any{rows[0], rows[0]}
+			case "wrong_default":
+				rows[1].(map[string]any)["isDefault"] = true
+			case "missing_effort":
+				rows[0].(map[string]any)["supportedReasoningEfforts"] = []any{}
+			case "wrong_effort":
+				rows[0].(map[string]any)["defaultReasoningEffort"] = "low"
+			case "missing_v2":
+				delete(rows[0].(map[string]any), "multiAgentVersion")
+			case "missing_modalities":
+				rows[0].(map[string]any)["inputModalities"] = []any{"text"}
+			case "pagination":
+				catalog["nextCursor"] = "more"
+			}
+			result = catalog
+		case "thread/start":
+			if request.Params["model"] != "grok-4.7" || (!strings.HasPrefix(mode, "startup") && request.Params["experimentalRawEvents"] != true) {
+				return
+			}
+			cwd, _ := os.Getwd()
+			provider := "grok"
+			if mode == "wrong_start_provider" {
+				provider = "PRIVATE_OTHER"
+			}
+			result = map[string]any{
+				"model": "grok-4.7", "modelProvider": provider, "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
+				"sandbox": map[string]any{"type": "readOnly"},
+				"thread":  shippedProtocolThread(map[string]any{"id": "PRIVATE_PARENT", "model": "grok-4.7", "modelProvider": "grok", "cwd": cwd}),
+			}
+		case "turn/start":
+			phase++
+			if request.Params["threadId"] != "PRIVATE_PARENT" || phase > 2 {
+				return
+			}
+			prompt := request.Params["input"].([]any)[0].(map[string]any)["text"].(string)
+			if phase == 1 {
+				if _, exists := request.Params["effort"]; exists {
+					return
+				}
+				if !strings.HasPrefix(mode, "startup") {
+					if request.Params["outputSchema"] != nil {
+						return
+					}
+					activeID = "PRIVATE_SEED_TURN"
+					setupMarker = strings.TrimPrefix(strings.SplitN(prompt, ". ", 2)[0], "Remember this bounded setup marker: ")
+					if len(setupMarker) != 32 {
+						return
+					}
+					text := "setup retained"
+					if mode == "nonce_known_uppercase" {
+						text = strings.ToUpper(nonce)
+					}
+					if mode == "known_result" || mode == "known_legacy_result" {
+						text = nonce
+					}
+					seed = map[string]any{"id": activeID, "status": "completed", "error": nil, "items": []any{user("seed-input", prompt), agent("seed-reply", text)}}
+					if mode == "reasoning_seed" || mode == "reasoning_seed_known" {
+						text := "A harmless planning observation."
+						if mode == "reasoning_seed_known" {
+							text = nonce
+						}
+						seed["items"] = append(seed["items"].([]any), map[string]any{"type": "reasoning", "id": "seed-reasoning", "content": []string{text}})
+					}
+					if mode == "known_legacy_result" {
+						seed["items"].([]any)[1].(map[string]any)["phase"] = ""
+					}
+					if mode == "known_commentary_result" {
+						seed["items"] = append(seed["items"].([]any), map[string]any{"type": "agentMessage", "id": "seed-commentary", "phase": "commentary", "text": nonce})
+					}
+					if mode == "known_metadata" {
+						seed["items"].([]any)[0].(map[string]any)["id"] = nonce
+					}
+					if mode == "known_user_result" {
+						seed["items"].([]any)[0] = user("seed-input", "remember "+nonce)
+					}
+					_, _ = io.WriteString(trace, "setup/start\n")
+				}
+			} else {
+				if request.Params["effort"] != "ultra" {
+					return
+				}
+				wantSchema := map[string]any{"type": "object", "properties": map[string]any{"child_nonce": map[string]any{"type": []any{"string", "null"}}}, "required": []any{"child_nonce"}, "additionalProperties": false}
+				gotSchema, _ := json.Marshal(request.Params["outputSchema"])
+				wantSchemaJSON, _ := json.Marshal(wantSchema)
+				if string(gotSchema) != string(wantSchemaJSON) {
+					return
+				}
+				_, _ = io.WriteString(trace, "task/start\n")
+				taskPrompt = prompt
+				if strings.Contains(taskPrompt, setupMarker) {
+					return
+				}
+				if mode != "direct_stream" && mode != "stream_count_budget" && !strings.HasPrefix(mode, "delayed_") {
+					emitChildren()
+				}
+			}
+			result = map[string]any{"turn": map[string]any{"id": activeID, "status": "inProgress", "items": []any{}}}
+		case "thread/read":
+			if strings.HasPrefix(mode, "startup_late_") {
+				thread, status := "PRIVATE_PARENT", "failed"
+				var terminalError any
+				if mode == "startup_late_error" {
+					status, terminalError = "completed", map[string]any{"message": "PRIVATE_ERROR"}
+				}
+				if mode == "startup_late_unrelated" {
+					thread = "PRIVATE_OTHER"
+				}
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": map[string]any{"id": "PRIVATE_PARENT_TURN", "status": status, "error": terminalError, "items": []any{}}}})
+			}
+			if mode == "late_conflict" && request.Params["threadId"] == "PRIVATE_CHILD" {
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "PRIVATE_PARENT", "turn": map[string]any{"id": "PRIVATE_PARENT_TURN", "status": "failed", "items": []any{}}}})
+			}
+			id := request.Params["threadId"].(string)
+			if id == "PRIVATE_CHILD" && (mode == "child_terminal_failed" || mode == "child_terminal_interrupted" || mode == "child_terminal_error" || mode == "first_conflict_second_valid") || id == "PRIVATE_CHILD_TWO" && mode == "conflict_during_other_read" {
+				status := "failed"
+				var terminalError any
+				if mode == "child_terminal_interrupted" {
+					status = "interrupted"
+				}
+				if mode == "child_terminal_error" {
+					status, terminalError = "completed", map[string]any{"message": "PRIVATE_ERROR"}
+				}
+				notify("turn/completed", "PRIVATE_CHILD", "PRIVATE_CHILD_TURN", map[string]any{"id": "PRIVATE_CHILD_TURN", "status": status, "error": terminalError})
+			}
+			if id == "PRIVATE_CHILD" && mode == "unrelated_terminal_failure" {
+				notify("turn/completed", "PRIVATE_OTHER", "PRIVATE_CHILD_TURN", map[string]any{"id": "PRIVATE_CHILD_TURN", "status": "failed"})
+			}
+			result = snapshot(id)
+			if wrapped, ok := result.(map[string]any); ok {
+				if thread, ok := wrapped["thread"].(map[string]any); ok {
+					wrapped["thread"] = shippedProtocolThread(thread)
+				}
+			}
+		default:
+			return
+		}
+		_ = output.Encode(map[string]any{"id": request.ID, "result": result})
+		if request.Method == "thread/read" && request.Params["threadId"] == "PRIVATE_CHILD" && strings.HasPrefix(mode, "delayed_") {
+			emitChildren()
+		}
+		if request.Method == "turn/start" && phase == 2 && (mode == "direct_stream" || mode == "stream_count_budget") {
+			emitChildren()
+			if mode == "stream_count_budget" {
+				for i := 0; i < 513; i++ {
+					notify("rawResponseItem/completed", "PRIVATE_OTHER", "other", map[string]any{"type": "reasoning"})
+				}
+			}
+		}
+		if request.Method == "turn/start" {
+			terminal := map[string]any{"id": activeID, "status": "completed", "error": nil, "items": []any{}}
+			threadID := "PRIVATE_PARENT"
+			if phase == 2 {
+				if mode == "failed" || mode == "interrupted" {
+					terminal["status"] = mode
+				}
+				if mode == "wrong_thread" {
+					threadID = "PRIVATE_OTHER"
+				}
+				if mode == "wrong_turn" {
+					terminal["id"] = "PRIVATE_OTHER"
+				}
+				if mode == "missing_terminal" {
+					return
+				}
+			}
+			if phase == 1 && mode == "seed_failed" {
+				terminal["status"] = "failed"
+			}
+			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": terminal}})
+			if phase == 2 && mode == "conflict" {
+				terminal["status"] = "failed"
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": terminal}})
+			}
+			if phase == 2 && (mode == "wrong_thread" || mode == "wrong_turn") {
+				return
+			}
+		}
+	}
+}
+
+func TestShippedCatalogRequiresCompleteDTOs(t *testing.T) {
+	for _, mode := range []string{"ok", "extra_model", "missing_model", "duplicate_model", "reordered", "wrong_default", "missing_effort", "wrong_effort", "missing_v2", "missing_modalities", "pagination"} {
+		t.Run(mode, func(t *testing.T) {
+			opts := fixtureOptions(t, "shipped:"+mode)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			got, err := live.ShippedCatalog(ctx, opts.Subject, opts.APIKey)
+			if (err == nil) != (mode == "ok") {
+				t.Fatalf("catalog oracle mismatch: %+v %v", got, err)
+			}
+			if err == nil && (!got.ShippedCatalog || got.CatalogModels != 2 || got.Turns != 0 || got.Threads != 0) {
+				t.Fatal("catalog-only scope changed")
+			}
+		})
+	}
+}
+
+func shippedChildSuccess(mode string) bool {
+	switch mode {
+	// Public inherited-item presentation is not the semantic recall proof.
+	case "parent_tool_rounds", "parent_large_intermediate", "child_nonce_uppercase", "auxiliary_tool_before_result", "auxiliary_tool_between_fragments", "ambiguous_results", "empty_reply_fragments", "parent_history_item_id", "raw_prose", "prior_error_mismatch", "reasoning_current", "reasoning_seed", "reasoning_inherited", "marker_reply_uppercase", "parent_nonce_uppercase", "host_user_context", "marker_split_valid", "paginated_history", "child_no_history", "child_partial_history", "child_history_item_id", "child_history_content", "child_history_order", "marker_after_result", "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "known_metadata", "prior_failed", "inherited_diagnostic", "delayed_stream", "inherited_task_history", "closed_after_result", "split_after_result_mention", "direct_stream", "after_result_mention", "later_turn_fresh", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn":
+		return true
+	}
+	return false
+}
+
+func TestShippedStartupAndChildRejectIncompleteEvidence(t *testing.T) {
+	// Final-fragment and closure cases keep freshness tied to the actual result,
+	// while the child still needs a consistent completed terminal.
+	modes := []string{"parent_tool_rounds", "parent_large_intermediate", "parent_null", "parent_missing_field", "parent_extra_field", "parent_duplicate_field", "parent_wrong_type", "parent_wrong_nonce", "parent_nonce_embedded", "parent_two_json", "child_nonce_uppercase", "empty_reply_fragments", "parent_history_item_id", "parent_history_content", "parent_history_order", "raw_prose", "prior_error_missing", "reasoning_current", "reasoning_seed", "reasoning_inherited", "reasoning_current_known", "reasoning_seed_known", "marker_reply_uppercase", "parent_nonce_uppercase", "marker_input_uppercase", "nonce_input_uppercase", "nonce_known_uppercase", "paginated_parent_supplied", "paginated_parent_supplied_uppercase", "host_user_context", "direct_user_only", "marker_user_supplied", "marker_split_valid", "marker_split_supplied", "auxiliary_tool_between_fragments", "paginated_history", "missing_marker", "wrong_marker", "marker_input_supplied", "marker_prior_supplied", "marker_followup_supplied", "marker_host_supplied", "auxiliary_tool_before_result", "marker_after_result", "root_cli", "root_vscode", "root_exec", "root_unknown", "root_custom", "root_invalid", "root_number", "root_boolean", "root_array", "child_unit_source", "known_commentary_result", "known_user_result", "known_metadata", "known_legacy_result", "prior_failed", "prior_conflict", "prior_error_mismatch", "inherited_diagnostic", "delayed_stream", "delayed_out_of_order", "delayed_missing_input", "delayed_missing_terminal", "inherited_task_history", "inherited_supplied", "closed_after_result", "split_after_result_mention", "split_before_result_supplied", "direct_stream", "input_after_result", "missing_prior_stream", "stream_byte_budget", "stream_count_budget", "missing_activity", "child_path", "activity_child", "missing_stream", "missing_input", "missing_child_start", "missing_child_terminal", "missing_raw_result", "encrypted_input", "input_recipient", "raw_child", "raw_turn", "raw_text", "closed_child", "followup_supplied", "later_turn_supplied", "later_turn_fresh", "after_result_mention", "child_terminal_failed", "child_terminal_interrupted", "child_terminal_error", "conflict_during_other_read", "first_conflict_second_valid", "unrelated_terminal_failure", "ok", "many_valid", "multiple_results", "incidental_unrelated", "late_conflict", "parent_prose", "incidental_failed", "incidental_running", "incidental_spawn_failure", "child_later_failure", "child_later_turn", "child_no_history", "child_partial_history", "child_history_id", "child_history_item_id", "child_history_content", "child_history_order", "parent_history_changed", "cross_binding", "known_result", "prompt_supplied", "ambiguous_results", "seed_failed", "wrong_start_provider", "failed", "interrupted", "wrong_thread", "wrong_turn", "missing_terminal", "conflict", "stale", "duplicate_turn", "missing_reply", "wrong_history_provider", "wrong_history_model", "child_provider", "child_model", "child_parent", "child_fresh", "child_failed", "child_interrupted", "child_missing", "child_inherited", "child_mismatch", "spawn_failed", "spawn_sender", "unrelated_recipient"}
+	for _, mode := range modes {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			opts := fixtureOptions(t, "shipped:"+mode)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			got, err := live.ShippedChildCollaboration(ctx, opts.Subject, opts.APIKey)
+			if (err == nil) != shippedChildSuccess(mode) {
+				t.Fatalf("child oracle mismatch: %+v %v", got, err)
+			}
+			if err == nil && (!got.ChildBound || !got.ChildCompleted || !got.ChildResultDelivered || got.Turns != 2 || got.SetupTurns != 1 || got.TaskTurns != 1 || !got.SetupCompleted) {
+				t.Fatal("complete child proof absent")
+			}
+			if mode == "known_result" && live.DescribeFailure(err).Code != "child_result_not_proven" {
+				t.Fatal("supplied-result rejection lost its semantic failure code")
+			}
+			if strings.Contains(fmt.Sprint(got, err), "PRIVATE_") {
+				t.Fatal("private fixture data escaped")
+			}
+			var script struct{ Trace string }
+			_ = json.Unmarshal([]byte(opts.APIKey), &script)
+			trace, _ := os.ReadFile(script.Trace)
+			if strings.Count(string(trace), "turn/start\n") > 2 || strings.Count(string(trace), "setup/start\n") > 1 || strings.Count(string(trace), "task/start\n") > 1 {
+				t.Fatal("semantic turn resubmitted")
+			}
+		})
+	}
+	opts := fixtureOptions(t, "shipped:startup")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	got, err := live.ShippedStartup(ctx, opts.Subject, opts.APIKey)
+	if err != nil || !got.Completed || !got.ShippedCatalog || got.Turns != 1 {
+		t.Fatalf("startup: %+v %v", got, err)
+	}
+}
+
+func TestShippedPinnedUsesRetainedHistoryScenario(t *testing.T) {
+	opts := fixtureOptions(t, "history:shipped")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	got, err := live.ShippedPinned(ctx, opts.Subject, opts.APIKey)
+	if err != nil || got.Model != "grok-4.6" || !got.ShippedCatalog || !got.Recalled || got.Turns != 2 {
+		t.Fatalf("pinned: %+v %v", got, err)
+	}
+}
+
+func TestShippedStartupRevalidatesAdmittedTerminal(t *testing.T) {
+	for _, mode := range []string{"startup_late_failed", "startup_late_error", "startup_late_unrelated"} {
+		t.Run(mode, func(t *testing.T) {
+			options := fixtureOptions(t, "shipped:"+mode)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			got, err := live.ShippedStartup(ctx, options.Subject, options.APIKey)
+			accepted := mode == "startup_late_unrelated"
+			if (err == nil) != accepted || got.Completed != accepted || got.Turns != 1 {
+				t.Fatalf("terminal contradiction check: %+v %v", got, err)
+			}
+			if strings.Contains(fmt.Sprint(got, err), "PRIVATE_") {
+				t.Fatal("private terminal evidence escaped")
+			}
+		})
+	}
+}
+
+// Native output constraints make the parent result unambiguous; they never
+// substitute for the actual child's inherited context and consumed-input proof.
+func TestChildStructuredResultDiagnostics(t *testing.T) {
+	for _, mode := range []string{"ok", "parent_null", "parent_duplicate_field", "child_parent", "prompt_supplied"} {
+		t.Run(mode, func(t *testing.T) {
+			opts := fixtureOptions(t, "shipped:"+mode)
+			dir := t.TempDir()
+			diagnostics := live.NewDiagnostics(dir)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, err := live.ShippedChildCollaboration(ctx, opts.Subject, opts.APIKey, diagnostics)
+			diagnostics.Close()
+			if (err == nil) != (mode == "ok") {
+				t.Fatalf("structured result changed actual child oracle: %v", err)
+			}
+			data, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			var requests []map[string]any
+			var result map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var event struct {
+					Kind   string         `json:"kind"`
+					Fields map[string]any `json:"fields"`
+				}
+				if json.Unmarshal([]byte(line), &event) != nil {
+					t.Fatal("invalid diagnostic event")
+				}
+				if event.Kind == "product_turn_request" {
+					requests = append(requests, event.Fields)
+				}
+				if event.Kind == "child_parent_result" {
+					result = event.Fields
+				}
+			}
+			if len(requests) != 2 || requests[0]["output_schema"] != nil || requests[1]["output_schema"] == nil {
+				t.Fatal("setup/task schema phase diagnostics incorrect")
+			}
+			if result == nil || result["reply"] == nil {
+				t.Fatal("public parent result missing from diagnostics")
+			}
+			if mode == "ok" && (result["parsed_nonce"] != "12345678-1234-4234-8234-123456789abc" || !strings.Contains(string(data), "child_stream_check")) {
+				t.Fatal("parsed result and independent child proof missing")
+			}
+			if (mode == "parent_null" || mode == "parent_duplicate_field") && (!strings.Contains(string(data), "child_candidate") || !strings.Contains(string(data), "child_result_uncredited")) {
+				t.Fatal("invalid parent output lost actual child diagnostic evidence")
+			}
+			if mode == "parent_duplicate_field" && result["parse_valid"] != false {
+				t.Fatal("malformed parent schema result was credited")
+			}
+		})
+	}
+}

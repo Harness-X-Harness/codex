@@ -1,0 +1,36 @@
+name: grok-build
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+    outputs:
+      artifact-id:
+        value: ${{ jobs.package.outputs.artifact-id }}
+      artifact-digest:
+        value: ${{ jobs.package.outputs.artifact-digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package
+    runs-on: ${{ inputs.target == 'x86_64-unknown-linux-musl' && 'ubuntu-24.04' || 'macos-15' }}
+    timeout-minutes: 170
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    outputs:
+      artifact-id: ${{ steps.package.outputs.artifact-id }}
+      artifact-digest: ${{ steps.package.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/build-grok
+        id: package
+        with:
+          target: ${{ inputs.target }}

@@ -119,3 +119,28 @@ fn agent_status_uses_reasoning_summaries_only() {
     assert!(!rendered.contains("hidden raw reasoning"));
     assert!(!rendered.contains("raw-only reasoning"));
 }
+
+#[test]
+fn agent_status_hosted_web_preserves_bounded_query() {
+    let mut store = ThreadEventStore::new(/*capacity*/ 8);
+    store.push_notification(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: codex_app_server_protocol::ThreadItem::untimed(ThreadItemPayload::WebSearch(
+                codex_app_server_protocol::WebSearchItem {
+                    id: "web-item".into(),
+                    query: "日".repeat(2_000),
+                    action: None,
+                    results: None,
+                },
+            )),
+            thread_id: "thread-child".into(),
+            turn_id: "turn-1".into(),
+            completed_at_ms: 1,
+        },
+    ));
+    let preview = AgentStatusThreadPreview::from_store("/root/reviewer".into(), &store);
+    assert_eq!(
+        preview.activity,
+        vec![format!("Web search: {}...", "日".repeat(225))]
+    );
+}

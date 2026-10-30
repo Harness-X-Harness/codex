@@ -109,6 +109,7 @@ pub(crate) async fn build_prompt_input_from_session(
         .for_prompt(
             &step_context.settings.model_info.input_modalities,
             sess.services.image_store.as_ref(),
+            turn_context.provider.api_dialect(),
         )
         .await;
     let base_instructions = sess.get_base_instructions().await;

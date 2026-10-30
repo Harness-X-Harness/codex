@@ -32,6 +32,7 @@ use crate::session::turn_context::TurnContext;
 use crate::utils::json::serialized_json_bytes;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_api::ApiDialect;
 use codex_attachment_store::AttachmentStore;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
@@ -605,8 +606,9 @@ impl ContextManager {
         self,
         input_modalities: &[InputModality],
         image_store: &dyn AttachmentStore,
+        dialect: ApiDialect,
     ) -> Vec<ResponseItem> {
-        self.for_prompt_annotated(input_modalities, image_store)
+        self.for_prompt_annotated(input_modalities, image_store, dialect)
             .await
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
@@ -618,8 +620,9 @@ impl ContextManager {
         mut self,
         input_modalities: &[InputModality],
         image_store: &dyn AttachmentStore,
+        dialect: ApiDialect,
     ) -> Vec<ResponseItemEnvelope> {
-        self.normalize_history(input_modalities);
+        self.normalize_history(input_modalities, dialect);
         replace_unresolvable_image_files(
             Arc::make_mut(&mut self.items)
                 .iter_mut()
@@ -983,11 +986,17 @@ impl ContextManager {
     /// 1. every call (function/custom) has a corresponding output entry
     /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
-    pub(crate) fn normalize_history(&mut self, input_modalities: &[InputModality]) {
+    pub(crate) fn normalize_history(
+        &mut self,
+        input_modalities: &[InputModality],
+        dialect: ApiDialect,
+    ) {
         let items = Arc::make_mut(&mut self.items);
 
-        // all function/tool calls must have a corresponding output
-        normalize::ensure_call_outputs_present(items);
+        // Only explicitly recognized provider completions are exempt from pairing.
+        normalize::ensure_call_outputs_present_except_hosted(items, |item| {
+            dialect == ApiDialect::Grok && codex_protocol::grok_hosted::is_completed_search(item)
+        });
 
         // Paired outputs must have a corresponding call; named external outputs stand alone.
         normalize::remove_orphan_outputs(items);

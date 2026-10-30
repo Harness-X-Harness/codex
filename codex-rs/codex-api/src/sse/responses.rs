@@ -1,11 +1,14 @@
+use super::grok::GrokSequencer;
 use super::responses_error::parse_failed_response;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
+use crate::common::SearchActivityAdmission;
 use crate::error::ApiError;
 use crate::error::parse_terminal_provider_error;
 use crate::guardian_assessment::parse_guardian_assessment;
+use crate::provider::ApiDialect;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
@@ -21,6 +24,7 @@ use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -36,11 +40,13 @@ const OPENAI_MODEL_HEADER: &str = "openai-model";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
-pub fn spawn_response_stream(
+pub(crate) fn spawn_response_stream_with_search(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
+    dialect: ApiDialect,
+    search_activity: SearchActivityAdmission,
 ) -> ResponseStream {
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
@@ -94,6 +100,8 @@ pub fn spawn_response_stream(
             idle_timeout,
             telemetry,
             safety_buffering_treatment,
+            dialect,
+            search_activity,
         )
         .await;
     });
@@ -164,11 +172,14 @@ pub struct ResponsesStreamEvent {
     pub(crate) kind: String,
     pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
-    response: Option<Value>,
+    pub(super) response: Option<Value>,
     response_id: Option<Value>,
     error: Option<Value>,
-    item: Option<Value>,
-    item_id: Option<String>,
+    pub(super) item: Option<Value>,
+    pub(super) item_id: Option<String>,
+    // Preserve the wire type check even though canonical delivery uses the item.
+    #[serde(rename = "input")]
+    _input: Option<String>,
     call_id: Option<String>,
     delta: Option<String>,
     text: Option<String>,
@@ -566,6 +577,8 @@ pub async fn process_sse(
         idle_timeout,
         telemetry,
         SafetyBufferingTreatment::default(),
+        ApiDialect::OpenAi,
+        SearchActivityAdmission::Disabled,
     )
     .await;
 }
@@ -576,62 +589,87 @@ async fn process_sse_with_treatment(
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
+    dialect: ApiDialect,
+    search_activity: SearchActivityAdmission,
 ) {
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut sequencer = (dialect == ApiDialect::Grok).then(|| GrokSequencer::new(search_activity));
+    let mut ready = VecDeque::new();
 
     loop {
-        let start = Instant::now();
-        let response = tokio::select! {
-            biased;
-            _ = tx_event.closed() => return,
-            response = timeout(idle_timeout, stream.next()) => response,
-        };
-        if let Some(t) = telemetry.as_ref() {
-            t.on_sse_poll(&response, start.elapsed());
-        }
-        let sse = match response {
-            Ok(Some(Ok(sse))) => sse,
-            Ok(Some(Err(e))) => {
-                debug!("SSE Error: {e:#}");
-                let error = match e {
-                    eventsource_stream::EventStreamError::Transport(
-                        error @ codex_client::TransportError::Policy(_),
-                    ) => ApiError::Transport(error),
-                    error => ApiError::Stream(error.to_string()),
-                };
-                let _ = tx_event.send(Err(error)).await;
-                return;
+        let event = if let Some(event) = ready.pop_front() {
+            event
+        } else {
+            let start = Instant::now();
+            let response = tokio::select! {
+                biased;
+                _ = tx_event.closed() => return,
+                response = timeout(idle_timeout, stream.next()) => response,
+            };
+            if let Some(t) = telemetry.as_ref() {
+                t.on_sse_poll(&response, start.elapsed());
             }
-            Ok(None) => {
-                let error = response_error.unwrap_or(ApiError::Stream(
-                    "stream closed before response.completed".into(),
-                ));
-                let _ = tx_event.send(Err(error)).await;
-                return;
-            }
-            Err(_) => {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
-                    .await;
-                return;
-            }
-        };
+            let sse = match response {
+                Ok(Some(Ok(sse))) => sse,
+                Ok(Some(Err(e))) => {
+                    debug!("SSE Error: {e:#}");
+                    let error = match e {
+                        eventsource_stream::EventStreamError::Transport(
+                            error @ codex_client::TransportError::Policy(_),
+                        ) => ApiError::Transport(error),
+                        error => ApiError::Stream(error.to_string()),
+                    };
+                    let _ = tx_event.send(Err(error)).await;
+                    return;
+                }
+                Ok(None) => {
+                    let error = response_error.unwrap_or(ApiError::Stream(
+                        "stream closed before response.completed".into(),
+                    ));
+                    let _ = tx_event.send(Err(error)).await;
+                    return;
+                }
+                Err(_) => {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream("idle timeout waiting for SSE".into())))
+                        .await;
+                    return;
+                }
+            };
 
-        trace!("SSE event: {}", &sse.data);
+            trace!("SSE event: {}", &sse.data);
 
-        let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
-            Ok(event) => event,
-            Err(e) => {
-                debug!(
-                    error_category = ?e.classify(),
-                    error_line = e.line(),
-                    error_column = e.column(),
-                    payload_bytes = sse.data.len(),
-                    "Failed to parse SSE event"
-                );
+            if let Some(sequencer) = sequencer.as_mut() {
+                match sequencer.push(sse) {
+                    Ok((activity, events)) => {
+                        if let Some(activity) = activity
+                            && tx_event.send(Ok(activity)).await.is_err()
+                        {
+                            return;
+                        }
+                        ready.extend(events);
+                    }
+                    Err(error) => {
+                        let _ = tx_event.send(Err(error)).await;
+                        return;
+                    }
+                }
                 continue;
+            }
+            match serde_json::from_str(&sse.data) {
+                Ok(event) => event,
+                Err(e) => {
+                    debug!(
+                        error_category = ?e.classify(),
+                        error_line = e.line(),
+                        error_column = e.column(),
+                        payload_bytes = sse.data.len(),
+                        "Failed to parse SSE event"
+                    );
+                    continue;
+                }
             }
         };
         let safety_buffering = event.safety_buffering(&safety_buffering_treatment);
@@ -655,6 +693,20 @@ async fn process_sse_with_treatment(
             }
         }
 
+        if dialect == ApiDialect::Grok
+            && event.kind == "response.incomplete"
+            && event.response.as_ref().is_some_and(|response| {
+                response["incomplete_details"]["reason"].as_str() == Some("interrupted")
+            })
+        {
+            let _ = tx_event
+                .send(Err(ApiError::Stream(
+                    "Grok stream interrupted before response.completed".into(),
+                )))
+                .await;
+            return;
+        }
+        let is_grok_error = dialect == ApiDialect::Grok && event.kind == "error";
         match process_responses_event(event) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
@@ -665,13 +717,23 @@ async fn process_sse_with_treatment(
                     return;
                 }
             }
+            Ok(None) if is_grok_error => {
+                let _ = tx_event
+                    .send(Err(ApiError::Stream(
+                        "Grok stream reported an error".into(),
+                    )))
+                    .await;
+                return;
+            }
             Ok(None) => {}
             Err(error) => {
                 let error = error.into_api_error();
-                if matches!(
-                    error,
-                    ApiError::FlexUnavailable | ApiError::ResponseIncomplete(_)
-                ) {
+                if dialect == ApiDialect::Grok
+                    || matches!(
+                        error,
+                        ApiError::FlexUnavailable | ApiError::ResponseIncomplete(_)
+                    )
+                {
                     let _ = tx_event.send(Err(error)).await;
                     return;
                 }
@@ -1554,11 +1616,13 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             stream_response,
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         assert_eq!(stream.upstream_request_id.as_deref(), Some("req-1"));
         let event = stream
@@ -1594,11 +1658,13 @@ mod tests {
             bytes: Box::pin(bytes),
         };
 
-        let mut stream = spawn_response_stream(
+        let mut stream = spawn_response_stream_with_search(
             stream_response,
             idle_timeout(),
             /*telemetry*/ None,
             /*turn_state*/ None,
+            ApiDialect::OpenAi,
+            SearchActivityAdmission::Disabled,
         );
         let mut events = Vec::new();
         while let Some(event) = stream.rx_event.recv().await {
@@ -2063,6 +2129,28 @@ mod tests {
             serde_json::from_value(event).expect("expected event to deserialize");
 
         assert_eq!(event.model_verifications(), None);
+    }
+
+    #[test]
+    fn responses_stream_event_validates_optional_input_wire_type() {
+        let event = json!({"type": "response.custom_tool_call_input.done"});
+        assert!(serde_json::from_value::<ResponsesStreamEvent>(event.clone()).is_ok());
+        for input in [json!(null), json!("tool input")] {
+            let mut event = event.clone();
+            event["input"] = input;
+            assert!(serde_json::from_value::<ResponsesStreamEvent>(event).is_ok());
+        }
+        for input in [json!(1), json!({}), json!([]), json!(true)] {
+            let mut event = event.clone();
+            event["input"] = input;
+            assert!(serde_json::from_value::<ResponsesStreamEvent>(event).is_err());
+        }
+        assert!(
+            serde_json::from_str::<ResponsesStreamEvent>(
+                r#"{"type":"response.custom_tool_call_input.done","input":"a","input":"b"}"#,
+            )
+            .is_err()
+        );
     }
 
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
