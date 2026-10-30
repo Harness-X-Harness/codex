@@ -7,9 +7,12 @@ use crate::common::SearchActivityAdmission;
 use crate::error::ApiError;
 use codex_protocol::SearchActivityKind;
 use codex_protocol::SearchActivityState;
+use codex_protocol::grok_hosted::HostedReplayError;
+use codex_protocol::grok_hosted::hosted_replay_byte_limit;
 use codex_protocol::grok_hosted::is_x_search_name;
-use codex_protocol::grok_hosted::project_search_replay;
+use codex_protocol::grok_hosted::project_search_replay_with_diagnostics;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction;
 use eventsource_stream::Event;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -164,8 +167,15 @@ impl GrokSequencer {
                         ));
                     }
                     if bound.web {
-                        project_search_replay(&item)
-                            .map_err(|_| invalid("invalid completed Web search"))?;
+                        project_search_replay_with_diagnostics(&item).map_err(|error| {
+                            invalid_web_completion(
+                                &item,
+                                &error,
+                                index,
+                                frame_bytes,
+                                bound.status_completed,
+                            )
+                        })?;
                         state = Some(SearchActivityState::Completed);
                     }
                     bound.closed = true;
@@ -320,4 +330,47 @@ fn parse_item(
 
 fn invalid(reason: &str) -> ApiError {
     ApiError::Stream(format!("Grok stream: {reason}"))
+}
+
+fn invalid_web_completion(
+    item: &ResponseItem,
+    error: &HostedReplayError,
+    index: u64,
+    frame_bytes: usize,
+    completion_status_seen: bool,
+) -> ApiError {
+    let (status, action) = match item {
+        ResponseItem::WebSearchCall { status, action, .. } => {
+            let status = match status.as_deref() {
+                None => "missing",
+                Some("completed") => "completed",
+                Some("failed") => "failed",
+                Some("incomplete") => "incomplete",
+                Some("in_progress") => "in_progress",
+                Some("searching") => "searching",
+                Some("cancelled") => "cancelled",
+                Some(_) => "other",
+            };
+            let action = match action {
+                None => "missing",
+                Some(WebSearchAction::Search { .. }) => "search",
+                Some(WebSearchAction::OpenPage { .. }) => "open_page",
+                Some(WebSearchAction::FindInPage { .. }) => "find_in_page",
+                Some(WebSearchAction::Other) => "other",
+            };
+            (status, action)
+        }
+        _ => ("not_web", "not_web"),
+    };
+    // Only finite labels and local sizes/indexes cross the public error bridge.
+    // Provider status strings, IDs, queries, URLs and payloads stay out. Keep the
+    // existing Stream category so diagnostics cannot change retry eligibility.
+    invalid(&format!(
+        "invalid completed Web search (reason={}, status={status}, action={action}, \
+         replay_bytes={}, replay_cap_bytes={}, output_index={index}, \
+         frame_bytes={frame_bytes}, completion_status_seen={completion_status_seen})",
+        error.reason(),
+        error.replay_bytes_class(),
+        hosted_replay_byte_limit(),
+    ))
 }

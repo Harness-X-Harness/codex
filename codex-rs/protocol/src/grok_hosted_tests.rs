@@ -147,4 +147,70 @@ fn web_replay_query_bound_uses_exact_wire_fields_without_metadata() {
         project_search_replay(&above).unwrap_err(),
         "Grok hosted replay exceeds the 10000 estimated-token context limit"
     );
+    let error = project_search_replay_with_diagnostics(&above).unwrap_err();
+    assert_eq!(error.reason(), "replay_too_large");
+    assert_eq!(error.replay_bytes_class(), "over_cap");
+    assert_eq!(hosted_replay_byte_limit(), max);
+}
+
+#[test]
+fn web_replay_rejection_reasons_preserve_the_existing_admission_and_error_text() {
+    let base = json!({
+        "type":"web_search_call", "id":"private-id", "status":"completed",
+        "action":{"type":"search", "query":"private-query"}
+    });
+    for (field, field_value, reason) in [
+        ("id", json!(null), "missing_identity"),
+        ("id", json!(""), "missing_identity"),
+        ("status", json!(null), "missing_status"),
+        ("status", json!("in_progress"), "non_completed_status"),
+        ("status", json!("failed"), "non_completed_status"),
+        ("status", json!("private-status"), "non_completed_status"),
+        ("action", json!(null), "missing_action"),
+        (
+            "action",
+            json!({"type":"private-action", "query":"private-query"}),
+            "unknown_action",
+        ),
+    ] {
+        let mut value = base.clone();
+        value[field] = field_value;
+        let item: ResponseItem = serde_json::from_value(value).unwrap();
+        assert!(!is_completed_web_search(&item));
+        let error = project_search_replay_with_diagnostics(&item).unwrap_err();
+        assert_eq!(error.reason(), reason);
+        assert_eq!(error.replay_bytes_class(), "not_measured");
+        assert_eq!(error.to_string(), "unsupported Grok hosted replay item");
+        assert_eq!(project_search_replay(&item).unwrap_err(), error.to_string());
+        assert!(!error.to_string().contains("private-"));
+    }
+}
+
+#[test]
+fn classified_replay_keeps_supported_empty_details_and_non_replayed_metadata() {
+    for action in [
+        json!({"type":"search"}),
+        json!({"type":"search", "queries":[]}),
+        json!({"type":"open_page"}),
+        json!({"type":"open_page", "url":""}),
+        json!({"type":"find_in_page"}),
+        json!({"type":"find_in_page", "pattern":""}),
+    ] {
+        let item: ResponseItem = serde_json::from_value(json!({
+            "type":"web_search_call", "id":"web-id", "status":"completed",
+            "action":action,
+            "internal_chat_message_metadata_passthrough":{
+                "turn_id":"metadata".repeat(hosted_replay_byte_limit())
+            }
+        }))
+        .unwrap();
+        let projected = project_search_replay_with_diagnostics(&item).unwrap();
+        assert_eq!(projected, project_search_replay(&item).unwrap());
+        assert_eq!(projected["action"], action);
+        assert!(
+            projected
+                .get("internal_chat_message_metadata_passthrough")
+                .is_none()
+        );
+    }
 }

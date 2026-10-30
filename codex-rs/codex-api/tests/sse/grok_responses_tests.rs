@@ -393,6 +393,179 @@ async fn grok_search_activity_rejects_unbound_conflicting_and_false_completion()
     Ok(())
 }
 
+#[tokio::test]
+async fn grok_web_rejection_diagnostics_cross_the_stream_bridge_without_content_or_completion()
+-> Result<()> {
+    let private_query = "private-query";
+    let private_id = "private-item-id";
+    let mut cases = Vec::new();
+    for (status, status_class) in [
+        (json!(null), "missing"),
+        (json!("failed"), "failed"),
+        (json!("incomplete"), "incomplete"),
+        (json!("in_progress"), "in_progress"),
+        (json!("searching"), "searching"),
+        (json!("cancelled"), "cancelled"),
+        (json!("private-status"), "other"),
+    ] {
+        let mut item = web_item("completed");
+        item["status"] = status;
+        cases.push((
+            item,
+            if status_class == "missing" {
+                "missing_status"
+            } else {
+                "non_completed_status"
+            },
+            status_class,
+            "search",
+            "not_measured",
+        ));
+    }
+    for (action, reason, action_class, bytes_class) in [
+        (json!(null), "missing_action", "missing", "not_measured"),
+        (
+            json!({"type":"private-action", "url":"https://private-url.invalid"}),
+            "unknown_action",
+            "other",
+            "not_measured",
+        ),
+        (
+            json!({"type":"search", "query":private_query.repeat(10_000)}),
+            "replay_too_large",
+            "search",
+            "over_cap",
+        ),
+        (
+            json!({"type":"open_page", "url":"https://private-url.invalid".repeat(2_000)}),
+            "replay_too_large",
+            "open_page",
+            "over_cap",
+        ),
+        (
+            json!({"type":"find_in_page", "pattern":"private-pattern".repeat(4_000)}),
+            "replay_too_large",
+            "find_in_page",
+            "over_cap",
+        ),
+    ] {
+        let mut item = web_item("completed");
+        item["action"] = action;
+        cases.push((item, reason, "completed", action_class, bytes_class));
+    }
+    for (mut item, reason, status, action, bytes_class) in cases {
+        item["id"] = json!(private_id);
+        if reason != "replay_too_large" && action == "search" {
+            item["action"]["query"] = json!(private_query);
+        }
+        for completion_status_seen in [false, true] {
+            let mut start = web_item("in_progress");
+            start["id"] = json!(private_id);
+            let done = item_frame("response.output_item.done", /*index*/ 0, item.clone());
+            let frame_bytes = serde_json::to_string(&done)?.len();
+            let mut events = vec![item_frame(
+                "response.output_item.added",
+                /*index*/ 0,
+                start,
+            )];
+            if completion_status_seen {
+                events.push(json!({
+                    "type":"response.web_search_call.completed", "output_index":0,
+                    "item_id":private_id
+                }));
+            }
+            events.extend([done, completed()]);
+            let result = run_web_events(events, ApiDialect::Grok).await?;
+            let Some(Err(ApiError::Stream(diagnostic))) = result.last() else {
+                panic!("rejection must retain the existing stream-error category: {result:?}");
+            };
+            assert_eq!(
+                diagnostic,
+                &format!(
+                    "Grok stream: invalid completed Web search (reason={reason}, \
+                     status={status}, action={action}, replay_bytes={bytes_class}, \
+                     replay_cap_bytes={}, output_index=0, frame_bytes={frame_bytes}, \
+                     completion_status_seen={completion_status_seen})",
+                    codex_protocol::grok_hosted::hosted_replay_byte_limit(),
+                )
+            );
+            assert!(diagnostic.len() < 512);
+            let bridged = codex_api::map_api_error(ApiError::Stream(diagnostic.clone()));
+            assert!(matches!(
+                bridged.details(),
+                codex_protocol::error::CodexErrorDetails::Stream(message) if message == diagnostic
+            ));
+            assert!(bridged.retry_delay(1).is_some());
+            assert!(bridged.retry_after().is_none());
+            for private in [
+                private_query,
+                private_id,
+                "private-url",
+                "private-pattern",
+                "private-status",
+                "private-action",
+            ] {
+                assert!(!diagnostic.contains(private));
+            }
+            assert!(result.iter().all(|event| !matches!(
+                event,
+                Ok(ResponseEvent::SearchActivity {
+                    state: codex_protocol::SearchActivityState::Completed,
+                    ..
+                }) | Ok(ResponseEvent::OutputItemDone(
+                    ResponseItem::WebSearchCall { .. }
+                ))
+            )));
+            assert_failed(result);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_web_diagnostics_do_not_require_optional_action_details() -> Result<()> {
+    for action in [
+        json!({"type":"search"}),
+        json!({"type":"open_page"}),
+        json!({"type":"find_in_page"}),
+    ] {
+        let mut item = web_item("completed");
+        item["action"] = action;
+        let result = run_web_events(
+            vec![
+                item_frame(
+                    "response.output_item.added",
+                    /*index*/ 0,
+                    web_item("in_progress"),
+                ),
+                item_frame("response.output_item.done", /*index*/ 0, item),
+                completed(),
+            ],
+            ApiDialect::Grok,
+        )
+        .await?;
+        assert!(result.iter().all(Result::is_ok));
+        assert_eq!(
+            result
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    Ok(ResponseEvent::SearchActivity {
+                        state: codex_protocol::SearchActivityState::Completed,
+                        ..
+                    })
+                ))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            result.last(),
+            Some(Ok(ResponseEvent::Completed { .. }))
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct GatedSearchTransport(Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<String>>>>);
 
