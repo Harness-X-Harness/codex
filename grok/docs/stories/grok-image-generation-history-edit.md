@@ -17,27 +17,32 @@ This Story does not prove Mini routing/accounting or Grok Build.
 
 Given a fresh isolated environment and the identified binary/model:
 
-1. A natural request asks for a dog on a plain background. Its Turn completes
-   and supplies a completed public image with a user-accessible, decodable PNG.
-2. A fresh judge Thread receives those actual image pixels and the question
-   "Is there a dog in the photo?" It receives no producer conversation/history.
-   The turn uses the SDK's formal output schema `{"type":"boolean"}`; its
-   completed final response must be the JSON boolean `true`.
-3. The original generation Thread receives a natural request to add a red hat
-   while keeping the dog and background. Its Turn completes with a public image
-   and matching saved PNG.
-4. Another fresh judge Thread receives the edited pixels and the question
-   "Is there a dog wearing a red hat in the photo?" The same boolean output
-   schema applies, and its completed final response must be `true`.
+1. A natural request asks for exactly one dog on a plain background. Its Turn
+   completes and supplies a completed public image with a user-accessible,
+   decodable PNG.
+2. The original generation Thread receives a natural request to add another dog,
+   making exactly two dogs. Its Turn completes with a public image and matching
+   saved PNG.
+3. One fresh judge Thread receives both actual image payloads in chronological
+   order and asks whether the first shows exactly one dog and the second exactly
+   two. It receives no producer conversation, prompts or claimed answer. The
+   SDK's formal object output schema requires both `first_has_one_dog` and
+   `second_has_two_dogs` booleans; both must be `true`.
 
-The LLM judges the visual proposition from actual pixels; the harness only
-validates the boolean result. The criterion is intentionally known to the judge,
-not the producer's claimed answer or history. `false`, missing/malformed output,
-null, strings, numbers or objects do not establish the proposition. There is no
-breed dictionary, lexical description matcher, repair call or fallback judge.
-Schema conformance is not itself visual correctness: judge mistakes remain
-possible, and retained PNGs and public replies permit inspection. A pass is not
-a pixel-perfect measure of every aspect of an edit.
+The LLM judges the visual propositions from the pixels; the harness validates
+both booleans, not image descriptions. The criterion is intentionally known to
+the judge. This is one producer-isolated judgment of two propositions, **not two
+statistically independent judgments**. A false or missing proposition does not
+complete the Story. Missing/duplicate/extra fields, null, wrong types or multiple
+JSON values cannot stand in for the two judgments. There is no breed dictionary,
+lexical description matcher, repair call or fallback judge. Schema conformance
+is not visual correctness: judge mistakes remain possible, and retained PNGs
+and public replies permit inspection. A pass is not a pixel-perfect measure of
+every aspect of an edit.
+
+This product-first acceptance revision (2026-10-30) replaces the prior red-hat
+example and two separate judge calls. It retains both visual outcomes while
+removing one redundant judge invocation; it does not rewrite historical results.
 
 The saved file must match the public image payload and remain safely readable
 inside the owned image directory. Decoding and byte/pixel budgets are resource
@@ -50,8 +55,9 @@ invalidate a subsequent complete, correct result within the same invocation.
 ## Partial success and failure boundaries
 
 An image endpoint response without a completed public image, an unreadable or
-invalid PNG, an unsuccessful Turn, missing or incorrect independent recognition,
-or generation without the requested edited result does not complete the Story.
+invalid PNG, an unsuccessful Turn, missing or incorrect producer-isolated
+recognition, or generation without the requested edited result does not complete
+the Story.
 A generation prompt echoed as an answer cannot replace recognition in a fresh
 conversation. Wrong-thread evidence cannot complete the submitted operation.
 
@@ -62,10 +68,10 @@ another Provider or unrelated image may stand in for the requested result.
 
 ## Proof plan and evidence
 
-The proof has four semantic Turn submissions across three fresh Threads, in one
-owned process and isolated environment. The generation and edit share the first
-Thread; each recognition uses its own new Thread. The scenario catalog owns the
-executable budget. A separately authorized real-backend run is required; these
+The proof has three semantic Turn submissions across two fresh Threads, in one
+owned process and isolated environment. Generation and edit share the first
+Thread; one separate recognition Thread receives the actual ordered image pair.
+The scenario catalog owns the executable budget. A separately authorized real-backend run is required; these
 instructions do not authorize one.
 
 - [`ImageGenerationEdit`](../../live/image.go), the
@@ -73,11 +79,17 @@ instructions do not authorize one.
   [artifact reader](../../live/image_artifact.go) own the result oracle.
 - [`TestGrokImageGenerationEdit` and negative controls](../../live/image_test.go)
   use a fake public App Server and validate submission, independent recognition,
-  completion and rejection of wrong/incomplete results.
+  completion and rejection of wrong/incomplete results. Edit failure before the
+  judge retains the generated PNG but does not claim it was visually recognized;
+  a valid mixed judge result retains each individual boolean without passing.
+  Diagnostic sink failure is independently checked not to change these outcomes.
 - [`TestImagePinnedFixture`](../../tests/integration/image_test.go) executes the
   selected real Codex against controlled Responses/Images HTTP. Its synthetic
   PNGs and scripted visual answers validate transport, actual image input,
-  same-thread edit and independent recognition orchestration, not real vision.
+  same-thread edit and producer-isolated recognition orchestration, not real vision.
+  [`TestImageJudgeFixtureRejectsFalseComposition`](../../tests/integration/image_judge_fixture_test.go)
+  separately mutates image order, identity, isolation and required schema fields.
+  These direct HTTP fixture checks do not execute the native runtime.
 - [Rust image preparation](../../../codex-rs/core/src/image_preparation.rs),
   [public image integration](../../../codex-rs/app-server/tests/suite/v2/imagegen_extension.rs)
   and stock `ImagesClient` regressions separately own exact tool/ABI, codec,

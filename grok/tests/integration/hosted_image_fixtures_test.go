@@ -229,12 +229,10 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		fixture.reject(writer, "request_contract")
 		return
 	}
-	// Fresh recognition turns contain the image itself, with no generation
-	// conversation. The question states the criterion, not its answer. This is controlled transport proof,
-	// not a claim that these synthetic pixels depict a dog.
-	var attached string
+	// The one fresh recognition turn contains both ordered images, with no
+	// producer conversation. Synthetic pixels prove transport, not vision.
+	var attached []string
 	var question string
-	images := 0
 	priorOutput := false
 	for _, raw := range body.Input {
 		var item struct {
@@ -255,47 +253,44 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		}
 		for _, part := range item.Content {
 			if part.Type == "input_image" {
-				attached = part.ImageURL
-				images++
+				attached = append(attached, part.ImageURL)
 			}
 			if part.Type == "input_text" {
 				question += part.Text
 			}
 		}
 	}
-	if attached != "" {
-		if images != 1 || priorOutput || strings.Contains(question, "Draw a clear picture of a dog on a plain background.") || strings.Contains(question, "Add a red hat to the dog in the image you just generated") {
+	if len(attached) > 0 {
+		if len(attached) != 2 || priorOutput || strings.Contains(question, "Draw a clear picture") || strings.Contains(question, "Add another dog beside it") {
 			fixture.reject(writer, "recognition_history_leaked")
+			return
+		}
+		if fixture.generations != 1 || fixture.edits != 1 || fixture.recognitions != 0 {
+			fixture.reject(writer, "recognition_order")
 			return
 		}
 		var text struct {
 			Format struct {
-				Type   string         `json:"type"`
-				Strict bool           `json:"strict"`
-				Schema map[string]any `json:"schema"`
+				Type   string          `json:"type"`
+				Strict bool            `json:"strict"`
+				Schema json.RawMessage `json:"schema"`
 			} `json:"format"`
 		}
-		if json.Unmarshal(body.Text, &text) != nil || text.Format.Type != "json_schema" || !text.Format.Strict || len(text.Format.Schema) != 1 || text.Format.Schema["type"] != "boolean" {
+		if json.Unmarshal(body.Text, &text) != nil || text.Format.Type != "json_schema" || !text.Format.Strict || !imageJudgeSchemaValid(text.Format.Schema) {
 			fixture.reject(writer, "recognition_output_schema")
 			return
 		}
-		expectedQuestion := ""
-		switch attached {
-		case "data:image/png;base64," + fixture.first:
-			expectedQuestion = "Is there a dog in the photo? Return only true or false."
-		case "data:image/png;base64," + fixture.second:
-			expectedQuestion = "Is there a dog wearing a red hat in the photo? Return only true or false."
-		default:
+		if attached[0] != "data:image/png;base64,"+fixture.first || attached[1] != "data:image/png;base64,"+fixture.second {
 			fixture.reject(writer, "recognition_image_mismatch")
 			return
 		}
-		if !strings.Contains(question, expectedQuestion) {
+		if !strings.Contains(question, imageJudgeQuestion) {
 			fixture.reject(writer, "recognition_question")
 			return
 		}
-		reply := "true"
-		if fixture.recognitions < len(fixture.judgeReplies) {
-			reply = fixture.judgeReplies[fixture.recognitions]
+		reply := `{"first_has_one_dog":true,"second_has_two_dogs":true}`
+		if len(fixture.judgeReplies) > 0 {
+			reply = fixture.judgeReplies[0]
 		}
 		fixture.responses++
 		fixture.recognitions++
@@ -338,7 +333,7 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 		return
 	}
 	fixture.responses++
-	if fixture.responses > 6 {
+	if fixture.responses > 5 {
 		fixture.reject(writer, "response_budget")
 		return
 	}
@@ -360,6 +355,39 @@ func (fixture *imageNativeHTTP) respond(writer http.ResponseWriter, data []byte)
 	if err := writeSSE(writer, framed); err != nil {
 		fixture.reject(writer, "write")
 	}
+}
+
+const imageJudgeQuestion = "Does the first image show exactly one dog, and does the second image show exactly two dogs?"
+const imageJudgeSchema = `{"type":"object","properties":{"first_has_one_dog":{"type":"boolean"},"second_has_two_dogs":{"type":"boolean"}},"required":["first_has_one_dog","second_has_two_dogs"],"additionalProperties":false}`
+
+func imageJudgeSchemaValid(raw json.RawMessage) bool {
+	var schema map[string]any
+	if json.Unmarshal(raw, &schema) != nil || len(schema) != 4 || schema["type"] != "object" || schema["additionalProperties"] != false {
+		return false
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok || len(props) != 2 {
+		return false
+	}
+	for _, key := range []string{"first_has_one_dog", "second_has_two_dogs"} {
+		prop, ok := props[key].(map[string]any)
+		if !ok || len(prop) != 1 || prop["type"] != "boolean" {
+			return false
+		}
+	}
+	required, ok := schema["required"].([]any)
+	if !ok || len(required) != 2 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, value := range required {
+		key, ok := value.(string)
+		if !ok || props[key] == nil || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return len(seen) == 2
 }
 
 func (fixture *imageNativeHTTP) image(writer http.ResponseWriter, data []byte, edit bool) {

@@ -78,7 +78,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			}
 			return turn, err
 		}
-		judgeSchema, err := protocolv2.OutputSchemaFromJSON([]byte(`{"type":"boolean"}`))
+		judgeSchema, err := protocolv2.OutputSchemaFromJSON([]byte(`{"type":"object","properties":{"first_has_one_dog":{"type":"boolean"},"second_has_two_dogs":{"type":"boolean"}},"required":["first_has_one_dog","second_has_two_dogs"],"additionalProperties":false}`))
 		if err != nil {
 			return failedObservation("image_judge_schema_invalid", "live: image judge schema unavailable")
 		}
@@ -86,7 +86,8 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 		if err != nil {
 			return err
 		}
-		prompts := []string{"Draw a clear picture of a dog on a plain background.", "Add a red hat to the dog in the image you just generated, keeping the dog and background."}
+		prompts := []string{"Draw a clear picture of exactly one dog on a plain background.", "Add another dog beside it in the image you just generated, so there are exactly two dogs."}
+		var images []observedImage
 		for index, prompt := range prompts {
 			phase := []string{"generation", "edit"}[index]
 			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase, "status": "submitted", "prompt": prompt})
@@ -112,43 +113,38 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 			} else {
 				evidence.EditedImageSHA256 = result.digest
 			}
-			// The independent judge sees actual pixels and the criterion question,
-			// never the producer prompt, history, or a supplied positive answer.
-			recognitionThread, err := start()
-			if err != nil {
-				return err
-			}
-			if recognitionThread == generationThread {
-				return failedObservation("image_recognition_not_independent", "live: image recognition conversation is not independent")
-			}
-			recognitionPrompt := []string{"Is there a dog in the photo? Return only true or false.", "Is there a dog wearing a red hat in the photo? Return only true or false."}[index]
-			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "submitted", "prompt": recognitionPrompt, "input_sha256": result.digest, "output_schema": map[string]any{"type": "boolean"}})
-			recognized, err := run(recognitionThread, []protocolv2.UserInput{imageInput(result), protocolv2.NewUserInputText(protocolv2.UserInputText{Text: recognitionPrompt})}, &judgeSchema)
-			options.Diagnostics.Record("image_phase", map[string]any{"phase": phase + "_recognition", "status": "returned", "completed": err == nil})
-			if err != nil {
-				return err
-			}
-			base.Stage = "image_" + phase + "_recognition_completed"
-			reply, err := finalProductReply(recognized)
-			options.Diagnostics.Record("image_recognition", map[string]any{"phase": phase, "reply": reply, "aggregate_available": err == nil})
-			if err != nil {
-				return err
-			}
-			base.ReplyBytes = len(reply)
-			accepted, judgeErr := imageJudgeAnswer(reply)
-			options.Diagnostics.Record("image_verdict", map[string]any{"phase": phase, "accepted": accepted, "valid": judgeErr == nil})
-			if judgeErr != nil {
-				return judgeErr
-			}
-			if !accepted {
-				return failedObservation("image_visual_result_mismatch", "live: requested image content not established")
-			}
-			if index == 0 {
-				evidence.GenerationRecognized = true
-				base.Stage = "image_generation_verified"
-			} else {
-				evidence.EditRecognized = true
-			}
+			images = append(images, result)
+		}
+		// One isolated judge sees the actual ordered pixels, never the producer's
+		// conversation or claimed answer. These are two propositions in one
+		// judgment, not statistically independent judgments.
+		recognitionThread, err := start()
+		if err != nil {
+			return err
+		}
+		recognitionPrompt := "Does the first image show exactly one dog, and does the second image show exactly two dogs?"
+		options.Diagnostics.Record("image_phase", map[string]any{"phase": "recognition", "status": "submitted", "prompt": recognitionPrompt,
+			"input_sha256": []string{images[0].digest, images[1].digest}, "output_schema": judgeSchema})
+		recognized, err := run(recognitionThread, []protocolv2.UserInput{imageInput(images[0]), imageInput(images[1]), protocolv2.NewUserInputText(protocolv2.UserInputText{Text: recognitionPrompt})}, &judgeSchema)
+		options.Diagnostics.Record("image_phase", map[string]any{"phase": "recognition", "status": "returned", "completed": err == nil})
+		if err != nil {
+			return err
+		}
+		base.Stage = "image_recognition_completed"
+		reply, err := finalProductReply(recognized)
+		options.Diagnostics.Record("image_recognition", map[string]any{"reply": reply, "aggregate_available": err == nil})
+		if err != nil {
+			return err
+		}
+		base.ReplyBytes = len(reply)
+		first, second, judgeErr := imageJudgeAnswer(reply)
+		options.Diagnostics.Record("image_verdict", map[string]any{"first_has_one_dog": first, "second_has_two_dogs": second, "valid": judgeErr == nil})
+		if judgeErr != nil {
+			return judgeErr
+		}
+		evidence.GenerationRecognized, evidence.EditRecognized = first, second
+		if !first || !second {
+			return failedObservation("image_visual_result_mismatch", "live: requested image content not established")
 		}
 		base.Completed, base.Stage = true, "image_edit_verified"
 		return nil

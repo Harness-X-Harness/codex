@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 )
@@ -23,7 +24,7 @@ func imageBoundThread(id, cwd, model string, turns []any) map[string]any {
 	return map[string]any{"id": id, "sessionId": "private-session", "modelProvider": "grok", "model": model, "cliVersion": "image-fixture", "createdAt": 1, "updatedAt": 1, "cwd": cwd, "ephemeral": false, "preview": "", "projectId": nil, "source": "appServer", "status": map[string]any{"type": "idle"}, "turns": turns}
 }
 
-// This public-stdio double verifies the gate, not actual dog/hat recognition.
+// This public-stdio double verifies the gate, not actual dog-count recognition.
 func fakeImageServer() {
 	var script struct{ Mode, Trace string }
 	if json.Unmarshal([]byte(os.Getenv("GROK_API_KEY")), &script) != nil {
@@ -46,6 +47,7 @@ func fakeImageServer() {
 	history := map[string][]any{}
 	threads, generated, turns := 0, 0, 0
 	imageData := ""
+	var imagePair []string
 	for scanner.Scan() {
 		var req struct {
 			ID     json.RawMessage
@@ -75,6 +77,9 @@ func fakeImageServer() {
 			model = p.Model
 			threads++
 			id := fmt.Sprintf("thread-%d", threads)
+			if threads == 2 && mode == "judge_reused_thread" {
+				id = "thread-1"
+			}
 			result = map[string]any{"model": p.Model, "modelProvider": "grok", "cwd": cwd, "approvalPolicy": "never", "approvalsReviewer": "user", "sandbox": map[string]any{"type": "readOnly"}, "thread": imageBoundThread(id, cwd, model, nil)}
 		case "turn/start":
 			var p struct {
@@ -98,7 +103,7 @@ func fakeImageServer() {
 				if generated == 1 && !strings.Contains(p.Input[0].Text, "dog") {
 					return
 				}
-				if generated == 2 && !strings.Contains(p.Input[0].Text, "red hat") {
+				if generated == 2 && !strings.Contains(p.Input[0].Text, "exactly two dogs") {
 					return
 				}
 				canvas := image.NewRGBA(image.Rect(0, 0, 2, 2))
@@ -108,6 +113,7 @@ func fakeImageServer() {
 				imageData = base64.StdEncoding.EncodeToString(b.Bytes())
 				path := filepath.Join(root, fmt.Sprintf("result-%d.png", generated))
 				_ = os.WriteFile(path, b.Bytes(), 0600)
+				imagePair = append(imagePair, imageData)
 				if mode == "bad_payload" {
 					imageData = "bad"
 				}
@@ -130,28 +136,38 @@ func fakeImageServer() {
 					status = "failed"
 				}
 			} else {
-				question := "Is there a dog in the photo? Return only true or false."
-				if generated == 2 {
-					question = "Is there a dog wearing a red hat in the photo? Return only true or false."
-				}
-				if len(p.Input) != 2 || p.Input[0].Type != "image" || p.Input[0].URL != "data:image/png;base64,"+imageData || p.Input[1].Text != question {
+				question := "Does the first image show exactly one dog, and does the second image show exactly two dogs?"
+				if generated != 2 || len(p.Input) != 3 || p.Input[0].Type != "image" || p.Input[0].URL != "data:image/png;base64,"+imagePair[0] || p.Input[1].Type != "image" || p.Input[1].URL != "data:image/png;base64,"+imagePair[1] || p.Input[2].Text != question {
 					return
 				}
-				var schema map[string]any
-				if json.Unmarshal(p.OutputSchema, &schema) != nil || len(schema) != 1 || schema["type"] != "boolean" {
+				var schema, expected any
+				_ = json.Unmarshal([]byte(`{"type":"object","properties":{"first_has_one_dog":{"type":"boolean"},"second_has_two_dogs":{"type":"boolean"}},"required":["first_has_one_dog","second_has_two_dogs"],"additionalProperties":false}`), &expected)
+				if json.Unmarshal(p.OutputSchema, &schema) != nil || !reflect.DeepEqual(schema, expected) {
 					return
 				}
-				log("independent_pixels_verified")
-				log("boolean_schema_verified")
-				reply := "true"
+				log("ordered_pixels_verified")
+				log("paired_schema_verified")
+				reply := `{"first_has_one_dog":true,"second_has_two_dogs":true}`
 				if mode == "judge_failed" {
 					status = "failed"
 				}
-				if mode == "wrong_first" && generated == 1 || mode == "wrong_edit" && generated == 2 || mode == "negated" {
-					reply = "false"
-				}
-				if mode == "judge_null" {
+				switch mode {
+				case "wrong_first":
+					reply = `{"first_has_one_dog":false,"second_has_two_dogs":true}`
+				case "wrong_edit":
+					reply = `{"first_has_one_dog":true,"second_has_two_dogs":false}`
+				case "negated":
+					reply = `{"first_has_one_dog":false,"second_has_two_dogs":false}`
+				case "judge_null":
 					reply = "null"
+				case "judge_missing":
+					reply = `{"first_has_one_dog":true}`
+				case "judge_duplicate":
+					reply = `{"first_has_one_dog":false,"first_has_one_dog":true,"second_has_two_dogs":true}`
+				case "judge_wrong_type":
+					reply = `{"first_has_one_dog":"true","second_has_two_dogs":true}`
+				case "judge_extra":
+					reply = `{"first_has_one_dog":true,"second_has_two_dogs":true,"answer":true}`
 				}
 				items = append(items, map[string]any{"type": "agentMessage", "id": "answer", "text": reply, "phase": "final_answer"})
 			}
@@ -170,7 +186,7 @@ func fakeImageServer() {
 				result = map[string]any{"turn": map[string]any{"id": id, "status": "inProgress", "items": []any{}, "error": nil}}
 				_ = out.Encode(map[string]any{"id": req.ID, "result": result})
 				thread := p.ThreadID
-				if mode == "wrong_thread" {
+				if mode == "wrong_thread" || mode == "judge_wrong_thread" && p.ThreadID != "thread-1" {
 					thread = "unrelated"
 				}
 				_ = out.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": terminal}})

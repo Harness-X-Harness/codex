@@ -9,7 +9,7 @@ import (
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
-// ImageEvidence reports public image results and independent visual answers.
+// ImageEvidence reports public image results and a producer-isolated visual judgment.
 // Digests identify observed bytes; they do not prove their visual meaning.
 type ImageEvidence struct {
 	Evidence
@@ -19,8 +19,8 @@ type ImageEvidence struct {
 }
 
 // ImageGenerationEdit generates a dog, edits it in the same conversation, and
-// asks separate fresh conversations to judge each actual output image using
-// a schema-constrained boolean, not lexical matching of image descriptions.
+// asks one fresh conversation to judge both actual output images using
+// schema-constrained booleans, not lexical matching of image descriptions.
 func ImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence, error) {
 	options.imageFixture = true
 	return sdkImageGenerationEdit(ctx, options)
@@ -57,18 +57,19 @@ func completedImage(turn productTurn, root string) (observedImage, error) {
 	return result, nil
 }
 
-// The judge returns one JSON boolean under an explicit output schema. This
-// parser checks only the response contract; visual meaning belongs to the judge.
-func imageJudgeAnswer(reply string) (bool, error) {
-	var value any
-	if err := json.Unmarshal([]byte(reply), &value); err != nil {
-		return false, failedObservation("image_judge_response_invalid", "live: image judge did not return one JSON boolean")
+// The judge sees the ordered image pair once. Both visual propositions remain
+// required; this parser checks their response contract, not visual correctness.
+type imageJudgment struct {
+	FirstHasOneDog   *bool `json:"first_has_one_dog"`
+	SecondHasTwoDogs *bool `json:"second_has_two_dogs"`
+}
+
+func imageJudgeAnswer(reply string) (bool, bool, error) {
+	var value imageJudgment
+	if err := parseStructuredReply(reply, &value, "first_has_one_dog", "second_has_two_dogs"); err != nil || value.FirstHasOneDog == nil || value.SecondHasTwoDogs == nil {
+		return false, false, failedObservation("image_judge_response_invalid", "live: image judge did not return both boolean judgments")
 	}
-	accepted, ok := value.(bool)
-	if !ok {
-		return false, failedObservation("image_judge_response_invalid", "live: image judge did not return one JSON boolean")
-	}
-	return accepted, nil
+	return *value.FirstHasOneDog, *value.SecondHasTwoDogs, nil
 }
 
 // Diagnostics retain every public image attempt, not just the final image

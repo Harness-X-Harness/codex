@@ -23,12 +23,12 @@ func TestImagePinnedFixture(t *testing.T) {
 		name                                        string
 		replies                                     []string
 		responses, recognitions, generations, edits int
-		rejected                                    bool
+		rejected, first, second                     bool
 	}{
-		{"true", nil, 6, 2, 1, 1, false},
-		{"generation_false", []string{"false"}, 3, 1, 1, 0, true},
-		{"generation_nonboolean", []string{`{"result":true}`}, 3, 1, 1, 0, true},
-		{"edit_false", []string{"true", "false"}, 6, 2, 1, 1, true},
+		{"true", nil, 5, 1, 1, 1, false, true, true},
+		{"generation_false", []string{`{"first_has_one_dog":false,"second_has_two_dogs":true}`}, 5, 1, 1, 1, true, false, true},
+		{"generation_nonboolean", []string{`{"result":true}`}, 5, 1, 1, 1, true, false, false},
+		{"edit_false", []string{`{"first_has_one_dog":true,"second_has_two_dogs":false}`}, 5, 1, 1, 1, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			integrationObservation(t)
@@ -53,12 +53,12 @@ func TestImagePinnedFixture(t *testing.T) {
 				t.Fatalf("native image edit: %+v; %v", got, err)
 			}
 			if tc.rejected {
-				if got.Completed || got.EditRecognized || got.GenerationRecognized != (tc.edits > 0) {
+				if got.Completed || got.GenerationRecognized != tc.first || got.EditRecognized != tc.second {
 					t.Fatalf("false judge outcome accepted: %+v", got)
 				}
 				return
 			}
-			if !got.Completed || !got.FirstCompleted || !got.TurnCompleted || !got.Bound || !got.GenerationRecognized || !got.EditRecognized || got.Images != 2 || got.Artifacts != 2 || got.FirstImageSHA256 == "" || got.EditedImageSHA256 == "" || got.FirstImageSHA256 == got.EditedImageSHA256 || got.Model != options.Model {
+			if !got.Completed || !got.FirstCompleted || !got.TurnCompleted || !got.Bound || !got.GenerationRecognized || !got.EditRecognized || got.Images != 2 || got.Artifacts != 2 || got.FirstImageSHA256 == "" || got.EditedImageSHA256 == "" || got.Model != options.Model {
 				t.Fatal("native image edit evidence was not proven")
 			}
 		})
