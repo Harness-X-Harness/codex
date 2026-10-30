@@ -471,7 +471,6 @@ fn mcp_and_dynamic_bounds_reach_responses_and_code_mode_without_changing_argumen
         let code = crate::collect_code_mode_tool_definitions(
             [&namespace],
             /*code_mode_input_schema_max_bytes*/ None,
-            /*tool_description_first*/ false,
         );
         assert_eq!(code.len(), 1);
         assert_eq!(code[0].input_schema, Some(source.clone()));
@@ -489,7 +488,6 @@ fn mcp_and_dynamic_bounds_reach_responses_and_code_mode_without_changing_argumen
         let control = crate::collect_code_mode_tool_definitions(
             [&unbounded],
             /*code_mode_input_schema_max_bytes*/ None,
-            /*tool_description_first*/ false,
         );
         assert_eq!(code[0].description, control[0].description);
     }
@@ -571,11 +569,7 @@ fn code_mode_retains_large_bounded_schemas_without_inflating_argument_types() {
         crate::dynamic_tool_to_responses_api_tool(&dynamic(source.clone())).expect("dynamic spec"),
     );
     for limit in [None, Some(source_bytes)] {
-        let definitions = crate::collect_code_mode_tool_definitions(
-            [&spec],
-            limit,
-            /*tool_description_first*/ false,
-        );
+        let definitions = crate::collect_code_mode_tool_definitions([&spec], limit);
         assert_eq!(definitions[0].input_schema, Some(source.clone()));
         assert_eq!(
             definitions[0].input_schema_max_bytes,

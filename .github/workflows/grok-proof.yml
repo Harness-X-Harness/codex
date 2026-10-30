@@ -528,7 +528,7 @@ jobs:
           export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
           test "$STABLE_GIT_COMMIT" = "$GITHUB_SHA"
           cargo build -p codex-cli --bin codex --locked --profile ci-test --timings
-          cargo build -p codex-exec-server --bin codex-exec-server --locked --profile ci-test --timings
+          cargo build -p codex-exec-server-cli --bin codex-exec-server --locked --profile ci-test --timings
       - name: Test stock startup discovery with the shipped Grok profile
         env:
           # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
