@@ -113,6 +113,7 @@ fn terminal(items: &Items, id: &str, status: &str) -> ImageGenerationItem {
             failure: completed_image.failure.clone(),
             saved_path: completed_image.saved_path.clone(),
             input_images: completed_image.input_images.clone(),
+            generation_id: completed_image.generation_id.clone(),
         })])
     );
     completed_image.clone()
@@ -182,10 +183,9 @@ fn assert_outputs(
     assert!(output.success_for_logging());
     let stored = serde_json::to_value(item).expect("persisted item");
     assert!(stored.get("imagegenRequestId").is_none());
-    assert!(stored.get("generationId").is_none());
+    assert_eq!(stored.get("generationId"), Some(&json!(item.generation_id)));
     let mut expected_stored = item.clone();
     expected_stored.imagegen_request_id = None;
-    expected_stored.generation_id = None;
     assert_eq!(
         serde_json::from_value::<ImageGenerationItem>(stored).expect("restored item"),
         expected_stored

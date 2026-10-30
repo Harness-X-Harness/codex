@@ -12,6 +12,7 @@ fn trusted_web_tool_spec_keeps_unsigned_numeric_bounds() {
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         provider: create_model_provider(ModelProviderInfo::default(), /*auth_manager*/ None),
         settings: Default::default(),
+        supports_literature_search: false,
         originator: None,
     };
     let spec = serde_json::to_value(tool.spec()).expect("web tool spec");
