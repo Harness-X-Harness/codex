@@ -837,6 +837,42 @@ async fn grok_fork_explicit_model_policy_retains_request_precedence(selector: &s
         (fork.model.as_str(), fork.model_provider.as_str()),
         ("grok-4.7", expected_provider)
     );
+    assert_eq!(fork.thread.model_provider, expected_provider);
+    if expected_provider != GROK_PROVIDER {
+        // Fork overrides bind the new thread, but stock166 admits input only
+        // after the current provider selection matches that binding.
+        let request = app
+            .send_turn_start_request(TurnStartParams {
+                thread_id: fork.thread.id.clone(),
+                input: vec![V2UserInput::Text {
+                    text: "explicit fork continuation".into(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let error: JSONRPCError = timeout(
+            DEFAULT_READ_TIMEOUT,
+            app.read_stream_until_error_message(RequestId::Integer(request)),
+        )
+        .await??;
+        assert_eq!(error.error.code, -32600);
+        assert_eq!(
+            error.error.data,
+            Some(serde_json::to_value(
+                codex_app_server_protocol::ModelProviderError::ModelProviderMismatch {
+                    model_provider: expected_provider.into(),
+                    current_model_provider: GROK_PROVIDER.into(),
+                }
+            )?)
+        );
+        assert_eq!(requests.requests().len(), 1);
+
+        let config_path = home.path().join("config.toml");
+        let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+        config["model_provider"] = expected_provider.into();
+        std::fs::write(config_path, toml::to_string(&config)?)?;
+    }
     assert_eq!(
         send_turn(&mut app, &fork.thread.id, "explicit fork continuation").await?,
         TurnStatus::Completed
