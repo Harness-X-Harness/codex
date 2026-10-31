@@ -302,6 +302,82 @@ async fn grok_search_activity_requires_admitted_request_and_explicit_dialect() -
 }
 
 #[tokio::test]
+async fn grok_failed_web_operation_is_retained_and_does_not_abort_the_response() -> Result<()> {
+    let failed = json!({"type":"web_search_call", "id":"failed-open", "status":"failed",
+        "action":{"type":"open_page", "url":"https://example.com/unavailable"}});
+    let mut started = failed.clone();
+    started["status"] = json!("in_progress");
+    let success = web_item("completed");
+    let result = run_web_events(
+        vec![
+            item_frame("response.output_item.added", 0, started),
+            item_frame("response.output_item.done", 0, failed.clone()),
+            item_frame("response.output_item.added", 1, web_item("in_progress")),
+            item_frame("response.output_item.done", 1, success.clone()),
+            added(2),
+            done(2),
+            completed(),
+        ],
+        ApiDialect::Grok,
+    )
+    .await?;
+    assert!(result.iter().all(Result::is_ok), "{result:?}");
+    assert!(matches!(
+        result.last(),
+        Some(Ok(ResponseEvent::Completed { .. }))
+    ));
+    let web = result
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ResponseEvent::OutputItemDone(item @ ResponseItem::WebSearchCall { .. })) => {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(web.len(), 2);
+    assert_eq!(serde_json::to_value(web[0])?, failed);
+    assert_eq!(serde_json::to_value(web[1])?, success);
+    assert!(codex_protocol::grok_hosted::is_failed_web_search(web[0]));
+    assert!(!codex_protocol::grok_hosted::is_completed_web_search(
+        web[0]
+    ));
+    assert!(codex_protocol::grok_hosted::is_completed_web_search(web[1]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn grok_failed_web_operation_still_requires_bound_identity_and_replayable_shape() -> Result<()>
+{
+    let failed = json!({"type":"web_search_call", "id":"web-1", "status":"failed",
+        "action":{"type":"open_page", "url":"https://example.com/unavailable"}});
+    for (field, replacement) in [
+        ("id", json!("wrong-id")),
+        ("action", json!(null)),
+        ("action", json!({"type":"unknown"})),
+        (
+            "action",
+            json!({"type":"open_page", "url":"a".repeat(40_001)}),
+        ),
+    ] {
+        let mut terminal = failed.clone();
+        terminal[field] = replacement;
+        assert_failed(
+            run_web_events(
+                vec![
+                    item_frame("response.output_item.added", 0, web_item("in_progress")),
+                    item_frame("response.output_item.done", 0, terminal),
+                    completed(),
+                ],
+                ApiDialect::Grok,
+            )
+            .await?,
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn grok_search_activity_rejects_unbound_conflicting_and_false_completion() -> Result<()> {
     let start = item_frame(
         "response.output_item.added",
@@ -401,7 +477,6 @@ async fn grok_web_rejection_diagnostics_cross_the_stream_bridge_without_content_
     let mut cases = Vec::new();
     for (status, status_class) in [
         (json!(null), "missing"),
-        (json!("failed"), "failed"),
         (json!("incomplete"), "incomplete"),
         (json!("in_progress"), "in_progress"),
         (json!("searching"), "searching"),

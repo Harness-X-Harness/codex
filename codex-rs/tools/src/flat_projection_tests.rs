@@ -388,7 +388,11 @@ fn hosted_history_keeps_identity_without_entering_local_routes() {
         json!({"type":"web_search_call", "id":"web-id", "status":"completed",
         "action":{"type":"search", "query":"original query"}}),
     );
-    let history = vec![hosted, web];
+    let failed_web = item(
+        json!({"type":"web_search_call", "id":"web-failed", "status":"failed",
+        "action":{"type":"open_page", "url":"https://example.com/unavailable"}}),
+    );
+    let history = vec![hosted, web, failed_web];
     let routes = FlatToolRoutes::default();
     assert_eq!(routes.project_history(&history).unwrap(), history);
     assert_eq!(routes.project_history(&history).unwrap(), history);

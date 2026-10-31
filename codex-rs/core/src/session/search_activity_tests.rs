@@ -196,3 +196,68 @@ fn search_activity_never_becomes_realtime_text() {
         assert_eq!(realtime_text_for_event(&event), None);
     }
 }
+
+#[tokio::test]
+async fn failed_search_retention_requires_terminal_authority_and_fences_rebinding() {
+    use crate::session::tests::make_session_and_context;
+    use codex_protocol::models::ResponseItem;
+    let (sess, turn) = make_session_and_context().await;
+    let failed: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"web_search_call", "id":"failed-web", "status":"failed",
+        "action":{"type":"open_page", "url":"https://example.com/unavailable"}
+    }))
+    .unwrap();
+    let mut scope = SearchActivityScope::new().unwrap();
+    assert!(scope.validate_failed_web_search(&turn, &failed).is_err());
+    scope
+        .observe(
+            &sess,
+            &turn,
+            /*output_index*/ 0,
+            "failed-web".into(),
+            SearchActivityKind::Web,
+            SearchActivityState::Running,
+        )
+        .await
+        .unwrap();
+    assert!(scope.validate_failed_web_search(&turn, &failed).is_err());
+    scope
+        .observe(
+            &sess,
+            &turn,
+            /*output_index*/ 0,
+            "failed-web".into(),
+            SearchActivityKind::Web,
+            SearchActivityState::Completed,
+        )
+        .await
+        .unwrap();
+    for (field, value) in [("id", "another-web"), ("status", "completed")] {
+        let mut other = serde_json::to_value(&failed).unwrap();
+        other[field] = value.into();
+        assert!(
+            scope
+                .validate_failed_web_search(&turn, &serde_json::from_value(other).unwrap())
+                .is_err()
+        );
+    }
+    let id = scope.validate_failed_web_search(&turn, &failed).unwrap();
+    assert_eq!(id, "failed-web");
+    scope.retained(&turn, &id);
+    scope.clear(&sess, &turn).await;
+    assert!(scope.validate_response_identity(&turn, &failed).is_err());
+    assert!(scope.claim_canonical_identity(&turn, &id).is_err());
+    let mut next = SearchActivityScope::new().unwrap();
+    assert!(
+        next.observe(
+            &sess,
+            &turn,
+            /*output_index*/ 0,
+            id,
+            SearchActivityKind::Web,
+            SearchActivityState::Running,
+        )
+        .await
+        .is_err()
+    );
+}

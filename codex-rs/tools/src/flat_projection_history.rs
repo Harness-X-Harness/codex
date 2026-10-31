@@ -37,7 +37,7 @@ impl FlatToolRoutes {
                     // Local execution outputs can follow intervening hosted items
                     // from the same response. Prefer the uniquely local-shaped call.
                     let mut local = candidates.iter().copied().filter(|index| {
-                        !codex_protocol::grok_hosted::is_completed_search(&history[*index])
+                        !codex_protocol::grok_hosted::is_terminal_search(&history[*index])
                     });
                     let call_index = match (local.next(), local.next()) {
                         (Some(index), None) => index,
@@ -77,7 +77,7 @@ impl FlatToolRoutes {
         // X-search names. Only its paired occurrence takes precedence over the
         // hosted shape; an older output cannot reclassify a later hosted item.
         let is_hosted = |index: usize, item: &ResponseItem| {
-            codex_protocol::grok_hosted::is_completed_search(item)
+            codex_protocol::grok_hosted::is_terminal_search(item)
                 && !local_custom_calls.contains(&index)
         };
         let mut routes = self.clone();

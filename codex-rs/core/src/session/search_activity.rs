@@ -139,6 +139,34 @@ impl SearchActivityScope {
         Ok(())
     }
 
+    /// A failed hosted operation is retained in model history, not projected as
+    /// a successful public Web item. It still consumes the admitted identity.
+    pub(crate) fn validate_failed_web_search(
+        &self,
+        turn: &TurnContext,
+        item: &codex_protocol::models::ResponseItem,
+    ) -> CodexResult<String> {
+        if !codex_protocol::grok_hosted::is_failed_web_search(item) {
+            return Err(CodexErr::Stream(
+                "invalid failed hosted Web operation".into(),
+            ));
+        }
+        let id = item.id().ok_or_else(|| {
+            CodexErr::Stream("failed hosted Web operation has no identity".into())
+        })?;
+        if !self.pending.values().any(|(kind, pending_id, state)| {
+            *kind == SearchActivityKind::Web
+                && pending_id == id.as_str()
+                && *state == SearchActivityState::Completed
+        }) {
+            return Err(CodexErr::Stream(
+                "failed hosted Web operation lacks its terminal activity".into(),
+            ));
+        }
+        identity_fence(turn).validate_and_record(id.as_str(), Some(self.attempt_id))?;
+        Ok(id.to_string())
+    }
+
     /// Reject later raw rebinding before any started item can replace retained hosted history.
     pub(super) fn validate_response_identity(
         &self,

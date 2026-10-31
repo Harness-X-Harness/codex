@@ -167,6 +167,9 @@ impl GrokSequencer {
                         ));
                     }
                     if bound.web {
+                        // output_item.done ends an operation, not necessarily a
+                        // successful search. Preserve a known failed operation
+                        // for truthful replay and let the response continue.
                         project_search_replay_with_diagnostics(&item).map_err(|error| {
                             invalid_web_completion(
                                 &item,

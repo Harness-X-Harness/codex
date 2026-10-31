@@ -158,17 +158,17 @@ fn unsupported_output_content_is_not_silently_dropped() {
 }
 
 #[test]
-fn completed_hosted_history_preserves_order_ids_and_payload_without_wire_status() {
+fn terminal_web_history_preserves_order_ids_payload_and_status() {
     let input = json!([
+        {"type": "web_search_call", "id": "ws_failed", "status": "failed",
+            "action": {"type": "open_page", "url": "https://example.com/unavailable"}},
         {"type": "web_search_call", "id": "ws_1", "status": "completed",
             "action": {"type": "search", "query": "launch"}},
         {"type": "function_call", "id": "fc_1", "call_id": "local_1",
             "name": "functions__shell", "arguments": "{}"}
     ]);
     let request = request(json!([]), input.clone());
-    let mut expected = input.clone();
-    expected[0].as_object_mut().unwrap().remove("status");
-    assert_eq!(build(&request).unwrap()["input"], expected);
+    assert_eq!(build(&request).unwrap()["input"], input);
     assert_eq!(serde_json::to_value(&request.input).unwrap(), input);
 }
 
@@ -234,7 +234,7 @@ fn supported_web_replay_preserves_optional_action_fields() {
         let body = build(&request(json!([]), json!([item]))).unwrap();
         assert_eq!(
             body["input"][0],
-            json!({"type":"web_search_call", "id":"web-id", "action":action})
+            json!({"type":"web_search_call", "id":"web-id", "status":"completed", "action":action})
         );
     }
 }

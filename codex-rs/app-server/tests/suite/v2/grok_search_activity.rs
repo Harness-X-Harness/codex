@@ -9,12 +9,15 @@ use axum::body::Body;
 use axum::routing::post;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnItemsView;
@@ -119,6 +122,14 @@ struct Fixture {
 
 impl Fixture {
     async fn start(retries: u32, idle_timeout_ms: u64) -> Result<Self> {
+        Self::start_with_history_mode(retries, idle_timeout_ms, None).await
+    }
+
+    async fn start_with_history_mode(
+        retries: u32,
+        idle_timeout_ms: u64,
+        history_mode: Option<ThreadHistoryMode>,
+    ) -> Result<Self> {
         let server = GatedSearchServer::start().await?;
         let home = TempDir::new()?;
         super::grok_provider_binding::write_grok_fixture(home.path(), &server.uri)?;
@@ -158,6 +169,7 @@ impl Fixture {
         let request = app
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 model: Some("grok-4.6".into()),
+                history_mode,
                 ..Default::default()
             })
             .await?;
@@ -229,7 +241,9 @@ fn suffix() -> Vec<Value> {
 #[derive(Default)]
 struct Observed {
     text: String,
+    started_searches: Vec<Value>,
     canonical_searches: Vec<Value>,
+    warnings: Vec<String>,
 }
 
 impl Observed {
@@ -244,6 +258,12 @@ impl Observed {
                 let params = notification.params.context("notification params")?;
                 assert_ne!(params["item"]["type"], "xSearch");
                 match notification.method.as_str() {
+                    "warning" => self.warnings.push(
+                        params["message"]
+                            .as_str()
+                            .context("warning message")?
+                            .into(),
+                    ),
                     "item/agentMessage/delta" => self
                         .text
                         .push_str(params["delta"].as_str().context("text delta")?),
@@ -251,6 +271,9 @@ impl Observed {
                         if matches!(params["item"]["type"].as_str(), Some("webSearch")) =>
                     {
                         self.canonical_searches.push(params["item"].clone())
+                    }
+                    "item/started" if params["item"]["type"] == "webSearch" => {
+                        self.started_searches.push(params["item"].clone())
                     }
                     _ => {}
                 }
@@ -299,7 +322,7 @@ async fn grok_public_web_search_preserves_typed_history_and_followup() -> Result
     assert_eq!(
         hosted,
         vec![
-            json!({"type":"web_search_call","id":"web-1","action":{"type":"search","query":"fixture query"}})
+            json!({"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"fixture query"}})
         ]
     );
     assert!(
@@ -348,6 +371,194 @@ async fn grok_public_web_search_preserves_typed_history_and_followup() -> Result
             .iter()
             .any(|method| method == "item/searchActivity")
     );
+    Ok(())
+}
+
+fn failed_web() -> Value {
+    json!({"type":"web_search_call", "id":"web-failed", "status":"failed",
+        "action":{"type":"open_page", "url":"https://example.com/unavailable"}})
+}
+
+fn indexed_failed_web(index: u64) -> Vec<Value> {
+    let mut running = failed_web();
+    running["status"] = json!("in_progress");
+    vec![
+        json!({"type":"response.output_item.added","output_index":index,"item":running}),
+        json!({"type":"response.output_item.done","output_index":index,"item":failed_web()}),
+    ]
+}
+
+async fn assert_failed_web_has_no_public_history_item(
+    app: &mut TestAppServer,
+    thread_id: &str,
+    recovered: bool,
+) -> Result<()> {
+    let read = read_thread(app, thread_id).await?;
+    let request = app
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: thread_id.into(),
+            cursor: None,
+            limit: Some(10),
+            sort_direction: None,
+            items_view: Some(TurnItemsView::Full),
+        })
+        .await?;
+    let page: ThreadTurnsListResponse = timeout(WAIT, app.read_response(request)).await??;
+    assert!(page.next_cursor.is_none());
+    for turns in [&read.thread.turns, &page.data] {
+        let searches = turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .filter_map(|item| match &item.payload {
+                ThreadItemPayload::WebSearch(search) => Some(search.id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(searches, if recovered { vec!["web-1"] } else { vec![] });
+    }
+    Ok(())
+}
+
+#[test_case(ThreadHistoryMode::Legacy, true; "legacy_recovery")]
+#[test_case(ThreadHistoryMode::Paginated, true; "paginated_recovery")]
+#[test_case(ThreadHistoryMode::Legacy, false; "legacy_failure_only")]
+#[test_case(ThreadHistoryMode::Paginated, false; "paginated_failure_only")]
+#[tokio::test]
+async fn grok_public_failed_web_warns_without_success_credit_and_replays_truthfully(
+    history_mode: ThreadHistoryMode,
+    recovered: bool,
+) -> Result<()> {
+    let mut fixture = Fixture::start_with_history_mode(
+        /*retries*/ 0,
+        /*idle_timeout_ms*/ 120_000,
+        Some(history_mode),
+    )
+    .await?;
+    timeout(WAIT, fixture.server.requests.recv())
+        .await?
+        .context("first request")?;
+    let mut seen = Observed::default();
+    let mut frames = vec![responses::ev_response_created("recoverable-web")];
+    frames.extend(indexed_failed_web(/*index*/ 0));
+    fixture.server.send(/*request*/ 0, frames).await?;
+    seen.until(&mut fixture.app, "warning").await?;
+    assert_eq!(
+        seen.warnings,
+        vec!["A hosted Web operation failed; the response can continue with other results."]
+    );
+    assert!(seen.started_searches.is_empty());
+    assert!(seen.canonical_searches.is_empty());
+
+    let mut frames = if recovered {
+        indexed_web(/*index*/ 1, "fixture query")
+    } else {
+        Vec::new()
+    };
+    let message_index = if recovered { 2 } else { 1 };
+    let mut added = responses::ev_message_item_added("final", "");
+    added["output_index"] = json!(message_index);
+    let mut done = responses::ev_assistant_message("final", "done");
+    done["output_index"] = json!(message_index);
+    frames.extend([added, done, responses::ev_completed("recoverable-web")]);
+    fixture.server.send(/*request*/ 0, frames).await?;
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert!(completed.turn.error.is_none());
+    assert_eq!(seen.canonical_searches.len(), usize::from(recovered));
+    assert_eq!(seen.started_searches.len(), usize::from(recovered));
+    assert_failed_web_has_no_public_history_item(&mut fixture.app, &fixture.thread_id, recovered)
+        .await?;
+
+    fixture.start_turn().await?;
+    let followup = timeout(WAIT, fixture.server.requests.recv())
+        .await?
+        .context("followup request")?;
+    let hosted = followup["input"]
+        .as_array()
+        .context("followup input")?
+        .iter()
+        .filter(|item| item["type"] == "web_search_call")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut expected = vec![failed_web()];
+    if recovered {
+        expected.push(web("completed"));
+    }
+    assert_eq!(hosted, expected);
+    let mut added = responses::ev_message_item_added("followup", "");
+    added["output_index"] = json!(0);
+    let mut done = responses::ev_assistant_message("followup", "done");
+    done["output_index"] = json!(0);
+    fixture
+        .server
+        .send(
+            /*request*/ 1,
+            vec![added, done, responses::ev_completed("followup")],
+        )
+        .await?;
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    drop(fixture.app);
+    let mut cold = TestAppServer::builder()
+        .with_codex_home(fixture.home.path())
+        .build_initialized_with_timeout(WAIT)
+        .await?;
+    // Warnings are live observations, not a new durable public item. A restart
+    // must not reinterpret the retained failed ResponseItem as a Web success.
+    assert_failed_web_has_no_public_history_item(&mut cold, &fixture.thread_id, recovered).await?;
+    Ok(())
+}
+
+#[test_case(false; "same_response")]
+#[test_case(true; "next_sampling")]
+#[tokio::test]
+async fn grok_public_failed_web_identity_cannot_be_rebound(next_sampling: bool) -> Result<()> {
+    let mut fixture = Fixture::start(/*retries*/ 0, /*idle_timeout_ms*/ 120_000).await?;
+    timeout(WAIT, fixture.server.requests.recv())
+        .await?
+        .context("first request")?;
+    let mut seen = Observed::default();
+    fixture
+        .server
+        .send(/*request*/ 0, indexed_failed_web(/*index*/ 0))
+        .await?;
+    seen.until(&mut fixture.app, "warning").await?;
+    let (request, index) = if next_sampling {
+        fixture
+            .server
+            .send(
+                /*request*/ 0,
+                vec![json!({"type":"response.completed",
+                    "response":{"id":"failed-attempt","end_turn":false}})],
+            )
+            .await?;
+        let followup = timeout(WAIT, fixture.server.requests.recv())
+            .await?
+            .context("same-turn followup")?;
+        assert!(
+            followup["input"]
+                .as_array()
+                .context("input")?
+                .contains(&failed_web())
+        );
+        (1, 0)
+    } else {
+        (0, 1)
+    };
+    fixture
+        .server
+        .send(request, indexed_failed_web(index))
+        .await?;
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(seen.until(&mut fixture.app, "turn/completed").await?)?;
+    assert_eq!(completed.turn.status, TurnStatus::Failed);
+    assert!(seen.started_searches.is_empty());
+    assert!(seen.canonical_searches.is_empty());
+    assert_eq!(seen.warnings.len(), 1);
+    assert_failed_web_has_no_public_history_item(&mut fixture.app, &fixture.thread_id, false)
+        .await?;
     Ok(())
 }
 
@@ -447,7 +658,7 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
                 .cloned()
                 .collect::<Vec<_>>(),
             vec![
-                json!({"type":"web_search_call","id":"web-1","action":{"type":"search","query":"first"}})
+                json!({"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"first"}})
             ]
         );
         (1, 0)
@@ -531,7 +742,7 @@ async fn grok_public_search_activity_retained_id_cannot_be_rebound(
             .cloned()
             .collect::<Vec<_>>(),
         vec![
-            json!({"type":"web_search_call","id":"web-1","action":{"type":"search","query":"first"}})
+            json!({"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"first"}})
         ]
     );
     let mut added = responses::ev_message_item_added("followup", "");

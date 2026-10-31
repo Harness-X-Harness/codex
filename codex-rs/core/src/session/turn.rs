@@ -3174,8 +3174,17 @@ async fn try_run_sampling_request(
                     let mut turn_item = turn_item;
                     // An interrupted response may discard its partial item. Only expose
                     // items received during this drain once OutputItemDone confirms them.
-                    let stream_item_to_client =
-                        !*draining_for_mailbox && !defer_streamed_turn_items_for_contributors;
+                    // The public Web item has no failure status. Grok can finish
+                    // an individual hosted operation with `failed` and continue
+                    // the response, so publish its Web lifecycle only after a
+                    // successful done item. Internal activity still owns the
+                    // in-flight identity; failures have a separate warning path.
+                    let defer_hosted_web = turn_context.provider.api_dialect()
+                        == codex_api::ApiDialect::Grok
+                        && matches!(&item, ResponseItem::WebSearchCall { .. });
+                    let stream_item_to_client = !*draining_for_mailbox
+                        && !defer_streamed_turn_items_for_contributors
+                        && !defer_hosted_web;
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
                     let mut seeded_item_id: Option<String> = None;
                     if stream_item_to_client

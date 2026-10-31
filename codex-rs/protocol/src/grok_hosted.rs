@@ -1,4 +1,4 @@
-//! Raw completed Grok hosted shapes, including retired X history.
+//! Raw terminal Grok hosted shapes, including retired X history.
 //! Recognizing a shape is not permission to execute or replay it. Preserve legacy
 //! X calls through normalization so the Grok request boundary can reject them
 //! honestly instead of synthesizing a local tool result.
@@ -79,6 +79,21 @@ pub fn is_completed_x_search(item: &ResponseItem) -> bool {
 }
 
 pub fn is_completed_web_search(item: &ResponseItem) -> bool {
+    is_terminal_web_search(item)
+        && matches!(item, ResponseItem::WebSearchCall { status: Some(status), .. }
+            if status == "completed")
+}
+
+/// A failed hosted operation is terminal history, not successful search evidence.
+pub fn is_failed_web_search(item: &ResponseItem) -> bool {
+    is_terminal_web_search(item)
+        && matches!(item, ResponseItem::WebSearchCall { status: Some(status), .. }
+            if status == "failed")
+}
+
+/// The provider accepts previous Web output items as input, including their
+/// status. Admit only the known terminal states, not arbitrary status strings.
+pub fn is_terminal_web_search(item: &ResponseItem) -> bool {
     let ResponseItem::WebSearchCall {
         id: Some(id),
         status: Some(status),
@@ -88,7 +103,7 @@ pub fn is_completed_web_search(item: &ResponseItem) -> bool {
     else {
         return false;
     };
-    if id.as_str().is_empty() || status != "completed" {
+    if id.as_str().is_empty() || !matches!(status.as_str(), "completed" | "failed") {
         return false;
     }
     match action {
@@ -103,6 +118,10 @@ pub fn is_completed_search(item: &ResponseItem) -> bool {
     is_completed_x_search(item) || is_completed_web_search(item)
 }
 
+pub fn is_terminal_search(item: &ResponseItem) -> bool {
+    is_completed_x_search(item) || is_terminal_web_search(item)
+}
+
 /// Build the exact outbound view without truncating provider identity or payload.
 /// Uses the stock UTF-8-bytes/4 estimate, not a provider tokenizer measurement.
 pub fn project_search_replay(item: &ResponseItem) -> Result<serde_json::Value, String> {
@@ -110,7 +129,7 @@ pub fn project_search_replay(item: &ResponseItem) -> Result<serde_json::Value, S
 }
 
 /// Same validation and projection as `project_search_replay`, with finite
-/// rejection reasons for callers that must report why a completed item failed.
+/// rejection reasons for callers that must report why a terminal item was rejected.
 pub fn project_search_replay_with_diagnostics(
     item: &ResponseItem,
 ) -> Result<serde_json::Value, HostedReplayError> {
@@ -128,6 +147,7 @@ pub fn project_search_replay_with_diagnostics(
         Web {
             id: &'a crate::ResponseItemId,
             action: &'a WebSearchAction,
+            status: &'a str,
         },
     }
     let view = match item {
@@ -146,8 +166,9 @@ pub fn project_search_replay_with_diagnostics(
         ResponseItem::WebSearchCall {
             id: Some(id),
             action: Some(action),
+            status: Some(status),
             ..
-        } if is_completed_web_search(item) => Replay::Web { id, action },
+        } if is_terminal_web_search(item) => Replay::Web { id, action, status },
         _ => return Err(replay_shape_error(item)),
     };
     let json = codex_utils_string::to_json_string_bounded(&view, hosted_replay_byte_limit())
@@ -167,7 +188,7 @@ fn replay_shape_error(item: &ResponseItem) -> HostedReplayError {
     }
     match status.as_deref() {
         None => return HostedReplayError::MissingStatus,
-        Some("completed") => {}
+        Some("completed" | "failed") => {}
         Some(_) => return HostedReplayError::NonCompletedStatus,
     }
     match action {

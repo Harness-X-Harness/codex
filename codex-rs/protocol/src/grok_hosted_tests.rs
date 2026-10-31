@@ -69,6 +69,56 @@ fn web_completion_requires_a_lossless_supported_action() {
 }
 
 #[test]
+fn failed_web_operations_replay_truthfully_without_success_credit() {
+    for status in ["completed", "failed"] {
+        for action in [
+            json!({"type":"search", "query":"original query"}),
+            json!({"type":"open_page", "url":"https://example.com/page"}),
+            json!({"type":"find_in_page", "pattern":"original pattern"}),
+        ] {
+            let raw = json!({"type":"web_search_call", "id":"provider-id", "status":status,
+                "action":action});
+            let item: ResponseItem = serde_json::from_value(raw.clone()).unwrap();
+            assert!(is_terminal_web_search(&item));
+            assert!(is_terminal_search(&item));
+            assert_eq!(is_completed_web_search(&item), status == "completed");
+            assert_eq!(is_completed_search(&item), status == "completed");
+            assert_eq!(is_failed_web_search(&item), status == "failed");
+            assert_eq!(project_search_replay(&item).unwrap(), raw);
+            assert_eq!(serde_json::to_value(item).unwrap(), raw);
+        }
+    }
+}
+
+#[test]
+fn failed_web_replay_keeps_shape_and_context_guards() {
+    let base = json!({"type":"web_search_call", "id":"provider-id", "status":"failed",
+        "action":{"type":"open_page", "url":"https://example.com/page"}});
+    for (field, replacement, reason) in [
+        ("id", json!(""), "missing_identity"),
+        ("id", json!(null), "missing_identity"),
+        ("action", json!(null), "missing_action"),
+        ("action", json!({"type":"unknown"}), "unknown_action"),
+        (
+            "action",
+            json!({"type":"open_page", "url":"a".repeat(hosted_replay_byte_limit())}),
+            "replay_too_large",
+        ),
+    ] {
+        let mut raw = base.clone();
+        raw[field] = replacement;
+        let item: ResponseItem = serde_json::from_value(raw).unwrap();
+        assert!(!is_completed_web_search(&item));
+        assert_eq!(
+            project_search_replay_with_diagnostics(&item)
+                .unwrap_err()
+                .reason(),
+            reason
+        );
+    }
+}
+
+#[test]
 fn hosted_replay_bound_is_exact_non_truncating_and_separate_from_identity() {
     let max = codex_utils_string::approx_bytes_for_tokens(MAX_HOSTED_REPLAY_TOKENS);
     for unit in ["a", "雪", "\n", "\""] {
@@ -134,7 +184,7 @@ fn web_replay_query_bound_uses_exact_wire_fields_without_metadata() {
         assert_eq!(
             projected,
             json!({
-                "type":"web_search_call", "id":"web-id",
+                "type":"web_search_call", "id":"web-id", "status":"completed",
                 "action":{"type":"search", "query":query}
             })
         );
@@ -154,7 +204,7 @@ fn web_replay_query_bound_uses_exact_wire_fields_without_metadata() {
 }
 
 #[test]
-fn web_replay_rejection_reasons_preserve_the_existing_admission_and_error_text() {
+fn web_replay_rejection_reasons_preserve_nonterminal_and_malformed_guards() {
     let base = json!({
         "type":"web_search_call", "id":"private-id", "status":"completed",
         "action":{"type":"search", "query":"private-query"}
@@ -164,7 +214,7 @@ fn web_replay_rejection_reasons_preserve_the_existing_admission_and_error_text()
         ("id", json!(""), "missing_identity"),
         ("status", json!(null), "missing_status"),
         ("status", json!("in_progress"), "non_completed_status"),
-        ("status", json!("failed"), "non_completed_status"),
+        ("status", json!("incomplete"), "non_completed_status"),
         ("status", json!("private-status"), "non_completed_status"),
         ("action", json!(null), "missing_action"),
         (

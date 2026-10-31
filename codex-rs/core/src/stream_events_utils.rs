@@ -334,6 +334,31 @@ pub(crate) async fn handle_output_item_done(
             "Hosted X Search is retired and cannot be executed".into(),
         ));
     }
+    if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+        && codex_protocol::grok_hosted::is_failed_web_search(&item)
+    {
+        let id = search_activity.validate_failed_web_search(&ctx.step_context.turn, &item)?;
+        ctx.sess
+            .services
+            .executed_tool_calls
+            .observe_non_dispatched_call(&item);
+        // Preserve the provider's failed status and identity for stateless and
+        // cold-resume replay. No local output or successful Web item is invented.
+        record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item).await;
+        ctx.sess
+            .send_event(
+                &ctx.step_context.turn,
+                codex_protocol::protocol::EventMsg::Warning(
+                    codex_protocol::protocol::WarningEvent {
+                        message: "A hosted Web operation failed; the response can continue with other results."
+                            .into(),
+                    },
+                ),
+            )
+            .await;
+        output.retained_search_id = Some(id);
+        return Ok(output);
+    }
     let call = if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
         && codex_protocol::grok_hosted::is_completed_web_search(&item)
     {

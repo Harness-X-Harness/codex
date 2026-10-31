@@ -114,23 +114,53 @@ operation could coherently remain a failed operation in history if the provider
 accepts that representation. Unknown/corrupt/oversized records must never be
 silently dropped or credited as successful searches.
 
-The present Grok implementation uses `store=false` and projects history for
-subsequent requests. Removing only the SSE rejection would leave the same
-projection failure on the next request, and the public Web item does not carry a
-failure status that the existing Live success oracle can safely reinterpret.
-The reviewed [Web search documentation](https://docs.x.ai/developers/tools/web-search)
-and [Responses documentation](https://docs.x.ai/developers/rest-api-reference/inference/responses)
-did not establish a supported failed-Web next-input representation or a safe
-omission rule. This is a contract-evidence gap, not a claim that the provider
-cannot support recovery. No unsupported semantic relaxation is implemented.
+The 2026-10-31 scoped correction resolves the earlier replay-contract gap using
+the [official OpenAPI](https://docs.x.ai/openapi.json): `ModelRequest.input`
+accepts `ModelInputPart`, including prior `ModelOutput` and `WebSearchCall`.
+That shared input/output type has string `status`; its required fields are
+`type` and `action`, not a completed-only status. The official
+[Generate Text guide](https://docs.x.ai/developers/model-capabilities/text/generate-text)
+also replays `response.output` into the next request. This is schema/documentation
+authority, not a claim that an unexecuted backend continuation has passed.
 
-The change instead preserves the existing acceptance predicate and adds finite
-rejection reasons/status/action classes and size/cap metadata. The serializer is
-still bounded and single-pass; raw queries, URLs, IDs and unknown status strings
-are not copied into the error. The original rejected payload was not retained,
-so these new diagnostics do not retrospectively identify its cause. If a supported
-failure mapping is later established, it needs explicit next-request replay and
-no-false-success tests before changing this boundary.
+Grok remains stateless (`store=false`). A validated `completed` or `failed` Web
+operation retains its original identity, action and explicit status in canonical
+history and outbound replay. A known failed operation closes its own lifetime,
+not the whole response. Unknown/nonterminal status, unsupported action, identity
+conflict and oversized replay still fail closed. No failure item is silently
+discarded, rewritten as a user message or credited as a successful search.
+
+The pinned public Web item has no failure status. Rather than migrate the SDK or
+misrepresent a failure as success, Grok defers public Web Started until successful
+done. A failed operation emits an existing nonfatal, content-free Warning and no
+Web success lifecycle item. The raw failed item remains in provider history and
+keeps its identity fence through retries. The Warning is transient: reconnecting
+clients do not gain a durable public failed-Web item from this change; warm and
+cold thread reads must not reconstruct it as successful activity. Stock OpenAI
+start behavior is unchanged.
+
+Controlled Rust/API and actual-binary Integration owners force failed-open then
+successful-search continuation, same-thread/cold replay and identity conflicts.
+`TestHostedSearchFixture/web_failed_only` requires a correct final answer with
+only failed Web activity to remain NOT_PROVEN. The formal 16 Live scenarios,
+their genuine successful-operation requirement and their invocation budget are
+unchanged. A warning or diagnostic field never earns or removes acceptance.
+
+Finite replay rejection reasons/status/action classes and local size metadata
+also survive ordinary diagnostic event loss in compact summaries. Raw queries,
+URLs, IDs and unknown status strings are not copied into those summaries. The
+original rejected payload was not retained, so neither the new handling nor its
+diagnostics retrospectively explains why the provider's page open failed.
+
+Focused obligation (unexecuted model sketch, not TLC/refinement evidence):
+`WebDone(failed)` appends a failed canonical operation and leaves response state
+active; `WebDone(completed)` may additionally publish successful Web evidence.
+Only the response terminal decides whether the response completed. Replay must
+preserve each retained operation's ID/action/status; a retained ID cannot be
+rebound within its existing turn/attempt ownership rules. Diagnostic transitions
+stutter on these states. Provider eventual response and actual failed-history
+acceptance remain external progress/compatibility facts, not consequences of
+this safety model.
 
 ## Diagnostic contract and remaining observation gaps
 

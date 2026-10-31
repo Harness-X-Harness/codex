@@ -1215,7 +1215,7 @@ impl ModelClient {
         for item in input {
             let preserves_hosted_id = self.state.provider.api_dialect()
                 == codex_api::ApiDialect::Grok
-                && codex_protocol::grok_hosted::is_completed_web_search(item);
+                && codex_protocol::grok_hosted::is_terminal_web_search(item);
             if !preserves_hosted_id && item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }

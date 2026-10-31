@@ -993,9 +993,10 @@ impl ContextManager {
     ) {
         let items = Arc::make_mut(&mut self.items);
 
-        // Only explicitly recognized provider completions are exempt from pairing.
+        // Known provider-terminal operations are not local calls, including a
+        // failed hosted Web attempt whose real status must survive replay.
         normalize::ensure_call_outputs_present_except_hosted(items, |item| {
-            dialect == ApiDialect::Grok && codex_protocol::grok_hosted::is_completed_search(item)
+            dialect == ApiDialect::Grok && codex_protocol::grok_hosted::is_terminal_search(item)
         });
 
         // Paired outputs must have a corresponding call; named external outputs stand alone.

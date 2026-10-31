@@ -219,7 +219,12 @@ async fn hosted_web_search_survives_follow_up_local_dispatch_and_cold_resume(
 ) -> Result<()> {
     let server = MockServer::start().await;
     let home = home(&server, domain_filter, web_search_mode)?;
-    let hosted = hosted_items();
+    let mut hosted = hosted_items();
+    hosted.insert(
+        0,
+        json!({"type":"web_search_call", "id":"web-failed", "status":"failed",
+            "action":{"type":"open_page", "url":"https://example.com/unavailable"}}),
+    );
     let reasoning = json!({"type":"reasoning", "id":"rs_hosted", "summary":[],
         "encrypted_content":"opaque-hosted-replay",
         "content":[{"type":"reasoning_text", "text":"private search reasoning"}]});
@@ -252,6 +257,20 @@ async fn hosted_web_search_survives_follow_up_local_dispatch_and_cold_resume(
     let (hosted_turn_id, hosted_events) =
         successful_turn_events(&test, "Search Web for the fixture release.").await?;
     assert_eq!(hosted_events.iter().filter(|event| matches!(event, EventMsg::ItemCompleted(event) if matches!(event.item,codex_protocol::items::TurnItem::WebSearch(_)))).count(),1);
+    assert_eq!(
+        hosted_events.iter().filter(|event| matches!(event, EventMsg::Warning(warning)
+            if warning.message == "A hosted Web operation failed; the response can continue with other results.")).count(),
+        1
+    );
+    for event in &hosted_events {
+        match event {
+            EventMsg::ItemStarted(event) => assert_ne!(event.item.id(), "web-failed"),
+            EventMsg::ItemCompleted(event) => assert_ne!(event.item.id(), "web-failed"),
+            EventMsg::WebSearchBegin(event) => assert_ne!(event.call_id, "web-failed"),
+            EventMsg::WebSearchEnd(event) => assert_ne!(event.call_id, "web-failed"),
+            _ => {}
+        }
+    }
     let canonical_hosted = hosted
         .iter()
         .cloned()
@@ -335,18 +354,9 @@ async fn hosted_web_search_survives_follow_up_local_dispatch_and_cold_resume(
                 .any(|tool| tool["type"] == "function" && tool["name"] == wire_name)
         );
     }
-    // Canonical completion status is durable; the retained Grok replay whitelist
-    // omits status on the outgoing copy without changing identity or payload.
-    let wire_hosted = hosted
-        .iter()
-        .cloned()
-        .map(|mut item| {
-            item.as_object_mut()
-                .expect("hosted item object")
-                .remove("status");
-            item
-        })
-        .collect::<Vec<_>>();
+    // Both successful and failed operations retain their actual status on the
+    // outgoing copy, including after local dispatch and cold resume.
+    let wire_hosted = hosted;
     for request in &requests[1..] {
         let input = request.input();
         assert!(input.iter().all(|item| {

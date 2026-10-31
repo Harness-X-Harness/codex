@@ -18,7 +18,7 @@ import (
 // wire result remains a native negative. Retired selectors are unit-only no-launch checks.
 func TestHostedSearchFixture(t *testing.T) {
 	subject := nativeSubject(t)
-	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "unexpected_x_rejected"} {
+	for _, scenario := range []string{"web", "web_allowed", "web_excluded", "web_failed_then_success", "web_failed_only", "unexpected_x_rejected"} {
 		t.Run(scenario, func(t *testing.T) {
 			integrationObservation(t)
 			selected := scenario
@@ -27,6 +27,10 @@ func TestHostedSearchFixture(t *testing.T) {
 				selected = "web"
 				fixture.scenario = "web"
 				fixture.unexpectedX = true
+			}
+			if scenario == "web_failed_then_success" || scenario == "web_failed_only" {
+				selected, fixture.scenario = "web", "web"
+				fixture.failedWeb, fixture.failedOnly = true, scenario == "web_failed_only"
 			}
 			backend := httptest.NewServer(fixture)
 			defer backend.Close()
@@ -45,10 +49,18 @@ func TestHostedSearchFixture(t *testing.T) {
 				}
 				return
 			}
+			if fixture.failedOnly {
+				// A valid final answer and completed turn cannot turn a failed
+				// hosted operation into proof that a successful search occurred.
+				if err == nil || got.Completed || !got.FirstCompleted || got.FollowupCompleted || got.CanonicalCalls != 0 || got.SettledTurns != 1 || got.Turns != 1 || got.CleanupPending || fixture.responses != 1 || fixture.failure != "" || ctx.Err() != nil {
+					t.Fatalf("failed-only search earned credit or prevented a valid turn: %+v; %v", got, err)
+				}
+				return
+			}
 			if err != nil || fixture.failure != "" || fixture.responses != 2 || strings.Contains(string(encoded), "PRIVATE_") {
 				t.Fatalf("native hosted search: %+v; %v", got, err)
 			}
-			if !got.Completed || !got.FirstCompleted || !got.FollowupCompleted || got.Scenario != scenario || got.CanonicalCalls != 1 || got.SettledTurns != 2 || got.Turns != 2 || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Model != options.Model {
+			if !got.Completed || !got.FirstCompleted || !got.FollowupCompleted || got.Scenario != selected || got.CanonicalCalls != 1 || got.SettledTurns != 2 || got.Turns != 2 || got.Processes != 1 || got.Initializations != 1 || got.Threads != 1 || got.Model != options.Model {
 				t.Fatal("native hosted search evidence was not proven")
 			}
 		})

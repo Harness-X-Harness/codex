@@ -8,7 +8,7 @@ use crate::common::TextFormat;
 use crate::error::ApiError;
 use crate::grok_search::project_web_search;
 use codex_protocol::grok::GrokXSearchOptions;
-use codex_protocol::grok_hosted::is_completed_web_search;
+use codex_protocol::grok_hosted::is_terminal_web_search;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -300,7 +300,7 @@ fn project_item(index: usize, item: &ResponseItem) -> Result<Value, ApiError> {
             }
             item
         }
-        ResponseItem::WebSearchCall { .. } if is_completed_web_search(item) => {
+        ResponseItem::WebSearchCall { .. } if is_terminal_web_search(item) => {
             codex_protocol::grok_hosted::project_search_replay(item).map_err(ApiError::Stream)?
         }
         ResponseItem::AgentMessage {

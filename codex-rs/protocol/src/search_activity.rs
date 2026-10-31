@@ -19,6 +19,7 @@ pub enum SearchActivityKind {
 pub enum SearchActivityState {
     Running,
     /// A validated completed item arrived; canonical retention may still fail.
+    // Completion closes the item's lifetime, not necessarily a successful operation.
     Completed,
     /// The attempt ended without retaining this observation's canonical item.
     Cleared,

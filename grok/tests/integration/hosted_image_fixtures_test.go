@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -37,6 +38,8 @@ type hostedNativeHTTP struct {
 	replies     []string
 	mu          sync.Mutex
 	unexpectedX bool
+	failedWeb   bool
+	failedOnly  bool
 	scenario    string
 	failure     string
 	responses   int
@@ -63,6 +66,24 @@ func hostedSearchEvents(scenario string) []any {
 		map[string]any{"type": "response.custom_tool_call_input.done", "output_index": 0, "item_id": "hosted-x", "input": hostedNativeXInput},
 		map[string]any{"type": "response.output_item.done", "output_index": 0, "item": done},
 	}
+}
+
+func failedWebItem() map[string]any {
+	return map[string]any{"type": "web_search_call", "id": "hosted-web-failed", "status": "failed", "action": map[string]any{"type": "open_page", "url": "https://news.example.test/unavailable"}}
+}
+
+func hasExactHostedItem(input []json.RawMessage, want map[string]any) bool {
+	count := 0
+	for _, raw := range input {
+		var item map[string]any
+		if json.Unmarshal(raw, &item) == nil && item["id"] == want["id"] {
+			if !reflect.DeepEqual(item, want) {
+				return false
+			}
+			count++
+		}
+	}
+	return count == 1
 }
 
 func hostedToolPolicy(scenario string, tools []json.RawMessage) string {
@@ -476,16 +497,34 @@ func (fixture *hostedNativeHTTP) ServeHTTP(writer http.ResponseWriter, request *
 		return
 	}
 	fixture.tools = append(fixture.tools, nativeToolLabels(body.Tools))
+	if fixture.failedWeb && fixture.responses == 2 && !hasExactHostedItem(body.Input, failedWebItem()) {
+		fixture.reject(writer, "failed_web_history_not_preserved")
+		return
+	}
 	responseID := fmt.Sprintf("%s-%d", fixture.scenario, fixture.responses)
 	events := []any{map[string]any{"type": "response.created", "response": map[string]any{"id": responseID}}}
 	index := 0
 	if !inputHasHostedSearch(body.Input) {
+		if fixture.failedWeb {
+			start := map[string]any{"type": "web_search_call", "id": "hosted-web-failed", "status": "in_progress"}
+			events = append(events,
+				map[string]any{"type": "response.output_item.added", "output_index": index, "item": start},
+				map[string]any{"type": "response.output_item.done", "output_index": index, "item": failedWebItem()},
+			)
+			index++
+		}
 		responseScenario := fixture.scenario
 		if fixture.unexpectedX {
 			responseScenario = "x"
 		}
-		events = append(events, hostedSearchEvents(responseScenario)...)
-		index = 1
+		if !fixture.failedOnly {
+			for _, event := range hostedSearchEvents(responseScenario) {
+				frame := event.(map[string]any)
+				frame["output_index"] = index
+				events = append(events, frame)
+			}
+			index++
+		}
 	}
 	answer := `{"articles":[{"headline":"Controlled headline","url":"https://news.example.test/story"}],"summary":null}`
 	if fixture.responses == 2 {

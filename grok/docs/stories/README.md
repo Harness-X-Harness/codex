@@ -63,6 +63,18 @@ oversized items at the stock 10,000 estimated-token (40,000 UTF-8 byte) cap.
 This is a bytes/4 estimate, not a measured Grok tokenizer guarantee; truncation
 or reclassification cannot repair oversized replay.
 
+A failed hosted operation is not a failed user turn by itself. Known terminal
+`failed` operations retain their real identity/action/status for stateless replay,
+using the [official input/output Web schema](https://docs.x.ai/openapi.json).
+They emit a nonfatal Warning, not a successful public Web item. Grok delays public
+Web Started until successful done; the stock OpenAI path is unchanged. Warnings
+are transient, while canonical failed provider history survives cold resume.
+No failed operation is reconstructed as successful activity by thread/read.
+`TestHostedSearchFixture/web_failed_then_success` owns real-binary recovery and
+failed-history replay; `/web_failed_only` rejects false search credit even when
+the final answer and user turn complete. These controls do not add a Live call,
+change its success requirement or make optional diagnostics an assertion.
+
 **RETIRE under #414:** Hosted X has no truthful official typed representation at
 the pinned SDK baseline. The product stops advertising `x_search`, rejects explicit
 X configuration and unexpected X ingress, removes `xSearch` public items and the

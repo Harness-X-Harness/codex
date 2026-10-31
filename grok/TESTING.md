@@ -158,6 +158,13 @@ separate deterministic checks, not extra Live outcome gates. See the
 [Hosted X retirement boundary](docs/stories/README.md#hosted-webx-search)
 for the product exclusion, old-history disposition and the separate
 Rust emitted-stream/schema and offline SDK diagnostic owners.
+The controlled `TestHostedSearchFixture/web_failed_then_success` additionally
+requires a failed Web operation to survive stateless replay without aborting a
+successful answer. `/web_failed_only` requires zero successful Web credit despite
+a valid answer and completed turn. These run against the selected actual binary;
+compiling the fixtures or passing the offline observer tests is not composition
+evidence. A failed operation's public Warning is nonfatal and transient; it is
+not itself a durable Web item or a success witness.
 
 ## Live: actual Codex and actual Grok
 

@@ -188,7 +188,7 @@ impl ToolRouter {
                 {
                     return Err("Hosted X Search is retired and cannot be executed".into());
                 }
-                let hosted = codex_protocol::grok_hosted::is_completed_web_search(&item)
+                let hosted = codex_protocol::grok_hosted::is_terminal_web_search(&item)
                     && self
                         .model_visible_specs
                         .iter()
