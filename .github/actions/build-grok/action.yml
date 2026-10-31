@@ -37,6 +37,12 @@ runs:
     - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       with:
         targets: ${{ inputs.target }}
+    - name: Reclaim unused hosted Linux image SDKs
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: python3 grok/package/prepare_linux_disk.py
     - name: Prepare the Linux builder
       if: runner.os == 'Linux'
       shell: bash

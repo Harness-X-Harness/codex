@@ -57,6 +57,15 @@ uses the stock helper layout/resolvers, and stages the resulting complete
 package. Linux embeds the final stripped `bwrap` digest before building Codex.
 Stock pinned V8 artifacts and their checksum validation remain in use.
 
+Before Linux package compilation, `prepare_linux_disk.py` reclaims only the
+unused Android, .NET and Haskell image SDK directories on GitHub-hosted Linux
+musl jobs. Fixed paths are checked for redirection before any removal; local,
+self-hosted and macOS runs do not remove them. Before/after available-byte
+measurements use the Cargo target filesystem. This does not alter the release
+profile, symbol archives, inputs or smoke checks, and does not claim that a
+particular free-space amount guarantees a successful build. Its mocked safety
+tests run in the credential-free Go contracts workflow.
+
 Each target executes the staged launcher and runtime, checks the reported version
 against package metadata, starts the Code Mode host and standalone executor help paths, exercises its
 packaged `rg` and Linux `bwrap`, and runs the existing nonempty
