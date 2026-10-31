@@ -85,6 +85,7 @@ pub(crate) async fn prepare_prompt(
                 .for_prompt_annotated(
                     &model.input_modalities,
                     session.services.image_store.as_ref(),
+                    step.turn.provider.api_dialect(),
                 )
                 .await,
         )

@@ -6,6 +6,27 @@ use std::num::NonZeroU64;
 use tempfile::tempdir;
 
 #[test]
+fn grok_wire_identity_survives_provider_config_roundtrip() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Custom endpoint"
+base_url = "https://example.com/v1"
+wire_api = "grok_responses"
+stream_max_retries = 0
+stream_idle_timeout_ms = 1234
+"#,
+    )
+    .expect("explicit Grok provider config");
+
+    assert_eq!(provider.wire_api.to_string(), "grok_responses");
+    let encoded = toml::to_string(&provider).expect("serialize provider config");
+    assert_eq!(
+        toml::from_str::<ModelProviderInfo>(&encoded).expect("reload provider config"),
+        provider
+    );
+}
+
+#[test]
 fn runtime_internal_metadata_opt_in_is_not_serialized_or_configurable() {
     let trusted = ModelProviderInfo {
         include_internal_metadata: true,
@@ -95,6 +116,7 @@ base_url = "http://localhost:11434/v1"
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
         capabilities: None,
         project_id: None,
@@ -137,6 +159,7 @@ query_params = { api-version = "2025-04-01-preview" }
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: false,
         capabilities: None,
         project_id: None,
@@ -183,6 +206,7 @@ supports_standalone_web_search = true
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+        x_search: None,
         supports_standalone_web_search: true,
         capabilities: None,
         project_id: None,
@@ -378,6 +402,7 @@ fn test_create_amazon_bedrock_provider() {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            x_search: None,
             supports_standalone_web_search: false,
             capabilities: None,
             project_id: None,
@@ -1080,4 +1105,35 @@ fn builtin_openai_catalog_accepts_existing_chatgpt_hosts() {
             expected
         );
     }
+}
+
+#[test]
+fn retired_grok_x_search_configuration_is_explicitly_rejected() {
+    for body in [
+        "",
+        "[x_search]",
+        "[x_search]\nfrom_date = '2024-02-29'\nto_date = '2024-03-01'",
+    ] {
+        let provider: ModelProviderInfo =
+            toml::from_str(&format!("wire_api = 'grok_responses'\n{body}")).unwrap();
+        if body.is_empty() {
+            provider.validate().unwrap();
+        } else {
+            assert!(
+                provider
+                    .validate()
+                    .unwrap_err()
+                    .contains("Hosted X Search is retired")
+            );
+        }
+        let reloaded: ModelProviderInfo =
+            toml::from_str(&toml::to_string(&provider).unwrap()).unwrap();
+        assert_eq!(provider, reloaded);
+        assert_eq!(provider.x_search.is_some(), !body.is_empty());
+    }
+    let invalid = "wire_api = 'grok_responses'\n[x_search]\nfrom_date = '2023-02-29'";
+    assert!(toml::from_str::<ModelProviderInfo>(invalid).is_err());
+    let unsupported: ModelProviderInfo =
+        toml::from_str("wire_api = 'responses'\n[x_search]").unwrap();
+    assert!(unsupported.validate().unwrap_err().contains("x_search"));
 }

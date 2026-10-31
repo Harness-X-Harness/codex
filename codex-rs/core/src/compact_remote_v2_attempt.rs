@@ -135,6 +135,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 .for_prompt_annotated(
                     &model_info.input_modalities,
                     sess.services.image_store.as_ref(),
+                    turn_context.provider.api_dialect(),
                 )
                 .await
                 .into_iter()
@@ -272,7 +273,10 @@ pub(crate) async fn capture_background_input(
         step_context.settings.model_info.usable_context_window(),
         &base_instructions,
     );
-    snapshot.normalize_history(&step_context.settings.model_info.input_modalities);
+    snapshot.normalize_history(
+        &step_context.settings.model_info.input_modalities,
+        step_context.turn.provider.api_dialect(),
+    );
     let (mut input, metadata): (Vec<_>, Vec<_>) = snapshot
         .into_annotated_items()
         .into_iter()

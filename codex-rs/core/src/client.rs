@@ -104,6 +104,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::ToolSpec;
+use codex_tools::create_tools_json_for_responses_api;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
@@ -1046,6 +1047,40 @@ impl ModelClient {
                 }
             });
         }
+        // Project only this request copy. Canonical history and router capabilities
+        // remain provider-neutral, including when replaying a resumed session.
+        let projected_tools;
+        let tool_specs = if self.state.provider.api_dialect() == codex_api::ApiDialect::Grok {
+            let (tools, routes) = codex_tools::project_flat_function_tools(&prompt.tools)
+                .map_err(CodexErr::InvalidRequest)?;
+            input = routes
+                .project_history(&input)
+                .map_err(CodexErr::InvalidRequest)?;
+            // Normalize legacy hosted calls without synthesizing local outputs first.
+            // Projection preserves only unpaired hosted shapes; genuine paired local
+            // custom calls have already become function calls at this boundary.
+            if input
+                .iter()
+                .any(codex_protocol::grok_hosted::is_completed_x_search)
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "unsupported history: retired Hosted X Search cannot be replayed".into(),
+                ));
+            }
+            projected_tools = tools;
+            projected_tools.as_slice()
+        } else {
+            if prompt.tools.iter().any(|spec| {
+                matches!(spec,
+                codex_tools::ToolSpec::WebSearch { filters: Some(filters), .. }
+                    if filters.excluded_domains.as_ref().is_some_and(|domains| !domains.is_empty()))
+            }) {
+                return Err(CodexErr::InvalidRequest(
+                    "excluded_domains requires the Grok Responses dialect".into(),
+                ));
+            }
+            prompt.tools.as_ref()
+        };
         let is_openai = self.state.provider.info().is_openai();
         // These prompt-only items are rebuilt on every request. Hash their visible payloads
         // within the thread so retries and resumed sessions preserve their identity.
@@ -1055,8 +1090,13 @@ impl ModelClient {
         );
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
-            if !prompt.tools.is_empty() {
-                let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
+            if !tool_specs.is_empty() {
+                let tools = match self.state.provider.api_dialect() {
+                    codex_api::ApiDialect::OpenAi => {
+                        create_tools_json_for_responses_lite(tool_specs)?
+                    }
+                    codex_api::ApiDialect::Grok => create_tools_json_for_responses_api(tool_specs)?,
+                };
                 prefix.push(ResponseItem::AdditionalTools {
                     id: Some(ResponseItemId::with_suffix(
                         "at",
@@ -1068,7 +1108,7 @@ impl ModelClient {
             }
             None
         } else {
-            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
+            Some(create_tools_raw_json_for_responses_api(tool_specs)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
@@ -1173,7 +1213,10 @@ impl ModelClient {
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
-            if item.id().is_some_and(|id| !id.is_prefixed()) {
+            let preserves_hosted_id = self.state.provider.api_dialect()
+                == codex_api::ApiDialect::Grok
+                && codex_protocol::grok_hosted::is_completed_web_search(item);
+            if !preserves_hosted_id && item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
             }
             if !self.state.content_item_kinds_enabled {
@@ -1186,7 +1229,8 @@ impl ModelClient {
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.info().supports_websockets
+        if self.state.provider.api_dialect() != codex_api::ApiDialect::OpenAi
+            || !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
         {
             return false;
@@ -2038,6 +2082,8 @@ impl ResponsesHttpExecutor<'_> {
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
+            .with_dialect(self.client.state.provider.api_dialect())
+            .with_grok_x_search(self.client.state.provider.info().x_search.clone())
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 
@@ -2522,7 +2568,7 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
-            WireApi::Responses => {
+            WireApi::Responses | WireApi::GrokResponses => {
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self

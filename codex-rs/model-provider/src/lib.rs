@@ -5,6 +5,10 @@ mod capabilities;
 mod chatgpt_base_url;
 mod combined_auth;
 mod gcp;
+mod grok_catalog;
+#[cfg(test)]
+#[path = "grok_provider_tests.rs"]
+mod grok_provider_tests;
 mod models_endpoint;
 mod models_identity;
 mod provider;

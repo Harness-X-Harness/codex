@@ -576,6 +576,7 @@ pub(crate) async fn run_turn(
                     .for_prompt(
                         &step_context.settings.model_info.input_modalities,
                         sess.services.image_store.as_ref(),
+                        step_context.turn.provider.api_dialect(),
                     )
                     .await
             }
@@ -1792,6 +1793,7 @@ async fn run_sampling_request(
                 .for_prompt(
                     &step_context.settings.model_info.input_modalities,
                     sess.services.image_store.as_ref(),
+                    step_context.turn.provider.api_dialect(),
                 )
                 .await
         };
@@ -2255,6 +2257,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
                 .ok()
                 .map(|request| RealtimeEventText::Handoff(format!("{message}\n\n{request}"), None))
         }
+        // A live search preview is visual state, not assistant narration or a handoff.
+        EventMsg::SearchActivity(_) => None,
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::AuthRecoveryStarted(_)
@@ -2565,6 +2569,7 @@ async fn emit_turn_item_in_plan_mode(
 }
 
 /// Handle a completed assistant response item in plan mode, returning true if handled.
+#[allow(clippy::too_many_arguments)]
 async fn handle_assistant_item_done_in_plan_mode(
     sess: &Session,
     step_context: &StepContext,
@@ -2573,7 +2578,8 @@ async fn handle_assistant_item_done_in_plan_mode(
     state: &mut PlanModeStreamState,
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
-) -> bool {
+    search_activity: &super::search_activity::SearchActivityScope,
+) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
     if let ResponseItem::Message { role, .. } = item
         && role == "assistant"
@@ -2589,6 +2595,11 @@ async fn handle_assistant_item_done_in_plan_mode(
         )
         .await
         {
+            search_activity.validate_canonical(
+                turn_context,
+                item,
+                Some(&finalized_turn_item.turn_item),
+            )?;
             finalized_facts = Some(finalized_turn_item.facts.clone());
             emit_turn_item_in_plan_mode(
                 sess,
@@ -2613,9 +2624,9 @@ async fn handle_assistant_item_done_in_plan_mode(
         if let Some(agent_message) = final_last_agent_message {
             *last_agent_message = Some(agent_message);
         }
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -2797,6 +2808,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
+    let mut search_activity = super::search_activity::SearchActivityScope::new()?;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -2818,6 +2830,10 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.mode() == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+    if let Some(state) = plan_mode_state.as_ref() {
+        // Plan text can publish its generated item before assistant finalization.
+        search_activity.claim_canonical_identity(&turn_context, &state.plan_item_state.item_id)?;
+    }
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
@@ -2915,12 +2931,36 @@ async fn try_run_sampling_request(
             }
         };
 
+        if let ResponseEvent::OutputItemAdded(item) | ResponseEvent::OutputItemDone(item) = &event
+            && let Err(error) = search_activity.validate_response_identity(&turn_context, item)
+        {
+            break Err(error);
+        }
+        let event = match step_context.tool_router.normalize_response_event(event) {
+            Ok(Some(event)) => event,
+            Ok(None) => continue,
+            Err(error) => break Err(CodexErr::InvalidRequest(error)),
+        };
+
         sess.services
             .session_telemetry
             .record_responses(&handle_responses, &event);
         record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
+            ResponseEvent::SearchActivity {
+                output_index,
+                item_id,
+                kind,
+                state,
+            } => {
+                if let Err(error) = search_activity
+                    .observe(&sess, &turn_context, output_index, item_id, kind, state)
+                    .await
+                {
+                    break Err(error);
+                }
+            }
             ResponseEvent::Created { response_id } => {
                 if let Some(response_id) = response_id {
                     turn_context
@@ -2979,8 +3019,8 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut()
-                    && handle_assistant_item_done_in_plan_mode(
+                if let Some(state) = plan_mode_state.as_mut() {
+                    match handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &step_context,
                         turn_store.as_ref(),
@@ -2988,10 +3028,14 @@ async fn try_run_sampling_request(
                         state,
                         previously_streamed_item.as_ref(),
                         &mut last_agent_message,
+                        &search_activity,
                     )
                     .await
-                {
-                    continue;
+                    {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => break Err(error),
+                    }
                 }
 
                 let mut ctx = HandleOutputCtx {
@@ -3035,14 +3079,28 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
-                let output_result =
-                    match handle_output_item_done(&mut ctx, item, previously_streamed_item)
-                        .instrument(handle_responses)
-                        .await
-                    {
-                        Ok(output_result) => output_result,
-                        Err(err) => break Err(err),
-                    };
+                let retained_search_id = match &item {
+                    ResponseItem::WebSearchCall { id: Some(id), .. }
+                    | ResponseItem::CustomToolCall { id: Some(id), .. } => Some(id.to_string()),
+                    _ => None,
+                };
+                let output_result = match handle_output_item_done(
+                    &mut ctx,
+                    item,
+                    previously_streamed_item,
+                    &search_activity,
+                )
+                .instrument(handle_responses)
+                .await
+                {
+                    Ok(output_result) => output_result,
+                    Err(err) => break Err(err),
+                };
+                if let Some(item_id) = retained_search_id
+                    && output_result.retained_search_id.as_deref() == Some(item_id.as_str())
+                {
+                    search_activity.retained(&turn_context, &item_id);
+                }
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }
@@ -3431,6 +3489,11 @@ async fn try_run_sampling_request(
             }
         }
     };
+    // Cancellation, normalization failure and early exits can bypass an API
+    // terminal event. Clear before potentially blocking assistant/tool drain and
+    // before the outer retry loop can start the next attempt.
+    search_activity.clear(&sess, &turn_context).await;
+
     drop(sampling_span);
     drop(sampling_timing_guard);
     if let Some(finish_post_request) = finish_post_request {

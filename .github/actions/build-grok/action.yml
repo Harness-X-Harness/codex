@@ -1,0 +1,345 @@
+name: Build Grok target
+description: Build and stage one identified complete Grok package on its native runner.
+
+inputs:
+  target:
+    description: x86_64-unknown-linux-musl or aarch64-apple-darwin.
+    required: true
+
+outputs:
+  artifact-id:
+    description: Uploaded package artifact identity for this exact target and run.
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact-digest:
+    description: GitHub artifact SHA-256 digest.
+    value: ${{ steps.upload.outputs.artifact-digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Require the supported native target
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        case "$TARGET:$RUNNER_OS:$RUNNER_ARCH" in
+          x86_64-unknown-linux-musl:Linux:X64|aarch64-apple-darwin:macOS:ARM64) ;;
+          *) echo "Unsupported target/runner composition" >&2; exit 1 ;;
+        esac
+        echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-ci
+      with:
+        configure-linux-user-namespaces: "false"
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: "3.12"
+    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      with:
+        targets: ${{ inputs.target }}
+    - name: Prepare the Linux builder
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update -y
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils file gdb make pkg-config libcap-dev
+        cargo_home="$GITHUB_WORKSPACE/.cargo-home-grok"
+        mkdir -p "$cargo_home/bin"
+        : > "$cargo_home/config.toml"
+        echo "CARGO_HOME=$cargo_home" >> "$GITHUB_ENV"
+        echo "$cargo_home/bin" >> "$GITHUB_PATH"
+        echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >> "$GITHUB_ENV"
+        echo "AWS_LC_SYS_NO_JITTER_ENTROPY_x86_64_unknown_linux_musl=1" >> "$GITHUB_ENV"
+        # Ubuntu's musl-gcc specs do not implement GCC's -static-pie option:
+        # they inject an interpreter into Rust's self-relocating executable.
+        # Supply the static PIE linker mode explicitly, preserving PIE/ASLR.
+        # https://github.com/rust-lang/rust/issues/95926
+        echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=-C link-arg=-Wl,-static,-pie,--no-dynamic-linker,-z,text" >> "$GITHUB_ENV"
+    - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      if: runner.os == 'Linux'
+      with:
+        version: 0.14.0
+        use-cache: false
+    - name: Install musl tools
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: bash "$GITHUB_WORKSPACE/.github/scripts/install-musl-build-tools.sh"
+    - name: Check the musl static PIE linker before compiling the package
+      if: runner.os == 'Linux'
+      working-directory: codex-rs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        ulimit -c 0
+        probe="$RUNNER_TEMP/grok-musl-link-check"
+        mkdir -p "$probe/src"
+        printf '%s\n' '[package]' 'name = "grok-musl-link-check"' 'version = "0.0.0"' 'edition = "2024"' > "$probe/Cargo.toml"
+        printf '%s\n' 'fn main() { println!("grok-musl-link-ok"); }' > "$probe/src/main.rs"
+        # Cargo consumes the same target linker and target rustflags as the real
+        # package below. This small regression check does not replace its smoke.
+        cargo generate-lockfile --offline --manifest-path "$probe/Cargo.toml"
+        cargo build --offline --locked --release --target "$TARGET" --manifest-path "$probe/Cargo.toml"
+        program="$CARGO_TARGET_DIR/$TARGET/release/grok-musl-link-check"
+        readelf -h "$program" | tee "$probe/elf-header.txt"
+        readelf -l -d "$program" | tee "$probe/elf-linkage.txt"
+        grep -Eq 'Type:[[:space:]]+DYN' "$probe/elf-header.txt"
+        if grep -Eq 'INTERP|\(NEEDED\)' "$probe/elf-linkage.txt"; then
+          echo "The musl static PIE check unexpectedly requires a dynamic loader" >&2
+          exit 1
+        fi
+        test "$(timeout 10s "$program")" = grok-musl-link-ok
+    - uses: ./.github/actions/setup-rusty-v8
+      with:
+        target: ${{ inputs.target }}
+    - name: Build the final Linux sandbox helper
+      if: runner.os == 'Linux'
+      working-directory: codex-rs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        cargo build --locked --release --target "$TARGET" --bin bwrap
+        bwrap="${CARGO_TARGET_DIR:-target}/$TARGET/release/bwrap"
+        strip --strip-debug --strip-unneeded "$bwrap"
+        echo "CODEX_BWRAP_SHA256=$(sha256sum "$bwrap" | awk '{print $1}')" >> "$GITHUB_ENV"
+    - name: Preserve macOS release symbol bundles
+      if: runner.os == 'macOS'
+      shell: bash
+      run: echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed" >> "$GITHUB_ENV"
+    - name: Build the runtime, Code Mode host and standalone executor once
+      working-directory: codex-rs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+        test "$STABLE_GIT_COMMIT" = "$GITHUB_SHA"
+        if [[ "$RUNNER_OS" == Linux ]]; then
+          bash "$GITHUB_WORKSPACE/grok/package/observe_linux_build.sh" \
+            cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host --bin codex-exec-server
+        else
+          cargo build --locked --release --target "$TARGET" --bin codex --bin codex-code-mode-host --bin codex-exec-server
+        fi
+    - name: Record Linux runtime before stripping
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        evidence="$RUNNER_TEMP/grok-linux-diagnostics"
+        mkdir "$evidence"
+        {
+          printf '%s\n' 'cargo build --locked --release --target x86_64-unknown-linux-musl --bin codex --bin codex-code-mode-host --bin codex-exec-server'
+          rustc -vV
+          cargo -vV
+          zig version
+          "$CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER" --version
+          objcopy --version
+          strip --version
+          printf 'AWS_LC_SYS_NO_JITTER_ENTROPY=%s\n' "$AWS_LC_SYS_NO_JITTER_ENTROPY"
+          printf 'AWS_LC_SYS_NO_JITTER_ENTROPY_x86_64_unknown_linux_musl=%s\n' "$AWS_LC_SYS_NO_JITTER_ENTROPY_x86_64_unknown_linux_musl"
+          printf 'CARGO_BUILD_JOBS=%s CARGO_INCREMENTAL=%s\n' "$CARGO_BUILD_JOBS" "$CARGO_INCREMENTAL"
+          sha256sum codex-rs/Cargo.toml codex-rs/Cargo.lock codex-rs/.cargo/config.toml
+          printf 'CODEX_BWRAP_SHA256=%s\n' "$CODEX_BWRAP_SHA256"
+          sha256sum "$RUSTY_V8_ARCHIVE" "$RUSTY_V8_SRC_BINDING_PATH"
+        } > "$evidence/build-tools.txt"
+        python3 grok/package/diagnose_linux_binary.py --phase before-strip \
+          --binary "$CARGO_TARGET_DIR/$TARGET/release/codex" --evidence "$evidence"
+    - name: Archive symbols and strip the final runtime and helpers
+      working-directory: codex-rs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        bash "$GITHUB_WORKSPACE/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+          --target "$TARGET" --artifact-name "grok-$GITHUB_SHA-$TARGET" \
+          --release-dir "$CARGO_TARGET_DIR/$TARGET/release" \
+          --archive-dir "$RUNNER_TEMP/grok-symbols" --binaries "codex codex-code-mode-host codex-exec-server"
+    - name: Record Linux runtime after stripping
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        python3 grok/package/diagnose_linux_binary.py --phase after-strip \
+          --binary "$CARGO_TARGET_DIR/$TARGET/release/codex" \
+          --evidence "$RUNNER_TEMP/grok-linux-diagnostics"
+    - name: Resolve stock pinned helper artifacts
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        CODEX_REPO_ROOT: ${{ github.workspace }}
+        PYTHONPATH: ${{ github.workspace }}/scripts
+      run: |
+        python3 - <<'PY'
+        import os
+        from codex_package.ripgrep import resolve_rg_bin
+        from codex_package.targets import TARGET_SPECS
+        spec = TARGET_SPECS[os.environ["TARGET"]]
+        rg = resolve_rg_bin(spec, None)
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+            output.write(f"GROK_RG_BIN={rg}\n")
+        PY
+    - name: Stage the exact build inputs
+      working-directory: codex-rs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        release_dir="${CARGO_TARGET_DIR:-target}/$TARGET/release"
+        mkdir -p "$RUNNER_TEMP/grok-dist"
+        args=(--source-sha "$GITHUB_SHA" --target "$TARGET" --output "$RUNNER_TEMP/grok-dist/$TARGET"
+          --runtime "$release_dir/codex" --code-mode-host "$release_dir/codex-code-mode-host"
+          --exec-server "$release_dir/codex-exec-server"
+          --rg "$GROK_RG_BIN")
+        if [[ "$TARGET" == x86_64-unknown-linux-musl ]]; then args+=(--bwrap "$release_dir/bwrap"); fi
+        python3 "$GITHUB_WORKSPACE/grok/package/stage.py" "${args[@]}"
+    - name: Record staged Linux runtime and require all three startup probes
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        python3 grok/package/diagnose_linux_binary.py --phase staged \
+          --binary "$RUNNER_TEMP/grok-dist/$TARGET/bin/grok-bin" \
+          --evidence "$RUNNER_TEMP/grok-linux-diagnostics"
+        cp "$RUNNER_TEMP/grok-dist/$TARGET/grok-package.json" "$RUNNER_TEMP/grok-linux-diagnostics/package.json"
+        python3 grok/package/diagnose_linux_binary.py --require-success \
+          --evidence "$RUNNER_TEMP/grok-linux-diagnostics"
+    - name: Smoke the actual packaged entrypoints and helpers
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        package="$RUNNER_TEMP/grok-dist/$TARGET"
+        evidence="$RUNNER_TEMP/grok-package-evidence-$TARGET"
+        mkdir "$evidence"
+        cp "$package/grok-package.json" "$evidence/"
+        "$package/bin/grok-bin" --version | tee "$evidence/runtime-version.txt"
+        fixture_home="$RUNNER_TEMP/grok-home-$TARGET"
+        mkdir "$fixture_home"
+        cp "$package/config.toml.example" "$fixture_home/config.toml"
+        cp "$package/models.json" "$fixture_home/models.json"
+        CODEX_HOME="$fixture_home" "$package/bin/grok" --version | tee "$evidence/launcher-version.txt"
+        cmp "$evidence/runtime-version.txt" "$evidence/launcher-version.txt"
+        python3 - <<'PY'
+        import json, os, subprocess
+        from pathlib import Path
+        temporary = Path(os.environ["RUNNER_TEMP"])
+        target = os.environ["TARGET"]
+        package = temporary / "grok-dist" / target
+        evidence = temporary / ("grok-package-evidence-" + target)
+        metadata = json.loads((package / "grok-package.json").read_text())
+        home = temporary / ("grok-home-" + target)
+        sqlite = temporary / ("grok-startup-sqlite-" + target)
+        sqlite.mkdir()
+        env = os.environ.copy()
+        for key in ("GROK_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY",
+                    "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"):
+            env.pop(key, None)
+        env.update(CODEX_HOME=str(home), CODEX_SQLITE_HOME=str(sqlite))
+        result = subprocess.run(
+            [str(package / "bin/grok"), "app-server", "--print-startup-config", "--strict-config",
+             "--startup-client-info", json.dumps({"name": "grok_package_smoke", "version": metadata["version"]})],
+            cwd=home, env=env, capture_output=True, text=True, timeout=20,
+        )
+        (evidence / "startup-config.json").write_text(result.stdout)
+        if result.returncode != 0:
+            raise RuntimeError("Packaged startup configuration probe failed")
+        value = json.loads(result.stdout)
+        if (value.get("appServerVersion") != metadata["version"] or "error" in value
+                or "requirements" not in value.get("configRequirements", {})):
+            raise RuntimeError("Packaged startup configuration response is invalid")
+        if any(sqlite.iterdir()) or (home / "auth.json").exists():
+            raise RuntimeError("Startup discovery unexpectedly created runtime or authentication state")
+        for installed, shipped in (("config.toml", "config.toml.example"), ("models.json", "models.json")):
+            if (home / installed).read_bytes() != (package / shipped).read_bytes():
+                raise RuntimeError("Startup discovery changed the shipped configuration")
+        PY
+        python3 - <<'PY'
+        import json, os
+        from pathlib import Path
+        root = Path(os.environ["RUNNER_TEMP"]) / ("grok-package-evidence-" + os.environ["TARGET"])
+        metadata = json.loads((root / "grok-package.json").read_text())
+        actual = (root / "runtime-version.txt").read_text().strip().split()
+        if len(actual) != 2 or actual[1] != metadata["version"]:
+            raise RuntimeError("Packaged runtime version differs from package metadata")
+        if metadata["source_sha"] != os.environ["GITHUB_SHA"] or metadata["target"] != os.environ["TARGET"]:
+            raise RuntimeError("Package identity differs from the build subject")
+        PY
+        "$package/bin/codex-code-mode-host" --help > "$evidence/code-mode-host-help.txt"
+        "$package/bin/codex-exec-server" --help > "$evidence/exec-server-help.txt"
+        "$package/codex-path/rg" --version > "$evidence/rg-version.txt"
+        if [[ "$TARGET" == x86_64-unknown-linux-musl ]]; then
+          "$package/codex-resources/bwrap" --version > "$evidence/bwrap-version.txt"
+        fi
+        printf '%s\n' "source=$GITHUB_SHA" "target=$TARGET" "run=$GITHUB_RUN_ID" \
+          "attempt=$GITHUB_RUN_ATTEMPT" "platform=$RUNNER_OS/$RUNNER_ARCH" \
+          "entrypoint_smoke=passed" > "$evidence/subject.txt"
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      with:
+        go-version-file: grok/go.mod
+        cache: false
+    - name: Prepare the hosted Linux sandbox for package acceptance
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash grok/package/prepare_linux_sandbox_ci.sh
+    - name: Verify the packaged launcher App Server and Provider with a controlled backend
+      shell: bash
+      working-directory: grok
+      env:
+        # The Go harness runs on the host; do not inherit the musl C/C++ wrappers.
+        CC: cc
+        CXX: c++
+        GROK_CODEX_BIN: ${{ runner.temp }}/grok-dist/${{ inputs.target }}/bin/grok
+        GROK_LIVE_NATIVE_TARGET: ${{ inputs.target }}
+        TARGET: ${{ inputs.target }}
+        GROK_FACTS: "0"
+        GROK_LIVE: "0"
+      run: bash package/verify_provider.sh "$RUNNER_TEMP/grok-package-evidence-$TARGET"
+    - name: Archive the complete package with executable bits
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        archive="$RUNNER_TEMP/grok-$GITHUB_SHA-$TARGET.tar.gz"
+        tar -czf "$archive" -C "$RUNNER_TEMP/grok-dist/$TARGET" .
+        shasum -a 256 "$archive" > "$RUNNER_TEMP/grok-package-evidence-$TARGET/archive.sha256"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      id: upload
+      with:
+        name: grok-${{ github.sha }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/grok-${{ github.sha }}-${{ inputs.target }}.tar.gz
+        if-no-files-found: error
+        retention-days: 30
+    - name: Retain package identity and smoke evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: grok-package-evidence-${{ github.sha }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/grok-package-evidence-${{ inputs.target }}
+        if-no-files-found: warn
+        retention-days: 30
+    - name: Retain failed Linux startup diagnostics and stock symbols
+      if: ${{ failure() && runner.os == 'Linux' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: grok-linux-startup-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/grok-linux-diagnostics
+          ${{ runner.temp }}/grok-symbols
+        if-no-files-found: warn
+        retention-days: 7

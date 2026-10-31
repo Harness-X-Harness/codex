@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
@@ -15,6 +16,7 @@ use codex_login::GatewayAuthManager;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -123,6 +125,14 @@ pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-5.6-terra";
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
+
+    /// Selects API semantics from explicit configuration, independent of name and URL.
+    fn api_dialect(&self) -> ApiDialect {
+        match self.info().wire_api {
+            WireApi::Responses => ApiDialect::OpenAi,
+            WireApi::GrokResponses => ApiDialect::Grok,
+        }
+    }
 
     /// Returns whether the resolved Responses provider may receive internal tool metadata.
     fn include_internal_metadata(&self, provider: &Provider) -> bool {
@@ -436,14 +446,18 @@ pub fn create_model_provider(
 }
 
 pub(crate) fn create_model_provider_with_runtime(
-    provider_info: ModelProviderInfo,
+    mut provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
     runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
 ) -> SharedModelProvider {
-    if provider_info.is_amazon_bedrock() {
+    if provider_info.wire_api == WireApi::GrokResponses {
+        provider_info.stream_idle_timeout_ms.get_or_insert(60_000);
+        provider_info.stream_max_retries.get_or_insert(1);
+    }
+    if provider_info.wire_api == WireApi::Responses && provider_info.is_amazon_bedrock() {
         return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
     }
-    if provider_info.is_gcp() {
+    if provider_info.wire_api == WireApi::Responses && provider_info.is_gcp() {
         return Arc::new(GcpModelProvider::new(provider_info, auth_manager));
     }
     Arc::new(ConfiguredModelProvider::new(
@@ -471,6 +485,14 @@ enum ModelsCacheConfig {
 }
 
 impl ConfiguredModelProvider {
+    // Explicit catalogs are authoritative replacements. Grok has no remote discovery;
+    // its compatibility catalog must also avoid the stock bundled/cache path.
+    fn configured_model_catalog(&self, catalog: Option<ModelsResponse>) -> Option<ModelsResponse> {
+        catalog.or_else(|| {
+            (self.api_dialect() == ApiDialect::Grok).then(crate::grok_catalog::static_model_catalog)
+        })
+    }
+
     fn new(
         info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
@@ -551,7 +573,7 @@ impl ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         cache: ModelsCacheConfig,
     ) -> SharedModelsManager {
-        if let Some(model_catalog) = config_model_catalog {
+        if let Some(model_catalog) = self.configured_model_catalog(config_model_catalog) {
             return Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
@@ -595,6 +617,9 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
+        if self.api_dialect() == ApiDialect::Grok {
+            return crate::grok_catalog::GROK_4_6_MODEL_ID;
+        }
         if self
             .auth_manager
             .as_ref()
@@ -604,6 +629,20 @@ impl ModelProvider for ConfiguredModelProvider {
             API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
         } else {
             DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+        }
+    }
+
+    fn memory_extraction_preferred_model(&self) -> &'static str {
+        match self.api_dialect() {
+            ApiDialect::Grok => crate::grok_catalog::GROK_4_6_MODEL_ID,
+            ApiDialect::OpenAi => DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL,
+        }
+    }
+
+    fn memory_consolidation_preferred_model(&self) -> &'static str {
+        match self.api_dialect() {
+            ApiDialect::Grok => crate::grok_catalog::GROK_4_6_MODEL_ID,
+            ApiDialect::OpenAi => DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL,
         }
     }
 
@@ -835,6 +874,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            x_search: None,
             supports_standalone_web_search: false,
             capabilities: None,
             project_id: None,
