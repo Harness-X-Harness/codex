@@ -175,3 +175,74 @@ func TestDiagnosticsSummaryHashesIdentityAndPreservesUnknownRetry(t *testing.T) 
 		t.Fatal("auxiliary correlation was lost or delta fragments were retained")
 	}
 }
+
+func TestDiagnosticsHostedWebFailureSurvivesTraceLoss(t *testing.T) {
+	wrapped := "stream disconnected before completion: " + failedWebDiagnostic
+	raw := webDiagnosticError(t, "other", wrapped, nil)
+	cause := failedTurn("failed", raw, "live: hosted turn did not complete")
+	want := DescribeFailure(cause)
+	for _, sink := range []string{"nil", "closed", "quota", "unwritable"} {
+		t.Run(sink, func(t *testing.T) {
+			var d *Diagnostics
+			if sink != "nil" {
+				path := t.TempDir()
+				if sink == "unwritable" {
+					path = filepath.Join(path, "occupied")
+					if err := os.WriteFile(path, []byte("not a directory"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				d = NewDiagnostics(path)
+				t.Cleanup(d.Close)
+				if sink == "closed" {
+					d.Close()
+				} else if sink == "quota" {
+					d.maxEvents = 0
+				}
+			}
+			retry := webDiagnosticError(t, map[string]any{"responseStreamDisconnected": map[string]any{"httpStatusCode": nil}}, "Reconnecting...", wrapped)
+			protocolDiagnostic(d, "notification", map[string]any{"method": "error", "params": map[string]any{"error": retry, "willRetry": true}})
+			protocolDiagnostic(d, "notification", map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]any{"id": "turn", "status": "failed", "error": raw}}})
+			d.Record("fixture_result", map[string]any{"stage": "search_turn_submitted", "completed": false, "failure": diagnosticFailure(cause)})
+			d.Record("invocation_finished", map[string]any{"outcome": "not_observed", "failure": want, "exit_code": 1})
+			d.Close()
+			if cause == nil || cause.Error() != "live: hosted turn did not complete" || DescribeFailure(cause) != want {
+				t.Fatal("optional diagnostics changed the failed-turn outcome")
+			}
+			if sink == "quota" || sink == "unwritable" {
+				got := d.Status()
+				if got.LastError == nil || got.LastTerminal == nil || got.Result == nil || got.Invocation == nil ||
+					got.LastError.Failure.HostedWeb != want.HostedWeb || got.LastTerminal.Failure != want || got.Result.Failure != want || got.Invocation.Failure != want || len(got.CaptureErrors) == 0 {
+					t.Fatalf("trace loss discarded finite hosted-web classification: %+v", got)
+				}
+				encoded, err := json.Marshal(got)
+				if err != nil || strings.Contains(string(encoded), "Grok stream:") || strings.Contains(string(encoded), "Reconnecting") {
+					t.Fatal("compact summary copied error text instead of finite fields")
+				}
+			}
+		})
+	}
+}
+
+func TestDiagnosticsHostedWebFailureRemainsValueOnlyAndFinite(t *testing.T) {
+	d := NewDiagnostics(t.TempDir())
+	t.Cleanup(d.Close)
+	detail := DescribeFailure(failedTurn("failed", webDiagnosticError(t, "other", failedWebDiagnostic, nil), "live: rejected"))
+	d.Record("fixture_result", map[string]any{"failure": &detail})
+	want := detail
+	detail.HostedWeb.Action = "PRIVATE_CANARY"
+	copy := d.Status()
+	copy.Result.Failure.HostedWeb.Status = "PRIVATE_CANARY"
+	if d.Status().Result.Failure != want {
+		t.Fatal("hosted-web snapshot aliased caller or status state")
+	}
+	d.Record("fixture_result", map[string]any{"failure": &detail})
+	d.Close()
+	if d.Status().Result.Failure.HostedWeb != (HostedWebFailure{}) {
+		t.Fatal("unrecognized caller-created fields bypassed the finite summary projection")
+	}
+	encoded, err := json.Marshal(d.Status())
+	if err != nil || strings.Contains(string(encoded), "PRIVATE_CANARY") {
+		t.Fatal("arbitrary diagnostic labels reached public summary")
+	}
+}

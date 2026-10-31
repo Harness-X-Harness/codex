@@ -159,6 +159,9 @@ func (d *Diagnostics) summaryFailure(value any) FailureInfo {
 	result.Code = d.summaryText(result.Code)
 	result.TerminalStatus = d.summaryText(result.TerminalStatus)
 	result.ErrorKind = d.summaryText(result.ErrorKind)
+	if !result.HostedWeb.knownLabels() {
+		result.HostedWeb = HostedWebFailure{}
+	}
 	return result
 }
 
