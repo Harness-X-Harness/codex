@@ -66,6 +66,9 @@ func TestProductSDKNotificationRetainsTypedEvidenceAndByteBudget(t *testing.T) {
 	if observer.cause == nil || len(observer.queued()) != 0 {
 		t.Fatal("oversized typed evidence was retained")
 	}
+	if DescribeFailure(observer.cause).Code != "product_evidence_budget_exceeded" {
+		t.Fatal("resource exhaustion was not distinguished from answer validity")
+	}
 }
 
 func TestProductInProgressDiagnosticIsNotFailure(t *testing.T) {

@@ -300,7 +300,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 					if err := send("private_item_0", ""); err != nil {
 						t.Fatal(err)
 					}
-					if !observer.reply.recall || observer.reply.ambiguous || len(observer.reply.identities) != historyAssistantLimit {
+					if observer.reply.evaluated || observer.reply.recall || observer.reply.ambiguous || len(observer.reply.identities) != historyAssistantLimit || observer.reply.text.String() != historyTestJSON(token, turn+2) {
 						t.Fatal("old duplicate spent capacity or superseded the current result")
 					}
 				}

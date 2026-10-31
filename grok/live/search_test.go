@@ -162,6 +162,13 @@ func fakeSearchServer() {
 			continue
 		case "thread/read":
 			history := append([]any(nil), turns...)
+			if mode == "unrelated_history" {
+				var unrelated []any
+				for index := 0; index < 33; index++ {
+					unrelated = append(unrelated, map[string]any{"id": fmt.Sprintf("unrelated-%d", index), "status": "failed", "items": []any{}})
+				}
+				history = append(unrelated, history...)
+			}
 			if mode == "reordered_history" && len(history) == 2 {
 				history[0], history[1] = history[1], history[0]
 			}
@@ -192,7 +199,7 @@ func publicSearchFixtureCall() map[string]any {
 
 func TestHostedSearchPublicResultAndSingleContinuation(t *testing.T) {
 	for _, scenario := range []string{"web", "web_allowed", "web_excluded"} {
-		for _, mode := range []string{"ok", "duplicate", "settled_only", "notification_only", "split_final", "commentary_after_final", "reordered_history", "auxiliary_activity"} {
+		for _, mode := range []string{"ok", "duplicate", "settled_only", "notification_only", "split_final", "commentary_after_final", "reordered_history", "auxiliary_activity", "unrelated_history"} {
 			t.Run(scenario+"/"+mode, func(t *testing.T) {
 				t.Parallel()
 				options := fixtureOptions(t, "search:"+mode+":"+scenario)

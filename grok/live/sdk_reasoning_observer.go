@@ -381,8 +381,9 @@ func (observer *sdkHistoryObserver) finishTurn() {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	observer.active = false
+	observer.probe.evaluateReply(&observer.reply)
 	recall := observer.reply.recall && !observer.reply.ambiguous
-	observer.probe.diagnostics.Record("oracle_result", map[string]any{"scenario": "reasoning", "turn_id": observer.probe.turnID, "completed": observer.reply.completed, "recall": recall, "ambiguous": observer.reply.ambiguous, "reply_bytes": observer.reply.bytes, "authoritative": observer.reply.authoritative, "explicit_final": observer.reply.explicitFinal, "reply": observer.reply.text, "format_valid": observer.reply.formatValid})
+	observer.probe.diagnostics.Record("oracle_result", map[string]any{"scenario": "reasoning", "turn_id": observer.probe.turnID, "completed": observer.reply.completed, "recall": recall, "ambiguous": observer.reply.ambiguous, "reply_bytes": observer.reply.bytes, "authoritative": observer.reply.authoritative, "explicit_final": observer.reply.explicitFinal, "reply": observer.reply.text.String(), "format_valid": observer.reply.formatValid})
 	if observer.probe.previousID == "" {
 		observer.observations.FirstCompleted, observer.observations.FirstRecall, observer.observations.FirstReplyBytes = observer.reply.completed, recall, observer.reply.bytes
 		if observer.reply.completed {

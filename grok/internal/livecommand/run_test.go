@@ -47,6 +47,9 @@ func TestDiagnosticCaptureFailureIsSeparateFromNotRun(t *testing.T) {
 	if report.Diagnostics == nil || len(report.Diagnostics.CaptureErrors) == 0 {
 		t.Fatalf("capture failure hidden: %+v", report)
 	}
+	if report.Diagnostics.Invocation == nil || report.Diagnostics.Invocation.Outcome != report.Outcome || report.Diagnostics.Invocation.ExitCode != code {
+		t.Fatal("final report lost outcome when diagnostic files were unavailable")
+	}
 }
 
 func TestDiagnosticEarlyReturnPersistsInvocation(t *testing.T) {
@@ -54,6 +57,9 @@ func TestDiagnosticEarlyReturnPersistsInvocation(t *testing.T) {
 	report, code := Execute(context.Background(), Config{Scenario: "basic-primary", Timeout: time.Minute, DiagnosticsDir: dir}, func(string) string { return "" })
 	if code != 3 || report.Diagnostics == nil {
 		t.Fatal("not-run outcome changed")
+	}
+	if report.Diagnostics.Invocation == nil || report.Diagnostics.Invocation.Outcome != report.Outcome || report.Diagnostics.Invocation.Reason != report.Reason || report.Failure != nil || report.Diagnostics.Invocation.Failure.Code != "" {
+		t.Fatal("not-run summary disagreed with the final Report or invented failure")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
 	if err != nil {

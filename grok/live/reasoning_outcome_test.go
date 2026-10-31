@@ -22,7 +22,9 @@ func TestHistoryFailureClassifiesObservedBoundary(t *testing.T) {
 			if test.accepted {
 				o.acceptedCalls[sha256.Sum256([]byte("call"))] = struct{}{}
 			}
-			o.probe.addReplyFragment(historyItem{ID: "reply", Phase: "final_answer", Text: test.reply}, &o.reply)
+			if err := o.probe.completedTurn(historyTurn{Status: "completed", Items: []historyItem{{Type: "agentMessage", ID: "reply", Phase: "final_answer", Text: test.reply}}}, &o.reply); err != nil {
+				t.Fatal(err)
+			}
 			if o.reply.recall || DescribeFailure(o.replyFailure()).Code != test.code {
 				t.Fatal("wrong observed-boundary classification")
 			}

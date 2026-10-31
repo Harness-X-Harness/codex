@@ -76,6 +76,14 @@ type DiagnosticsStatus struct {
 	FlushTimedOut    bool     `json:"flush_timed_out"`
 	Truncated        bool     `json:"truncated"`
 	CaptureErrors    []string `json:"capture_errors,omitempty"`
+	// These compact observations survive trace quotas. They are diagnostic
+	// snapshots, not a second acceptance oracle or proof of successful capture.
+	Deltas       map[string]DiagnosticDelta `json:"deltas,omitempty"`
+	LastTerminal *DiagnosticTerminal        `json:"last_terminal,omitempty"`
+	LastError    *DiagnosticProtocolError   `json:"last_error,omitempty"`
+	Result       *DiagnosticResult          `json:"result,omitempty"`
+	Cleanup      *DiagnosticCleanup         `json:"cleanup,omitempty"`
+	Invocation   *DiagnosticInvocation      `json:"invocation,omitempty"`
 }
 
 func NewDiagnostics(dir string, secrets ...string) *Diagnostics {
@@ -189,6 +197,22 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 		d.drop(false, "record_after_close", false)
 		return
 	}
+	d.retainSummary(kind, fields)
+	delta, deltaBytes := d.countDelta(kind, fields)
+	if delta != "" && d.status.Deltas[delta].Samples >= diagnosticsDeltaSamples {
+		return
+	}
+	if delta != "" {
+		// Token fragments can split a secret across records. Sample only the
+		// public event metadata; complete items own sanitized response text.
+		sample := map[string]any{"delta_bytes": deltaBytes, "omitted": "delta_text"}
+		for _, key := range []string{"source", "method", "threadId", "turnId", "itemId", "callId"} {
+			if value, present := fields[key]; present {
+				sample[key] = value
+			}
+		}
+		fields = sample
+	}
 	if d.events == nil {
 		d.drop(false, "events_unavailable", false)
 		return
@@ -222,6 +246,11 @@ func (d *Diagnostics) Record(kind string, fields map[string]any) {
 		d.admittedEvents++
 		d.admittedBytes += len(data)
 		d.status.PendingWrites++
+		if delta != "" {
+			counts := d.status.Deltas[delta]
+			counts.Samples++
+			d.status.Deltas[delta] = counts
+		}
 	default:
 		d.drop(false, "queue_full", true)
 	}
@@ -324,6 +353,36 @@ func (d *Diagnostics) Status() DiagnosticsStatus {
 func (d *Diagnostics) snapshot() DiagnosticsStatus {
 	result := d.status
 	result.CaptureErrors = append([]string(nil), result.CaptureErrors...)
+	if d.status.Deltas != nil {
+		result.Deltas = make(map[string]DiagnosticDelta, len(d.status.Deltas))
+		for method, counts := range d.status.Deltas {
+			result.Deltas[method] = counts
+		}
+	}
+	if result.LastTerminal != nil {
+		value := *result.LastTerminal
+		result.LastTerminal = &value
+	}
+	if result.LastError != nil {
+		value := *result.LastError
+		if value.WillRetry != nil {
+			retry := *value.WillRetry
+			value.WillRetry = &retry
+		}
+		result.LastError = &value
+	}
+	if result.Result != nil {
+		value := *result.Result
+		result.Result = &value
+	}
+	if result.Cleanup != nil {
+		value := *result.Cleanup
+		result.Cleanup = &value
+	}
+	if result.Invocation != nil {
+		value := *result.Invocation
+		result.Invocation = &value
+	}
 	return result
 }
 

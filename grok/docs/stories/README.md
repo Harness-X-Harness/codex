@@ -39,6 +39,9 @@ added. Required fields and exact types are validated on one complete JSON value;
 null or empty required results cannot prove success. Schema validity does not
 independently establish article accuracy, recency or source grounding. Raw extension envelopes and
 byte-identical internal replay are not additional Live acceptance conditions.
+The task does not impose article-count, headline/URL/summary-length or completed
+Web-call maxima. Incoming frames and retained observations remain bounded; an
+exhausted observation budget is incomplete validation, not a wrong answer.
 Final text is collected from eligible final-answer items,
 ignoring commentary and accepting multiple final fragments. Target history is
 matched by unique submitted Turn identity, not array position or total length.

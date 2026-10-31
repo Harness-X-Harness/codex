@@ -77,7 +77,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
 			evidence.CleanupPending = !closed.ProcessReaped || closed.CallbackWorkPending != 0
-			options.Diagnostics.Record("sdk_cleanup", map[string]any{"process_reaped": closed.ProcessReaped, "callback_work_pending": closed.CallbackWorkPending, "failed": closeErr != nil, "failure": diagnosticFailure(closeErr)})
+			options.Diagnostics.Record("sdk_cleanup", map[string]any{"process_reaped": closed.ProcessReaped, "callback_work_pending": closed.CallbackWorkPending, "failed": closeErr != nil, "failure": diagnosticFailure(sdkFailure(closeErr))})
 			var callbackErr error
 			select {
 			case callbackErr = <-handlers.failures:
@@ -114,6 +114,9 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 
 // sdkFailure never formats SDK errors, which can contain private protocol data.
 func sdkFailure(err error) error {
+	if err == nil {
+		return nil
+	}
 	var observation *observationFailure
 	if errors.As(err, &observation) {
 		return observation

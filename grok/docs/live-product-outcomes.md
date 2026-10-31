@@ -59,6 +59,19 @@ cannot erase a contradictory terminal or unresolved owned cleanup. Conversely,
 a later business-proof failure must not erase independently established partial
 facts such as a child having completed its own turn.
 
+The user-confirmed 2026-10-31 limit reduction separates task correctness from
+observation resources. Complete answers are not rejected for a repeated
+4096-byte allowance, Unicode width, article count or unrequested string
+maxima. Exact invoice cents accept insignificant leading/trailing zeros; child
+path syntax remains owned by the native protocol rather than a Live-only
+length rule. Bound authoritative results, not unrelated history or consistent
+duplicate representations, own semantic validation. Identity conflicts,
+contradictory terminals, complete parsing, actual operations and cleanup remain
+required. SDK frame/retention limits, child candidate/delivery budgets, image
+memory/path safety and invocation/deadline limits remain resource boundaries.
+Exhausting such a boundary leaves proof incomplete; no truncated prefix earns
+acceptance. The formal and diagnostic scenario selections above are unchanged.
+
 ### Shop lookup and history
 
 The prompt identifies this shop, the quantity and yuan; the registered capability
@@ -137,6 +150,15 @@ separately reports drops, I/O errors, outstanding work and flush timeout. A boun
 Close can return while the writer is blocked; `closed` does not mean joined or
 complete. Detailed sink assertions belong in deterministic diagnostic tests,
 never in the Live business oracle.
+
+High-volume public deltas now retain counts/bytes and bounded metadata samples,
+not repeated text fragments. Complete public items retain their existing
+sanitized content. Fixed terminal, error, result, cleanup and invocation summaries
+are independent of the ordinary event quota and appear in the final report and
+manifest with hashed correlation identities. A completed terminal can therefore
+remain visible alongside a failed business result and successful cleanup, even
+when the trace is full. Deliberate sampling, unexpected capture loss and product
+proof are separate; none of these diagnostic fields becomes a Live assertion.
 
 Remaining limits are explicit: the pinned SDK discards child stderr; the public
 stream cannot expose a rejected provider frame it never forwarded; opaque

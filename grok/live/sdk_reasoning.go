@@ -172,6 +172,9 @@ func observeSDKHistoryTurn[R any](ctx context.Context, observer *sdkHistoryObser
 	for {
 		observer.mu.Lock()
 		cause := observer.cause
+		if observer.reply.completed && (fenced || observer.inlineTerminal) {
+			observer.probe.evaluateReply(&observer.reply)
+		}
 		// A notified terminal must cross the SDK callback fence. The original
 		// inline response is independently authoritative only when no terminal
 		// notification has overwritten the run snapshot.

@@ -109,6 +109,10 @@ func fakeShippedServer() {
 	defer trace.Close()
 	signal.Notify(make(chan os.Signal, 1), os.Interrupt)
 	mode := strings.TrimPrefix(script.Mode, "shipped:")
+	childPath := "/root/checker"
+	if mode == "long_child_path" {
+		childPath = "/root/" + strings.Repeat("checker", 180)
+	}
 	input, output := bufio.NewScanner(os.Stdin), json.NewEncoder(os.Stdout)
 	message := func(id, text string) map[string]any {
 		return map[string]any{"type": "agentMessage", "id": id, "text": text}
@@ -137,7 +141,7 @@ func fakeShippedServer() {
 		parentTurn["items"] = []any{message("interim", "Checking the order."), map[string]any{"type": "functionCallOutput", "id": "check-output", "name": "check", "output": "done"}, message("PRIVATE_PARENT_TURN-final", shippedInvoice)}
 	}
 	parentItems := parentTurn["items"].([]any)
-	activity := map[string]any{"type": "subAgentActivity", "id": "spawn-call", "kind": "started", "agentThreadId": "PRIVATE_CHILD", "agentPath": "/root/checker"}
+	activity := map[string]any{"type": "subAgentActivity", "id": "spawn-call", "kind": "started", "agentThreadId": "PRIVATE_CHILD", "agentPath": childPath}
 	if mode == "completed_activity" {
 		activity["kind"] = "completed"
 	}
@@ -169,7 +173,7 @@ func fakeShippedServer() {
 			rawFinal()
 			return
 		}
-		author, recipient, text := "/root/checker", "/root", shippedInvoice
+		author, recipient, text := childPath, "/root", shippedInvoice
 		if mode == "wrong_delivery_author" {
 			author = "/root/other"
 		}
@@ -290,7 +294,7 @@ func fakeShippedServer() {
 			id, _ := req.Params["threadId"].(string)
 			thread := map[string]any{"id": id, "turns": []any{parentTurn}}
 			if id != "PRIVATE_PARENT" {
-				thread = map[string]any{"id": id, "parentThreadId": "PRIVATE_PARENT", "forkedFromId": "PRIVATE_PARENT", "source": map[string]any{"subAgent": map[string]any{"thread_spawn": map[string]any{"agent_path": "/root/checker", "parent_thread_id": "PRIVATE_PARENT", "depth": 1}}}, "turns": []any{childTurn}}
+				thread = map[string]any{"id": id, "parentThreadId": "PRIVATE_PARENT", "forkedFromId": "PRIVATE_PARENT", "source": map[string]any{"subAgent": map[string]any{"thread_spawn": map[string]any{"agent_path": childPath, "parent_thread_id": "PRIVATE_PARENT", "depth": 1}}}, "turns": []any{childTurn}}
 				switch mode {
 				case "child_parent":
 					thread["parentThreadId"] = "PRIVATE_OTHER"
@@ -322,6 +326,13 @@ func fakeShippedServer() {
 					tid = "PRIVATE_OTHER"
 				}
 				notify("turn/completed", tid, "PRIVATE_PARENT_TURN", map[string]any{"id": "PRIVATE_PARENT_TURN", "status": status, "error": terr, "items": []any{}})
+			}
+			if mode == "long_history" && req.Params["threadId"] == "PRIVATE_PARENT" {
+				turns := thread["turns"].([]any)
+				for i := 0; i < 33; i++ {
+					turns = append([]any{turn(fmt.Sprintf("prior-%d", i), "Earlier task.")}, turns...)
+				}
+				thread["turns"] = turns
 			}
 			result = map[string]any{"thread": shippedProtocolThread(thread)}
 		default:
@@ -359,8 +370,8 @@ func TestShippedCatalogRequiresCompleteDTOs(t *testing.T) {
 }
 
 func TestShippedStartupAndChildRejectIncompleteEvidence(t *testing.T) {
-	success := map[string]bool{"ok": true, "completed_activity": true, "terminal_hint_only": true, "collab_receiver": true, "child_pinned_model": true, "child_fresh_fork": true, "raw_text_not_authority": true, "delayed_delivery": true, "optional_raw_noise": true, "parent_tool_rounds": true, "child_tool_rounds": true}
-	modes := []string{"ok", "completed_activity", "terminal_hint_only", "collab_receiver", "child_pinned_model", "child_fresh_fork", "raw_text_not_authority", "delayed_delivery", "optional_raw_noise", "parent_tool_rounds", "child_tool_rounds", "parent_only_invoice", "early_spawn_failure", "child_without_invoice", "child_wrong_invoice", "child_failed", "child_parent", "child_provider", "child_model", "child_unit_source", "child_self_path", "missing_delivery", "wrong_delivery_author", "wrong_delivery_recipient", "wrong_delivery_invoice", "pre_delivery_replay", "parent_wrong_invoice", "late_child_failure", "ready_late_child_failure", "wrong_start_provider", "failed"}
+	success := map[string]bool{"ok": true, "long_child_path": true, "long_history": true, "completed_activity": true, "terminal_hint_only": true, "collab_receiver": true, "child_pinned_model": true, "child_fresh_fork": true, "raw_text_not_authority": true, "delayed_delivery": true, "optional_raw_noise": true, "parent_tool_rounds": true, "child_tool_rounds": true}
+	modes := []string{"ok", "long_child_path", "long_history", "completed_activity", "terminal_hint_only", "collab_receiver", "child_pinned_model", "child_fresh_fork", "raw_text_not_authority", "delayed_delivery", "optional_raw_noise", "parent_tool_rounds", "child_tool_rounds", "parent_only_invoice", "early_spawn_failure", "child_without_invoice", "child_wrong_invoice", "child_failed", "child_parent", "child_provider", "child_model", "child_unit_source", "child_self_path", "missing_delivery", "wrong_delivery_author", "wrong_delivery_recipient", "wrong_delivery_invoice", "pre_delivery_replay", "parent_wrong_invoice", "late_child_failure", "ready_late_child_failure", "wrong_start_provider", "failed"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			opts := fixtureOptions(t, "shipped:"+mode)

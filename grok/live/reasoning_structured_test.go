@@ -2,6 +2,7 @@ package live
 
 import (
 	"crypto/sha256"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,7 +23,11 @@ func TestReasoningStructuredWholeAnswer(t *testing.T) {
 		{"substring", []string{`{"amount":"prefix 14"}`}, false, false},
 		{"multiple", []string{`{"amount":14}`, `{"amount":null}`}, false, false},
 		{"trailing_prose", []string{`{"amount":14}`, `done`}, false, false},
-		{"oversized", []string{strings.Repeat(" ", 4096) + `{"amount":14}`}, false, false},
+		{"long_whitespace", []string{strings.Repeat(" ", 8192) + `{"amount":14}`}, true, true},
+		{"long_split", []string{strings.Repeat(" ", 8192) + `{"amount":`, `14}`}, true, true},
+		{"long_wrong", []string{strings.Repeat(" ", 8192) + `{"amount":15}`}, true, false},
+		{"long_trailing_prose", []string{strings.Repeat(" ", 8192) + `{"amount":14}`, `done`}, false, false},
+		{"long_conflicting_fields", []string{strings.Repeat(" ", 8192) + `{"amount":14,"amount":15}`}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, summary := range []bool{false, true} {
@@ -42,12 +47,15 @@ func TestReasoningStructuredWholeAnswer(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
+					if err := probe.completedTurn(historyTurn{Status: "completed"}, &reply); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if reply.formatValid != tc.valid || reply.recall != tc.recalled {
 					t.Fatalf("summary=%t valid=%t recalled=%t", summary, reply.formatValid, reply.recall)
 				}
-				if len(reply.text) > 4097 {
-					t.Fatal("unbounded reply retention")
+				if reply.text.String() != strings.Join(tc.fragments, "\n") {
+					t.Fatal("complete admitted reply was not retained")
 				}
 			}
 		})
@@ -85,11 +93,47 @@ func TestReasoningPriceCalculationUsesCurrentQuantity(t *testing.T) {
 		for _, amount := range []string{"7", "14", "14.0", "21", "21.0", "null", `"21"`} {
 			probe := historyProbe{unitPrice: 7, previousID: previous}
 			reply := historyReply{}
-			probe.addReplyFragment(historyItem{Phase: "final_answer", Text: `{"amount":` + amount + `}`}, &reply)
+			if err := probe.completedTurn(historyTurn{Status: "completed", Items: []historyItem{{ID: "answer", Type: "agentMessage", Phase: "final_answer", Text: `{"amount":` + amount + `}`}}}, &reply); err != nil {
+				t.Fatal(err)
+			}
 			want := previous == "" && (amount == "14" || amount == "14.0") || previous != "" && (amount == "21" || amount == "21.0")
 			if reply.recall != want {
 				t.Fatalf("previous=%q amount=%s accepted=%t", previous, amount, reply.recall)
 			}
+		}
+	}
+}
+
+func TestReasoningFragmentsAreEvaluatedAtTheCompletedBoundary(t *testing.T) {
+	for _, phase := range []string{"", "final_answer"} {
+		probe := historyProbe{unitPrice: 7}
+		reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
+		for i := 0; i < 1024; i++ {
+			if err := probe.completedItem(historyItem{Type: "agentMessage", ID: strconv.Itoa(i), Phase: phase, Text: strings.Repeat("x", 512)}, &reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply.evaluated || reply.recall || reply.formatValid {
+				t.Fatal("a growing prefix was parsed or credited before the proof boundary")
+			}
+		}
+		if err := probe.completedItem(historyItem{Type: "agentMessage", ID: "answer", Phase: "final_answer", Text: `{"amount":14}`}, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if err := probe.completedTurn(historyTurn{Status: "completed"}, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if !reply.evaluated || reply.recall != (phase == "") {
+			t.Fatal("discarded legacy text or retained final fragments changed whole-answer semantics")
+		}
+		if err := probe.completedItem(historyItem{Type: "agentMessage", ID: "tail", Phase: "final_answer", Text: "wrong tail"}, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if reply.evaluated || reply.recall {
+			t.Fatal("a new late fragment borrowed previously evaluated recall")
+		}
+		probe.evaluateReply(&reply)
+		if reply.recall || reply.formatValid {
+			t.Fatal("wrong tail accepted after the valid answer")
 		}
 	}
 }

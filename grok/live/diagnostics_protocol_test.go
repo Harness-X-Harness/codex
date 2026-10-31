@@ -29,12 +29,12 @@ func TestPublicProtocolDiagnosticsRetainErrorsNotPrivatePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, wanted := range []string{"backend overloaded", "serverOverloaded", "willRetry", "The dog is visible", "rate limited", "failed"} {
+	for _, wanted := range []string{"backend overloaded", "serverOverloaded", "willRetry", "delta_bytes", "rate limited", "failed"} {
 		if !strings.Contains(text, wanted) {
 			t.Errorf("missing %s", wanted)
 		}
 	}
-	for _, denied := range []string{"PRIVATE_REASONING_CANARY", "secret-canary"} {
+	for _, denied := range []string{"PRIVATE_REASONING_CANARY", "secret-canary", "The dog is visible"} {
 		if strings.Contains(text, denied) {
 			t.Errorf("leaked %s", denied)
 		}

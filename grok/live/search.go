@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/url"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/Harness-X-Harness/codex/grok/internal/searchfixture"
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -126,7 +125,7 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 			return err
 		}
 	}
-	if read.Thread.ID != p.threadID || len(turns) > 32 {
+	if read.Thread.ID != p.threadID {
 		return errors.New("live: settled search history unavailable")
 	}
 	currentIndex, previousFound := -1, false
@@ -169,7 +168,11 @@ func (p *searchProbe) observeStarted(value protocolv2.Turn) error {
 	}
 	p.server.diagnostics.Record("search_answer", map[string]any{"thread_id": p.threadID, "turn_id": p.turnID, "text": reply})
 	answerErr := validateSearchAnswer(reply, p.previousID != "")
-	p.server.diagnostics.Record("search_answer_validation", map[string]any{"thread_id": p.threadID, "turn_id": p.turnID, "followup": p.previousID != "", "accepted": answerErr == nil, "failure": DescribeFailure(answerErr), "json_valid": json.Valid([]byte(reply)), "parsed": DescribeFailure(answerErr).Code != "structured_reply_invalid"})
+	validation := map[string]any{"thread_id": p.threadID, "turn_id": p.turnID, "followup": p.previousID != "", "accepted": answerErr == nil, "json_valid": json.Valid([]byte(reply)), "parsed": DescribeFailure(answerErr).Code != "structured_reply_invalid"}
+	if answerErr != nil {
+		validation["failure"] = DescribeFailure(answerErr)
+	}
+	p.server.diagnostics.Record("search_answer_validation", validation)
 	if answerErr != nil {
 		return answerErr
 	}
@@ -195,7 +198,7 @@ func (p *searchProbe) notification(message frame) error {
 	p.frames++
 	p.bytes += message.size
 	if p.frames > 4096 || p.bytes > 64<<20 {
-		return errors.New("live: search evidence budget exceeded")
+		return failedObservation("observation_budget_exceeded", "live: search evidence budget exceeded")
 	}
 	if value, ok := message.Notification.AsTurnCompleted(); ok {
 		if value.Params.ThreadID != p.threadID {
@@ -248,9 +251,6 @@ func (p *searchProbe) publicSearch(turnID string, item protocolv2.ThreadItem) er
 	if turnID != p.turnID || p.settled {
 		return nil
 	}
-	if len(credited) >= 64 {
-		return errors.New("live: hosted search item budget exceeded")
-	}
 	credited[search.ID] = true
 	p.result.CanonicalCalls++
 	return nil
@@ -265,8 +265,8 @@ func validateSearchTerminal(value turn) error {
 	return nil
 }
 
-const searchArticlesSchema = `{"type":"object","properties":{"articles":{"type":"array","maxItems":8,"items":{"type":"object","properties":{"headline":{"type":"string","maxLength":512},"url":{"type":"string","maxLength":2048}},"required":["headline","url"],"additionalProperties":false}},"summary":{"type":["string","null"],"maxLength":2048}},"required":["articles","summary"],"additionalProperties":false}`
-const searchSummarySchema = `{"type":"object","properties":{"summary":{"type":["string","null"],"maxLength":2048}},"required":["summary"],"additionalProperties":false}`
+const searchArticlesSchema = `{"type":"object","properties":{"articles":{"type":"array","items":{"type":"object","properties":{"headline":{"type":"string"},"url":{"type":"string"}},"required":["headline","url"],"additionalProperties":false}},"summary":{"type":["string","null"]}},"required":["articles","summary"],"additionalProperties":false}`
+const searchSummarySchema = `{"type":"object","properties":{"summary":{"type":["string","null"]}},"required":["summary"],"additionalProperties":false}`
 
 func searchOutputSchema(followup bool) (protocolv2.OutputSchema, error) {
 	schema := searchArticlesSchema
@@ -287,7 +287,7 @@ func validateSearchAnswer(reply string, followup bool) error {
 		if err := parseStructuredReply(reply, &answer, "summary"); err != nil {
 			return err
 		}
-		if answer.Summary == nil || strings.TrimSpace(*answer.Summary) == "" || utf8.RuneCountInString(*answer.Summary) > 2048 {
+		if answer.Summary == nil || strings.TrimSpace(*answer.Summary) == "" {
 			return invalid()
 		}
 		return nil
@@ -299,10 +299,7 @@ func validateSearchAnswer(reply string, followup bool) error {
 	if err := parseStructuredReply(reply, &answer, "articles", "summary"); err != nil {
 		return err
 	}
-	if len(answer.Articles) == 0 || len(answer.Articles) > 8 {
-		return invalid()
-	}
-	if answer.Summary != nil && utf8.RuneCountInString(*answer.Summary) > 2048 {
+	if len(answer.Articles) == 0 {
 		return invalid()
 	}
 	for _, raw := range answer.Articles {
@@ -313,7 +310,7 @@ func validateSearchAnswer(reply string, followup bool) error {
 		if err := parseStructuredReply(string(raw), &article, "headline", "url"); err != nil {
 			return err
 		}
-		if article.Headline == nil || strings.TrimSpace(*article.Headline) == "" || utf8.RuneCountInString(*article.Headline) > 512 || article.URL == nil || utf8.RuneCountInString(*article.URL) > 2048 {
+		if article.Headline == nil || strings.TrimSpace(*article.Headline) == "" || article.URL == nil {
 			return invalid()
 		}
 		u, err := url.Parse(*article.URL)

@@ -180,37 +180,96 @@ func TestSDKEditObserverIdentityAndContinuation(t *testing.T) {
 }
 
 func TestSDKEditObserverBudgetsAndSafeEvidence(t *testing.T) {
-	for _, mode := range []string{"count", "bytes", "inline_items", "settled_items"} {
+	for _, mode := range []string{"count", "bytes"} {
 		t.Run(mode, func(t *testing.T) {
 			observer := editSDKObserver(t, editFixture{})
 			var err error
-			switch mode {
-			case "count", "bytes":
-				size := 1
-				if mode == "bytes" {
-					size = sdkEditByteLimit + 1
-				}
-				for i := 0; i <= sdkEditObservationLimit && err == nil; i++ {
-					err = observer.budget(size)
-				}
-			default:
-				turn := editSDKTurn("first", false)
-				turn.Items = make([]protocolv2.ThreadItem, sdkEditObservationLimit)
-				for i := range turn.Items {
-					turn.Items[i] = editSDKTurn("second", false).Items[0]
-				}
-				if mode == "inline_items" {
-					err = observer.reconcile(turn)
-				} else {
-					_ = observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
-					err = observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{turn})
-				}
+			size := 1
+			if mode == "bytes" {
+				size = sdkEditByteLimit + 1
+			}
+			for i := 0; i <= sdkEditObservationLimit && err == nil; i++ {
+				err = observer.budget(size)
 			}
 			got, sticky := observer.snapshot()
 			failure := observer.failure(fmt.Errorf("PRIVATE_CANARY"))
 			safe, _ := json.Marshal([]any{got, DescribeFailure(failure), failure.Error()})
-			if err == nil || sticky == nil || got.Completed || strings.Contains(string(safe), "PRIVATE_CANARY") {
-				t.Fatal("budget or privacy boundary failed")
+			if err == nil || sticky == nil || got.Completed || strings.Contains(string(safe), "PRIVATE_CANARY") || DescribeFailure(err).Code != "edit_evidence_budget_exceeded" {
+				t.Fatal("retained-state budget or privacy boundary failed")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverDuplicateRepresentations(t *testing.T) {
+	for _, mode := range []string{"early_items", "inline_items", "settled_items", "irrelevant_items"} {
+		t.Run(mode, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			turn := editSDKTurn("first", false)
+			for i := 0; i <= sdkEditObservationLimit; i++ {
+				item := turn.Items[0]
+				if mode == "irrelevant_items" {
+					item = protocolv2.NewThreadItemCommandExecution(protocolv2.ThreadItemCommandExecution{ID: fmt.Sprintf("tool-%d", i), Command: "inspect", CWD: observer.fixture.path, CommandActions: []protocolv2.CommandAction{}, Status: protocolv2.CommandExecutionStatusCompleted})
+				}
+				turn.Items = append(turn.Items, item)
+			}
+			var err error
+			switch mode {
+			case "early_items":
+				err = editSDKTerminal(observer, turn)
+				if err == nil {
+					err = observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
+				}
+			case "settled_items":
+				err = observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
+				if err == nil {
+					err = observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{turn})
+				}
+			default:
+				err = observer.reconcile(turn)
+			}
+			if err != nil || observer.requireTurnProof() != nil || observer.count != 2 {
+				t.Fatalf("duplicate or irrelevant representations consumed retained-state budget: count=%d err=%v", observer.count, err)
+			}
+			if err := observer.validateSettled("PRIVATE_CANARY_thread", []protocolv2.Turn{turn}); err != nil || observer.count != 2 {
+				t.Fatal("settled replay charged a second copy")
+			}
+		})
+	}
+}
+
+func TestSDKEditObserverSelectedReplyAccounting(t *testing.T) {
+	for _, mode := range []string{"large_discarded_legacy", "large_commentary", "empty_final_keeps_legacy", "released_legacy_conflict"} {
+		t.Run(mode, func(t *testing.T) {
+			observer := editSDKObserver(t, editFixture{})
+			turn := editSDKTurn("first", false)
+			final := turn.Items[0]
+			legacy := invoiceMessage("legacy", "", strings.Repeat("x", sdkEditByteLimit))
+			switch mode {
+			case "large_discarded_legacy":
+				turn.Items = []protocolv2.ThreadItem{legacy, final}
+			case "large_commentary":
+				turn.Items = []protocolv2.ThreadItem{invoiceMessage("commentary", "commentary", strings.Repeat("x", sdkEditByteLimit)), final}
+			case "empty_final_keeps_legacy":
+				turn.Items = []protocolv2.ThreadItem{invoiceMessage("legacy", "", "answer"), invoiceMessage("empty", "final_answer", " \n ")}
+			case "released_legacy_conflict":
+				legacy = invoiceMessage("legacy", "", strings.Repeat("x", sdkEditByteLimit/2))
+				if observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil {
+					t.Fatal("start failed")
+				}
+				if editSDKTerminal(observer, protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{legacy}}) != nil || editSDKTerminal(observer, turn) != nil {
+					t.Fatal("final selection failed")
+				}
+				if observer.bytes >= sdkEditByteLimit/2 {
+					t.Fatal("superseded legacy text retained its byte charge")
+				}
+				if editSDKTerminal(observer, protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{invoiceMessage("legacy", "", "changed")}}) == nil || observer.requireTurnProof() == nil {
+					t.Fatal("discarding legacy text also discarded its conflict witness")
+				}
+				return
+			}
+			if err := observer.reconcile(turn); err != nil || observer.requireTurnProof() != nil || observer.bytes > 2048 {
+				t.Fatalf("unselected text consumed retained answer budget: bytes=%d err=%v", observer.bytes, err)
 			}
 		})
 	}
@@ -355,5 +414,47 @@ func TestSDKEditObserverConflictingCompletedReply(t *testing.T) {
 	turn.Items[0] = protocolv2.NewThreadItemAgentMessage(message)
 	if editSDKTerminal(observer, turn) == nil || observer.requireTurnProof() == nil {
 		t.Fatal("same completed message identity accepted contradictory content")
+	}
+}
+
+func TestSDKEditObserverUniqueEvidenceStillBounded(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	if observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}) != nil {
+		t.Fatal("start failed")
+	}
+	var err error
+	for i := 0; i <= sdkEditObservationLimit; i++ {
+		item := invoiceMessage(fmt.Sprintf("commentary-%d", i), "commentary", "progress")
+		err = observer.typedNotification(context.Background(), protocolv2.NewServerNotificationItemCompleted(protocolv2.ServerNotificationItemCompleted{Params: protocolv2.ItemCompletedNotification{ThreadID: "PRIVATE_CANARY_thread", TurnID: "first", Item: item, CompletedAtMS: 1}}))
+		if i < sdkEditObservationLimit && err != nil {
+			t.Fatal("bounded unique identities rejected early")
+		}
+	}
+	if DescribeFailure(err).Code != "edit_evidence_budget_exceeded" || observer.requireTurnProof() == nil {
+		t.Fatal("unbounded identity retention manufactured completed proof")
+	}
+}
+
+func TestSDKEditObserverEarlyCandidatesStillBounded(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	turn := editSDKTurn("first", false)
+	turn.Items = []protocolv2.ThreadItem{invoiceMessage("large", "final_answer", strings.Repeat("x", sdkEditByteLimit))}
+	if err := editSDKTerminal(observer, turn); DescribeFailure(err).Code != "edit_evidence_budget_exceeded" {
+		t.Fatal("unbound retained payload lost its resource guard")
+	}
+}
+
+func TestSDKEditObserverEarlyDuplicateDoesNotHideFailure(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	turn := editSDKTurn("first", false)
+	if editSDKTerminal(observer, turn) != nil || editSDKTerminal(observer, turn) != nil {
+		t.Fatal("early duplicate terminal rejected")
+	}
+	turn.Status = protocolv2.TurnStatusFailed
+	if editSDKTerminal(observer, turn) != nil {
+		t.Fatal("unbound contradiction was not retained for identity reconciliation")
+	}
+	if err := observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}); DescribeFailure(err).Code != "turn_unsuccessful" || observer.requireTurnProof() == nil {
+		t.Fatal("early replay deduplication concealed a matching failed terminal")
 	}
 }

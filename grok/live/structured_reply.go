@@ -6,14 +6,15 @@ import (
 	"strings"
 )
 
-// parseStructuredReply validates one bounded task-result object. The caller
-// owns its semantic facts and nullable-field policy; schema shape alone is not
-// proof of a tool, file, search, history, or visual outcome.
+// parseStructuredReply validates one complete task-result object from the
+// caller's bounded observations. The caller owns semantic facts and nullable-
+// field policy; schema shape alone is not proof of a tool, file, search,
+// history, or visual outcome. Answer length is not a semantic condition.
 func parseStructuredReply(reply string, out any, required ...string) error {
 	invalid := func() error {
 		return failedObservation("structured_reply_invalid", "live: structured task result is invalid")
 	}
-	if len(reply) == 0 || len(reply) > 4096 {
+	if len(reply) == 0 {
 		return invalid()
 	}
 	tokens := json.NewDecoder(strings.NewReader(reply))
@@ -79,12 +80,7 @@ func uniqueJSONValue(decoder *json.Decoder, depth int) error {
 			return io.ErrUnexpectedEOF
 		}
 	case '[':
-		count := 0
 		for decoder.More() {
-			count++
-			if count > 64 {
-				return io.ErrUnexpectedEOF
-			}
 			if err := uniqueJSONValue(decoder, depth+1); err != nil {
 				return err
 			}

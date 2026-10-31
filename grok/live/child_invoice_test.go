@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -18,6 +20,8 @@ func TestChildInvoice(t *testing.T) {
 		valid      bool
 	}{
 		{"plain", testInvoice, true},
+		{"large_fenced_prose", strings.Repeat("Checked.\n", 1200) + "```csv\n" + testInvoice + "\n```\n" + strings.Repeat("Thanks.\n", 1200), true},
+		{"long_equivalent_decimals", strings.ReplaceAll(strings.ReplaceAll(testInvoice, "4.50", "00000000000004.500000000000"), "1.25", "000000000001.250000000000"), true},
 		{"long_prose_after_fence", "```csv\n" + testInvoice + "\n```\nThanks.\nOrder checked.\nNo tax.\nNo shipping.\nReady to import.", true},
 		{"crlf", strings.ReplaceAll(testInvoice, "\n", "\r\n"), true},
 		{"fenced_prose", "Here is the checked invoice.\n```csv\n" + testInvoice + "\n```\nTotal includes no tax.", true},
@@ -36,6 +40,10 @@ func TestChildInvoice(t *testing.T) {
 		{"two_fenced", "```csv\n" + testInvoice + "\n```\n```csv\n" + testInvoice + "\n```", false},
 		{"fenced_and_bom_bare", "```csv\n" + testInvoice + "\n```\n\ufeff" + testInvoice, false},
 		{"fenced_and_quoted_multiline_header", "```csv\n" + testInvoice + "\n```\n\"item\n\",quantity,unit_price,line_total\npen,2,1.25,2.50", false},
+		{"fenced_and_unicode_case_header", "```csv\n" + testInvoice + "\n```\n" + strings.Replace(testInvoice, "item", "İTEM", 1), false},
+		{"fenced_and_bom_whitespace_header", "```csv\n" + testInvoice + "\n```\n" + strings.Replace(testInvoice, "item,quantity", "item,\ufeff \u2003quantity", 1), false},
+		{"fenced_and_quoted_bom_whitespace_header", "```csv\n" + testInvoice + "\n```\n" + strings.Replace(testInvoice, "item,quantity", "item,\"\ufeff \u2003quantity\"", 1), false},
+		{"malformed_quote_before_second_header", "```csv\n" + testInvoice + "\n```\n\"unterminated prose\n\"item\n\",quantity,unit_price,line_total\npen,2,1.25,2.50", false},
 		{"fractional_cent", strings.Replace(testInvoice, "4.50", "4.501", 1), false},
 		{"nonfinite", strings.Replace(testInvoice, "4.50", "NaN", 1), false},
 		{"ready", "The invoice is ready.", false},
@@ -180,5 +188,42 @@ func TestChildPartialFactsAfterClose(t *testing.T) {
 		if evidence.Completed || evidence.ChildResultDelivered || !evidence.ChildBound || evidence.ChildCompleted == contradiction {
 			t.Fatalf("partial facts changed: %+v", evidence)
 		}
+	}
+}
+
+func TestInvoiceCentsExactRepresentations(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for _, tc := range []struct {
+		text  string
+		want  int
+		valid bool
+	}{
+		{"0000000000000000004.500000000000000000", 450, true},
+		{"0.00000000000000000", 0, true},
+		{"4.500000000000000001", 0, false},
+		{"-1.00", 0, false},
+		{"NaN", 0, false},
+		{"1.2.3", 0, false},
+		{fmt.Sprintf("%d.%02d", maxInt/100, maxInt%100), maxInt, true},
+		{strconv.Itoa(maxInt/100 + 1), 0, false},
+		{strconv.Itoa(maxInt), 0, false},
+		{strings.Repeat("9", 80), 0, false},
+	} {
+		got, valid := invoiceCents(tc.text)
+		if valid != tc.valid || valid && got != tc.want {
+			t.Fatalf("invoiceCents(%q)=(%d,%t), want (%d,%t)", tc.text, got, valid, tc.want, tc.valid)
+		}
+	}
+}
+
+func TestInvoiceHeaderMalformedTails(t *testing.T) {
+	// Every line begins an unclosed quoted field. Scanning every suffix would
+	// repeatedly read the same tail; none is a second four-column report.
+	prose := strings.Repeat("\"item\n", 20000)
+	if !validChildInvoice(prose + "\n```csv\n" + testInvoice + "\n```") {
+		t.Fatal("unrelated malformed prose changed the sole fenced invoice")
+	}
+	if validChildInvoice(prose + "\n```csv\n" + testInvoice + "\n```\n" + testInvoice) {
+		t.Fatal("malformed prose concealed a second invoice")
 	}
 }

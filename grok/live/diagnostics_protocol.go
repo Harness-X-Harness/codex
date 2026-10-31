@@ -81,5 +81,5 @@ func diagnosticFailure(err error) any {
 	if err == nil {
 		return nil
 	}
-	return DescribeFailure(sdkFailure(err))
+	return DescribeFailure(err)
 }

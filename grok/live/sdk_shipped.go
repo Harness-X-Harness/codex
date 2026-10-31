@@ -282,7 +282,7 @@ func (transport *sdkProductObserver) observeFrame(ctx context.Context, message f
 	}
 	if len(transport.pending) >= 8192 || transport.pendingBytes+message.size > 128<<20 {
 		if transport.cause == nil {
-			transport.cause = errors.New("live: product evidence budget exceeded")
+			transport.cause = failedObservation("product_evidence_budget_exceeded", "live: product evidence budget exceeded")
 		}
 	} else {
 		transport.pending = append(transport.pending, message)

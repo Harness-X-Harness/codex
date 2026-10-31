@@ -91,6 +91,17 @@ of persistence. Event/artifact success counts advance only after their writes
 succeed, with pending writes, dropped records and capture errors reported
 separately.
 
+Public text/output deltas are summarized by method: total event/byte counts and
+at most 16 metadata-only samples per method. Full public items retain the
+existing whole-message sanitization; delta samples do not reconstruct text.
+Deliberate sampling is not a write failure or an unexpected truncation.
+Fixed-size last-terminal, last-error, fixture-result, SDK-cleanup and invocation
+summaries are retained in the manifest and final command report independently
+of the ordinary event quota. They use hashed correlation identities and finite
+error classifications, not raw errors or provider payloads. Terminal completion,
+business validation and cleanup remain separate facts. Missing optional capture
+still cannot change any of those facts or the scenario verdict.
+
 `Close` stops admission and waits at most two seconds for draining. `closed`
 means capture stopped, not that the writer joined; `flush_timed_out` is sticky
 if final persistence has not settled at the deadline. A late final manifest
@@ -326,6 +337,10 @@ supported public error details and task-visible input/output projections, with
 credential removal; it does not copy private backend reasoning or authentication.
 A report is capped at 1 MiB including its newline. In-memory identity and content
 correlation does not authorize storing those values in the report.
+Known observation-budget failures are identified at their owning boundary;
+they are not reclassified as malformed or incorrect answers. An absent error
+does not manufacture an `unclassified_failure`. Compact diagnostic summaries
+survive event quotas, but process loss can still prevent final persistence.
 
 The per-case outcomes remain `observed`, `not_observed`, `not_run` or
 `configuration_error`; the tagged aggregate is `observed` only for a complete
@@ -426,11 +441,17 @@ measurements and remaining unrun boundaries belong in the review/run record.
 
 Applicable existing turns carry formal SDK OutputSchema values: image propositions
 use two required booleans; attached images use nullable color/shape; reasoning
-uses a nullable price-based amount; Web uses bounded
+uses a nullable price-based amount; Web uses
 headline/URL articles and summary, then a summary continuation. Their values are
 checked against the existing actual-result authority, not schema validity alone.
 Offline regressions reject malformed/multiple JSON values, duplicate/unknown or
 missing keys, wrong types, null required facts and valid-shaped wrong results.
+They also accept complete long/Unicode answers, arbitrary nonempty article
+arrays, equivalent decimal spellings and relevant evidence among unrelated
+history. Resource limits belong to transport and retained observation, not
+answer validity; hitting one leaves the task unproven without accepting a
+truncated prefix. Consistent repeated representations are not additional work
+or extra evidence, while conflicting identities and late failures still reject.
 Controlled native fixtures verify schema transmission. The child task instead
 asks for a CSV invoice, with actual child contribution and delivery proof; old
 inheritance/schema compatibility fixtures are not its semantic oracle.

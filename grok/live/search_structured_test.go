@@ -30,7 +30,6 @@ func TestSearchStructuredResultContracts(t *testing.T) {
 		`{"articles":[{"headline":"h","url":"https://user:pass@example.test"}],"summary":null}`,
 		`{"articles":[{"headline":"h","url":"https://example.test"}],"summary":1}`,
 		`{"articles":[{"headline":"h","url":"https://example.test"}],"summary":null} true`,
-		`{"articles":[` + strings.TrimSuffix(strings.Repeat(`{"headline":"h","url":"https://example.test"},`, 9), ",") + `],"summary":null}`,
 	} {
 		if err := validateSearchAnswer(answer, false); err == nil {
 			t.Errorf("invalid articles accepted: %s", answer)
@@ -43,26 +42,29 @@ func TestSearchStructuredResultContracts(t *testing.T) {
 	}
 }
 
-func TestSearchSchemaLengthsCountUnicodeCodepoints(t *testing.T) {
-	headline := func(text string) string {
-		return `{"articles":[{"headline":"` + text + `","url":"https://news.example.test/a"}],"summary":null}`
-	}
-	for _, text := range []string{strings.Repeat("汉", 200), strings.Repeat("汉", 512)} {
-		if err := validateSearchAnswer(headline(text), false); err != nil {
-			t.Errorf("schema-valid Unicode headline rejected: %v", err)
+func TestSearchCompleteResultsDoNotDependOnIncidentalLengthOrArticleCount(t *testing.T) {
+	article := `{"headline":"h","url":"https://example.test"}`
+	manyArticles := strings.TrimSuffix(strings.Repeat(article+",", 70), ",")
+	for _, answer := range []string{
+		`{"articles":[` + manyArticles + `],"summary":null}`,
+		`{"articles":[{"headline":"` + strings.Repeat("汉", 2000) + `","url":"https://news.example.test/` + strings.Repeat("a", 4096) + `"}],"summary":"` + strings.Repeat("汉", 3000) + `"}`,
+	} {
+		if err := validateSearchAnswer(answer, false); err != nil {
+			t.Errorf("complete valid search result rejected: %v", err)
 		}
 	}
-	if err := validateSearchAnswer(headline(strings.Repeat("汉", 513)), false); err == nil {
-		t.Error("headline over schema codepoint limit accepted")
+	summary := `{"summary":"` + strings.Repeat("汉", 6000) + `"}`
+	if err := validateSearchAnswer(summary, true); err != nil {
+		t.Errorf("complete valid summary rejected: %v", err)
 	}
-	// Field constraints count codepoints; the independent total reply budget is bytes.
-	if err := validateSearchAnswer(`{"summary":"`+strings.Repeat("汉", 1000)+`"}`, true); err != nil {
-		t.Errorf("schema-valid Unicode summary rejected: %v", err)
+	for _, answer := range []string{summary + " trailing", summary + summary, strings.TrimSuffix(summary, "}")} {
+		if err := validateSearchAnswer(answer, true); err == nil {
+			t.Fatal("incomplete or trailing content accepted after a valid long prefix")
+		}
 	}
-	if err := validateSearchAnswer(`{"summary":"`+strings.Repeat("a", 2049)+`"}`, true); err == nil {
-		t.Error("summary over codepoint limit accepted")
-	}
-	if err := validateSearchAnswer(`{"summary":"`+strings.Repeat("汉", 1500)+`"}`, true); err == nil {
-		t.Error("global byte budget bypassed")
+	for _, invalidLast := range []string{`null`, `{"headline":"h","url":"javascript:alert(1)"}`, `{"headline":"h","url":"https://example.test","url":"https://other.test"}`} {
+		if err := validateSearchAnswer(`{"articles":[`+manyArticles+","+invalidLast+`],"summary":null}`, false); err == nil {
+			t.Fatal("invalid article beyond the old count limits was not checked")
+		}
 	}
 }

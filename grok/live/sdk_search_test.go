@@ -92,10 +92,10 @@ func TestSearchRunTerminalClassificationSurvivesEitherSignalOrder(t *testing.T) 
 	}
 }
 
-func TestSearchPublicItemsAreBoundedAndDuplicatesDoNotAddCredit(t *testing.T) {
+func TestSearchPublicItemsCreditUniqueBoundOccurrences(t *testing.T) {
 	result := SearchEvidence{}
 	probe := searchProbe{turnID: "turn", result: &result, calls: map[string]map[string]bool{"turn": {}}}
-	for i := 0; i < 64; i++ {
+	for i := 0; i < 65; i++ {
 		var item protocolv2.ThreadItem
 		raw := fmt.Sprintf(`{"type":"webSearch","id":"call-%d","query":"private query","action":{"type":"search"}}`, i)
 		if err := json.Unmarshal([]byte(raw), &item); err != nil {
@@ -109,17 +109,26 @@ func TestSearchPublicItemsAreBoundedAndDuplicatesDoNotAddCredit(t *testing.T) {
 		}
 	}
 	var extra protocolv2.ThreadItem
-	if err := json.Unmarshal([]byte(`{"type":"webSearch","id":"overflow","query":"private query","action":{"type":"search"}}`), &extra); err != nil {
+	if err := json.Unmarshal([]byte(`{"type":"webSearch","id":"other","query":"private query","action":{"type":"search"}}`), &extra); err != nil {
 		t.Fatal(err)
 	}
-	if err := probe.publicSearch("turn", extra); err == nil {
-		t.Fatal("unbounded public evidence")
-	}
-	if result.CanonicalCalls != 64 {
+	if result.CanonicalCalls != 65 {
 		t.Fatal("duplicates earned credit")
 	}
+	if err := probe.publicSearch("unrelated-turn", extra); err != nil || result.CanonicalCalls != 65 {
+		t.Fatal("unrelated turn earned credit")
+	}
 	probe.settled = true
-	if err := probe.publicSearch("turn", extra); err != nil || result.CanonicalCalls != 64 {
+	if err := probe.publicSearch("turn", extra); err != nil || result.CanonicalCalls != 65 {
 		t.Fatal("late observation changed settled result")
+	}
+}
+
+func TestSearchObservationBudgetIsIncompleteProofNotAnswerFailure(t *testing.T) {
+	for _, probe := range []searchProbe{{frames: 4096}, {bytes: 64 << 20}} {
+		err := probe.notification(frame{size: 1})
+		if DescribeFailure(err).Code != "observation_budget_exceeded" {
+			t.Fatalf("resource exhaustion lost its classification: %v", err)
+		}
 	}
 }

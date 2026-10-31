@@ -22,8 +22,12 @@ type observationFailure struct {
 func (failure *observationFailure) Error() string { return failure.message }
 
 // DescribeFailure never returns arbitrary error text or provider content.
-// Unclassified errors remain unknown instead of being attributed by their text.
+// Nil means no failure. Unclassified errors remain unknown instead of being
+// attributed by their text.
 func DescribeFailure(err error) FailureInfo {
+	if err == nil {
+		return FailureInfo{}
+	}
 	var failure *observationFailure
 	if errors.As(err, &failure) {
 		return failure.info
@@ -38,11 +42,7 @@ func failedObservation(code, message string) error {
 // Called only after the caller has bound the terminal to its expected turn.
 // Oversized or unfamiliar diagnostics never alter the existing rejection.
 func failedTurn(status string, raw json.RawMessage, message string) error {
-	info := FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "unknown"}
-	switch status {
-	case "completed", "failed", "interrupted", "inProgress":
-		info.TerminalStatus = status
-	}
+	info := FailureInfo{Code: "turn_unsuccessful", TerminalStatus: diagnosticTerminalStatus(status)}
 	if len(raw) == 0 || string(raw) == "null" {
 		return &observationFailure{message: message, info: info}
 	}
@@ -94,4 +94,13 @@ func failedTurn(status string, raw json.RawMessage, message string) error {
 		}
 	}
 	return &observationFailure{message: message, info: info}
+}
+
+func diagnosticTerminalStatus(status string) string {
+	switch status {
+	case "completed", "failed", "interrupted", "inProgress":
+		return status
+	default:
+		return "unknown"
+	}
 }

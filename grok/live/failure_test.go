@@ -52,7 +52,10 @@ func TestFailureDiagnosticsExcludePrivateContent(t *testing.T) {
 }
 
 func TestFailureDiagnosticsPreserveUnknownErrors(t *testing.T) {
-	for _, err := range []error{nil, errors.New("PRIVATE_CANARY"), errors.New("live: unsupported server request")} {
+	if got := DescribeFailure(nil); got != (FailureInfo{}) || diagnosticFailure(nil) != nil || sdkFailure(nil) != nil {
+		t.Fatal("successful observation acquired a failure")
+	}
+	for _, err := range []error{errors.New("PRIVATE_CANARY"), errors.New("live: unsupported server request")} {
 		if got := DescribeFailure(err); got != (FailureInfo{Code: "unclassified_failure"}) {
 			t.Fatalf("untyped error was attributed: %+v", got)
 		}

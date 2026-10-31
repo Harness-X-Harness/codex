@@ -91,7 +91,7 @@ Task result schemas are supplied explicitly on each applicable turn. Attached-im
 results contain nullable `color`/`shape` fields; reasoning uses nullable numeric `amount`;
 Web uses an article array and nullable
 summary, followed by a summary object. These are task-neutral shapes, not schemas
-containing expected fixture answers. One complete bounded JSON value is required;
+containing expected fixture answers. One complete JSON value is required;
 duplicate/unknown/missing keys, wrong types, trailing values and text fallback are
 rejected. Null records unknown information and cannot establish a required fact.
 Child uses the requested CSV invoice rather than an imposed JSON protocol.
@@ -99,6 +99,15 @@ Business facts still come from actual images, tool results, child work and publi
 search activity. Basic, startup, catalog and filesystem edit checks retain their
 direct oracles rather than gaining artificial structured answers. Diagnostics
 retain the requested schema, public response and parse/semantic verdict separately.
+
+Answer length, Unicode byte width, article count and decimal spelling are not
+correctness conditions. The SDK and observation owners bound incoming data and
+retained evidence; validators consume the complete selected result, never a
+truncated prefix. An observation-budget failure leaves validation incomplete,
+not an incorrect-answer finding. Authoritative final fragments are selected by
+bound identity and phase after checking conflicting identities; discarded
+commentary, unrelated history and consistent duplicate representations do not
+consume a second answer or evidence allowance.
 
 Each semantic input is submitted once. Product-internal retries/recovery remain
 product policy. Missing evidence does not authorize runner resubmission.
@@ -108,8 +117,11 @@ product policy. Missing evidence does not authorize runner resubmission.
 Source constants and tests own exact observation budgets. SDK frames cap at
 16 MiB. Scenario-specific bounds remain independent: Basic completion callbacks
 are bounded; reasoning bounds accepted identities and provisional replies;
-editing bounds public observations and correlation; image observation bounds
-terminal evidence and decoded bytes/pixels; child delivery/identity evidence has explicit event and byte bounds; hosted search bounds public items and turn identities.
+editing bounds retained unique relevant evidence and early unbound observations;
+image observation bounds terminal evidence and decoded bytes/pixels; child
+delivery/identity evidence has explicit event and byte bounds; hosted search
+retains bounded transport observations and correlated item identities without
+an independent cap on successful Web operations.
 A budget overflow leaves the result unproven, not evidence of a product/service
 limit. Isolated image fixtures do not prove unchanged shipped-profile composition
 or require a particular optional view-image route. Controlled fixtures do not establish real-backend relevance or policy
@@ -138,6 +150,14 @@ only the selected operation's public observations. The existing verdict summary
 remains suitable for logs; the attached diagnostic bundle intentionally includes
 synthetic task content and public backend responses and shares Actions artifact
 access/30-day retention. Do not use it for arbitrary private user uploads.
+
+Chat/output deltas contribute total counts and byte counts, plus at most 16
+metadata-only samples per method; complete public items own sanitized text.
+Sampling is explicit, not unexpected loss or a source for reconstructing replies.
+Compact last-terminal/error, fixture-result, SDK-cleanup and invocation summaries
+survive ordinary event quotas in the manifest and final report. Correlation there
+uses hashes, and a successful terminal is not conflated with a validated result
+or completed cleanup. These summaries are diagnostic, never acceptance inputs.
 
 Capture limits are explicit rather than silent: 4096 events, 64 KiB per event,
 32 attachments of at most 32 MiB each, 128 MiB total. Oversized events are marked,

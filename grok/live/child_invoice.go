@@ -2,7 +2,7 @@ package live
 
 import (
 	"encoding/csv"
-	"io"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -14,7 +14,7 @@ const childInvoiceTask = "Please ask a subagent to check this order and prepare 
 // do not change the invoice. A second report is never silently selected away.
 func validChildInvoice(text string) bool {
 	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "\ufeff"))
-	if text == "" || len(text) > 4096 {
+	if text == "" {
 		return false
 	}
 	if strings.Contains(text, "```") {
@@ -112,38 +112,64 @@ func invoiceColumns(row []string) map[string]int {
 	return columns
 }
 
-// Scan logical CSV records, including quoted/multiline headers, outside a code
-// block. Trimming a BOM must not conceal a second contradictory invoice.
+// Find only possible four-column headers, then let encoding/csv and the same
+// column validator decide. RE2 scans the prose once, including quoted multiline
+// fields; restarting a CSV reader at every line would rescan malformed tails.
+var invoiceHeader = func() *regexp.Regexp {
+	space := `[\t\n\v\f\r \p{Z}\x{0085}]`
+	inline := `[\t\v\f\r \p{Z}\x{0085}]`
+	name := `(?:item|quantity|unit_price|line_total)`
+	field := inline + `*(?:"` + space + `*\x{FEFF}?` + space + `*` + name + space + `*"|\x{FEFF}?` + inline + `*` + name + `)` + inline + `*`
+	return regexp.MustCompile(`(?m)^` + inline + `*\x{FEFF}?` + field + `(?:,` + field + `){3}$`)
+}()
+
 func hasInvoiceHeader(text string) bool {
-	lines := strings.Split(text, "\n")
-	for i := range lines {
-		r := csv.NewReader(strings.NewReader(strings.TrimPrefix(strings.TrimSpace(strings.Join(lines[i:], "\n")), "\ufeff")))
+	text = strings.ToLower(text) // same case normalization as invoiceColumns
+	for {
+		match := invoiceHeader.FindStringIndex(text)
+		if match == nil {
+			return false
+		}
+		r := csv.NewReader(strings.NewReader(strings.TrimPrefix(strings.TrimSpace(text[match[0]:match[1]]), "\ufeff")))
 		r.TrimLeadingSpace, r.FieldsPerRecord = true, -1
 		row, err := r.Read()
-		if err != io.EOF && err == nil && invoiceColumns(row) != nil {
+		if err == nil && invoiceColumns(row) != nil {
 			return true
 		}
+		text = text[match[1]:]
 	}
-	return false
 }
 
 func invoiceCents(text string) (int, bool) {
 	whole, fraction, _ := strings.Cut(text, ".")
-	if whole == "" || len(whole) > 8 || len(fraction) > 8 {
+	if whole == "" {
 		return 0, false
 	}
-	for _, digit := range whole + fraction {
-		if digit < '0' || digit > '9' {
-			return 0, false
+	for _, part := range []string{whole, fraction} {
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return 0, false
+			}
 		}
 	}
-	if len(fraction) > 2 && strings.Trim(fraction[2:], "0") != "" {
+	// Representation length does not change a value. Keep significant digits
+	// exact and reject fractional cents or integer overflow, never round.
+	whole = strings.TrimLeft(whole, "0")
+	if whole == "" {
+		whole = "0"
+	}
+	fraction = strings.TrimRight(fraction, "0")
+	if len(fraction) > 2 {
 		return 0, false
 	}
 	for len(fraction) < 2 {
 		fraction += "0"
 	}
 	w, err := strconv.Atoi(whole)
-	f, ferr := strconv.Atoi(fraction[:2])
-	return w*100 + f, err == nil && ferr == nil
+	f, ferr := strconv.Atoi(fraction)
+	maxInt := int(^uint(0) >> 1)
+	if err != nil || ferr != nil || w > (maxInt-f)/100 {
+		return 0, false
+	}
+	return w*100 + f, true
 }

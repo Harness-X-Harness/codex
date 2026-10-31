@@ -2,6 +2,7 @@ package live
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -48,7 +49,7 @@ func TestChildParentTerminalReply(t *testing.T) {
 		{"posttool_absent_no_fallback", []protocolv2.ThreadItem{good, wait}, "", false, false},
 		{"intermediate_identity_conflict", []protocolv2.ThreadItem{message("same", "a"), message("same", "b"), wait, good}, "", false, false},
 		{"cross_boundary_identity_conflict", []protocolv2.ThreadItem{message("same", "a"), wait, message("same", result)}, "", false, false},
-		{"large_final_still_bounded", []protocolv2.ThreadItem{wait, message("large", strings.Repeat("x", 4097))}, "", false, false},
+		{"large_final_is_fully_validated", []protocolv2.ThreadItem{wait, message("large", strings.Repeat("x", 4097))}, strings.Repeat("x", 4097), true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reply, err := childParentTerminalReply(productTurn{Items: tc.items}, map[string]bool{"child": true})
@@ -62,5 +63,24 @@ func TestChildParentTerminalReply(t *testing.T) {
 				t.Fatalf("invoice outcome: %q", reply)
 			}
 		})
+	}
+}
+
+func TestChildTerminalSelectionWithoutPresentationCaps(t *testing.T) {
+	path := "/root/" + strings.Repeat("a", 1100)
+	activity := protocolv2.NewThreadItemSubAgentActivity(protocolv2.ThreadItemSubAgentActivity{ID: "spawn", Kind: "started", AgentThreadID: "child", AgentPath: path})
+	items := make([]protocolv2.ThreadItem, 0, 132)
+	for i := 0; i < 129; i++ {
+		items = append(items, invoiceMessage(fmt.Sprintf("progress-%d", i), "", "Checking."))
+	}
+	items = append(items, activity, invoiceMessage("answer", "", testInvoice))
+	turn := productTurn{Items: items}
+	candidates, err := childCandidates(turn, "parent", nil)
+	if err != nil || candidates["child"] != path {
+		t.Fatal("valid native path was hidden by a Live string-length rule")
+	}
+	reply, err := childParentTerminalReply(turn, map[string]bool{"child": true})
+	if err != nil || reply != testInvoice {
+		t.Fatal("irrelevant earlier items or long bound path erased the terminal invoice")
 	}
 }

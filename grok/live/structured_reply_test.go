@@ -9,13 +9,13 @@ func TestStructuredReplyOneCompleteTypedObject(t *testing.T) {
 	type result struct {
 		Token *string `json:"token"`
 	}
-	for _, raw := range []string{`{"token":"actual"}`, ` {"token":null} `} {
+	for _, raw := range []string{`{"token":"actual"}`, ` {"token":null} `, `{"token":"` + strings.Repeat("汉", 2000) + `"}`, strings.Repeat(" ", 8192) + `{"token":"actual"}`} {
 		var got result
 		if err := parseStructuredReply(raw, &got, "token"); err != nil {
 			t.Errorf("valid shape rejected %s: %v", raw, err)
 		}
 	}
-	for _, raw := range []string{"", `null`, `true`, `[]`, `{}`, `{"Token":"wrong case"}`, `{"token":42}`, `{"token":true}`, `{"token":{}}`, `{"token":"a","extra":true}`, `{"token":"a","token":"b"}`, `{"token":"a"} {"token":"b"}`, "```json\n{\"token\":\"a\"}\n```", `{"token":"a"} trailing`, `{"token":"` + strings.Repeat("x", 4096) + `"}`} {
+	for _, raw := range []string{"", `null`, `true`, `[]`, `{}`, `{"Token":"wrong case"}`, `{"token":42}`, `{"token":true}`, `{"token":{}}`, `{"token":"a","extra":true}`, `{"token":"a","token":"b"}`, `{"token":"a"} {"token":"b"}`, "```json\n{\"token\":\"a\"}\n```", `{"token":"a"} trailing`, `{"token":"` + strings.Repeat("x", 8192) + `"} trailing`, `{"token":"` + strings.Repeat("x", 8192) + `","token":"other"}`} {
 		var got result
 		if parseStructuredReply(raw, &got, "token") == nil {
 			t.Errorf("invalid result accepted %s", raw)

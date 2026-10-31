@@ -33,7 +33,10 @@ tool price p, `amount` must be 2p on N and 3p on N+1; `null` is unavailable and
 not success. This proves using the prior price, not reproducing a random marker.
 N+1 is submitted once on the same thread without the runner supplying the price. Explicit `final_answer` items take priority over
 commentary/partial text; without an explicit final, phase-unknown replies retain
-legacy compatibility. All eligible final fragments form one bounded JSON result.
+legacy compatibility. All eligible final fragments form one complete JSON result
+within the SDK's bounded observations; answer length is not an arithmetic or
+format condition. If resource admission fails, the proof is incomplete rather
+than evidence of an incorrect amount.
 Do not select the first parseable object or accept an amount substring in prose.
 Missing/duplicate/unknown fields, extra JSON values, non-numeric non-null amounts,
 and trailing prose reject the format. Replayed item identities do not add

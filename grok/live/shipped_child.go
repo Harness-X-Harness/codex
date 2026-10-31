@@ -45,7 +45,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 		for id, path := range candidates {
 			child, readErr := readProductThread(server, id, "")
 			childPath := child.Source.SubAgent.ThreadSpawn.AgentPath
-			eligible := readErr == nil && child.ParentThreadID == parentID && childPath != "" && childPath != "/root" && len(childPath) <= 1024 &&
+			eligible := readErr == nil && child.ParentThreadID == parentID && childPath != "" && childPath != "/root" &&
 				(child.Model == providerfixture.PrimaryModel || child.Model == providerfixture.PinnedModel) && (path == "" || path == childPath)
 			server.diagnostics.Record("child_candidate", map[string]any{"child_id": id, "parent_id": child.ParentThreadID, "forked_from_id": child.ForkedFromID, "path": childPath, "observed_path": path, "eligible": eligible, "read_failed": readErr != nil})
 			if !eligible {
@@ -68,13 +68,13 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 			turn  productTurn
 		}
 		var qualifying, completed []candidate
+		parentTurns := make(map[string]bool, len(parent.Turns))
+		for _, turn := range parent.Turns {
+			parentTurns[turn.ID] = true
+		}
 		for _, child := range children {
 			for _, turn := range child.Turns {
-				inherited := false
-				for _, prior := range parent.Turns {
-					inherited = inherited || prior.ID == turn.ID
-				}
-				if inherited {
+				if parentTurns[turn.ID] {
 					continue
 				}
 				recordProductDiagnosticTurn(server.diagnostics, "child_result", child.ID, turn)
@@ -170,7 +170,7 @@ func runShippedChildCollaboration(ctx context.Context, options Options) (Evidenc
 func childCandidates(turn productTurn, parentID string, events []frame) (map[string]string, error) {
 	candidates := make(map[string]string)
 	add := func(id, path string) error {
-		if id == "" || id == parentID || len(path) > 1024 {
+		if id == "" || id == parentID {
 			return nil
 		}
 		if old, seen := candidates[id]; seen && old != "" && path != "" && old != path {
@@ -258,9 +258,6 @@ func childParentTerminalReply(turn productTurn, boundChildren map[string]bool) (
 }
 
 func childTerminalItems(turn productTurn, boundChildren map[string]bool) ([]protocolv2.ThreadItem, error) {
-	if len(turn.Items) > 128 {
-		return nil, errors.New("live: product item budget exceeded")
-	}
 	identities := make(map[string][2]string)
 	var messages []protocolv2.ThreadItem
 	terminalStart := 0
@@ -289,7 +286,7 @@ func childTerminalItems(turn productTurn, boundChildren map[string]bool) ([]prot
 			// multi_agents_v2/spawn.rs emits Started with the tool call ID only
 			// after successful spawn. Other lifecycle activity is asynchronous.
 			// The accepted result still requires the actual lineage/read binding.
-			if item.Kind == "started" && item.ID != "" && boundChildren[item.AgentThreadID] && item.AgentPath != "" && len(item.AgentPath) <= 1024 {
+			if item.Kind == "started" && item.ID != "" && boundChildren[item.AgentThreadID] && item.AgentPath != "" {
 				status = "completed"
 			}
 		}
@@ -321,18 +318,14 @@ func childTerminalItems(turn productTurn, boundChildren map[string]bool) ([]prot
 		identities[item.ID] = identity
 		messages = append(messages, value)
 	}
-	// Only the terminal segment consumes the 4096-byte result budget. Full
-	// bounded public history stays available for diagnostics and freshness.
+	// Select the terminal segment from the complete bounded public history.
+	// Earlier messages still participate in identity-conflict detection.
 	return messages[terminalStart:], nil
 }
 
 func finalProductReply(turn productTurn) (string, error) {
-	if len(turn.Items) > 128 {
-		return "", errors.New("live: product item budget exceeded")
-	}
 	var final, legacy []string
 	identities := make(map[string][2]string)
-	size := 0
 	for _, value := range turn.Items {
 		item, ok := value.AsAgentMessage()
 		if !ok {
@@ -342,11 +335,11 @@ func finalProductReply(turn productTurn) (string, error) {
 		if item.Phase != nil && item.Phase.Value != nil {
 			phase = string(*item.Phase.Value)
 		}
-		if phase != "" && phase != "final_answer" {
-			continue
-		}
 		text := strings.TrimSpace(item.Text)
 		if item.ID == "" {
+			if phase != "" && phase != "final_answer" {
+				continue
+			}
 			return "", errors.New("live: invalid product reply")
 		}
 		value := [2]string{phase, text}
@@ -357,14 +350,13 @@ func finalProductReply(turn productTurn) (string, error) {
 			continue
 		}
 		identities[item.ID] = value
+		if phase != "" && phase != "final_answer" {
+			continue
+		}
 		// Stock finalization can retain a message after stripping hidden markup.
 		// It contributes no answer, but its identity must still detect conflicts.
 		if text == "" {
 			continue
-		}
-		size += len(text)
-		if size > 4096 {
-			return "", errors.New("live: product reply budget exceeded")
 		}
 		if phase == "final_answer" {
 			final = append(final, text)
@@ -395,7 +387,7 @@ func readProductThread(server *sdkProductObserver, id, model string) (productThr
 	if err != nil {
 		return thread, errors.New("live: invalid product completion")
 	}
-	if thread.ID != id || (model != "" && thread.Model != model) || thread.Provider != "grok" || len(thread.Turns) > 32 {
+	if thread.ID != id || (model != "" && thread.Model != model) || thread.Provider != "grok" {
 		return thread, errors.New("live: durable product binding mismatch")
 	}
 	return thread, nil

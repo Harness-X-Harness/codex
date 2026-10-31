@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/ronhuafeng/llm-go/codexsdk"
@@ -32,6 +33,9 @@ type sdkEditLedger struct {
 	seen                             map[[sha256.Size]byte][sha256.Size]byte
 	approvals                        map[string]bool
 	pending                          []sdkEditObservation
+	pendingSeen                      map[[sha256.Size]byte]bool
+	pendingBytes, replyBytes         int
+	hasFinal                         bool
 }
 
 // Callback-owned ledgers retain both turns until the SDK joins callback work.
@@ -102,8 +106,8 @@ func (observer *sdkEditObserver) beginTurn() error {
 }
 
 func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
-	// Keep the same JSON projection as callbacks: editItem serialization also
-	// defines byte charges; replay conflicts compare scenario facts below.
+	// Use the same fact projection as callbacks. Only retained unique facts
+	// consume the observer budget, not this transient SDK envelope.
 	raw, err := json.Marshal(turn)
 	var decoded editTurn
 	observer.mu.Lock()
@@ -112,9 +116,6 @@ func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
 		return observer.reject(failedObservation("invalid_edit_evidence", "live: invalid edit evidence"))
 	}
 	ledger := observer.ledgers[len(observer.ledgers)-1]
-	if err := observer.budget(len(raw)); err != nil {
-		return err
-	}
 	if ledger.reconciled || decoded.ID == "" || decoded.ID == ledger.probe.previousID {
 		return observer.reject(failedObservation("edit_turn_identity_missing", "live: edit turn identity not established"))
 	}
@@ -124,7 +125,9 @@ func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
 		ledger.evidence.Stage = "edit_continuation_submitted"
 	}
 	pending := ledger.pending
-	ledger.pending = nil
+	observer.count -= len(pending)
+	observer.bytes -= ledger.pendingBytes
+	ledger.pending, ledger.pendingSeen, ledger.pendingBytes = nil, nil, 0
 	for _, observation := range pending {
 		if err := observer.accept(ledger, observation); err != nil {
 			return err
@@ -151,10 +154,6 @@ func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	observer.noteCallback(ctx)
-	raw, marshalErr := json.Marshal(request)
-	if marshalErr == nil {
-		observer.budget(len(raw))
-	}
 	if approval, ok := request.AsItemFileChangeRequestApproval(); ok {
 		// Every file-change request is declined. A positive fixture has no
 		// approval step; losing that denial would let a later write look authorized.
@@ -169,10 +168,10 @@ func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2
 		}
 		if len(observer.ledgers) != 0 && observer.fixture.decline && params.ThreadID == observer.threadID && params.TurnID != "" && params.ItemID != "" {
 			ledger := observer.ledgers[0]
-			if len(observer.ledgers) == 1 && observer.cause == nil && marshalErr == nil {
+			if len(observer.ledgers) == 1 && observer.cause == nil {
 				candidate := sdkEditObservation{ThreadID: params.ThreadID, TurnID: params.TurnID, Item: editItem{ID: params.ItemID}, method: "file_change_approval"}
 				if !ledger.reconciled {
-					ledger.pending = append(ledger.pending, candidate)
+					observer.enqueue(ledger, candidate)
 				} else {
 					observer.accept(ledger, candidate)
 				}
@@ -198,8 +197,7 @@ func (observer *sdkEditObserver) typedNotification(ctx context.Context, notifica
 		}
 		method = "turn/completed"
 	}
-	// Charge the full projection before comparing the relevant scenario facts.
-	// Its JSON type checks also precede tool checks.
+	// Decode the typed projection before selecting retained scenario facts.
 	raw, err := json.Marshal(notification)
 	return observer.observeEnvelope(method, raw, err)
 }
@@ -207,9 +205,6 @@ func (observer *sdkEditObserver) typedNotification(ctx context.Context, notifica
 func (observer *sdkEditObserver) observeEnvelope(method string, raw []byte, marshalErr error) error {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
-	if err := observer.budget(len(raw)); err != nil {
-		return err
-	}
 	var envelope struct {
 		Params sdkEditObservation `json:"params"`
 	}
@@ -232,10 +227,53 @@ func (observer *sdkEditObserver) observeEnvelope(method string, raw []byte, mars
 	}
 	ledger := observer.ledgers[len(observer.ledgers)-1]
 	if !ledger.reconciled {
-		ledger.pending = append(ledger.pending, observation)
-		return nil
+		return observer.enqueue(ledger, observation)
 	}
 	return observer.reject(failedObservation("unrelated_edit_turn", "live: unrelated edit turn evidence"))
+}
+
+// Early callbacks have no authoritative turn identity yet. Retain bounded,
+// unique candidates until reconciliation, without charging duplicate envelopes
+// or retaining irrelevant tool payloads. Matching terminal contradictions are
+// checked after binding, even when their items were already observed.
+func (observer *sdkEditObserver) enqueue(ledger *sdkEditLedger, observation sdkEditObservation) error {
+	if observation.method == "turn/completed" && len(observation.Turn.Items) != 0 {
+		items := observation.Turn.Items
+		observation.Turn.Items = nil
+		if err := observer.enqueue(ledger, observation); err != nil {
+			return err
+		}
+		for _, item := range items {
+			if err := observer.enqueue(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: observation.Turn.ID, Item: item, method: "item/completed", callback: observation.callback}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if observation.method == "item/completed" && observation.Item.Type != "agentMessage" && observation.Item.Type != "fileChange" {
+		// Keep the prospective turn identity, not auxiliary item content.
+		observation.Item = editItem{}
+	}
+	raw, err := json.Marshal(observation)
+	if err != nil {
+		return observer.reject(failedObservation("invalid_edit_evidence", "live: invalid edit evidence"))
+	}
+	// The method is internal and is not serialized by encoding/json.
+	key := sha256.Sum256(append([]byte(observation.method+"\x00"), raw...))
+	if ledger.pendingSeen[key] {
+		return nil
+	}
+	size := len(raw) + sha256.Size
+	if err := observer.budget(size); err != nil {
+		return err
+	}
+	if ledger.pendingSeen == nil {
+		ledger.pendingSeen = make(map[[sha256.Size]byte]bool)
+	}
+	ledger.pendingSeen[key] = true
+	ledger.pending = append(ledger.pending, observation)
+	ledger.pendingBytes += size
+	return nil
 }
 
 func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEditObservation) error {
@@ -249,6 +287,9 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 			return nil
 		}
 		if !ledger.approvals[observation.Item.ID] {
+			if err := observer.budget(len(observation.Item.ID)); err != nil {
+				return err
+			}
 			ledger.approvals[observation.Item.ID] = true
 			ledger.evidence.Approvals++
 		}
@@ -269,6 +310,12 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 		}
 		ledger.callbackTerminal = ledger.callbackTerminal || observation.callback
 		for _, item := range items {
+			if item.Type == "agentMessage" && item.Phase == "final_answer" && strings.TrimSpace(item.Text) != "" {
+				observer.selectFinal(ledger)
+				break
+			}
+		}
+		for _, item := range items {
 			if err := observer.accept(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: turn.ID, Item: item, method: "item/completed"}); err != nil {
 				return err
 			}
@@ -278,10 +325,6 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 			return observer.reject(failedObservation("unrelated_edit_turn", "live: unrelated edit turn evidence"))
 		}
 		item := observation.Item
-		raw, _ := json.Marshal(item)
-		if err := observer.budget(len(raw)); err != nil {
-			return err
-		}
 		// Tool choice, arguments and intermediate activity do not decide a
 		// filesystem outcome. Only final replies and unauthorized committed
 		// changes need observation; file-change counts are diagnostic.
@@ -298,13 +341,46 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 			}
 			return nil
 		}
-		if err := ledger.probe.publicItem(item, &ledger.observation); err != nil {
-			return observer.reject(err)
+		retainReply := false
+		if item.Type == "agentMessage" {
+			if item.ID == "" {
+				return observer.reject(failedObservation("invalid_edit_evidence", "live: edit reply identity unavailable"))
+			}
+			if item.Phase == "final_answer" && strings.TrimSpace(item.Text) != "" {
+				observer.selectFinal(ledger)
+			}
+			retainReply = strings.TrimSpace(item.Text) != "" && (item.Phase == "final_answer" || item.Phase == "" && !ledger.hasFinal)
+		}
+		size := 2 * sha256.Size // retained identity and content fingerprints
+		if retainReply {
+			size += len(facts)
+		}
+		if err := observer.budget(size); err != nil {
+			return err
+		}
+		if item.Type == "fileChange" || retainReply {
+			if err := ledger.probe.publicItem(item, &ledger.observation); err != nil {
+				return observer.reject(err)
+			}
+		}
+		if retainReply {
+			ledger.replyBytes += len(facts)
 		}
 		ledger.seen[key] = digest
 	}
 	observer.signal()
 	return nil
+}
+
+func (observer *sdkEditObserver) selectFinal(ledger *sdkEditLedger) {
+	if !ledger.hasFinal {
+		// Discard superseded text, never its identity fingerprints. A later
+		// contradictory replay still fails even though it cannot be the answer.
+		observer.bytes -= ledger.replyBytes
+		ledger.replyBytes = 0
+		ledger.observation.replies = nil
+		ledger.hasFinal = true
+	}
 }
 
 // A settled read validates both retained terminals; it is not a callback fence.
@@ -318,7 +394,7 @@ func (observer *sdkEditObserver) validateSettled(threadID string, turns []protoc
 	for _, turn := range turns {
 		raw, err := json.Marshal(turn)
 		var decoded editTurn
-		if observer.budget(len(raw)) != nil || err != nil || json.Unmarshal(raw, &decoded) != nil || seen[decoded.ID] {
+		if err != nil || json.Unmarshal(raw, &decoded) != nil || seen[decoded.ID] {
 			return observer.reject(failedObservation("invalid_settled_edit_thread", "live: settled edit thread identity not established"))
 		}
 		seen[decoded.ID] = true

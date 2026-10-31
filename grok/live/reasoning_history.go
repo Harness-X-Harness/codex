@@ -54,8 +54,8 @@ type historyTurn struct {
 
 type historyReply struct {
 	bytes                                       int
-	text                                        string
-	formatValid                                 bool
+	text                                        strings.Builder
+	formatValid, evaluated                      bool
 	completed, recall, authoritative, ambiguous bool
 	explicitFinal                               bool
 	identities                                  map[[sha256.Size]byte]historyReplyOutcome
@@ -86,7 +86,8 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 				// it has no eligible result; it cannot borrow an older answer.
 				probe.diagnostics.Record("oracle_reply_reset", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "source": "terminal_items"})
 				reply.bytes, reply.recall, reply.explicitFinal = 0, false, false
-				reply.text, reply.formatValid = "", false
+				reply.text.Reset()
+				reply.formatValid, reply.evaluated = false, false
 				reply.authoritative, reply.ambiguous = true, false
 				reply.identities = nil
 				summaryAssistant = true
@@ -114,6 +115,7 @@ func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) 
 			return err
 		}
 	}
+	probe.evaluateReply(reply)
 	return nil
 }
 
@@ -170,31 +172,37 @@ func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) 
 func (probe *historyProbe) addReplyFragment(item historyItem, reply *historyReply) {
 	probe.diagnostics.Record("oracle_reply_fragment", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "item_id": item.ID, "phase": item.Phase, "text": item.Text, "reset_legacy": item.Phase == "final_answer" && !reply.explicitFinal, "authoritative": reply.authoritative})
 	if item.Phase == "final_answer" && !reply.explicitFinal {
-		reply.bytes, reply.recall, reply.text, reply.formatValid = 0, false, "", false
+		reply.bytes = 0
+		reply.text.Reset()
 	}
 	reply.bytes += len(item.Text)
-	if len(reply.text) <= 4096 {
-		if reply.text != "" {
-			reply.text += "\n"
-		}
-		remaining := 4097 - len(reply.text)
-		if len(item.Text) > remaining {
-			reply.text += item.Text[:remaining]
-		} else {
-			reply.text += item.Text
-		}
+	if reply.text.Len() != 0 {
+		reply.text.WriteByte('\n')
+	}
+	reply.text.WriteString(item.Text)
+	reply.formatValid, reply.recall, reply.evaluated = false, false, false
+	reply.explicitFinal = item.Phase == "final_answer"
+}
+
+// SDK retention and frame limits own resource admission. Assemble the complete
+// selected answer without repeatedly copying or parsing its growing prefixes.
+// Turn completion and final observation boundaries request evaluation; an
+// unchanged collected reply reuses it, while new fragments cannot borrow recall.
+func (probe *historyProbe) evaluateReply(reply *historyReply) {
+	if reply.evaluated {
+		return
 	}
 	var result struct {
 		Amount *float64 `json:"amount"`
 	}
-	err := parseStructuredReply(reply.text, &result, "amount")
+	err := parseStructuredReply(reply.text.String(), &result, "amount")
 	reply.formatValid = err == nil
 	quantity := 2
 	if probe.previousID != "" {
 		quantity = 3
 	}
 	reply.recall = err == nil && result.Amount != nil && probe.unitPrice > 0 && *result.Amount == float64(quantity*probe.unitPrice)
-	reply.explicitFinal = item.Phase == "final_answer"
+	reply.evaluated = true
 }
 
 func historyItemOutcome(item historyItem) historyReplyOutcome {

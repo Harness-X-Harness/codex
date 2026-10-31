@@ -215,8 +215,10 @@ func Execute(ctx context.Context, config Config, getenv func(string) string) (re
 		case evidence.Stage == "preflight":
 			return finish("configuration_error", "subject_or_fixture_not_verified", 2)
 		}
-		detail := live.DescribeFailure(err)
-		r.Failure = &detail
+		if err != nil {
+			detail := live.DescribeFailure(err)
+			r.Failure = &detail
+		}
 		return finish("not_observed", reason, 1)
 	}
 	return finish("observed", "", 0)
