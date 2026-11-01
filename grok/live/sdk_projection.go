@@ -39,28 +39,6 @@ func productThreadFromSDK(value protocolv2.Thread) (productThread, error) {
 	return result, nil
 }
 
-func searchTurnFromSDK(value protocolv2.Turn) (turn, error) {
-	result := turn{ID: value.ID, Status: string(value.Status)}
-	if value.Error != nil && value.Error.Value != nil {
-		var err error
-		result.Error, err = json.Marshal(*value.Error.Value)
-		if err != nil {
-			return result, err
-		}
-	}
-	for _, value := range value.Items {
-		item := item{Type: string(value.Kind())}
-		if message, ok := value.AsAgentMessage(); ok {
-			item.Text = message.Text
-			if message.Phase != nil && message.Phase.Value != nil {
-				item.Phase = string(*message.Phase.Value)
-			}
-		}
-		result.Items = append(result.Items, item)
-	}
-	return result, nil
-}
-
 func sdkString(value *protocolv2.Nullable[string]) string {
 	if value != nil && value.Value != nil {
 		return *value.Value

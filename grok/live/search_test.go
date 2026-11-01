@@ -161,6 +161,13 @@ func fakeSearchServer() {
 			_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
 			continue
 		case "thread/read":
+			if mode == "read_error_late_failed" {
+				// The read fails after a completed turn, but an admitted late
+				// contradiction still belongs to this proof and must survive cleanup.
+				_ = output.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": map[string]any{"id": "turn1", "status": "failed", "items": []any{}}}})
+				_ = output.Encode(map[string]any{"id": request.ID, "error": map[string]any{"code": -32603, "message": "PRIVATE_READ_FAILURE"}})
+				continue
+			}
 			history := append([]any(nil), turns...)
 			if mode == "unrelated_history" {
 				var unrelated []any
@@ -283,4 +290,16 @@ func TestHostedSearchStructuredAnswersRejectWithoutRetry(t *testing.T) {
 			assertSearchInvocationCount(t, options, want)
 		})
 	}
+}
+
+func TestHostedSearchReadFailureRetainsLateContradiction(t *testing.T) {
+	options := fixtureOptions(t, "search:read_error_late_failed:web")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := live.HostedSearch(ctx, options, "web")
+	failure := live.DescribeFailure(err)
+	if err == nil || got.Completed || got.FollowupCompleted || failure.TerminalStatus != "failed" {
+		t.Fatalf("late contradiction lost on read failure: %+v %+v %v", got, failure, err)
+	}
+	assertSearchInvocationCount(t, options, 1)
 }

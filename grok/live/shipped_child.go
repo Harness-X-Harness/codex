@@ -432,17 +432,19 @@ func observeProductInputTurn(server *sdkProductObserver, id string, evidence *Ev
 
 // A completed image result need not also contain an assistant text message.
 func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence *Evidence, effort string, input []protocolv2.UserInput, outputSchema ...*protocolv2.OutputSchema) (productThread, productTurn, error) {
-	var texts []string
-	for _, part := range input {
-		if text, ok := part.AsText(); ok {
-			texts = append(texts, text.Text)
-		}
-	}
 	var schema *protocolv2.OutputSchema
 	if len(outputSchema) > 0 {
 		schema = outputSchema[0]
 	}
-	server.diagnostics.Record("product_turn_request", map[string]any{"thread_id": id, "effort": effort, "text": texts, "input_count": len(input), "output_schema": schema})
+	if server.diagnostics != nil {
+		var texts []string
+		for _, part := range input {
+			if text, ok := part.AsText(); ok {
+				texts = append(texts, text.Text)
+			}
+		}
+		server.diagnostics.Record("product_turn_request", map[string]any{"thread_id": id, "effort": effort, "text": texts, "input_count": len(input), "output_schema": schema})
+	}
 	evidence.Turns++
 	request := protocolv2.TurnStartParams{ThreadID: id, Input: input, OutputSchema: schema}
 	if effort != "" {
@@ -457,7 +459,6 @@ func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence
 	if err != nil {
 		return productThread{}, terminal, errors.New("live: invalid product completion")
 	}
-	recordProductDiagnosticTurn(server.diagnostics, "product_turn_start", id, terminal)
 	if terminal.ID == "" {
 		return productThread{}, terminal, errors.New("live: product turn identity absent")
 	}
@@ -504,42 +505,4 @@ func observeProductCompletedTurn(server *sdkProductObserver, id string, evidence
 		return thread, terminal, err
 	}
 	return thread, terminal, nil
-}
-
-// Preserve public task output before validating it; never serialize raw history or reasoning.
-func recordProductDiagnosticTurn(diagnostics *Diagnostics, source, threadID string, turn productTurn) {
-	if diagnostics == nil {
-		return
-	}
-	fields := map[string]any{"thread_id": threadID, "turn_id": turn.ID, "status": turn.Status}
-	if len(turn.Error) != 0 {
-		fields["error"] = turn.Error
-	}
-	if turn.Status == "failed" || turn.Status == "interrupted" {
-		if err := completedProductTurn(turn); err != nil {
-			fields["failure"] = DescribeFailure(err)
-		}
-	}
-	diagnostics.Record(source, fields)
-	for _, item := range turn.Items {
-		if _, reasoning := item.AsReasoning(); reasoning {
-			continue
-		}
-		raw, err := json.Marshal(item)
-		if err == nil {
-			diagnostics.Item(source, raw)
-		}
-	}
-}
-
-// Observe decoded public snapshots before oracle validation can reject them.
-func recordSDKDiagnosticTurn(diagnostics *Diagnostics, source, threadID string, value protocolv2.Turn) {
-	if diagnostics == nil {
-		return
-	}
-	turn := productTurn{ID: value.ID, Status: string(value.Status), Items: value.Items}
-	if value.Error != nil && value.Error.Value != nil {
-		turn.Error, _ = json.Marshal(*value.Error.Value)
-	}
-	recordProductDiagnosticTurn(diagnostics, source, threadID, turn)
 }

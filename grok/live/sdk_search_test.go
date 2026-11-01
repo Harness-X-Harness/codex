@@ -83,7 +83,7 @@ func TestSearchRunTerminalClassificationSurvivesEitherSignalOrder(t *testing.T) 
 			if len(failures) != 0 {
 				t.Fatal("matching terminal entered the competing transport failure channel")
 			}
-			err := probe.observeStarted(protocolv2.Turn{ID: "turn", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
+			_, err := probe.awaitReply(protocolv2.Turn{ID: "turn", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}})
 			want := FailureInfo{Code: "turn_unsuccessful", TerminalStatus: "failed", ErrorKind: "other"}
 			if DescribeFailure(err) != want || result.Completed || result.FirstCompleted || result.FollowupCompleted || result.CanonicalCalls != 0 || result.SettledTurns != 0 {
 				t.Fatalf("terminal lost classification or gained credit: %+v, %v", result, err)

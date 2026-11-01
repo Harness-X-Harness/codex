@@ -2,9 +2,16 @@ package live
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
-	"strings"
+	"errors"
+	"fmt"
+
+	"github.com/Harness-X-Harness/codex/grok/internal/integrationfixture"
+
+	"github.com/ronhuafeng/llm-go/codexsdk"
+	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
 )
 
 const historyTool = "apple_price_lookup"
@@ -14,197 +21,386 @@ const historyOutputSchema = `{"type":"object","properties":{"amount":{"type":["n
 // This bounds replay evidence, not product tool calls or retries.
 const historyAssistantLimit = 4096
 
-// ReasoningHistory observes two same-thread turns without semantic reinvocation.
-// It leaves reasoning effort to the configured model rather than overriding it.
-// Native encrypted replay/tool eligibility and Subject provenance are prerequisites;
-// deterministic fixtures do not establish real-provider Story success.
+// ReasoningHistory is the executable two-turn shop example.
+// Both schemas are submitted explicitly; assertions never resubmit work.
 func ReasoningHistory(ctx context.Context, options Options) (Evidence, error) {
-	return sdkReasoningHistory(ctx, options)
-}
-
-// Only the unit price and tool result, current turn identities and bounded reply evidence survive frames.
-// Repeated internal calls are counted, never accumulated in a call-ID/event map.
-type historyProbe struct {
-	diagnostics                  *Diagnostics
-	evidence                     *Evidence
-	threadID, turnID, previousID string
-	unitPrice                    int
-	toolResult                   string
-}
-
-type historyItem struct {
-	ID               string  `json:"id"`
-	Type             string  `json:"type"`
-	Phase            string  `json:"phase"`
-	Text             string  `json:"text"`
-	Namespace        *string `json:"namespace"`
-	Tool             string  `json:"tool"`
-	Status           string  `json:"status"`
-	Success          bool    `json:"success"`
-	ContentItems     []item  `json:"contentItems"`
-	EncryptedContent string  `json:"encrypted_content"`
-}
-
-type historyTurn struct {
-	ID     string          `json:"id"`
-	Status string          `json:"status"`
-	Error  json.RawMessage `json:"error"`
-	Items  []historyItem   `json:"items"`
-}
-
-type historyReply struct {
-	bytes                                       int
-	text                                        strings.Builder
-	formatValid, evaluated                      bool
-	completed, recall, authoritative, ambiguous bool
-	explicitFinal                               bool
-	identities                                  map[[sha256.Size]byte]historyReplyOutcome
-}
-
-type historyReplyOutcome struct {
-	finalEligible, explicitFinal, hasContent bool
-	textSHA                                  [sha256.Size]byte
-}
-
-func (probe *historyProbe) completedTurn(turn historyTurn, reply *historyReply) error {
-	if turn.Status != "completed" || len(turn.Error) != 0 && string(turn.Error) != "null" {
-		return failedTurn(turn.Status, turn.Error, "live: turn did not complete successfully")
+	schema, schemaErr := protocolv2.OutputSchemaFromJSON([]byte(historyOutputSchema))
+	if schemaErr != nil {
+		return Evidence{}, failedObservation("history_schema_invalid", "live: history output schema unavailable")
 	}
-	reply.completed = true
-	// The public MessagePhase owner distinguishes terminal answers from
-	// commentary/partial text. An authoritative summary combines all explicit
-	// final answers, with phase-unknown legacy fallback only when no final exists.
-	summaryAssistant := false
-	summaryIdentities := make(map[[sha256.Size]byte]historyReplyOutcome)
-	for _, item := range turn.Items {
-		if item.Type == "agentMessage" {
-			if item.ID == "" {
-				return failedObservation("assistant_identity_missing", "live: assistant item identity not established")
+	observer := newSDKHistoryObserver()
+	observer.diagnostics = options.Diagnostics
+	handlers := sdkFixtureHandlers{
+		requests: observer.request, notifications: observer.typedNotification, failures: observer.failures,
+		retention: codexsdk.NotificationRetentionBudget{MaxCount: 65536, MaxBytes: 64 << 20},
+		raw: &codexsdk.RawNotificationSubscription{
+			Methods:                        []string{codexsdk.RawResponseItemCompletedExtension},
+			EnableRawResponseItemExtension: true, Handler: observer.notification,
+		},
+	}
+	evidence, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence, closeSDK func() error) error {
+		if options.shippedProfile {
+			if err := requireSDKShippedCatalog(ctx, client, evidence); err != nil {
+				return err
 			}
-			if !summaryAssistant {
-				// A nonempty assistant summary supersedes notifications even when
-				// it has no eligible result; it cannot borrow an older answer.
-				probe.diagnostics.Record("oracle_reply_reset", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "source": "terminal_items"})
-				reply.bytes, reply.recall, reply.explicitFinal = 0, false, false
-				reply.text.Reset()
-				reply.formatValid, reply.evaluated = false, false
-				reply.authoritative, reply.ambiguous = true, false
-				reply.identities = nil
-				summaryAssistant = true
-			}
-			identity := sha256.Sum256([]byte(item.ID))
-			outcome := historyItemOutcome(item)
-			if previous, seen := summaryIdentities[identity]; seen {
-				if previous != outcome {
-					reply.ambiguous = true
-					return failedObservation("assistant_identity_conflict", "live: authoritative reply identity conflicted")
+		}
+		observer.mu.Lock()
+		observer.observations = *evidence
+		observer.observations.Threads = 1
+		observer.mu.Unlock()
+		defer func() {
+			observer.mu.Lock()
+			defer observer.mu.Unlock()
+			pending := evidence.CleanupPending
+			*evidence = observer.observations
+			evidence.CleanupPending = pending
+		}()
+		turn := protocolv2.TurnStartParams{
+			OutputSchema: &schema,
+			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
+				Text: "Use the shop's apple_price_lookup tool as the authoritative source for its current apple price, then calculate how much two kilograms cost in yuan.",
+			})},
+		}
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
+		options.Diagnostics.Record("history_tool_declaration", map[string]any{
+			"tool": historyTool, "description": integrationfixture.HistoryProbeDescription,
+			"declared_to_sdk": true, "provider_request_observed": false,
+		})
+		experimental := true
+		stream, err := client.ThreadRunner().StartStream(ctx, codexsdk.StartThreadRunRequest{
+			Thread: protocolv2.ThreadStartParams{
+				Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd),
+				ExperimentalRawEvents: &experimental,
+				DynamicTools: protocolv2.Value([]protocolv2.DynamicToolSpec{protocolv2.NewDynamicToolSpecFunction(protocolv2.DynamicToolSpecFunction{
+					Name: historyTool, Description: integrationfixture.HistoryProbeDescription,
+					InputSchema: protocolv2.JSONObject(map[string]protocolv2.JSONValue{
+						"type": protocolv2.JSONString("object"), "properties": protocolv2.JSONObject(map[string]protocolv2.JSONValue{}),
+						"additionalProperties": protocolv2.JSONBool(false),
+					}),
+				})}),
+			},
+			Turn: turn,
+			AdmitTurn: func(thread protocolv2.ThreadStartResponse, _ protocolv2.TurnStartParams) error {
+				options.Diagnostics.Record("history_thread_config", map[string]any{"model": thread.Model, "provider": thread.ModelProvider, "reasoning_effort": thread.ReasoningEffort, "provider_request_observed": false})
+				if thread.Thread.ID == "" || thread.Model != options.Model || thread.ModelProvider != "grok" || thread.Thread.ModelProvider != "grok" || thread.CWD != cwd {
+					return failedObservation("fixture_binding_failed", "live: fixture binding not established")
 				}
-				continue
-			}
-			if len(summaryIdentities) == historyAssistantLimit {
-				return failedObservation("assistant_identity_budget_exceeded", "live: assistant identity evidence budget exceeded")
-			}
-			summaryIdentities[identity] = outcome
-			if strings.TrimSpace(item.Text) == "" {
-				continue
-			}
-			if item.Phase == "final_answer" || item.Phase == "" && !reply.explicitFinal {
-				probe.addReplyFragment(item, reply)
-			}
-		} else if err := probe.completedItem(item, reply); err != nil {
+				observer.mu.Lock()
+				defer observer.mu.Unlock()
+				observer.threadID = thread.Thread.ID
+				observer.observations.Bound, observer.observations.Stage = true, "thread_bound"
+				observer.observations.Turns++
+				observer.active = true
+				return nil
+			},
+		})
+		if err != nil {
+			return observer.failure(err)
+		}
+		firstCursor, cancelFirstCursor, turnErr := observeSDKHistoryTurn(ctx, observer, stream, func(run codexsdk.StartedThreadRun) codexsdk.ThreadRunResult { return run.Run })
+		defer cancelFirstCursor()
+		// The shop result is an assertion of this ordinary program, not a
+		// transport-ready predicate. Record partial facts even on failure.
+		amountErr := observer.assertAmount(2)
+		if turnErr == nil {
+			turnErr = amountErr
+		}
+		if turnErr == nil {
+			turnErr = awaitFirstHistoryFacts(ctx, observer, stream, func(run codexsdk.StartedThreadRun) codexsdk.ThreadRunResult { return run.Run }, firstCursor)
+		}
+		// Inline completion can precede independently delivered evidence.
+		// Recheck the final selected response after that evidence settles.
+		turnErr = observer.settleTurn(2, turnErr)
+		cancelFirstCursor()
+		if turnErr != nil {
+			return turnErr
+		}
+		threadID := observer.beginContinuation()
+		turn.OutputSchema = &schema // Explicit on the resumed turn; never rely on inheritance.
+		turn.Input = []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
+			Text: "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again.",
+		})}
+		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 2, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})
+		excludeTurns := true
+		continued, err := client.ThreadRunner().ResumeStream(ctx, codexsdk.ResumeThreadRunRequest{
+			Thread: protocolv2.ThreadResumeParams{ThreadID: threadID, Model: protocolv2.Value(options.Model), ModelProvider: protocolv2.Value("grok"), CWD: protocolv2.Value(cwd), ExcludeTurns: &excludeTurns},
+			Turn:   turn,
+			AdmitTurn: func(thread protocolv2.ThreadResumeResponse, _ protocolv2.TurnStartParams) error {
+				if thread.Thread.ID != threadID || thread.Model != options.Model || thread.ModelProvider != "grok" || thread.Thread.ModelProvider != "grok" || thread.CWD != cwd {
+					return failedObservation("fixture_binding_failed", "live: fixture binding not established")
+				}
+				observer.mu.Lock()
+				defer observer.mu.Unlock()
+				observer.observations.Turns++
+				observer.active = true
+				return nil
+			},
+		})
+		if err != nil {
+			return observer.failure(err)
+		}
+		_, cancelSecondCursor, turnErr := observeSDKHistoryTurn(ctx, observer, continued, func(run codexsdk.ResumedThreadRun) codexsdk.ThreadRunResult { return run.Run })
+		defer cancelSecondCursor()
+		turnErr = observer.settleTurn(3, turnErr)
+		cancelSecondCursor()
+		if turnErr != nil {
+			return turnErr
+		}
+		if err := closeSDK(); err != nil {
 			return err
 		}
-	}
-	probe.evaluateReply(reply)
-	return nil
-}
-
-func (probe *historyProbe) completedItem(item historyItem, reply *historyReply) error {
-	if item.Type == "agentMessage" {
-		if item.ID == "" {
-			return failedObservation("assistant_identity_missing", "live: assistant item identity not established")
+		// Joined callbacks may revoke the result; no success is emitted first.
+		if err := observer.failure(nil); err != nil {
+			return err
 		}
-		if reply.authoritative {
-			return nil
-		}
-		identity := sha256.Sum256([]byte(item.ID))
-		outcome := historyItemOutcome(item)
-		if previous, seen := reply.identities[identity]; seen {
-			if previous != outcome {
-				reply.ambiguous = true
-			}
-			return nil
-		}
-		if len(reply.identities) == historyAssistantLimit {
-			return failedObservation("assistant_identity_budget_exceeded", "live: assistant identity evidence budget exceeded")
-		}
-		reply.identities[identity] = outcome
-		// Empty finalized text contributes no candidate, but still carries identity.
-		if !outcome.hasContent {
-			return nil
-		}
-		// Combine unseen eligible fragments from the entire final response.
-		// Explicit finals outrank legacy text; commentary never earns recall.
-		// Replay and conflicting identities stay above.
-		if item.Phase == "final_answer" || item.Phase == "" && !reply.explicitFinal {
-			probe.addReplyFragment(item, reply)
-		}
-	}
-	if probe.previousID != "" {
+		observer.mu.Lock()
+		observer.observations.Stage = "history_recalled"
+		observer.mu.Unlock()
 		return nil
+	})
+	return settleSDKHistoryEvidence(evidence, err), err
+}
+
+// Evidence is copied before the SDK cleanup attempt. A late callback or cleanup
+// failure can still reject that run; do not leave its whole-scenario success
+// stage in the returned value. Previously observed terminal/recall facts remain.
+func settleSDKHistoryEvidence(evidence Evidence, cause error) Evidence {
+	if cause != nil && evidence.Stage == "history_recalled" {
+		evidence.Stage = "continuation_completed"
 	}
-	if item.Type == "reasoning" {
-		probe.evidence.ReasoningItems++
-	}
-	if item.Type == "dynamicToolCall" && item.ID != "" && item.Namespace == nil && item.Tool == historyTool && item.Status == "completed" && item.Success && probe.unitPrice > 0 && probe.toolResult != "" {
-		for _, content := range item.ContentItems {
-			if content.Type == "inputText" && strings.Contains(content.Text, probe.toolResult) {
-				probe.evidence.CompletedTools++
-				break
-			}
+	return evidence
+}
+
+func observeSDKHistoryTurn[R any](ctx context.Context, observer *sdkHistoryObserver, stream *codexsdk.Stream[R], runResult func(R) codexsdk.ThreadRunResult) (cursorResult <-chan error, cancelCursor context.CancelFunc, resultErr error) {
+	cancelCursor = func() {}
+	// Result provides the actual turn/start identity without Wait's extra
+	// caller-cancellation snapshot of the same retained history.
+	snapshot, _ := stream.Result()
+	snapshotErr := stream.Err()
+	run := runResult(snapshot)
+	failure := func(cause error) error {
+		if latest, ok := stream.Result(); ok {
+			observer.recoverNotifications(runResult(latest).Notifications)
 		}
+		return observer.failure(cause)
+	}
+	if run.Turn.ID == "" && snapshotErr != nil {
+		return cursorResult, cancelCursor, failure(snapshotErr)
+	}
+	// Reconcile the public retained snapshot before trusting an inline result.
+	if err := observer.reconcile(run); err != nil {
+		return cursorResult, cancelCursor, err
+	}
+	var cursorCtx context.Context
+	cursorCtx, cancelCursor = context.WithCancel(ctx)
+	// Cursor cancellation is caller-local. The fixture's bounded CloseContext
+	// owns the process, callbacks and runs, including an inline terminal that
+	// this pinned SDK does not itself terminalize. Close would interrupt it.
+	results := make(chan error, 1)
+	cursorResult = results
+	go func() {
+		// Next consumes only the history cursor; Notification would clone each
+		// event. This SDK terminalizes the cursor after dispatched callbacks.
+		for stream.Next(cursorCtx) {
+		}
+		err := stream.Err()
+		if err == nil {
+			err = cursorCtx.Err()
+		}
+		results <- err
+	}()
+	fenced := false
+	for {
+		observer.mu.Lock()
+		cause := observer.cause
+		// Collection owns identity and callback ordering, never the expected
+		// shop total. Conflicting provisional identities stay unproven.
+		if observer.reply.completed && (fenced || observer.inlineTerminal) {
+			observer.evaluateReply(&observer.reply)
+		}
+		// An empty terminal may precede complete item notifications. Retain
+		// that compatibility without letting the expected amount drive waiting.
+		ready := observer.reply.completed && !observer.reply.ambiguous &&
+			(observer.reply.authoritative || observer.reply.formatValid) && (fenced || observer.inlineTerminal)
+		observer.mu.Unlock()
+		if cause != nil {
+			return cursorResult, cancelCursor, cause
+		}
+		if ready {
+			return cursorResult, cancelCursor, nil
+		}
+		select {
+		case <-observer.changed:
+		case err := <-cursorResult:
+			if err == nil {
+				fenced = true
+				continue
+			}
+			var terminal *codexsdk.TurnError
+			if !errors.As(err, &terminal) {
+				return cursorResult, cancelCursor, failure(err)
+			}
+		case <-ctx.Done():
+			return cursorResult, cancelCursor, failure(ctx.Err())
+		}
+	}
+}
+
+// assertAmount evaluates the complete selected reply. The caller supplies the
+// task quantity explicitly; neither callback state nor transport chooses it.
+func (observer *sdkHistoryObserver) assertAmount(kilograms int) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.evaluateReply(&observer.reply)
+	reply := &observer.reply
+	reply.recall = historyAmountMatches(reply, observer.unitPrice, kilograms)
+	if !reply.recall {
+		return observer.replyFailure()
 	}
 	return nil
 }
 
-// All eligible final fragments form one structured result; never pick a valid
-// object from a larger malformed answer. Final phase still outranks legacy text.
-func (probe *historyProbe) addReplyFragment(item historyItem, reply *historyReply) {
-	probe.diagnostics.Record("oracle_reply_fragment", map[string]any{"scenario": "reasoning", "turn_id": probe.turnID, "item_id": item.ID, "phase": item.Phase, "text": item.Text, "reset_legacy": item.Phase == "final_answer" && !reply.explicitFinal, "authoritative": reply.authoritative})
-	if item.Phase == "final_answer" && !reply.explicitFinal {
-		reply.bytes = 0
-		reply.text.Reset()
+// A raw encrypted item may itself establish reasoning; no second typed
+// reasoning representation is required. Keep this inline-compatibility shim:
+// the pinned SDK has no callback flush that keeps the same process resumable.
+func awaitFirstHistoryFacts[R any](ctx context.Context, observer *sdkHistoryObserver, stream *codexsdk.Stream[R], runResult func(R) codexsdk.ThreadRunResult, cursorErrors <-chan error) error {
+	failure := func(cause error) error {
+		if latest, ok := stream.Result(); ok {
+			observer.recoverNotifications(runResult(latest).Notifications)
+		}
+		return observer.failure(cause)
 	}
-	reply.bytes += len(item.Text)
-	if reply.text.Len() != 0 {
-		reply.text.WriteByte('\n')
+	for {
+		observer.mu.Lock()
+		cause := observer.cause
+		ready := !observer.reply.ambiguous && observer.observations.ReasoningItems > 0 && observer.observations.EncryptedItems > 0 && observer.observations.CompletedTools > 0
+		observer.mu.Unlock()
+		if cause != nil {
+			return cause
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-observer.changed:
+		case err := <-cursorErrors:
+			if err == nil {
+				continue
+			}
+			var terminal *codexsdk.TurnError
+			if !errors.As(err, &terminal) {
+				return failure(err)
+			}
+		case <-ctx.Done():
+			return failure(ctx.Err())
+		}
 	}
-	reply.text.WriteString(item.Text)
-	reply.formatValid, reply.recall, reply.evaluated = false, false, false
-	reply.explicitFinal = item.Phase == "final_answer"
 }
 
-// SDK retention and frame limits own resource admission. Assemble the complete
-// selected answer without repeatedly copying or parsing its growing prefixes.
-// Turn completion and final observation boundaries request evaluation; an
-// unchanged collected reply reuses it, while new fragments cannot borrow recall.
-func (probe *historyProbe) evaluateReply(reply *historyReply) {
-	if reply.evaluated {
-		return
+// Freeze the selected response and its business verdict under the same lock.
+// Callbacks after this point may contradict, but cannot add positive credit.
+func (observer *sdkHistoryObserver) settleTurn(kilograms int, prior error) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.evaluateReply(&observer.reply)
+	observer.reply.recall = historyAmountMatches(&observer.reply, observer.unitPrice, kilograms)
+	observer.finishTurnLocked()
+	if prior != nil {
+		return prior
 	}
-	var result struct {
-		Amount *float64 `json:"amount"`
+	if observer.cause != nil {
+		return observer.cause
 	}
-	err := parseStructuredReply(reply.text.String(), &result, "amount")
-	reply.formatValid = err == nil
-	quantity := 2
-	if probe.previousID != "" {
-		quantity = 3
+	if !observer.reply.completed || observer.reply.ambiguous {
+		return failedObservation("assistant_identity_conflict", "live: turn proof did not settle unambiguously")
 	}
-	reply.recall = err == nil && result.Amount != nil && probe.unitPrice > 0 && *result.Amount == float64(quantity*probe.unitPrice)
-	reply.evaluated = true
+	if !observer.reply.recall {
+		return observer.replyFailure()
+	}
+	return nil
 }
 
-func historyItemOutcome(item historyItem) historyReplyOutcome {
-	return historyReplyOutcome{finalEligible: item.Phase == "" || item.Phase == "final_answer", explicitFinal: item.Phase == "final_answer", hasContent: strings.TrimSpace(item.Text) != "", textSHA: sha256.Sum256([]byte(item.Text))}
+func historyAmountMatches(reply *historyReply, unitPrice, kilograms int) bool {
+	return reply.formatValid && reply.amount != nil && unitPrice > 0 && *reply.amount == float64(kilograms*unitPrice)
+}
+
+func (observer *sdkHistoryObserver) request(_ context.Context, request protocolv2.ServerRequest) (codexsdk.ServerRequestResponse, error) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	call, ok := request.AsItemToolCall()
+	if !ok {
+		cause := observer.reject(failedObservation("unsupported_server_request", "live: unsupported server request"))
+		// Known approval requests get a typed denial even if normal fixture
+		// shutdown begins before the SDK writes the callback response.
+		if _, command := request.AsItemCommandExecutionRequestApproval(); command {
+			return codexsdk.CommandExecutionApprovalResponse(protocolv2.CommandExecutionRequestApprovalResponse{
+				Decision: protocolv2.NewCommandExecutionApprovalDecisionDecline(),
+			}), nil
+		}
+		if _, file := request.AsItemFileChangeRequestApproval(); file {
+			return codexsdk.FileChangeApprovalResponse(protocolv2.FileChangeRequestApprovalResponse{
+				Decision: protocolv2.FileChangeApprovalDecisionDecline,
+			}), nil
+		}
+		return codexsdk.ServerRequestResponse{}, cause
+	}
+	params := call.Params
+	observer.diagnostics.Record("history_tool_input", map[string]any{"turn_id": params.TurnID, "call_id": params.CallID, "tool": params.Tool, "arguments": params.Arguments})
+	arguments, object := params.Arguments.AsObject()
+	text, success := "Price lookup is unavailable during continuation.", false
+	valid := observer.active && params.ThreadID == observer.threadID && params.TurnID != "" && params.TurnID != observer.previousID &&
+		(observer.turnID == "" || params.TurnID == observer.turnID) && params.CallID != "" &&
+		(params.Namespace == nil || params.Namespace.Value == nil) && params.Tool == historyTool && object && len(arguments) == 0
+	if !valid || observer.cause != nil {
+		observer.reject(failedObservation("history_tool_request_unattributed", "live: history tool request not authorized"))
+	} else if observer.previousID != "" {
+		observer.turnID = params.TurnID
+		observer.observations.DeniedToolCalls++
+	} else {
+		identity := sha256.Sum256([]byte(params.CallID))
+		_, seen := observer.acceptedCalls[identity]
+		if !seen && len(observer.acceptedCalls) == historyToolIdentityLimit {
+			observer.reject(failedObservation("history_tool_identity_budget_exceeded", "live: history tool identity evidence budget exceeded"))
+		} else {
+			if observer.unitPrice == 0 {
+				var sample [1]byte
+				if _, err := rand.Read(sample[:]); err != nil {
+					return codexsdk.ServerRequestResponse{}, observer.reject(failedObservation("history_price_unavailable", "live: tool price unavailable"))
+				}
+				observer.unitPrice = 5 + int(sample[0]%15)
+				observer.toolResult = fmt.Sprintf(`{"unit_price_yuan":%d}`, observer.unitPrice)
+			}
+			observer.turnID = params.TurnID
+			observer.acceptedCalls[identity] = struct{}{}
+			observer.observations.ToolCalls++
+			text, success = observer.toolResult, true
+		}
+	}
+	observer.diagnostics.Record("history_tool_output", map[string]any{"turn_id": params.TurnID, "call_id": params.CallID, "success": success, "text": text})
+	return codexsdk.DynamicToolResponse(protocolv2.DynamicToolCallResponse{
+		ContentItems: []protocolv2.DynamicToolCallOutputContentItem{protocolv2.NewDynamicToolCallOutputContentItemInputText(protocolv2.DynamicToolCallOutputContentItemInputText{Text: text})}, Success: success,
+	}), nil
+}
+
+// Classify the failed proof, not an unobserved backend cause. The shop price
+// exists only after an accepted callback; without it there is no expected amount.
+func (observer *sdkHistoryObserver) replyFailure() error {
+	code, message := "history_reply_not_recalled", "live: continuation did not recall the checked price"
+	if !observer.reply.formatValid {
+		code, message = "history_reply_invalid", "live: final reply did not match the amount schema"
+	} else if observer.previousID == "" {
+		if observer.unitPrice == 0 || len(observer.acceptedCalls) == 0 {
+			code, message = "history_lookup_not_observed", "live: no accepted shop price lookup was observed"
+		} else {
+			code, message = "history_amount_mismatch", "live: final amount did not match the checked shop price"
+		}
+	}
+	observer.diagnostics.Record("history_outcome", map[string]any{
+		"code": code, "stage": observer.observations.Stage,
+		"lookup_accepted":   len(observer.acceptedCalls) > 0,
+		"price_initialized": observer.unitPrice > 0,
+		"format_valid":      observer.reply.formatValid,
+		"continuation":      observer.previousID != "",
+	})
+	return failedObservation(code, message)
 }

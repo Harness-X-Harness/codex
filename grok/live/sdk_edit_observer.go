@@ -18,8 +18,8 @@ const (
 
 type sdkEditObservation struct {
 	ThreadID, TurnID string
-	Turn             editTurn
-	Item             editItem
+	Turn             protocolv2.Turn
+	Item             editItemFact
 	method           string
 	callback         bool
 }
@@ -100,7 +100,7 @@ func (observer *sdkEditObserver) beginTurn() error {
 		return observer.reject(failedObservation("edit_thread_identity_missing", "live: edit thread identity not established"))
 	}
 	ledger := &sdkEditLedger{seen: make(map[[sha256.Size]byte][sha256.Size]byte), approvals: make(map[string]bool)}
-	ledger.probe = editProbe{threadID: observer.threadID, previousID: previous, fixture: observer.fixture, evidence: &ledger.evidence, base: &ledger.evidence.Evidence}
+	ledger.probe = editProbe{previousID: previous, fixture: observer.fixture, evidence: &ledger.evidence, base: &ledger.evidence.Evidence}
 	observer.ledgers = append(observer.ledgers, ledger)
 	return nil
 }
@@ -108,18 +108,16 @@ func (observer *sdkEditObserver) beginTurn() error {
 func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
 	// Use the same fact projection as callbacks. Only retained unique facts
 	// consume the observer budget, not this transient SDK envelope.
-	raw, err := json.Marshal(turn)
-	var decoded editTurn
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
-	if len(observer.ledgers) == 0 || err != nil || json.Unmarshal(raw, &decoded) != nil {
+	if len(observer.ledgers) == 0 {
 		return observer.reject(failedObservation("invalid_edit_evidence", "live: invalid edit evidence"))
 	}
 	ledger := observer.ledgers[len(observer.ledgers)-1]
-	if ledger.reconciled || decoded.ID == "" || decoded.ID == ledger.probe.previousID {
+	if ledger.reconciled || turn.ID == "" || turn.ID == ledger.probe.previousID {
 		return observer.reject(failedObservation("edit_turn_identity_missing", "live: edit turn identity not established"))
 	}
-	ledger.probe.turnID, ledger.reconciled = decoded.ID, true
+	ledger.probe.turnID, ledger.reconciled = turn.ID, true
 	ledger.evidence.Stage = "edit_turn_submitted"
 	if ledger.probe.previousID != "" {
 		ledger.evidence.Stage = "edit_continuation_submitted"
@@ -133,9 +131,9 @@ func (observer *sdkEditObserver) reconcile(turn protocolv2.Turn) error {
 			return err
 		}
 	}
-	if decoded.Status != "inProgress" {
+	if turn.Status != "inProgress" {
 		ledger.inlineTerminal = true
-		return observer.accept(ledger, sdkEditObservation{ThreadID: observer.threadID, Turn: decoded, method: "turn/completed"})
+		return observer.accept(ledger, sdkEditObservation{ThreadID: observer.threadID, Turn: turn, method: "turn/completed"})
 	}
 	observer.signal()
 	return observer.cause
@@ -169,7 +167,7 @@ func (observer *sdkEditObserver) request(ctx context.Context, request protocolv2
 		if len(observer.ledgers) != 0 && observer.fixture.decline && params.ThreadID == observer.threadID && params.TurnID != "" && params.ItemID != "" {
 			ledger := observer.ledgers[0]
 			if len(observer.ledgers) == 1 && observer.cause == nil {
-				candidate := sdkEditObservation{ThreadID: params.ThreadID, TurnID: params.TurnID, Item: editItem{ID: params.ItemID}, method: "file_change_approval"}
+				candidate := sdkEditObservation{ThreadID: params.ThreadID, TurnID: params.TurnID, Item: editItemFact{ID: params.ItemID}, method: "file_change_approval"}
 				if !ledger.reconciled {
 					observer.enqueue(ledger, candidate)
 				} else {
@@ -190,34 +188,24 @@ func (observer *sdkEditObserver) typedNotification(ctx context.Context, notifica
 	observer.mu.Lock()
 	observer.noteCallback(ctx)
 	observer.mu.Unlock()
-	method := "item/completed"
-	if _, ok := notification.AsItemCompleted(); !ok {
-		if _, ok := notification.AsTurnCompleted(); !ok {
-			return nil
-		}
-		method = "turn/completed"
+	var observation sdkEditObservation
+	if value, ok := notification.AsItemCompleted(); ok {
+		observation = sdkEditObservation{ThreadID: value.Params.ThreadID, TurnID: value.Params.TurnID, Item: editFact(value.Params.Item), method: "item/completed", callback: true}
+	} else if value, ok := notification.AsTurnCompleted(); ok {
+		observation = sdkEditObservation{ThreadID: value.Params.ThreadID, Turn: value.Params.Turn, method: "turn/completed", callback: true}
+	} else {
+		return nil
 	}
-	// Decode the typed projection before selecting retained scenario facts.
-	raw, err := json.Marshal(notification)
-	return observer.observeEnvelope(method, raw, err)
-}
-
-func (observer *sdkEditObserver) observeEnvelope(method string, raw []byte, marshalErr error) error {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
-	var envelope struct {
-		Params sdkEditObservation `json:"params"`
-	}
-	if marshalErr != nil || json.Unmarshal(raw, &envelope) != nil || len(observer.ledgers) == 0 {
+	if len(observer.ledgers) == 0 {
 		return observer.reject(failedObservation("invalid_edit_evidence", "live: invalid edit evidence"))
 	}
-	observation := envelope.Params
-	observation.method, observation.callback = method, true
 	if observation.ThreadID != observer.threadID {
 		return observer.reject(failedObservation("unrelated_edit_thread", "live: unrelated edit thread evidence"))
 	}
 	id := observation.TurnID
-	if method == "turn/completed" {
+	if observation.method == "turn/completed" {
 		id = observation.Turn.ID
 	}
 	for _, ledger := range observer.ledgers {
@@ -244,7 +232,7 @@ func (observer *sdkEditObserver) enqueue(ledger *sdkEditLedger, observation sdkE
 			return err
 		}
 		for _, item := range items {
-			if err := observer.enqueue(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: observation.Turn.ID, Item: item, method: "item/completed", callback: observation.callback}); err != nil {
+			if err := observer.enqueue(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: observation.Turn.ID, Item: editFact(item), method: "item/completed", callback: observation.callback}); err != nil {
 				return err
 			}
 		}
@@ -252,9 +240,18 @@ func (observer *sdkEditObserver) enqueue(ledger *sdkEditLedger, observation sdkE
 	}
 	if observation.method == "item/completed" && observation.Item.Type != "agentMessage" && observation.Item.Type != "fileChange" {
 		// Keep the prospective turn identity, not auxiliary item content.
-		observation.Item = editItem{}
+		observation.Item = editItemFact{}
 	}
-	raw, err := json.Marshal(observation)
+	// Fingerprint only retained business facts, never SDK timing/view metadata.
+	// The typed Turn stays authoritative; this serialization is budget accounting,
+	// not a second protocol representation or decoder.
+	observation.Turn = protocolv2.Turn{ID: observation.Turn.ID, Status: observation.Turn.Status, Error: observation.Turn.Error}
+	raw, err := json.Marshal(struct {
+		ThreadID, TurnID, TerminalID string
+		Status                       string
+		Error                        *protocolv2.Nullable[protocolv2.TurnError]
+		Item                         editItemFact
+	}{observation.ThreadID, observation.TurnID, observation.Turn.ID, string(observation.Turn.Status), observation.Turn.Error, observation.Item})
 	if err != nil {
 		return observer.reject(failedObservation("invalid_edit_evidence", "live: invalid edit evidence"))
 	}
@@ -310,13 +307,13 @@ func (observer *sdkEditObserver) accept(ledger *sdkEditLedger, observation sdkEd
 		}
 		ledger.callbackTerminal = ledger.callbackTerminal || observation.callback
 		for _, item := range items {
-			if item.Type == "agentMessage" && item.Phase == "final_answer" && strings.TrimSpace(item.Text) != "" {
+			if fact := editFact(item); fact.Type == "agentMessage" && fact.Phase == "final_answer" && strings.TrimSpace(fact.Text) != "" {
 				observer.selectFinal(ledger)
 				break
 			}
 		}
 		for _, item := range items {
-			if err := observer.accept(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: turn.ID, Item: item, method: "item/completed"}); err != nil {
+			if err := observer.accept(ledger, sdkEditObservation{ThreadID: observation.ThreadID, TurnID: turn.ID, Item: editFact(item), method: "item/completed"}); err != nil {
 				return err
 			}
 		}
@@ -392,15 +389,13 @@ func (observer *sdkEditObserver) validateSettled(threadID string, turns []protoc
 	}
 	seen := make(map[string]bool, len(turns))
 	for _, turn := range turns {
-		raw, err := json.Marshal(turn)
-		var decoded editTurn
-		if err != nil || json.Unmarshal(raw, &decoded) != nil || seen[decoded.ID] {
+		if seen[turn.ID] {
 			return observer.reject(failedObservation("invalid_settled_edit_thread", "live: settled edit thread identity not established"))
 		}
-		seen[decoded.ID] = true
+		seen[turn.ID] = true
 		var ledger *sdkEditLedger
 		for _, candidate := range observer.ledgers {
-			if candidate.reconciled && decoded.ID == candidate.probe.turnID {
+			if candidate.reconciled && turn.ID == candidate.probe.turnID {
 				ledger = candidate
 				break
 			}
@@ -408,7 +403,7 @@ func (observer *sdkEditObserver) validateSettled(threadID string, turns []protoc
 		if ledger == nil {
 			return observer.reject(failedObservation("invalid_settled_edit_thread", "live: settled edit thread identity not established"))
 		}
-		if err := observer.accept(ledger, sdkEditObservation{ThreadID: threadID, Turn: decoded, method: "turn/completed"}); err != nil {
+		if err := observer.accept(ledger, sdkEditObservation{ThreadID: threadID, Turn: turn, method: "turn/completed"}); err != nil {
 			return err
 		}
 	}
@@ -455,10 +450,13 @@ func (observer *sdkEditObserver) snapshot() (StructuredEditEvidence, error) {
 	var evidence StructuredEditEvidence
 	if len(observer.ledgers) != 0 {
 		first := observer.ledgers[0]
-		for index, ledger := range observer.ledgers {
-			reply, err := finalProductReply(productTurn{Items: ledger.observation.replies})
-			observer.diagnostics.Record("oracle_reply", map[string]any{"scenario": "edit", "turn": index + 1, "text": reply, "available": err == nil})
+		if observer.diagnostics != nil {
+			for index, ledger := range observer.ledgers {
+				reply, err := finalProductReply(productTurn{Items: ledger.observation.replies})
+				observer.diagnostics.Record("oracle_reply", map[string]any{"scenario": "edit", "turn": index + 1, "text": reply, "available": err == nil})
+			}
 		}
+
 		evidence = observer.ledgers[len(observer.ledgers)-1].evidence
 		evidence.Turns = len(observer.ledgers)
 		evidence.FirstCompleted, evidence.FirstReplyBytes = first.evidence.FirstCompleted, first.observation.replyBytes

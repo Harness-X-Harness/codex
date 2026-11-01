@@ -29,9 +29,9 @@ func historyObserverResponse(text string, success bool) codexsdk.ServerRequestRe
 func historyObserverFixture(t *testing.T) (*sdkHistoryObserver, string) {
 	t.Helper()
 	observer := newSDKHistoryObserver()
-	observer.active, observer.probe.threadID = true, "private_thread"
+	observer.active, observer.threadID = true, "private_thread"
 	response, err := observer.request(context.Background(), historyObserverRequest("private_call_0"))
-	token := observer.probe.toolResult
+	token := observer.toolResult
 	var price struct {
 		UnitPrice int `json:"unit_price_yuan"`
 	}
@@ -77,7 +77,7 @@ func TestSDKHistoryObserverProvisionalReconciliation(t *testing.T) {
 			}
 			err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{ID: actualID, Status: protocolv2.TurnStatusInProgress}, Notifications: []protocolv2.ServerNotification{terminal}})
 			observer.recoverNotifications([]protocolv2.ServerNotification{tool, terminal})
-			observer.finishTurn()
+			observer.settleTurn(2, nil)
 			want := Evidence{ToolCalls: 1}
 			if actualID == "private_turn" {
 				want = Evidence{Stage: "first_turn_completed", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 13}
@@ -123,7 +123,7 @@ func TestSDKHistoryObserverFailurePrefixRecovery(t *testing.T) {
 		}
 	}
 	observer.recoverNotifications(notifications)
-	observer.finishTurn()
+	observer.settleTurn(2, nil)
 	if !reflect.DeepEqual(observer.observations, Evidence{Stage: "turn_submitted", ToolCalls: 1, CompletedTools: 1, ReasoningItems: 1, FirstRecall: true, FirstReplyBytes: 13}) {
 		t.Fatal("failure recovery duplicated partial evidence or invented terminal completion")
 	}
@@ -143,7 +143,7 @@ func TestSDKHistoryObserverCallCapacity(t *testing.T) {
 	}
 	denied, err := observer.request(context.Background(), historyObserverRequest("private_new_call"))
 	failure := observer.failure(context.DeadlineExceeded)
-	observer.finishTurn()
+	observer.settleTurn(2, nil)
 	if err != nil || !reflect.DeepEqual(denied, historyObserverResponse("Price lookup is unavailable during continuation.", false)) || !reflect.DeepEqual(DescribeFailure(failure), FailureInfo{Code: "history_tool_identity_budget_exceeded"}) || !reflect.DeepEqual(observer.observations, Evidence{ToolCalls: 4097}) {
 		t.Fatal("new identity at capacity was not safely denied without false completion")
 	}
@@ -183,10 +183,10 @@ func TestSDKHistoryFinishedTurnRetainsContradictionChecks(t *testing.T) {
 			if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{ID: "private_turn", Status: protocolv2.TurnStatusInProgress}}); err != nil {
 				t.Fatal(err)
 			}
-			observer.finishTurn()
+			observer.settleTurn(2, nil)
 			if prior {
 				observer.active = true
-				observer.probe.previousID, observer.probe.turnID = "private_turn", "private_next"
+				observer.previousID, observer.turnID = "private_turn", "private_next"
 			}
 			before := observer.observations
 			err := observer.typedNotification(context.Background(), historyObserverCompleted(protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: historyTestJSON(token)})))
@@ -204,7 +204,7 @@ func TestSDKHistoryFinishedTurnIgnoresUnrelatedInvalidItem(t *testing.T) {
 			if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{ID: "private_turn", Status: protocolv2.TurnStatusInProgress}}); err != nil {
 				t.Fatal(err)
 			}
-			observer.finishTurn()
+			observer.settleTurn(2, nil)
 			params := protocolv2.ItemCompletedNotification{ThreadID: "private_thread", TurnID: "private_turn", Item: protocolv2.NewThreadItemAgentMessage(protocolv2.ThreadItemAgentMessage{ID: "", Text: "irrelevant"})}
 			if field == "thread" {
 				params.ThreadID = "private_other"
@@ -221,7 +221,7 @@ func TestSDKHistoryFinishedTurnIgnoresUnrelatedInvalidItem(t *testing.T) {
 
 func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) {
 	observer, token := historyObserverFixture(t)
-	observer.probe.previousID = "private_previous"
+	observer.previousID = "private_previous"
 	observer.observations = Evidence{FirstCompleted: true, FirstRecall: true, FirstReplyBytes: 13, Turns: 2}
 	if err := observer.reconcile(codexsdk.ThreadRunResult{Turn: protocolv2.Turn{
 		ID: "private_turn", Status: protocolv2.TurnStatusCompleted, Items: []protocolv2.ThreadItem{
@@ -230,7 +230,7 @@ func TestSDKHistoryLateFailureSettlesPreviouslyCopiedSuccessStage(t *testing.T) 
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	observer.finishTurn()
+	observer.settleTurn(3, nil)
 	observer.observations.Stage = "history_recalled"
 	copied := observer.observations
 	// Force the exact schedule: inline proof and returned evidence copy precede
@@ -265,7 +265,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 			for turn := 0; turn < 2; turn++ {
 				turnID := "private_turn"
 				if turn == 1 {
-					if observer.beginContinuation() != "private_thread" || observer.probe.previousID != turnID ||
+					if observer.beginContinuation() != "private_thread" || observer.previousID != turnID ||
 						len(observer.reply.identities) != 0 || observer.reply.completed || observer.reply.authoritative || observer.reply.explicitFinal || observer.reply.recall ||
 						observer.reconciled || observer.callbackTerminalSeen || observer.deliveredTyped != 0 || observer.recoveredTyped != 0 {
 						t.Fatal("production continuation transition retained prior reply credit or identity budget")
@@ -306,7 +306,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 				}
 				if mode == "overflow" && turn == 1 {
 					err := send("private_overflow", token)
-					observer.finishTurn()
+					observer.settleTurn(turn+2, nil)
 					if DescribeFailure(err).Code != "assistant_identity_budget_exceeded" || len(observer.reply.identities) != historyAssistantLimit || observer.observations.Completed || !observer.observations.FirstCompleted || !observer.observations.FirstRecall {
 						t.Fatal("capacity + 1 was not rejected before completion or damaged prior-turn proof")
 					}
@@ -332,7 +332,7 @@ func TestSDKHistoryObserverAssistantCapacity(t *testing.T) {
 				err := observer.typedNotification(context.Background(), protocolv2.NewServerNotificationTurnCompleted(protocolv2.ServerNotificationTurnCompleted{Params: protocolv2.TurnCompletedNotification{
 					ThreadID: "private_thread", Turn: protocolv2.Turn{ID: turnID, Status: protocolv2.TurnStatusCompleted, Items: items},
 				}}))
-				observer.finishTurn()
+				err = observer.settleTurn(turn+2, err)
 				if (err == nil) != wantRecall || !observer.reply.completed || observer.reply.recall != wantRecall || observer.reply.ambiguous {
 					t.Fatal("terminal authority or capacity result changed")
 				}

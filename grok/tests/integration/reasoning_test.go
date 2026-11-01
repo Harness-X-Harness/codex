@@ -80,7 +80,9 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	fixture.toolName, fixture.threadID = name, threadID
 	calls, outputs, encrypted, firstPrompts, continuations, firstFinals := 0, 0, 0, 0, 0, 0
-	reasoningAt, callAt, outputAt, finalAt, continuationAt := -1, -1, -1, -1, -1
+	var userTexts []string
+	var userPositions []int
+	firstPromptAt, reasoningAt, callAt, outputAt, finalAt, continuationAt := -1, -1, -1, -1, -1, -1
 	for index, raw := range body.Input {
 		var item struct {
 			Type, Role, Name, Arguments string
@@ -129,20 +131,13 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 			}
 		case "message":
 			for _, part := range item.Content {
-				if item.Role == "user" && fixture.priceResult != "" && strings.Contains(part.Text, fixture.priceResult) {
-					fail("user_secret_inserted")
-					return
-				}
-				if item.Role == "user" && part.Text == reasoningFirstPrompt {
-					firstPrompts++
-				}
-				if item.Role == "user" && part.Text == reasoningContinuationPrompt {
-					continuations++
-					continuationAt = index
-					if fixture.priceResult == "" || strings.Contains(part.Text, fixture.priceResult) || strings.Contains(part.Text, reasoningHTTPCipher) {
-						fail("continuation_secret_inserted")
+				if item.Role == "user" {
+					if fixture.priceResult != "" && strings.Contains(part.Text, fixture.priceResult) || strings.Contains(part.Text, reasoningHTTPCipher) {
+						fail("user_secret_inserted")
 						return
 					}
+					userTexts = append(userTexts, part.Text)
+					userPositions = append(userPositions, index)
 				}
 				if item.Role == "assistant" && fixture.priceResult != "" && part.Text == reasoningAmountReply(fixture.priceResult, 2) {
 					firstFinals++
@@ -151,6 +146,28 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 			}
 		}
 	}
+	// The submitted task is the last nonempty user text on the initial request.
+	// Learn that observation once; do not freeze unrelated product context.
+	if fixture.requests == 1 {
+		for _, text := range userTexts {
+			if strings.TrimSpace(text) != "" {
+				fixture.firstPrompt = text
+			}
+		}
+	}
+	for i, text := range userTexts {
+		if text == fixture.firstPrompt && fixture.firstPrompt != "" {
+			firstPrompts++
+			firstPromptAt = userPositions[i]
+		}
+		// Only a new task after the prior final can be the continuation.
+		// Empty parts and unrelated pre-final context do not submit a task.
+		if fixture.requests == 3 && finalAt >= 0 && userPositions[i] > finalAt && strings.TrimSpace(text) != "" {
+			continuations++
+			continuationAt = userPositions[i]
+		}
+	}
+
 	if bytes.Contains(data, []byte(reasoningHTTPPrivate)) || firstPrompts != 1 || calls > 1 || outputs > 1 || encrypted > 1 {
 		fail("history_contract")
 		return
@@ -164,7 +181,7 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 		fail("history_prefix_missing")
 		return
 	}
-	if fixture.requests > 1 && (reasoningAt >= callAt || callAt >= outputAt ||
+	if fixture.requests > 1 && (firstPromptAt >= reasoningAt || reasoningAt >= callAt || callAt >= outputAt ||
 		(fixture.requests == 3 && (outputAt >= finalAt || finalAt >= continuationAt))) {
 		fail("history_order_changed")
 		return
@@ -201,6 +218,7 @@ func (fixture *reasoningHTTP) ServeHTTP(writer http.ResponseWriter, request *htt
 type reasoningHTTP struct {
 	mu                                     sync.Mutex
 	model, threadID, toolName, priceResult string
+	firstPrompt                            string
 	failure                                string
 	requests                               int
 	replayed, continued                    bool
@@ -257,9 +275,6 @@ func TestReasoningHistoryFixture(t *testing.T) {
 		})
 	}
 }
-
-const reasoningFirstPrompt = "Use the shop's apple_price_lookup tool as the authoritative source for its current apple price, then calculate how much two kilograms cost in yuan."
-const reasoningContinuationPrompt = "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again."
 
 const reasoningAmountSchema = `{"type":"object","properties":{"amount":{"type":["number","null"]}},"required":["amount"],"additionalProperties":false}`
 

@@ -16,7 +16,7 @@ func sdkImageGenerationEdit(ctx context.Context, options Options) (ImageEvidence
 	server := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1), diagnostics: options.Diagnostics}
 	handlers := sdkFixtureHandlers{requests: server.request, notifications: server.typedNotification, afterClose: server.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 256 << 20}, queue: 8192}
-	base, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, base *Evidence) error {
+	base, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, base *Evidence, closeSDK func() error) error {
 		server.client = client
 		root := filepath.Join(filepath.Dir(cwd), "generated_images")
 		type identity struct{ thread, turn string }

@@ -66,7 +66,7 @@ func Basic(ctx context.Context, options Options) (Evidence, error) {
 			}
 		},
 	}
-	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence, closeSDK func() error) error {
 		evidence.Threads = 1
 		observer.evidence = evidence
 		observer.diagnostics = options.Diagnostics

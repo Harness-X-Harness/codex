@@ -19,6 +19,16 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{
 		{"equivalent_json_string", ""},
 		{"summary_whitespace", ""},
+		{"initial_user_context", ""},
+		{"blank_user_parts", ""},
+		{"later_unrelated_context", ""},
+		{"changed_first_user", "history_contract"},
+		{"missing_first_user", "history_contract"},
+		{"duplicate_first_user", "history_contract"},
+		{"reordered_first_user", "history_order_changed"},
+		{"duplicate_continuation", "history_prefix_missing"},
+		{"missing_continuation", "history_prefix_missing"},
+		{"injected_price", "user_secret_inserted"},
 		{"summary_omitted", "encrypted_history_changed"},
 		{"summary_null", "encrypted_history_changed"},
 		{"summary_nonempty", "encrypted_history_changed"},
@@ -69,7 +79,10 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 				fixture.ServeHTTP(w, r)
 				return w
 			}
-			input := []any{message("user", reasoningFirstPrompt)}
+			input := []any{message("user", "An arbitrary first task, not the production prompt.")}
+			if tc.name == "initial_user_context" {
+				input = append([]any{message("user", "Product-provided initial context.")}, input...)
+			}
 			if request(input).Code != http.StatusOK {
 				t.Fatal("fixture did not issue probe")
 			}
@@ -81,8 +94,27 @@ func testReasoningFixtureReplaySemantics(t *testing.T) {
 			if request(input).Code != http.StatusOK {
 				t.Fatal("fixture did not accept paired tool result")
 			}
-			input = append(input, message("assistant", reasoningAmountReply(priceResult, 2)), message("user", reasoningContinuationPrompt))
+			input = append(input, message("assistant", reasoningAmountReply(priceResult, 2)), message("user", "A distinct follow-up using prior context."))
 			switch tc.name {
+			case "blank_user_parts":
+				input = append([]any{message("user", " \n ")}, input...)
+				input = append(input, message("user", ""))
+			case "later_unrelated_context":
+				input = append([]any{message("user", "Unrelated product context added before the final.")}, input...)
+			case "changed_first_user":
+				input[0] = message("user", "Changed first task")
+			case "missing_first_user":
+				input = input[1:]
+			case "duplicate_first_user":
+				input = append(input, input[0])
+			case "reordered_first_user":
+				input[0], input[1] = input[1], input[0]
+			case "duplicate_continuation":
+				input = append(input, input[len(input)-1])
+			case "missing_continuation":
+				input = input[:len(input)-1]
+			case "injected_price":
+				input[len(input)-1] = message("user", priceResult)
 			case "equivalent_json_string":
 				output["output"] = json.RawMessage(`"\u007b\"unit_price_yuan\":7}"`)
 			case "summary_omitted":

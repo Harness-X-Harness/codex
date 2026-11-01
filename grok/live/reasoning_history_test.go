@@ -148,10 +148,10 @@ func fakeHistoryServer() {
 			}
 			if phase == 1 {
 				firstPrompt = text
-				if text != "Use the shop's apple_price_lookup tool as the authoritative source for its current apple price, then calculate how much two kilograms cost in yuan." {
+				if !historyPromptIntent(text, false) {
 					return
 				}
-			} else if text != "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again." {
+			} else if !historyPromptIntent(text, true) {
 				return
 			}
 			mark("turn_valid")
@@ -162,6 +162,10 @@ func fakeHistoryServer() {
 			if mode == "identity_summary_composition" || mode == "identity_turn_reset" {
 				// Exercise two-turn delivery with a small sequence; exact capacity is tested through the typed observer.
 				scenario = mode
+			}
+			inlineEOF := scenario == "inline_missing_facts_eof"
+			if inlineEOF {
+				scenario = "inline"
 			}
 			turn := "PRIVATE_TURN_ONE"
 			if phase == 2 && scenario != "reused_turn" {
@@ -326,7 +330,7 @@ func fakeHistoryServer() {
 				cipher = map[string]any{"type": "message", "id": "PRIVATE_CIPHER", "role": "assistant", "content": []any{}}
 				send(map[string]any{"method": "item/reasoning/textDelta", "params": map[string]any{"threadId": threadID, "turnId": eventTurn, "itemId": "PRIVATE_REASONING", "delta": historyCanary, "contentIndex": 0}})
 			}
-			if scenario == "no_cipher" {
+			if scenario == "no_cipher" || inlineEOF {
 				cipher["encrypted_content"] = ""
 			}
 			if scenario == "cipher_missing_identity" {
@@ -544,6 +548,9 @@ func fakeHistoryServer() {
 					send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": map[string]any{"id": turn, "status": "failed", "error": map[string]any{"message": historyCanary}, "items": []any{}}}})
 				}
 				reply(p, map[string]any{"turn": completed})
+				if inlineEOF {
+					return
+				}
 			} else if scenario != "no_terminal" {
 				send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": threadID, "turn": completed}})
 			}
@@ -584,7 +591,7 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 	var capacity sync.Mutex
 	modes := []string{"final_then_commentary", "next_final_then_commentary", "final_then_partial", "next_final_then_partial", "final_then_commentary_items", "next_final_then_commentary_items", "next_legacy_commentary", "turn", "item", "early", "late", "inline", "encrypted_only", "repeated", "legacy", "legacy_replaced", "next_denial", "next_item", "next_inline", "next_late", "next_legacy",
 		"wrong_model", "wrong_provider", "wrong_thread_provider", "request_thread", "request_turn", "request_namespace", "request_empty_namespace", "request_tool", "empty_call", "unsupported", "early_unsupported", "inline_conflict", "inline_missing_item", "provisional_mismatch", "wrong_thread", "wrong_turn",
-		"no_reason", "no_cipher", "missing_cipher", "cipher_missing_identity", "cipher_empty_identity", "cipher_wrong_thread", "cipher_wrong_turn", "no_request", "no_tool", "tool_failed", "tool_partial", "tool_namespace", "tool_empty_namespace", "tool_wrong_thread", "tool_wrong_turn", "tool_wrong_call", "tool_identity_limit", "tool_identity_overflow", "reply_wrong_thread", "reply_wrong_turn", "wrong_tool", "wrong_output", "no_reply", "missing_reply", "wrong_reply", "commentary", "delta", "legacy_superseded", "legacy_commentary", "summary_replay", "no_terminal", "failed", "partial", "error", "eof", "malformed", "hang",
+		"no_reason", "no_cipher", "missing_cipher", "cipher_missing_identity", "cipher_empty_identity", "cipher_wrong_thread", "cipher_wrong_turn", "no_request", "no_tool", "tool_failed", "tool_partial", "tool_namespace", "tool_empty_namespace", "tool_wrong_thread", "tool_wrong_turn", "tool_wrong_call", "tool_identity_limit", "tool_identity_overflow", "reply_wrong_thread", "reply_wrong_turn", "wrong_tool", "wrong_output", "no_reply", "missing_reply", "wrong_reply", "commentary", "delta", "legacy_superseded", "legacy_commentary", "summary_replay", "no_terminal", "failed", "partial", "error", "eof", "inline_missing_facts_eof", "malformed", "hang",
 		"next_stale_amount", "next_wrong_thread", "next_wrong_turn", "next_reused_turn", "next_no_reply", "next_missing_reply", "next_wrong_reply", "next_commentary", "next_legacy_superseded", "next_summary_replay", "next_no_terminal", "next_failed", "next_error", "next_eof", "next_inline_conflict", "next_inline_missing_item"}
 	for _, mode := range []string{
 		"identity_replay", "identity_replay_final", "identity_delayed_final", "identity_duplicate",
@@ -709,6 +716,11 @@ func TestReasoningHistoryPublicProtocol(t *testing.T) {
 						t.Fatal("failure recovery duplicated or lost real partial evidence")
 					}
 				}
+				if mode == "inline_missing_facts_eof" {
+					if ctx.Err() != nil || live.DescribeFailure(err).Code == "deadline_exceeded" || got.Turns != 1 || got.EncryptedItems != 0 {
+						t.Fatal("inline missing proof lost the SDK failure cursor or submitted continuation")
+					}
+				}
 				if mode == "cipher_missing_identity" || mode == "cipher_empty_identity" {
 					// Raw reasoning permits an absent ID on the wire, but cannot
 					// establish encrypted-history authority without that identity.
@@ -816,4 +828,42 @@ func historyReplyJSON(value string, kilograms int) string {
 	}
 	data, _ := json.Marshal(map[string]any{"amount": amount})
 	return string(data)
+}
+
+// Check the task's independent intent, not its sentence or punctuation. Transport
+// replay is checked separately against the input actually observed by the backend.
+func historyPromptIntent(text string, continuation bool) bool {
+	text = strings.ToLower(text)
+	contains := func(parts ...string) bool {
+		for _, part := range parts {
+			if !strings.Contains(text, part) {
+				return false
+			}
+		}
+		return true
+	}
+	if continuation {
+		return contains("price", "three kilograms") &&
+			(strings.Contains(text, "already") || strings.Contains(text, "previous")) &&
+			(strings.Contains(text, "do not look up") || strings.Contains(text, "without another lookup"))
+	}
+	return contains("shop", "apple_price_lookup", "authoritative", "two kilograms", "yuan")
+}
+
+func TestHistoryPromptIntent(t *testing.T) {
+	for _, tc := range []struct {
+		text               string
+		continuation, want bool
+	}{
+		{"For two kilograms, calculate the cost in yuan from the shop's authoritative apple_price_lookup.", false, true},
+		{"Use the previous price for three kilograms, without another lookup.", true, true},
+		{"Guess a market price for two kilograms in yuan.", false, false},
+		{"Use the shop's authoritative apple_price_lookup for three kilograms in yuan.", false, false},
+		{"Look up the price for three kilograms again.", true, false},
+		{"Use the previous price for two kilograms, without another lookup.", true, false},
+	} {
+		if got := historyPromptIntent(tc.text, tc.continuation); got != tc.want {
+			t.Errorf("task intent: continuation=%t got=%t want=%t", tc.continuation, got, tc.want)
+		}
+	}
 }
