@@ -2,12 +2,14 @@ package live_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Harness-X-Harness/codex/grok/dist"
 	"github.com/Harness-X-Harness/codex/grok/live"
 )
 
@@ -19,7 +21,7 @@ func TestProductDiagnosticsRetainSuccessfulAndRejectedObservations(t *testing.T)
 		want                    []string
 		fails                   bool
 	}{
-		{"catalog", "shipped:ok", "catalog", []string{"catalog_result", "actual", "expected", "grok-4.7"}, false},
+		{"catalog", "shipped:ok", "catalog", nil, false},
 		{"catalog_mismatch", "shipped:missing_model", "catalog", []string{"catalog_result", "actual", "expected", "matches"}, true},
 		{"child", "shipped:ok", "child", []string{"child_candidate", "child_reply_check", "child_parent_result", "invoice_correct", "child_visible_message", "product_turn_request"}, false},
 		{"child_wrong_invoice", "shipped:child_wrong_invoice", "child", []string{"child_reply_check", "invoice_correct", "child_result"}, true},
@@ -52,6 +54,51 @@ func TestProductDiagnosticsRetainSuccessfulAndRejectedObservations(t *testing.T)
 			diagnostics.Close()
 			if (err != nil) != test.fails {
 				t.Fatalf("unexpected oracle result: %v", err)
+			}
+			if test.name == "catalog" {
+				slugs, err := dist.ModelSlugs()
+				if err != nil {
+					t.Fatal(err)
+				}
+				trace, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, line := range strings.Split(strings.TrimSpace(string(trace)), "\n") {
+					var event struct {
+						Kind   string `json:"kind"`
+						Fields struct {
+							Actual, Expected struct {
+								Data []struct{ ID, Model string }
+							}
+							Matches bool
+						}
+					}
+					if err := json.Unmarshal([]byte(line), &event); err != nil {
+						t.Fatal(err)
+					}
+					if event.Kind != "catalog_result" {
+						continue
+					}
+					found = true
+					if !event.Fields.Matches {
+						t.Fatal("successful catalog diagnostic lost its match result")
+					}
+					for _, rows := range [][]struct{ ID, Model string }{event.Fields.Actual.Data, event.Fields.Expected.Data} {
+						if len(rows) != len(slugs) {
+							t.Fatal("catalog diagnostic lost shipped model identities")
+						}
+						for i, slug := range slugs {
+							if rows[i].ID != slug || rows[i].Model != slug {
+								t.Fatal("catalog diagnostic differs from shipped model identities")
+							}
+						}
+					}
+				}
+				if !found {
+					t.Fatal("retained diagnostic missing catalog_result")
+				}
 			}
 			var contents strings.Builder
 			if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {

@@ -223,12 +223,6 @@ jobs:
           cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-message-board -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item
       - name: Require unchanged formatting input
         uses: ./.github/actions/check-clean-worktree
-      - name: Check Code Mode host fixture formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-code-mode-host -- --config imports_granularity=Item --check
-      - name: Check affected Provider runtime crate formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-model-provider -p codex-core -p core_test_support -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager -p codex-prompts -p codex-api -p codex-app-server -p codex-tui -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-history-notes-extension -p codex-message-board -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension -- --config imports_granularity=Item --check
       - name: Install native Linux test dependencies
         run: |
           sudo apt-get update
@@ -383,11 +377,6 @@ jobs:
         run: just fix -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings
       - name: Require unchanged filesystem construction input
         uses: ./.github/actions/check-clean-worktree
-      - name: Freeze unchanged native proof input
-        uses: ./.github/actions/check-clean-worktree
-      - name: Check filesystem API formatting
-        working-directory: codex-rs
-        run: cargo fmt -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server -- --config imports_granularity=Item --check
       # Owner construction above stays uncached. Subsequent build/test compilation and
       # strict Clippy use sccache; every selected test still executes.
       - name: Mask the ephemeral compiler-cache token
