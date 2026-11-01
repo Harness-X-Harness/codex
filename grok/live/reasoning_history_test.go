@@ -148,10 +148,10 @@ func fakeHistoryServer() {
 			}
 			if phase == 1 {
 				firstPrompt = text
-				if text != "Use the shop's apple_price_lookup tool as the authoritative source for its current apple price, then calculate how much two kilograms cost in yuan." {
+				if !historyPromptIntent(text, false) {
 					return
 				}
-			} else if text != "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again." {
+			} else if !historyPromptIntent(text, true) {
 				return
 			}
 			mark("turn_valid")
@@ -816,4 +816,42 @@ func historyReplyJSON(value string, kilograms int) string {
 	}
 	data, _ := json.Marshal(map[string]any{"amount": amount})
 	return string(data)
+}
+
+// Check the task's independent intent, not its sentence or punctuation. Transport
+// replay is checked separately against the input actually observed by the backend.
+func historyPromptIntent(text string, continuation bool) bool {
+	text = strings.ToLower(text)
+	contains := func(parts ...string) bool {
+		for _, part := range parts {
+			if !strings.Contains(text, part) {
+				return false
+			}
+		}
+		return true
+	}
+	if continuation {
+		return contains("price", "three kilograms") &&
+			(strings.Contains(text, "already") || strings.Contains(text, "previous")) &&
+			(strings.Contains(text, "do not look up") || strings.Contains(text, "without another lookup"))
+	}
+	return contains("shop", "apple_price_lookup", "authoritative", "two kilograms", "yuan")
+}
+
+func TestHistoryPromptIntent(t *testing.T) {
+	for _, tc := range []struct {
+		text               string
+		continuation, want bool
+	}{
+		{"For two kilograms, calculate the cost in yuan from the shop's authoritative apple_price_lookup.", false, true},
+		{"Use the previous price for three kilograms, without another lookup.", true, true},
+		{"Guess a market price for two kilograms in yuan.", false, false},
+		{"Use the shop's authoritative apple_price_lookup for three kilograms in yuan.", false, false},
+		{"Look up the price for three kilograms again.", true, false},
+		{"Use the previous price for two kilograms, without another lookup.", true, false},
+	} {
+		if got := historyPromptIntent(tc.text, tc.continuation); got != tc.want {
+			t.Errorf("task intent: continuation=%t got=%t want=%t", tc.continuation, got, tc.want)
+		}
+	}
 }
