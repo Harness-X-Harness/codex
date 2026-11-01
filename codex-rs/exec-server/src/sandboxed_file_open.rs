@@ -3,21 +3,24 @@ use codex_sandboxing::SandboxExecRequest;
 use codex_utils_path_uri::PathUri;
 use tokio::io;
 
+use crate::file_system_mutation::EffectGuard;
 use crate::fs_helper::FsHelperOpenParams;
 use crate::fs_helper::FsHelperOpenResponse;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_helper::FsHelperResponse;
+#[cfg(unix)]
+use crate::fs_sandbox::check_helper_output;
+#[cfg(unix)]
+use crate::fs_sandbox::collect_helper_output;
 #[cfg(windows)]
 use crate::fs_sandbox::drain_helper_stderr;
+#[cfg(windows)]
+use crate::fs_sandbox::finish_helper;
 use crate::fs_sandbox::io_error;
 #[cfg(windows)]
 use crate::fs_sandbox::read_helper_response;
-#[cfg(windows)]
-use crate::fs_sandbox::reap_helper_after_response;
 use crate::fs_sandbox::spawn_command;
-#[cfg(unix)]
-use crate::fs_sandbox::wait_for_helper_output;
 use crate::protocol::FsOpenMode;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
@@ -29,18 +32,31 @@ pub(crate) async fn open(
 ) -> Result<tokio::fs::File, JSONRPCErrorError> {
     let request = serde_json::to_vec(&FsHelperRequest::Open(FsHelperOpenParams { path, mode }))
         .map_err(|error| internal_error(format!("invalid fs sandbox helper request: {error}")))?;
-    open_platform(command, request).await
+    open_platform(command, request, mode).await
 }
 
-fn open_response(response: &[u8]) -> Result<FsHelperOpenResponse, JSONRPCErrorError> {
+fn open_response(
+    response: &[u8],
+    effect: &mut Option<EffectGuard>,
+) -> Result<FsHelperOpenResponse, JSONRPCErrorError> {
     match serde_json::from_slice(response).map_err(|error| {
         internal_error(format!("invalid fs sandbox helper open response: {error}"))
     })? {
-        FsHelperResponse::Ok(FsHelperPayload::Open(response)) => Ok(response),
+        FsHelperResponse::Ok(FsHelperPayload::Open(response)) => {
+            if let Some(effect) = effect {
+                effect.settle();
+            }
+            Ok(response)
+        }
         FsHelperResponse::Ok(_) => Err(invalid_request(
             "invalid fs sandbox helper open response".to_string(),
         )),
-        FsHelperResponse::Error(error) => Err(error),
+        FsHelperResponse::Error(error) => {
+            if let Some(effect) = effect {
+                effect.settle();
+            }
+            Err(error)
+        }
     }
 }
 
@@ -49,6 +65,7 @@ fn open_response(response: &[u8]) -> Result<FsHelperOpenResponse, JSONRPCErrorEr
 async fn open_platform(
     command: SandboxExecRequest,
     request: Vec<u8>,
+    mode: FsOpenMode,
 ) -> Result<tokio::fs::File, JSONRPCErrorError> {
     use std::io::Write;
     use std::os::fd::OwnedFd;
@@ -56,14 +73,19 @@ async fn open_platform(
 
     let (mut receiver, sender) = UnixStream::pair().map_err(io_error)?;
     let sender: OwnedFd = sender.into();
-    let child = spawn_command(command, codex_utils_pty::ChildStdin::File(sender))?;
-    receiver.write_all(&request).map_err(io_error)?;
-    receiver
-        .shutdown(std::net::Shutdown::Write)
-        .map_err(io_error)?;
-
-    let output = wait_for_helper_output(child).await?;
-    open_response(&output.stdout)?;
+    let mut child = spawn_command(command, codex_utils_pty::ChildStdin::File(sender))?;
+    let mut effect = (mode == FsOpenMode::Replace).then(EffectGuard::new);
+    let sent = receiver
+        .write_all(&request)
+        .and_then(|()| receiver.shutdown(std::net::Shutdown::Write));
+    // A failed send still waits for the helper, retaining ownership of truncation.
+    let (exited, output) = collect_helper_output(&mut child).await;
+    if exited && let Some(effect) = &mut effect {
+        effect.settle();
+    }
+    sent.map_err(io_error)?;
+    let output = check_helper_output(output)?;
+    open_response(&output.stdout, &mut effect)?;
     let descriptor = receive_file_descriptor(&receiver).map_err(io_error)?;
     Ok(tokio::fs::File::from_std(std::fs::File::from(descriptor)))
 }
@@ -73,31 +95,36 @@ async fn open_platform(
 async fn open_platform(
     command: SandboxExecRequest,
     mut request: Vec<u8>,
+    mode: FsOpenMode,
 ) -> Result<tokio::fs::File, JSONRPCErrorError> {
     use tokio::io::AsyncWriteExt;
 
     let mut child = spawn_command(command, codex_utils_pty::ChildStdin::Piped)?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| internal_error("missing fs sandbox helper stdin".to_string()))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| internal_error("missing fs sandbox helper stdout".to_string()))?;
-    request.push(b'\n');
-    stdin.write_all(&request).await.map_err(io_error)?;
-    stdin.flush().await.map_err(io_error)?;
+    let mut effect = (mode == FsOpenMode::Replace).then(EffectGuard::new);
+    let mut stdin = child.stdin.take();
+    let stdout = child.stdout.take();
     let stderr = drain_helper_stderr(&mut child);
-
+    request.push(b'\n');
     let result = async {
+        let stdin = stdin
+            .as_mut()
+            .ok_or_else(|| internal_error("missing fs sandbox helper stdin".to_string()))?;
+        stdin.write_all(&request).await.map_err(io_error)?;
+        stdin.flush().await.map_err(io_error)?;
+        let stdout =
+            stdout.ok_or_else(|| internal_error("missing fs sandbox helper stdout".to_string()))?;
         let response = read_helper_response(stdout).await?;
-        let response = open_response(&response)?;
+        // A valid terminal response settles truncation even if handle duplication fails.
+        let response = open_response(&response, &mut effect)?;
         duplicate_file_handle(response.process_id, response.file_handle).map_err(io_error)
     }
     .await;
     drop(stdin);
-    reap_helper_after_response(child, stderr).await?;
+    let (exited, cleanup) = finish_helper(&mut child, stderr).await;
+    if exited && let Some(effect) = &mut effect {
+        effect.settle();
+    }
+    cleanup?;
     result.map(tokio::fs::File::from_std)
 }
 

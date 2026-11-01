@@ -1640,3 +1640,6 @@ async fn memories_startup_phase2_v2_consolidates_without_a_handbook() -> anyhow:
     assert_eq!(request.body_json()["service_tier"], "flex");
     Ok(())
 }
+
+#[path = "grok_startup_tests.rs"]
+mod grok;

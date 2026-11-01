@@ -159,7 +159,8 @@ fn persisted_event_msg(
             .then_some(Cow::Borrowed(ev)),
 
         // Transient, non-durable events.
-        EventMsg::Error(_)
+        EventMsg::SearchActivity(_)
+        | EventMsg::Error(_)
         | EventMsg::ThreadQueueChanged(_)
         | EventMsg::GuardianAssessment(_)
         | EventMsg::ExecCommandEnd(_)
@@ -288,3 +289,7 @@ fn persisted_item_completed_event<'a>(
 #[cfg(test)]
 #[path = "policy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "policy_search_activity_tests.rs"]
+mod search_activity_tests;

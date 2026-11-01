@@ -89,11 +89,16 @@ pub(crate) enum InputQueueActivity {
 }
 
 /// Turn-local pending input storage owned by the input queue flow.
+///
+/// Completion closes this queue when taking its final snapshot, before the
+/// active-turn slot is cleared. Unlike mailbox delivery, closure is permanent:
+/// later input must be rejected or recorded by the caller's history fallback.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
     items: Vec<TurnInput>,
     /// Response items queued through a notifying injection, unlike passive context.
     has_pending_injection: bool,
+    closed: bool,
 }
 
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
@@ -322,7 +327,7 @@ impl InputQueue {
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.clear_pending_waiters();
         // Pending mail can own extension attachments whose destructors need the lock released.
-        let pending_input = std::mem::take(&mut turn_state.pending_input);
+        let pending_input = turn_state.pending_input.take_items();
         drop(turn_state);
         drop(pending_input);
     }
@@ -377,31 +382,42 @@ impl InputQueue {
         &self,
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
-    ) {
-        {
+    ) -> Result<(), Vec<TurnInput>> {
+        let accepted = {
             let mut turn_state = turn_state.lock().await;
-            turn_state.pending_input.has_pending_injection |= input
-                .iter()
-                .any(|input| matches!(input, TurnInput::ResponseItem(_)));
-            turn_state.pending_input.items.extend(input);
-            turn_state.accept_mailbox_delivery_for_current_turn();
+            push_turn_input_if_open(&mut turn_state, input)
+        };
+        if accepted.is_ok() {
+            self.signal_steer();
         }
-        self.activity_tx.send_replace(InputQueueActivity::Steer);
+        accepted
     }
 
+    /// Appends input owned by a start or wakeup path before task registration.
     pub(crate) async fn extend_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
         input: Vec<TurnInput>,
     ) {
-        turn_state.lock().await.pending_input.items.extend(input);
+        let mut turn_state = turn_state.lock().await;
+        assert!(
+            !turn_state.pending_input.is_closed(),
+            "reserved turn input must remain open until task completion"
+        );
+        turn_state.pending_input.items.extend(input);
+    }
+
+    pub(super) fn signal_steer(&self) {
+        self.activity_tx.send_replace(InputQueueActivity::Steer);
     }
 
     pub(crate) async fn take_pending_input_for_turn_state(
         &self,
         turn_state: &Mutex<TurnState>,
     ) -> Vec<TurnInput> {
-        std::mem::take(&mut turn_state.lock().await.pending_input).items
+        let mut turn_state = turn_state.lock().await;
+        turn_state.pending_input.closed = true;
+        turn_state.pending_input.take_items()
     }
 
     #[expect(
@@ -420,7 +436,7 @@ impl InputQueue {
                     let accepts_mailbox_delivery =
                         turn_state.accepts_mailbox_delivery_for_current_turn();
                     let pending_input = if accepts_mailbox_delivery {
-                        std::mem::take(&mut turn_state.pending_input).items
+                        turn_state.pending_input.take_items()
                     } else {
                         Vec::new()
                     };
@@ -470,7 +486,29 @@ impl InputQueue {
     }
 }
 
+/// Checks admission and reopens mailbox delivery under the owning turn-state lock.
+pub(super) fn push_turn_input_if_open(
+    turn_state: &mut TurnState,
+    input: Vec<TurnInput>,
+) -> Result<(), Vec<TurnInput>> {
+    if turn_state.pending_input.is_closed() {
+        return Err(input);
+    }
+    turn_state.pending_input.has_pending_injection |= input
+        .iter()
+        .any(|input| matches!(input, TurnInput::ResponseItem(_)));
+    turn_state.pending_input.items.extend(input);
+    turn_state.accept_mailbox_delivery_for_current_turn();
+    Ok(())
+}
+
 impl TurnInputQueue {
+    /// Drains queued work without reopening a completed turn.
+    fn take_items(&mut self) -> Vec<TurnInput> {
+        self.has_pending_injection = false;
+        std::mem::take(&mut self.items)
+    }
+
     fn has_user_input(&self) -> bool {
         self.items
             .iter()
@@ -479,6 +517,10 @@ impl TurnInputQueue {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.closed
     }
 
     fn pending_activity(&self) -> Option<InputQueueActivity> {
@@ -631,7 +673,8 @@ mod tests {
                     client_id: None,
                 }],
             )
-            .await;
+            .await
+            .expect("open queue accepts steer");
 
         activity_rx.changed().await.expect("steer update");
         assert_eq!(*activity_rx.borrow_and_update(), InputQueueActivity::Steer);
@@ -640,7 +683,9 @@ mod tests {
     #[tokio::test]
     async fn input_queue_reports_already_pending_steer() {
         let input_queue = InputQueue::new();
-        let turn_state = Mutex::new(TurnState::default());
+        let active_turn = ActiveTurn::default();
+        let turn_state = Arc::clone(&active_turn.turn_state);
+        let active = Mutex::new(Some(active_turn));
         let passive_output: TurnInput = serde_json::from_value(serde_json::json!({
             "ResponseItem": {"type": "function_call_output", "name": "notify", "output": "passive"}
         }))
@@ -657,15 +702,18 @@ mod tests {
                 &turn_state,
                 vec![passive_output.clone()],
             )
-            .await;
+            .await
+            .expect("open queue accepts injection");
         assert_eq!(
             input_queue.subscribe_activity(Some(&turn_state)).await.1,
             Some(InputQueueActivity::Steer)
         );
         // Consuming the injection must not make later passive context wake a wait.
-        input_queue
-            .take_pending_input_for_turn_state(&turn_state)
-            .await;
+        assert_eq!(
+            input_queue.get_pending_input(&active).await.0,
+            vec![passive_output.clone(), passive_output.clone()]
+        );
+        assert!(!turn_state.lock().await.pending_input.is_closed());
         input_queue
             .extend_pending_input_for_turn_state(&turn_state, vec![passive_output])
             .await;
@@ -701,7 +749,8 @@ mod tests {
                     client_id: None,
                 }],
             )
-            .await;
+            .await
+            .expect("open queue accepts steer");
 
         let (_activity_rx, pending_activity) =
             input_queue.subscribe_activity(Some(&turn_state)).await;
@@ -844,3 +893,7 @@ mod tests {
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
     }
 }
+
+#[cfg(test)]
+#[path = "input_queue_close_tests.rs"]
+mod close_tests;

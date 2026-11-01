@@ -1,4 +1,7 @@
 use codex_protocol::AgentPath;
+use codex_protocol::SearchActivityEvent;
+use codex_protocol::SearchActivityKind;
+use codex_protocol::SearchActivityState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -13,6 +16,7 @@ use std::time::Duration;
 
 use super::ToolRuntimeTraceEvent;
 use super::tool_runtime_trace_event;
+use super::wrapped_protocol_event_type;
 use crate::ExecutionStatus;
 
 #[test]
@@ -148,4 +152,24 @@ fn exec_command_trace_payloads_use_inferred_native_cwd() -> anyhow::Result<()> {
         })
     );
     Ok(())
+}
+
+#[test]
+fn transient_search_activity_is_not_retained_as_runtime_or_wrapped_trace() {
+    for state in [
+        SearchActivityState::Running,
+        SearchActivityState::Completed,
+        SearchActivityState::Cleared,
+    ] {
+        let event = EventMsg::SearchActivity(SearchActivityEvent {
+            attempt_id: 1,
+            output_index: 1,
+            item_id: "search-1".to_string(),
+            kind: SearchActivityKind::Web,
+            state,
+        });
+
+        assert!(tool_runtime_trace_event(&event).is_none());
+        assert_eq!(wrapped_protocol_event_type(&event), None);
+    }
 }

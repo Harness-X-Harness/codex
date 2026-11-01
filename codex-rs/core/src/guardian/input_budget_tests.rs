@@ -343,6 +343,7 @@ async fn compacted_review_restores_originals_once_and_persists_the_request_prefi
         .for_prompt(
             &step.settings.model_info.input_modalities,
             session.services.image_store.as_ref(),
+            codex_api::ApiDialect::OpenAi,
         )
         .await;
     assert_eq!(prompt.input, persisted);

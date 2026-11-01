@@ -83,6 +83,7 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
         .for_prompt_annotated(
             &turn.model_info().input_modalities,
             session.services.image_store.as_ref(),
+            turn.provider.api_dialect(),
         )
         .await;
     codex_guardian_context::prepare_sync_delivery(&mut context, &history)
@@ -149,6 +150,7 @@ pub(crate) async fn finalize(
         .for_prompt_annotated(
             &model.input_modalities,
             session.services.image_store.as_ref(),
+            step.turn.provider.api_dialect(),
         )
         .await;
     // Use the history that will actually reach the model. Recompute after every

@@ -1,5 +1,10 @@
 name: setup-ci
 description: Prepare common tools and environment shared by CI jobs.
+inputs:
+  configure-linux-user-namespaces:
+    description: Allow the existing Linux runner user-namespace sysctl provisioning.
+    required: false
+    default: "true"
 outputs:
   bazel-output-base:
     description: Filesystem path used for Bazel's output base.
@@ -25,7 +30,7 @@ runs:
       run: echo "CI_BUILD_ROOT=$HOME/.cache/codex-ci" >> "$GITHUB_ENV"
 
     - name: Enable unprivileged user namespaces (Linux)
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && inputs.configure-linux-user-namespaces == 'true'
       shell: bash
       run: |
         sudo sysctl -w kernel.unprivileged_userns_clone=1

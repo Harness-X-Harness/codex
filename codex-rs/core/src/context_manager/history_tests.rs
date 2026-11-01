@@ -46,6 +46,7 @@ use codex_protocol_test_support::ContentItemTestExt;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use futures::FutureExt;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Luma;
@@ -1012,7 +1013,11 @@ async fn for_prompt_preserves_inter_agent_assistant_messages() {
     assert_eq!(raw_items(&history), std::slice::from_ref(&item));
     assert_eq!(
         history
-            .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+            .for_prompt(
+                &default_input_modalities(),
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![item]
     );
@@ -1139,16 +1144,16 @@ async fn for_prompt_annotated_preserves_metadata_while_normalizing_item() {
         },
         metadata: Some(CodexHarnessMetadata::default()),
     };
-    let mut history = ContextManager::new();
-    history.replace_annotated(vec![envelope.clone()]);
-
-    let normalized = history
-        .for_prompt_annotated(&[InputModality::Text], &InlineAttachmentStore)
-        .await;
-
-    assert_eq!(normalized.len(), 1);
-    assert_eq!(normalized[0].metadata, envelope.metadata);
-    assert_ne!(normalized[0].item, envelope.item);
+    for dialect in [codex_api::ApiDialect::OpenAi, codex_api::ApiDialect::Grok] {
+        let mut history = ContextManager::new();
+        history.replace_annotated(vec![envelope.clone()]);
+        let normalized = history
+            .for_prompt_annotated(&[InputModality::Text], &InlineAttachmentStore, dialect)
+            .await;
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].metadata, envelope.metadata);
+        assert_ne!(normalized[0].item, envelope.item);
+    }
 }
 
 #[test]
@@ -1205,8 +1210,10 @@ fn total_token_usage_includes_all_items_after_last_model_generated_item() {
 
 /// Unavailable images become harness-attributed placeholders without changing saved history or
 /// neighboring inline content and its annotations.
+#[test_case(codex_api::ApiDialect::OpenAi; "openai")]
+#[test_case(codex_api::ApiDialect::Grok; "grok")]
 #[tokio::test]
-async fn for_prompt_replaces_unavailable_message_images() {
+async fn for_prompt_replaces_unavailable_message_images(dialect: codex_api::ApiDialect) {
     let original: ResponseItem = from_value(json!({
         "type": "message", "role": "user",
         "content": [
@@ -1229,6 +1236,7 @@ async fn for_prompt_replaces_unavailable_message_images() {
                 InputModality::Audio,
             ],
             &FailingAttachmentStore,
+            dialect,
         )
         .await;
     let expected: ResponseItem = from_value(json!({
@@ -1249,8 +1257,10 @@ async fn for_prompt_replaces_unavailable_message_images() {
 }
 
 /// Both tool output formats retain inline images and text when a neighboring file expires.
+#[test_case(codex_api::ApiDialect::OpenAi; "openai")]
+#[test_case(codex_api::ApiDialect::Grok; "grok")]
 #[tokio::test]
-async fn for_prompt_replaces_unavailable_tool_images() {
+async fn for_prompt_replaces_unavailable_tool_images(dialect: codex_api::ApiDialect) {
     for (call, output) in [
         (
             json!({"type": "function_call", "call_id": "call-1", "name": "view_image", "arguments": "{}"}),
@@ -1288,6 +1298,7 @@ async fn for_prompt_replaces_unavailable_tool_images() {
                         InputModality::Audio
                     ],
                     &FailingAttachmentStore,
+                    dialect,
                 )
                 .await,
             vec![call.clone(), expected]
@@ -1401,7 +1412,11 @@ async fn for_prompt_strips_media_when_model_does_not_support_it() {
     let history = create_history_with_items(items);
     let text_only_modalities = vec![InputModality::Text];
     let stripped = history
-        .for_prompt(&text_only_modalities, &InlineAttachmentStore)
+        .for_prompt(
+            &text_only_modalities,
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::OpenAi,
+        )
         .await;
 
     let expected = vec![
@@ -1513,7 +1528,8 @@ async fn for_prompt_strips_media_when_model_does_not_support_it() {
                     InputModality::Image,
                     InputModality::Audio,
                 ],
-                &InlineAttachmentStore
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
             )
             .await,
         fully_supported_items
@@ -1541,7 +1557,11 @@ async fn for_prompt_strips_media_when_model_does_not_support_it() {
         internal_chat_message_metadata_passthrough: None,
     }]);
     let preserved = with_images
-        .for_prompt(&modalities, &InlineAttachmentStore)
+        .for_prompt(
+            &modalities,
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::OpenAi,
+        )
         .await;
     assert_eq!(preserved.len(), 1);
     if let ResponseItem::Message { content, .. } = &preserved[0] {
@@ -1567,7 +1587,8 @@ async fn for_prompt_strips_media_when_model_does_not_support_it() {
         with_audio
             .for_prompt(
                 &[InputModality::Text, InputModality::Audio],
-                &InlineAttachmentStore
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
             )
             .await,
         vec![audio_message]
@@ -1600,7 +1621,11 @@ async fn for_prompt_preserves_image_generation_calls_when_images_are_supported()
 
     assert_eq!(
         history
-            .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+            .for_prompt(
+                &default_input_modalities(),
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![
             ResponseItem::ImageGenerationCall {
@@ -1652,7 +1677,11 @@ async fn for_prompt_clears_image_generation_result_when_images_are_unsupported()
 
     assert_eq!(
         history
-            .for_prompt(&[InputModality::Text], &InlineAttachmentStore)
+            .for_prompt(
+                &[InputModality::Text],
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![
             ResponseItem::Message {
@@ -1822,7 +1851,11 @@ async fn drop_last_n_user_turns_preserves_prefix() {
     history.drop_last_n_user_turns(/*num_turns*/ 1);
     assert_eq!(
         history
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![
             assistant_msg("session prefix item"),
@@ -1842,7 +1875,11 @@ async fn drop_last_n_user_turns_preserves_prefix() {
     assert_eq!(
         history
             .clone()
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![assistant_msg("session prefix item")]
     );
@@ -1989,7 +2026,11 @@ async fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 
     assert_eq!(
         history
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         expected_prefix_and_first_turn
     );
@@ -2028,7 +2069,11 @@ async fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     history.drop_last_n_user_turns(/*num_turns*/ 2);
     assert_eq!(
         history
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         expected_prefix_only
     );
@@ -2053,7 +2098,11 @@ async fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     history.drop_last_n_user_turns(/*num_turns*/ 3);
     assert_eq!(
         history
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         expected_prefix_only
     );
@@ -2096,7 +2145,11 @@ async fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
     assert_eq!(
         history
             .clone()
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![
             assistant_msg("session prefix item"),
@@ -2226,7 +2279,11 @@ async fn drop_last_n_user_turns_trims_saved_prefix_update_above_rolled_back_turn
 
     assert_eq!(
         history
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![
             assistant_msg("session prefix item"),
@@ -2260,7 +2317,11 @@ async fn drop_last_n_user_turns_clears_reference_context_for_mixed_developer_con
     assert_eq!(
         history
             .clone()
-            .for_prompt(&modalities, &InlineAttachmentStore)
+            .for_prompt(
+                &modalities,
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![
             user_input_text_msg("turn 1 user"),
@@ -2326,7 +2387,11 @@ async fn normalization_retains_local_shell_outputs() {
     let modalities = default_input_modalities();
     let history = create_history_with_items(items.clone());
     let normalized = history
-        .for_prompt(&modalities, &InlineAttachmentStore)
+        .for_prompt(
+            &modalities,
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::OpenAi,
+        )
         .await;
     assert_eq!(normalized, items);
 }
@@ -2553,7 +2618,7 @@ fn normalize_adds_missing_output_for_custom_tool_call(inherited: bool) {
         .get_or_insert_default()
         .inherited_user_message = inherited;
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(
         raw_items(&h),
@@ -2602,7 +2667,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id(inherited: bool) {
         .get_or_insert_default()
         .inherited_user_message = inherited;
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(
         raw_items(&h),
@@ -2646,7 +2711,7 @@ fn normalize_removes_orphan_function_call_output() {
     }];
     let mut h = create_history_with_items(items);
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(raw_items(&h), vec![]);
 }
@@ -2663,7 +2728,7 @@ fn normalize_removes_orphan_custom_tool_call_output() {
     }];
     let mut h = create_history_with_items(items);
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(raw_items(&h), vec![]);
 }
@@ -2722,7 +2787,7 @@ fn normalize_mixed_inserts_and_removals() {
     ];
     let mut h = create_history_with_items(items);
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(
         raw_items(&h),
@@ -2803,7 +2868,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
     assert_eq!(
         raw_items(&h),
         vec![
@@ -2844,7 +2909,11 @@ async fn normalize_preserves_named_function_call_output_without_call_id() {
 
     assert_eq!(
         history
-            .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+            .for_prompt(
+                &default_input_modalities(),
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi
+            )
             .await,
         vec![item]
     );
@@ -2878,10 +2947,18 @@ async fn for_prompt_assigns_stable_id_to_synthetic_output_without_reordering_his
     ];
 
     let first = create_history_with_items(items.clone())
-        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .for_prompt(
+            &default_input_modalities(),
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::OpenAi,
+        )
         .await;
     let second = create_history_with_items(items)
-        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .for_prompt(
+            &default_input_modalities(),
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::OpenAi,
+        )
         .await;
 
     assert_eq!(
@@ -2915,7 +2992,7 @@ fn normalize_adds_missing_output_for_tool_search_call() {
     }];
     let mut h = create_history_with_items(items);
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(
         raw_items(&h),
@@ -2956,7 +3033,7 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 }
 
 #[cfg(debug_assertions)]
@@ -2978,7 +3055,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() 
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 }
 
 #[cfg(debug_assertions)]
@@ -2994,7 +3071,7 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 }
 
 #[cfg(debug_assertions)]
@@ -3009,7 +3086,7 @@ fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 }
 
 #[cfg(not(debug_assertions))]
@@ -3025,7 +3102,7 @@ fn normalize_removes_orphan_client_tool_search_output() {
     }];
     let mut h = create_history_with_items(items);
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(raw_items(&h), vec![]);
 }
@@ -3043,7 +3120,7 @@ fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 }
 
 #[test]
@@ -3058,7 +3135,7 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
     }];
     let mut h = create_history_with_items(items);
 
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 
     assert_eq!(
         raw_items(&h),
@@ -3123,7 +3200,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
         },
     ];
     let mut h = create_history_with_items(items);
-    h.normalize_history(&default_input_modalities());
+    h.normalize_history(&default_input_modalities(), codex_api::ApiDialect::OpenAi);
 }
 
 #[test]
@@ -3772,4 +3849,113 @@ fn text_only_items_count_decoded_content() {
     let estimated = estimate_response_item_model_visible_bytes(&item);
 
     assert_eq!(estimated, "Hello, \"world\"!\nこんにちは".len() as i64);
+}
+
+#[tokio::test]
+async fn hosted_history_exception_preserves_canonical_completion() {
+    let hosted: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"x-id", "call_id":"x-call", "name":"x_keyword_search",
+        "status":"completed", "input":"query"
+    }))
+    .unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(hosted.clone())]);
+    let actual = history
+        .clone()
+        .for_prompt(
+            &[InputModality::Text],
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::Grok,
+        )
+        .await;
+    assert_eq!(actual, vec![hosted.clone()]);
+    assert_eq!(
+        history.raw_items().cloned().collect::<Vec<_>>(),
+        vec![hosted]
+    );
+}
+
+#[tokio::test]
+async fn hosted_history_exception_requires_grok_dialect() {
+    let hosted: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"x-id", "call_id":"x-call", "name":"x_keyword_search",
+        "status":"completed", "input":"query"
+    }))
+    .unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(hosted)]);
+    let result = std::panic::AssertUnwindSafe(async {
+        history
+            .for_prompt(
+                &[InputModality::Text],
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::OpenAi,
+            )
+            .await
+    })
+    .catch_unwind()
+    .await;
+    if cfg!(debug_assertions) {
+        assert!(result.is_err());
+    } else {
+        let actual = result.unwrap();
+        assert_eq!(actual.len(), 2);
+        assert!(matches!(
+            &actual[1], ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "x-call"
+        ));
+    }
+}
+
+#[tokio::test]
+async fn hosted_history_exception_does_not_erase_local_pairing() {
+    let local: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"local-id", "call_id":"local-call", "name":"x_keyword_search", "input":"local input"
+    })).unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(local)]);
+    let result = std::panic::AssertUnwindSafe(async {
+        history
+            .for_prompt(
+                &[InputModality::Text],
+                &InlineAttachmentStore,
+                codex_api::ApiDialect::Grok,
+            )
+            .await
+    })
+    .catch_unwind()
+    .await;
+    if cfg!(debug_assertions) {
+        assert!(result.is_err());
+    } else {
+        let actual = result.unwrap();
+        assert_eq!(actual.len(), 2);
+        assert!(
+            matches!(&actual[1], ResponseItem::CustomToolCallOutput { call_id, .. } if call_id == "local-call")
+        );
+    }
+}
+
+#[tokio::test]
+async fn oversized_saved_hosted_history_is_not_reclassified_as_local() {
+    let hosted: ResponseItem = serde_json::from_value(serde_json::json!({
+        "type":"custom_tool_call", "id":"x-id", "call_id":"x-call", "name":"x_keyword_search",
+        "status":"completed", "input":"q".repeat(40_000)
+    }))
+    .unwrap();
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![ResponseItemEnvelope::new(hosted.clone())]);
+    let actual = history
+        .for_prompt(
+            &[InputModality::Text],
+            &InlineAttachmentStore,
+            codex_api::ApiDialect::Grok,
+        )
+        .await;
+    assert_eq!(actual, vec![hosted]);
+    assert!(
+        codex_tools::FlatToolRoutes::default()
+            .project_history(&actual)
+            .unwrap_err()
+            .contains("context limit")
+    );
 }
