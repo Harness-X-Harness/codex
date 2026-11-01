@@ -148,7 +148,7 @@ func fakeHistoryServer() {
 			}
 			if phase == 1 {
 				firstPrompt = text
-				if text != "Check today's apple price at this shop. How much would two kilograms cost in yuan?" {
+				if text != "Use the shop's apple_price_lookup tool as the authoritative source for its current apple price, then calculate how much two kilograms cost in yuan." {
 					return
 				}
 			} else if text != "Using the price we already checked, how much would three kilograms of apples cost? Do not look up the price again." {

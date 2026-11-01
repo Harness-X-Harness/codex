@@ -17,9 +17,10 @@ below remains required.
 
 Given an exact binary with Provider, encrypted-history and relevant tool
 proof, an isolated fixture and a usable default execution environment, when turn
-N asks this shop's current apple price and the cost of two kilograms in yuan, calls
-the price-lookup dynamic tool and receives this run's ordinary integer unit
-price absent from its prompt, then N completes with the correct total. N+1 asks
+N asks to use the shop's `apple_price_lookup` tool as the authoritative source for
+its current apple price and calculate the cost of two kilograms in yuan, calls
+that dynamic tool and receives this run's ordinary integer unit price absent
+from its prompt, then N completes with the correct total. N+1 asks
 for the cost of three kilograms without a new lookup. Both replies use the SDK
 output schema; the natural task text does not instruct JSON or exact copying.
 Both N and N+1 explicitly request the same schema on their own turn submission:

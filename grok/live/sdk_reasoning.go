@@ -44,7 +44,7 @@ func sdkReasoningHistory(ctx context.Context, options Options) (Evidence, error)
 		turn := protocolv2.TurnStartParams{
 			OutputSchema: &schema,
 			Input: []protocolv2.UserInput{protocolv2.NewUserInputText(protocolv2.UserInputText{
-				Text: "Check today's apple price at this shop. How much would two kilograms cost in yuan?",
+				Text: "Use the shop's apple_price_lookup tool as the authoritative source for its current apple price, then calculate how much two kilograms cost in yuan.",
 			})},
 		}
 		options.Diagnostics.Record("turn_input", map[string]any{"scenario": "reasoning", "turn": 1, "model": options.Model, "input": turn.Input, "output_schema": json.RawMessage(historyOutputSchema)})

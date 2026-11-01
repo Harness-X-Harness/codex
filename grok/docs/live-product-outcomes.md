@@ -74,10 +74,11 @@ acceptance. The formal and diagnostic scenario selections above are unchanged.
 
 ### Shop lookup and history
 
-The prompt identifies this shop, the quantity and yuan; the registered capability
-identifies the shop's price list. It does not prescribe a tool identifier, JSON
-copying or an invented current market price. The formal amount schema is supplied
-through the SDK. The price is generated only inside an accepted callback, so a
+The first prompt explicitly names `apple_price_lookup` as the authoritative
+source for this shop's current apple price, then asks for the two-kilogram total
+in yuan. The registered capability identifies the shop's price list; tool choice
+remains automatic. Neither turn asks for JSON copying or supplies a price. The
+formal amount schema is supplied through the SDK. The price is generated only inside an accepted callback, so a
 valid first answer with no accepted lookup means `history_lookup_not_observed`,
 not demonstrated wrong arithmetic or memory. After a lookup, the first total and
 continuation are compared with the actual price. Completed encrypted reasoning,
