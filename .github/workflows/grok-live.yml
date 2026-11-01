@@ -102,6 +102,19 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/live-evidence"
           go run ./cmd/grok-scenarios "${args[@]}" > "$RUNNER_TEMP/live-evidence/selected.json"
+          go run ./cmd/grok-scenarios "${args[@]}" --test-owners > "$RUNNER_TEMP/live-test-owners.json"
+          python3 -c '
+          import json, os
+          root = os.environ["RUNNER_TEMP"]
+          with open(root + "/live-evidence/selected.json") as f: names = json.load(f)
+          with open(root + "/live-test-owners.json") as f: owners = json.load(f)
+          if (not isinstance(names, list) or not names or not isinstance(owners, list)
+              or len(owners) != len(names)
+              or not all(isinstance(owner, str) and owner and "\n" not in owner for owner in owners)
+              or len(set(owners)) != len(owners)):
+              raise SystemExit("invalid catalog test owners")
+          print("\n".join(owners))
+          ' > "$RUNNER_TEMP/live-test-owners.txt"
       - name: Prepare the hosted Linux sandbox for Live
         run: bash grok/package/prepare_linux_sandbox_ci.sh
       - name: Execute the explicit Go Live selection once
@@ -124,10 +137,10 @@ jobs:
           digest="$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/live-package/verified.json"))["runtime_sha256"])')"
           selection=(-grok-live-suite "$SUITE")
           if [[ "$SUITE" == diagnostic ]]; then selection+=(-grok-live-scenario "$SCENARIO"); fi
-          mapfile -t names < <(python3 -c 'import json,os; print("\n".join(json.load(open(os.environ["RUNNER_TEMP"]+"/live-evidence/selected.json"))))')
+          mapfile -t owners < "$RUNNER_TEMP/live-test-owners.txt"
           required=()
-          for name in "${names[@]}"; do
-            required+=(--require "github.com/Harness-X-Harness/codex/grok/tests/live:TestLive/$name")
+          for owner in "${owners[@]}"; do
+            required+=(--require "$owner")
           done
           test "${#required[@]}" -gt 0
           status=0

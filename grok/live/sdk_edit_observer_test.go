@@ -87,7 +87,7 @@ func TestSDKEditObserverAllowsEquivalentExecution(t *testing.T) {
 	if observer.reconcile(turn) != nil || observer.requireTurnProof() != nil {
 		t.Fatal("equivalent execution path was rejected")
 	}
-	// This is only terminal proof; sdkStructuredEdit must still read exact bytes.
+	// This is only terminal proof; the scenario must still read exact bytes.
 	got, _ := observer.snapshot()
 	if got.FileChanges != 2 || got.Completed || got.BytesMatch {
 		t.Fatal("intermediate activity manufactured filesystem proof")
@@ -456,5 +456,33 @@ func TestSDKEditObserverEarlyDuplicateDoesNotHideFailure(t *testing.T) {
 	}
 	if err := observer.reconcile(protocolv2.Turn{ID: "first", Status: protocolv2.TurnStatusInProgress, Items: []protocolv2.ThreadItem{}}); DescribeFailure(err).Code != "turn_unsuccessful" || observer.requireTurnProof() == nil {
 		t.Fatal("early replay deduplication concealed a matching failed terminal")
+	}
+}
+
+// Timing and file diff metadata are not edit acceptance facts. Equivalent typed
+// observations must not consume a new candidate or conflict with the real result.
+func TestSDKEditObserverTypedFactsIgnoreAuxiliaryMetadata(t *testing.T) {
+	observer := editSDKObserver(t, editFixture{})
+	first := editSDKTurn("first", false)
+	if err := editSDKTerminal(observer, first); err != nil {
+		t.Fatal(err)
+	}
+	count, size := observer.count, observer.bytes
+	first.CompletedAt = protocolv2.Value(int64(123))
+	first.DurationMS = protocolv2.Value(int64(100))
+	change, _ := first.Items[1].AsFileChange()
+	change.Changes[0].Diff = "a different diagnostic representation"
+	first.Items[1] = protocolv2.NewThreadItemFileChange(change)
+	if err := editSDKTerminal(observer, first); err != nil {
+		t.Fatal(err)
+	}
+	if observer.count != count || observer.bytes != size {
+		t.Fatal("auxiliary metadata changed retained business facts")
+	}
+	if err := observer.reconcile(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := observer.requireTurnProof(); err != nil {
+		t.Fatal(err)
 	}
 }

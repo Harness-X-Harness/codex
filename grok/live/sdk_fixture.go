@@ -30,7 +30,7 @@ type sdkFixtureHandlers struct {
 
 // withSDKFixture owns one isolated SDK process; scenario observers retain
 // responsibility for turn admission, correlation and business evidence.
-func withSDKFixture(ctx context.Context, options Options, edit *editFixture, handlers sdkFixtureHandlers, run func(*codexsdk.Client, string, *Evidence) error) (Evidence, error) {
+func withSDKFixture(ctx context.Context, options Options, edit *editFixture, handlers sdkFixtureHandlers, run func(*codexsdk.Client, string, *Evidence, func() error) error) (Evidence, error) {
 	return withFixture(ctx, options, edit, func(home, cwd string, evidence *Evidence) (runErr error) {
 		options.Diagnostics.Record("sdk_starting", map[string]any{"model": options.Model, "stderr_capture": "unavailable_pinned_sdk_discards_stderr"})
 		notifications := handlers.notifications
@@ -72,7 +72,15 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			options.Diagnostics.Record("sdk_start_failed", map[string]any{"failure": DescribeFailure(sdkFailure(err))})
 			return sdkFailure(err)
 		}
-		defer func() {
+		// Explicit scenario cleanup and deferred failure cleanup share one
+		// owned join. A second call observes the same result, never closes twice.
+		closeAttempted := false
+		var shutdownErr error
+		closeSDK := func() error {
+			if closeAttempted {
+				return shutdownErr
+			}
+			closeAttempted = true
 			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			closed, closeErr := client.CloseContext(closeCtx)
@@ -86,13 +94,19 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 			if callbackErr != nil {
 				options.Diagnostics.Record("callback_failure", map[string]any{"failure": DescribeFailure(callbackErr)})
 			}
+			shutdownErr = callbackErr
+			if shutdownErr == nil && closeErr != nil {
+				shutdownErr = sdkFailure(closeErr)
+			}
+			if shutdownErr == nil && evidence.CleanupPending {
+				shutdownErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
+			}
+			return shutdownErr
+		}
+		defer func() {
+			closeErr := closeSDK()
 			if runErr == nil {
-				runErr = callbackErr
-				if runErr == nil && closeErr != nil {
-					runErr = sdkFailure(closeErr)
-				} else if runErr == nil && evidence.CleanupPending {
-					runErr = failedObservation("sdk_cleanup_incomplete", "live: SDK cleanup incomplete")
-				}
+				runErr = closeErr
 			}
 			if handlers.afterClose != nil && !evidence.CleanupPending {
 				if finalized := handlers.afterClose(cwd, evidence, runErr); finalized != nil {
@@ -108,7 +122,7 @@ func withSDKFixture(ctx context.Context, options Options, edit *editFixture, han
 		if !identity.Observed || identity.UserAgent == "" || homeErr != nil || fixtureErr != nil || !os.SameFile(actualHome, fixtureHome) {
 			return failedObservation("invalid_initialization", "live: initialization evidence unavailable")
 		}
-		return run(client, cwd, evidence)
+		return run(client, cwd, evidence, closeSDK)
 	})
 }
 

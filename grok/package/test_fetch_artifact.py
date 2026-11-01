@@ -1213,6 +1213,113 @@ class FailureCodeTests(unittest.TestCase):
 
 
 class PRWorkflowTests(unittest.TestCase):
+    def test_live_workflow_uses_catalog_owners_and_rejects_incomplete_selection(self):
+        workflow = (
+            Path(__file__).resolve().parents[2] / ".github/workflows/grok-live.yml"
+        ).read_text()
+
+        def script(name):
+            step = workflow.split("      - name: " + name + "\n", 1)[1].split(
+                "      - ", 1
+            )[0]
+            return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+        select = script("Validate the explicit Go-owned selection before backend use")
+        execute = script("Execute the explicit Go Live selection once")
+        names = '["first", "second"]'
+        owners = '["catalog/pkg:TestCustom/first", "catalog/pkg:TestCustom/second"]'
+        for case, selected, discovered, valid in (
+            ("complete", names, owners, True),
+            ("empty", "[]", "[]", False),
+            ("missing", names, '["catalog/pkg:TestCustom/first"]', False),
+            (
+                "duplicate",
+                names,
+                '["catalog/pkg:TestCustom/first", "catalog/pkg:TestCustom/first"]',
+                False,
+            ),
+            ("malformed", names, "not-json", False),
+            ("not_array", names, '"catalog/pkg:TestCustom/first"', False),
+            ("wrong_owner_type", names, '["catalog/pkg:TestCustom/first", 2]', False),
+            (
+                "newline_in_owner",
+                names,
+                '["catalog/pkg:TestCustom/first", "bad\\nowner"]',
+                False,
+            ),
+        ):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fake_go = root / "go"
+                fake_go.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import json, os, sys\n"
+                    "args = sys.argv[1:]\n"
+                    "with open(os.environ['CALLS'], 'a') as f: f.write(json.dumps(args) + '\\n')\n"
+                    "if args[:2] == ['run', './cmd/grok-scenarios']:\n"
+                    "    print(os.environ['OWNERS'] if '--test-owners' in args else os.environ['NAMES'])\n"
+                    "elif args[0] == 'test':\n"
+                    "    print('{}')\n"
+                    "elif args[:2] == ['run', './cmd/grok-test-results']:\n"
+                    "    print('{\"passed\":true}')\n"
+                    "else:\n"
+                    "    sys.exit(3)\n"
+                )
+                fake_go.chmod(0o755)
+                package = root / "live-package"
+                package.mkdir()
+                (package / "selection.json").write_text("{}")
+                (package / "verified.json").write_text(
+                    json.dumps({"source_sha": SHA, "runtime_sha256": "d" * 64})
+                )
+                env = dict(
+                    os.environ,
+                    PATH=str(root) + os.pathsep + os.environ["PATH"],
+                    RUNNER_TEMP=str(root),
+                    CALLS=str(root / "calls"),
+                    NAMES=selected,
+                    OWNERS=discovered,
+                    SUITE="full",
+                    SCENARIO="",
+                    LIVE_TIMEOUT="100m",
+                    LIVE_ENVIRONMENT="test",
+                    GITHUB_SHA=HARNESS,
+                )
+                selection = subprocess.run(
+                    ["bash", "-c", select], env=env, capture_output=True, text=True
+                )
+                self.assertEqual(selection.returncode == 0, valid, selection.stderr)
+                calls = [
+                    json.loads(line) for line in (root / "calls").read_text().splitlines()
+                ]
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[0][2:], calls[1][2:-1])
+                self.assertEqual(calls[1][-1], "--test-owners")
+                if not valid:
+                    self.assertFalse(any(call[0] == "test" for call in calls))
+                    continue
+                self.assertEqual(
+                    json.loads((root / "live-evidence/selected.json").read_text()),
+                    json.loads(names),
+                )
+                result = subprocess.run(
+                    ["bash", "-c", execute], env=env, capture_output=True, text=True
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [
+                    json.loads(line) for line in (root / "calls").read_text().splitlines()
+                ]
+                self.assertEqual(sum(call[0] == "test" for call in calls), 1)
+                requirements = calls[-1]
+                self.assertEqual(
+                    [
+                        requirements[i + 1]
+                        for i, arg in enumerate(requirements)
+                        if arg == "--require"
+                    ],
+                    json.loads(owners),
+                )
+
     def test_source_admission_is_separate_from_catalog_selection(self):
         workflow = (
             Path(__file__).resolve().parents[2] / ".github/workflows/grok-live.yml"

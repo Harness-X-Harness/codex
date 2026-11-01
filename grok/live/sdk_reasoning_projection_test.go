@@ -47,7 +47,7 @@ func TestSDKHistoryProjectionNullableEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			observer.finishTurn()
+			observer.settleTurn(2, nil)
 			wantTools := 0
 			if tc.tool {
 				wantTools = 1

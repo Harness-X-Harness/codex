@@ -66,7 +66,7 @@ func AttachedImageHistory(ctx context.Context, options Options) (Evidence, error
 	server := &sdkProductObserver{ctx: ctx, changed: make(chan struct{}, 1), diagnostics: options.Diagnostics}
 	handlers := sdkFixtureHandlers{requests: server.request, notifications: server.typedNotification, afterClose: server.afterClose,
 		retention: codexsdk.NotificationRetentionBudget{MaxCount: 8192, MaxBytes: 8 << 20}}
-	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence, closeSDK func() error) error {
 		server.client = client
 		schema, err := protocolv2.OutputSchemaFromJSON([]byte(attachedImageSchemaJSON))
 		if err != nil {

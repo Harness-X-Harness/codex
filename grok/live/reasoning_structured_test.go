@@ -31,14 +31,14 @@ func TestReasoningStructuredWholeAnswer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, summary := range []bool{false, true} {
-				probe := historyProbe{unitPrice: 7, toolResult: token}
+				probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 				reply := historyReply{identities: map[[sha256.Size]byte]historyReplyOutcome{}}
 				var items []historyItem
 				for index, text := range tc.fragments {
 					items = append(items, historyItem{Type: "agentMessage", ID: string(rune('a' + index)), Phase: "final_answer", Text: text})
 				}
 				if summary {
-					if err := probe.completedTurn(historyTurn{Status: "completed", Items: items}, &reply); err != nil {
+					if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed", Items: items}, &reply); err != nil {
 						t.Fatal(err)
 					}
 				} else {
@@ -47,7 +47,7 @@ func TestReasoningStructuredWholeAnswer(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					if err := probe.completedTurn(historyTurn{Status: "completed"}, &reply); err != nil {
+					if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed"}, &reply); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -74,9 +74,9 @@ func TestReasoningStructuredSummaryIdentity(t *testing.T) {
 		{"distinct_fragments", []historyItem{{Type: "agentMessage", ID: "a", Phase: "final_answer", Text: `{"amount":`}, {Type: "agentMessage", ID: "b", Phase: "final_answer", Text: `14}`}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			probe := historyProbe{unitPrice: 7, toolResult: token}
+			probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 			reply := historyReply{}
-			err := probe.completedTurn(historyTurn{Status: "completed", Items: tc.items}, &reply)
+			err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed", Items: tc.items}, &reply)
 			if tc.conflict {
 				if DescribeFailure(err).Code != "assistant_identity_conflict" || !reply.ambiguous {
 					t.Fatal("conflicting summary identity accepted")
@@ -89,16 +89,15 @@ func TestReasoningStructuredSummaryIdentity(t *testing.T) {
 }
 
 func TestReasoningPriceCalculationUsesCurrentQuantity(t *testing.T) {
-	for _, previous := range []string{"", "previous-turn"} {
+	for _, kilograms := range []int{2, 3} {
 		for _, amount := range []string{"7", "14", "14.0", "21", "21.0", "null", `"21"`} {
-			probe := historyProbe{unitPrice: 7, previousID: previous}
-			reply := historyReply{}
-			if err := probe.completedTurn(historyTurn{Status: "completed", Items: []historyItem{{ID: "answer", Type: "agentMessage", Phase: "final_answer", Text: `{"amount":` + amount + `}`}}}, &reply); err != nil {
-				t.Fatal(err)
-			}
-			want := previous == "" && (amount == "14" || amount == "14.0") || previous != "" && (amount == "21" || amount == "21.0")
-			if reply.recall != want {
-				t.Fatalf("previous=%q amount=%s accepted=%t", previous, amount, reply.recall)
+			observer := newSDKHistoryObserver()
+			observer.unitPrice = 7
+			observer.reply.text.WriteString(`{"amount":` + amount + `}`)
+			err := observer.assertAmount(kilograms)
+			want := kilograms == 2 && (amount == "14" || amount == "14.0") || kilograms == 3 && (amount == "21" || amount == "21.0")
+			if (err == nil) != want {
+				t.Fatalf("quantity=%d amount=%s accepted=%t", kilograms, amount, err == nil)
 			}
 		}
 	}
@@ -106,7 +105,7 @@ func TestReasoningPriceCalculationUsesCurrentQuantity(t *testing.T) {
 
 func TestReasoningFragmentsAreEvaluatedAtTheCompletedBoundary(t *testing.T) {
 	for _, phase := range []string{"", "final_answer"} {
-		probe := historyProbe{unitPrice: 7}
+		probe := sdkHistoryObserver{unitPrice: 7}
 		reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 		for i := 0; i < 1024; i++ {
 			if err := probe.completedItem(historyItem{Type: "agentMessage", ID: strconv.Itoa(i), Phase: phase, Text: strings.Repeat("x", 512)}, &reply); err != nil {
@@ -119,7 +118,7 @@ func TestReasoningFragmentsAreEvaluatedAtTheCompletedBoundary(t *testing.T) {
 		if err := probe.completedItem(historyItem{Type: "agentMessage", ID: "answer", Phase: "final_answer", Text: `{"amount":14}`}, &reply); err != nil {
 			t.Fatal(err)
 		}
-		if err := probe.completedTurn(historyTurn{Status: "completed"}, &reply); err != nil {
+		if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed"}, &reply); err != nil {
 			t.Fatal(err)
 		}
 		if !reply.evaluated || reply.recall != (phase == "") {

@@ -3,7 +3,6 @@ package live
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/ronhuafeng/llm-go/codexsdk/protocolv2"
@@ -70,31 +69,6 @@ func imageJudgeAnswer(reply string) (bool, bool, error) {
 		return false, false, failedObservation("image_judge_response_invalid", "live: image judge did not return both boolean judgments")
 	}
 	return *value.FirstHasOneDog, *value.SecondHasTwoDogs, nil
-}
-
-// Diagnostics retain every public image attempt, not just the final image
-// credited by the oracle. Capture never changes acceptance or reads saved paths.
-func recordImageTurn(diagnostics *Diagnostics, phase string, turn productTurn) {
-	for index, item := range turn.Items {
-		image, ok := item.AsImageGeneration()
-		if !ok {
-			continue
-		}
-		fields := map[string]any{"phase": phase, "item": index, "status": image.Status,
-			"failed": image.Failure != nil && image.Failure.Value != nil}
-		if image.Result != "" {
-			data, err := imagePayload(image.Result)
-			if err != nil {
-				fields["capture"] = "invalid_png"
-			} else {
-				fields["artifact"] = diagnostics.Artifact(fmt.Sprintf("%s-%d.png", phase, index), data)
-				fields["sha256"] = editDigest(data)
-			}
-		} else {
-			fields["capture"] = "no_image_payload"
-		}
-		diagnostics.Record("image_attempt", fields)
-	}
 }
 
 func nullJSON(value json.RawMessage) bool {

@@ -3,8 +3,8 @@
 `grok-live` makes the existing `grok/live` scenario functions independently
 invocable. Build from `grok/` with `go build -o grok-live ./cmd/grok-live`.
 `grok-scenarios --family live --suite diagnostic` lists the primary/pinned,
-reasoning, edit, image, shipped profile/child and hosted-search catalog. Full has
-17 formal cases. Reasoning history leaves effort at the model default.
+reasoning, edit, image, shipped profile/child and hosted-search catalog.
+Reasoning history leaves effort at the model default.
 The command adds no product oracle.
 
 One invocation selects one scenario. Provide an absolute source executable,

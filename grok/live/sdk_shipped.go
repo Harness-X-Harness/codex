@@ -11,7 +11,7 @@ import (
 )
 
 func sdkShippedCatalog(ctx context.Context, options Options) (Evidence, error) {
-	return withSDKFixture(ctx, options, nil, sdkFixtureHandlers{}, func(client *codexsdk.Client, _ string, evidence *Evidence) error {
+	return withSDKFixture(ctx, options, nil, sdkFixtureHandlers{}, func(client *codexsdk.Client, _ string, evidence *Evidence, closeSDK func() error) error {
 		return requireSDKShippedCatalog(ctx, client, evidence, options.Diagnostics)
 	})
 }
@@ -26,7 +26,7 @@ func sdkShippedSession(ctx context.Context, options Options, observe func(*sdkPr
 			EnableRawResponseItemExtension: true, Handler: transport.rawNotification,
 		},
 	}
-	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+	return withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence, closeSDK func() error) error {
 		transport.client = client
 		if err := requireSDKShippedCatalog(ctx, client, evidence, options.Diagnostics); err != nil {
 			return err

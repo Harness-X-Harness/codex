@@ -212,23 +212,3 @@ func (stream *childStream) proof(child, parent productThread, credited, current 
 	// callbacks. Missing fragments remain pending until the original deadline.
 	return childPending
 }
-
-func (stream *childStream) recordDiagnostic(message frame) {
-	if message.Method != "rawResponseItem/completed" {
-		return
-	}
-	var event childRawEvent
-	if json.Unmarshal(message.Params, &event) != nil {
-		return
-	}
-	if event.Item.Type != "agent_message" && event.Item.Type != "message" {
-		return
-	}
-	var text []string
-	for _, part := range event.Item.Content {
-		if part.Type == "input_text" || part.Type == "output_text" {
-			text = append(text, part.Text)
-		}
-	}
-	stream.diagnostics.Record("child_visible_message", map[string]any{"thread_id": event.ThreadID, "turn_id": event.TurnID, "item_id": event.Item.ID, "type": event.Item.Type, "role": event.Item.Role, "phase": event.Item.Phase, "author": event.Item.Author, "recipient": event.Item.Recipient, "text": text})
-}

@@ -39,10 +39,10 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 				name = "summary"
 			}
 			t.Run(tc.name+"/"+name, func(t *testing.T) {
-				probe := historyProbe{unitPrice: 7, toolResult: token}
+				probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 				reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 				if summary {
-					if err := probe.completedTurn(historyTurn{Status: "completed", Items: tc.items}, &reply); err != nil {
+					if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed", Items: tc.items}, &reply); err != nil {
 						t.Fatal(err)
 					}
 				} else {
@@ -51,7 +51,7 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					if err := probe.completedTurn(historyTurn{Status: "completed"}, &reply); err != nil {
+					if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed"}, &reply); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -67,12 +67,12 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 		{item("summary", "commentary", token)},
 		{item("summary", "", "wrong")},
 	} {
-		probe := historyProbe{unitPrice: 7, toolResult: token}
+		probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 		reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 		if err := probe.completedItem(item("earlier", "final_answer", token), &reply); err != nil {
 			t.Fatal(err)
 		}
-		if err := probe.completedTurn(historyTurn{Status: "completed", Items: summary}, &reply); err != nil {
+		if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed", Items: summary}, &reply); err != nil {
 			t.Fatal(err)
 		}
 		if !reply.authoritative || reply.recall {
@@ -83,7 +83,7 @@ func TestHistoryReplyPhaseSelection(t *testing.T) {
 
 func TestHistoryReplyPhaseIdentityConflict(t *testing.T) {
 	const token = `{"unit_price_yuan":7}`
-	probe := historyProbe{unitPrice: 7, toolResult: token}
+	probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 	reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 	for _, item := range []historyItem{
 		{Type: "agentMessage", ID: "a", Phase: "final_answer", Text: historyTestJSON(token)},
@@ -97,7 +97,7 @@ func TestHistoryReplyPhaseIdentityConflict(t *testing.T) {
 	if !reply.ambiguous {
 		t.Fatal("same-ID explicit-final/legacy conflict was treated as replay")
 	}
-	if err := probe.completedTurn(historyTurn{Status: "completed", Items: []historyItem{
+	if err := completeHistoryTestTurn(&probe, historyTurn{Status: "completed", Items: []historyItem{
 		{Type: "agentMessage", ID: "authoritative", Phase: "final_answer", Text: historyTestJSON(token)},
 	}}, &reply); err != nil {
 		t.Fatal(err)
@@ -115,12 +115,12 @@ func TestHistoryEmptyReplyIdentity(t *testing.T) {
 			name = "summary"
 		}
 		t.Run("missing_identity/"+name, func(t *testing.T) {
-			probe := historyProbe{unitPrice: 7, toolResult: token}
+			probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 			reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 			item := historyItem{Type: "agentMessage", Phase: "final_answer"}
 			var err error
 			if summary {
-				err = probe.completedTurn(historyTurn{Status: "completed", Items: []historyItem{item}}, &reply)
+				err = completeHistoryTestTurn(&probe, historyTurn{Status: "completed", Items: []historyItem{item}}, &reply)
 			} else {
 				err = probe.completedItem(item, &reply)
 			}
@@ -131,7 +131,7 @@ func TestHistoryEmptyReplyIdentity(t *testing.T) {
 	}
 	for _, kind := range []string{"content", "phase"} {
 		t.Run("same_id_"+kind+"_conflict", func(t *testing.T) {
-			probe := historyProbe{unitPrice: 7, toolResult: token}
+			probe := sdkHistoryObserver{unitPrice: 7, toolResult: token}
 			reply := historyReply{identities: make(map[[sha256.Size]byte]historyReplyOutcome)}
 			empty := historyItem{Type: "agentMessage", ID: "empty", Phase: "final_answer"}
 			changed := empty
@@ -169,4 +169,10 @@ func historyTestJSON(token string, quantities ...int) string {
 	}
 	data, _ := json.Marshal(map[string]string{"amount": token})
 	return string(data)
+}
+
+func completeHistoryTestTurn(probe *sdkHistoryObserver, turn historyTurn, reply *historyReply) error {
+	err := probe.completedTurn(turn, reply)
+	reply.recall = historyAmountMatches(reply, probe.unitPrice, 2)
+	return err
 }

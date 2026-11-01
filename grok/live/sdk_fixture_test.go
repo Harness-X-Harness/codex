@@ -52,7 +52,7 @@ func TestSDKFixtureRetainsInputsUntilPendingCallbackJoins(t *testing.T) {
 	var owned *codexsdk.Client
 	var home string
 	businessErr := errors.New("controlled business rejection")
-	got, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence) error {
+	got, err := withSDKFixture(ctx, options, nil, handlers, func(client *codexsdk.Client, cwd string, evidence *Evidence, closeSDK func() error) error {
 		owned, home = client, filepath.Dir(cwd)
 		thread, err := client.Threads().Start(ctx, protocolv2.ThreadStartParams{Model: protocolv2.Value(options.Model)})
 		if err != nil {
