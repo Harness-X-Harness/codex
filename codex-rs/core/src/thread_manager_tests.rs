@@ -3020,6 +3020,239 @@ async fn injected_models_manager_controls_refresh_policy() {
     assert!(!config.codex_home.join("models_cache.json").exists());
 }
 
+fn thread_manager_with_catalog_config(config: &Config) -> ThreadManager {
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    ThreadManager::new(
+        config,
+        Arc::clone(&auth_manager),
+        build_models_manager(config, auth_manager),
+        crate::CodexAppsToolsCache::default(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        passthrough_image_store(),
+        thread_store_from_config(config, /*state_db*/ None),
+        /*agent_graph_store*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    )
+}
+
+#[tokio::test]
+async fn thread_models_manager_uses_its_provider_and_explicit_catalog() {
+    let home = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = home.path().abs();
+    config.cwd = home.path().abs();
+    let mut stock_model = codex_models_manager::bundled_models_response()
+        .expect("bundled models")
+        .models
+        .remove(0);
+    stock_model.slug = "stock-catalog-model".to_string();
+    stock_model.visibility = codex_protocol::openai_models::ModelVisibility::List;
+    stock_model.supported_in_api = true;
+    stock_model.context_window = Some(32_000);
+    stock_model.max_context_window = Some(32_000);
+    stock_model.auto_compact_token_limit = Some(28_000);
+    config.model = Some(stock_model.slug.clone());
+    config.model_catalog = Some(ModelsResponse {
+        models: vec![stock_model.clone()],
+    });
+    config
+        .features
+        .enable(Feature::ApiKeyModelDiscovery)
+        .expect("enable discovery");
+    let manager = thread_manager_with_catalog_config(&config);
+    // Static and injected catalogs that ignore discovery keep their ownership
+    // even when the configuration enables API-key model discovery.
+    assert!(Arc::ptr_eq(
+        &manager.get_models_manager(),
+        &manager.models_manager_for_config(&config),
+    ));
+
+    let mut grok_config = config.clone();
+    grok_config.model_provider_id = "grok".to_string();
+    grok_config.model_provider.name = "Grok".to_string();
+    grok_config.model_provider.wire_api = codex_model_provider_info::WireApi::GrokResponses;
+    grok_config.model_provider.requires_openai_auth = false;
+    grok_config.model_provider.supports_websockets = false;
+    let mut grok_model = stock_model.clone();
+    grok_model.slug = "grok-catalog-model".to_string();
+    grok_model.context_window = Some(500_000);
+    grok_model.max_context_window = Some(500_000);
+    grok_model.auto_compact_token_limit = Some(400_000);
+    grok_config.model = Some(grok_model.slug.clone());
+    grok_config.model_catalog = Some(ModelsResponse {
+        models: vec![grok_model.clone()],
+    });
+
+    let stock = manager
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start stock thread");
+    let grok = manager
+        .start_thread(StartThreadOptions {
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(grok_config.clone())
+        })
+        .await
+        .expect("start Grok thread");
+
+    for (thread, expected, thread_config) in [
+        (&stock.thread, &stock_model, &config),
+        (&grok.thread, &grok_model, &grok_config),
+    ] {
+        let models_manager = &thread.session.services.models_manager;
+        let catalog = models_manager
+            .raw_model_catalog(RefreshStrategy::Offline, config.http_client_factory())
+            .await;
+        assert_eq!(catalog.models, vec![expected.clone()]);
+        let info = models_manager
+            .get_model_info(&expected.slug, &thread_config.to_models_manager_config())
+            .await;
+        assert_eq!(info.context_window, expected.context_window);
+        assert_eq!(
+            models_manager
+                .get_default_model(
+                    &None,
+                    /*allow_provider_model_fallback*/ false,
+                    RefreshStrategy::Offline,
+                    config.http_client_factory(),
+                )
+                .await,
+            expected.slug
+        );
+    }
+    assert!(!Arc::ptr_eq(
+        &stock.thread.session.services.models_manager,
+        &grok.thread.session.services.models_manager,
+    ));
+    stock
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown stock");
+    grok.thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown Grok");
+    assert!(!config.codex_home.join("models_cache.json").exists());
+}
+
+#[tokio::test]
+async fn thread_models_manager_reuses_only_the_same_route_catalog_and_auth_scope() {
+    let home = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = home.path().abs();
+    config.model_catalog = None;
+    let manager = thread_manager_with_catalog_config(&config);
+    let auth_manager = manager.auth_manager();
+    let original = manager.get_models_manager();
+    assert!(Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&config, &auth_manager),
+    ));
+
+    let mut different_catalog = config.clone();
+    let mut explicit_catalog =
+        codex_models_manager::bundled_models_response().expect("bundled models");
+    explicit_catalog.models.truncate(1);
+    explicit_catalog.models[0].slug = "per-thread-catalog".to_string();
+    different_catalog.model_catalog = Some(explicit_catalog.clone());
+    let explicit_manager = manager
+        .state
+        .models_manager_for_config(&different_catalog, &auth_manager);
+    assert!(!Arc::ptr_eq(&original, &explicit_manager));
+    assert_eq!(
+        explicit_manager
+            .raw_model_catalog(RefreshStrategy::Offline, config.http_client_factory())
+            .await,
+        explicit_catalog
+    );
+
+    let mut different_endpoint = config.clone();
+    different_endpoint.model_provider.base_url = Some("http://127.0.0.1:1/v1".to_string());
+    assert!(!Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&different_endpoint, &auth_manager),
+    ));
+    let different_auth = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("other"));
+    assert!(!Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&config, &different_auth),
+    ));
+    let mut different_discovery = config.clone();
+    different_discovery
+        .features
+        .set_enabled(
+            Feature::ApiKeyModelDiscovery,
+            !config.features.enabled(Feature::ApiKeyModelDiscovery),
+        )
+        .expect("change discovery policy");
+    assert!(!Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&different_discovery, &auth_manager),
+    ));
+
+    // The process-facing catalog can change this policy after startup. Reuse
+    // must inspect the manager's current value, not its original config value.
+    original.set_api_key_model_discovery_enabled(
+        different_discovery
+            .features
+            .enabled(Feature::ApiKeyModelDiscovery),
+    );
+    assert!(Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&different_discovery, &auth_manager),
+    ));
+    assert!(!Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&config, &auth_manager),
+    ));
+    original.set_api_key_model_discovery_enabled(
+        config.features.enabled(Feature::ApiKeyModelDiscovery),
+    );
+
+    let mut grok_config = config.clone();
+    grok_config.model_provider.wire_api = codex_model_provider_info::WireApi::GrokResponses;
+    grok_config.model_provider.requires_openai_auth = false;
+    grok_config.model_provider.supports_websockets = false;
+    let grok = manager
+        .state
+        .models_manager_for_config(&grok_config, &auth_manager);
+    let catalog = grok
+        .raw_model_catalog(RefreshStrategy::Offline, config.http_client_factory())
+        .await;
+    assert_eq!(catalog.models.len(), 1);
+    assert_eq!(catalog.models[0].slug, "grok-4.6");
+    assert_eq!(catalog.models[0].context_window, Some(500_000));
+    assert!(!config.codex_home.join("models_cache.json").exists());
+    assert!(Arc::ptr_eq(
+        &original,
+        &manager
+            .state
+            .models_manager_for_config(&config, &auth_manager),
+    ));
+}
+
 #[test]
 fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     let committed_history =

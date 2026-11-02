@@ -51,3 +51,15 @@ fn provider_error_schema_matches_wire_fields() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn provider_mismatch_explains_history_binding_not_global_switching() {
+    let error = ModelProviderError::ModelProviderMismatch {
+        model_provider: "saved-provider".into(),
+        current_model_provider: "requested-provider".into(),
+    };
+    assert_eq!(
+        error.to_string(),
+        "This chat uses saved-provider and cannot be resumed with requested-provider. Resume with saved-provider, or start a new chat with requested-provider."
+    );
+}

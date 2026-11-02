@@ -649,6 +649,13 @@ jobs:
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail --success-output=immediate -E 'test(suite::v2::compaction::)'
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::model_provider_enforcement::) | test(suite::v2::config_model_provider_requirements::) | test(suite::v2::model_list_requirements_tests::)'
           just test -p codex-app-server --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(models_refresh_worker::tests::) | test(config_manager::)'
+      - name: Test unified runtime provider isolation
+        working-directory: codex-rs
+        run: |
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::unified_provider_runtime::)'
+          just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(thread_models_manager_) | test(injected_models_manager_controls_refresh_policy)'
+          just test -p codex-tui --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::provider_defaults::)'
+          just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(model_provider_error::tests::)'
       - name: Test internal model consumers and child ownership
         working-directory: codex-rs
         run: |

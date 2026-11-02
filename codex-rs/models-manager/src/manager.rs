@@ -139,9 +139,14 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         None
     }
 
-    /// Supply startup API-key discovery policy; live changes require a new session.
-    /// Static catalogs ignore this setting.
+    /// Supply API-key discovery policy. Managers sharing this policy observe live
+    /// updates; static catalogs ignore the setting.
     fn set_api_key_model_discovery_enabled(&self, _enabled: bool) {}
+
+    /// Effective discovery policy, or `None` when this manager ignores the setting.
+    fn api_key_model_discovery_enabled(&self) -> Option<bool> {
+        None
+    }
 
     /// List all available models, refreshing according to the specified strategy.
     ///
@@ -476,6 +481,10 @@ impl ModelsManager for OpenAiModelsManager {
     fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
         self.api_key_model_discovery_enabled
             .store(enabled, Ordering::SeqCst);
+    }
+
+    fn api_key_model_discovery_enabled(&self) -> Option<bool> {
+        Some(self.api_key_model_discovery_enabled.load(Ordering::SeqCst))
     }
 
     fn refresh_after_auth_change(

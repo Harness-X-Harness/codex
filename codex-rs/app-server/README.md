@@ -309,16 +309,22 @@ be loaded. This covers turn start/steer, review, compaction, manual queue start,
 updates. Realtime connections use separate routing configuration and are not checked here.
 Interrupt, realtime stop, and goal pause/clear remain available.
 
-Resume and input RPCs also reject a thread whose saved provider differs from the current
-configured provider, including profile and app-server launch overrides. The JSON-RPC error's
-`data` contains `ModelProviderError`: `modelProviderMismatch` has `modelProvider` and
-`currentModelProvider`, `modelProviderNotConfigured` identifies a missing provider, and
+A client may select a configured provider and model on `thread/start`. A thread retains its
+provider across turns and resume, independently of the process's default provider. Cold resume
+requires the saved provider to remain configured and rejects an explicit override to a different
+provider. Rejoining a running thread warns about and ignores conflicting overrides rather than
+changing its route. Starting a new thread can select a different provider.
+
+A running thread uses its retained provider configuration; deleting an ordinary provider
+configuration or changing or breaking the ordinary default does not revoke that route. Managed
+requirements still apply, including when they change or cannot be loaded. Cold resume must
+resolve the saved provider again and satisfy those requirements.
+
+The JSON-RPC error's `data` contains `ModelProviderError`: `modelProviderMismatch` identifies
+a conflicting provider, `modelProviderNotConfigured` identifies a missing provider, and
 `modelProviderPolicyConflict` identifies a mandatory-policy conflict. Clients can still use
-`thread/read` to display history and disable the composer with the error's explanation.
-Changing the resume request's provider does not bypass validation of the saved provider;
-switch the configured provider back to continue the chat. Input is also rejected when the
-current provider configuration cannot be loaded. Older clients retain their normal error
-fallback for unrecognized structured error variants.
+`thread/read` to display history and disable the composer with the error's explanation. Older
+clients retain their normal error fallback for unrecognized structured error variants.
 
 ## Managed network requirements
 

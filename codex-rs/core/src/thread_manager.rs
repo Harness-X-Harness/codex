@@ -80,6 +80,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
@@ -485,6 +486,7 @@ pub(crate) struct ThreadManagerState {
     agent_control_factory: Option<AgentControlFactory>,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    models_manager_selection: ModelsManagerSelection,
     git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
@@ -504,6 +506,30 @@ pub(crate) struct ThreadManagerState {
     analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
+}
+
+/// Configuration that owns the shared startup catalog. A thread with a different
+/// route or explicit catalog must not inherit that catalog's defaults or capabilities.
+struct ModelsManagerSelection {
+    provider: ModelProviderInfo,
+    catalog: Option<ModelsResponse>,
+    codex_home: PathBuf,
+}
+
+impl ModelsManagerSelection {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            provider: config.model_provider.clone(),
+            catalog: config.model_catalog.clone(),
+            codex_home: config.codex_home.to_path_buf(),
+        }
+    }
+
+    fn matches_config(&self, config: &Config) -> bool {
+        self.provider == config.model_provider
+            && self.catalog == config.model_catalog
+            && self.codex_home == config.codex_home.as_path()
+    }
 }
 
 pub fn build_models_manager(
@@ -656,6 +682,7 @@ impl ThreadManager {
                 thread_id_generator: default_thread_id_generator(),
                 agent_control_factory: None,
                 models_manager,
+                models_manager_selection: ModelsManagerSelection::from_config(config),
                 git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
@@ -855,6 +882,11 @@ impl ThreadManager {
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 agent_control_factory: None,
+                models_manager_selection: ModelsManagerSelection {
+                    provider: provider.clone(),
+                    catalog: None,
+                    codex_home: codex_home.clone(),
+                },
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
                     .models_manager(codex_home, /*config_model_catalog*/ None),
                 git_root_discovery: Arc::default(),
@@ -998,6 +1030,13 @@ impl ThreadManager {
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
         self.state.models_manager.clone()
+    }
+
+    /// Select model metadata for a materialized thread config, rather than the
+    /// process default. Loaded threads should use their retained models manager.
+    pub fn models_manager_for_config(&self, config: &Config) -> SharedModelsManager {
+        self.state
+            .models_manager_for_config(config, &self.state.auth_manager)
     }
 
     pub async fn list_models(
@@ -1810,6 +1849,26 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    fn models_manager_for_config(
+        &self,
+        config: &Config,
+        auth_manager: &Arc<AuthManager>,
+    ) -> SharedModelsManager {
+        if self.models_manager_selection.matches_config(config)
+            && Arc::ptr_eq(&self.auth_manager, auth_manager)
+            && self
+                .models_manager
+                .api_key_model_discovery_enabled()
+                .is_none_or(|enabled| {
+                    enabled == config.features.enabled(Feature::ApiKeyModelDiscovery)
+                })
+        {
+            Arc::clone(&self.models_manager)
+        } else {
+            build_models_manager(config, Arc::clone(auth_manager))
+        }
+    }
+
     pub(crate) fn shared_thread_instructions_provider(
         &self,
         root_thread_id: ThreadId,
@@ -2539,6 +2598,10 @@ impl ThreadManagerState {
         } else {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
+        let models_manager = self.models_manager_for_config(&config, &auth_manager);
+        let models_manager = models_manager
+            .for_originator(&startup_context.originator)
+            .unwrap_or(models_manager);
         let spawn_result = Session::spawn(SessionSpawnArgs {
             attached_thread,
             startup,
@@ -2548,10 +2611,7 @@ impl ThreadManagerState {
             instructions: startup_context.instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: self
-                .models_manager
-                .for_originator(&startup_context.originator)
-                .unwrap_or_else(|| Arc::clone(&self.models_manager)),
+            models_manager,
             git_root_discovery: Arc::clone(&self.git_root_discovery),
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
