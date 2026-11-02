@@ -531,7 +531,7 @@ fn encrypted_reply() -> Vec<StreamingSseChunk> {
             added("seed"),
             text_delta("GROK_SEED"),
             done("seed", "GROK_SEED"),
-            json!({"type": "response.output_item.added", "output_index": 1, "item": reasoning.clone()}),
+            json!({"type": "response.output_item.added", "output_index": 1, "item": reasoning}),
             json!({"type": "response.output_item.done", "output_index": 1, "item": reasoning}),
             responses::ev_completed("seed"),
         ],
