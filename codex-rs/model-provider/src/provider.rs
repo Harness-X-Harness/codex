@@ -22,6 +22,7 @@ use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
@@ -421,7 +422,15 @@ pub fn resolve_api_provider(
     info: &ModelProviderInfo,
     auth: Option<&CodexAuth>,
 ) -> codex_protocol::error::Result<Provider> {
-    let mut provider = info.to_api_provider(auth.map(CodexAuth::auth_mode))?;
+    resolve_api_provider_with_auth_mode(info, auth, auth.map(CodexAuth::auth_mode))
+}
+
+fn resolve_api_provider_with_auth_mode(
+    info: &ModelProviderInfo,
+    auth: Option<&CodexAuth>,
+    auth_mode: Option<AuthMode>,
+) -> codex_protocol::error::Result<Provider> {
+    let mut provider = info.to_api_provider(auth_mode)?;
     if info.base_url.is_none() && uses_fedramp_api_key(auth, info)? {
         provider.base_url = FEDRAMP_API_BASE_URL.to_string();
     }
@@ -472,6 +481,10 @@ pub(crate) fn create_model_provider_with_runtime(
 struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    // Legacy OpenAI default-endpoint selection can depend on the ambient login
+    // even when an explicit provider key owns authentication. Never expose this
+    // routing-only context to auth, recovery, attestation, or model catalogs.
+    default_endpoint_auth_manager: Option<Arc<AuthManager>>,
     // Construct eagerly; report setup failures when auth is requested because the factory is infallible.
     gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
@@ -507,7 +520,18 @@ impl ConfiguredModelProvider {
                 .gateway_auth(config, &manager.runtime_config())
                 .map_err(|_| "failed to create provider OAuth HTTP client".to_string())
         });
-        let auth_manager = auth_manager_for_provider(auth_manager, &info);
+        let default_endpoint_auth_manager = auth_manager.clone().filter(|_| {
+            info.requires_openai_auth
+                && info.wire_api == WireApi::Responses
+                && info.base_url.is_none()
+                && (info.env_key.is_some() || info.experimental_bearer_token.is_some())
+                && !info.has_command_auth()
+        });
+        // An explicit provider credential (or unauthenticated provider) must not
+        // expose the unrelated OpenAI login to request recovery, attestation, or
+        // catalog filtering. Command auth still owns its independent manager.
+        let auth_manager = auth_manager_for_provider(auth_manager, &info)
+            .filter(|_| provider_uses_first_party_auth_path(&info) || info.has_command_auth());
         let runtime_for_destination = |destination: Option<&str>| {
             runtime_auth.clone().filter(|_| {
                 destination.is_none_or(|url| {
@@ -527,6 +551,7 @@ impl ConfiguredModelProvider {
         Self {
             info,
             auth_manager,
+            default_endpoint_auth_manager,
             gateway_auth_manager,
             runtime_auth: inference_runtime_auth,
             catalog_runtime_auth,
@@ -692,6 +717,24 @@ impl ModelProvider for ConfiguredModelProvider {
         })
     }
 
+    fn api_provider_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<Provider> {
+        // Read only the cached routing context. An independent provider key must
+        // not trigger an unrelated login's proactive refresh or recovery.
+        let default_endpoint_auth_mode = self
+            .default_endpoint_auth_manager
+            .as_ref()
+            .and_then(|manager| manager.auth_mode());
+        resolve_api_provider_with_auth_mode(
+            &self.info,
+            auth,
+            auth.map(CodexAuth::auth_mode)
+                .or(default_endpoint_auth_mode),
+        )
+    }
+
     fn api_provider_and_auth(
         &self,
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<(Provider, SharedAuthProvider)>>
@@ -792,6 +835,10 @@ impl ModelProvider for ConfiguredModelProvider {
         self.create_models_manager(config_model_catalog, ModelsCacheConfig::Custom(cache))
     }
 }
+
+#[cfg(test)]
+#[path = "provider_auth_isolation_tests.rs"]
+mod auth_isolation_tests;
 
 #[cfg(test)]
 mod tests {

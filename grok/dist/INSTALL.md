@@ -55,6 +55,60 @@ it in command arguments or logs. The raw `bin/grok-bin` entrypoint is also used
 by explicitly isolated app-server harnesses and does not apply the shell
 launcher's Home checks.
 
+## One App Server with OpenAI and Grok threads
+
+The packaged runtime is this fork's Codex binary with both OpenAI and Grok
+wire-dialect support; it is not an official stock OpenAI binary. An App Server
+client can use one runtime process and one Home configuration for threads bound
+to either configured provider. This does not require or replace the existing
+Grok-only `config.toml.example`.
+
+For example, in a **dedicated** Home, a unified configuration can use stock
+OpenAI as its default and define Grok alongside it:
+
+```toml
+model_provider = "openai"
+
+[model_providers.grok]
+name = "Grok"
+base_url = "https://grok.trustedtunnel.app/v1"
+env_key = "GROK_API_KEY"
+wire_api = "grok_responses"
+requires_openai_auth = false
+supports_websockets = false
+```
+
+Use the existing OpenAI authentication mechanism and provide `GROK_API_KEY`
+through an approved execution environment. Neither credential belongs in this
+file, command arguments, or logs. Do not copy the Grok-only example's top-level
+`model_catalog_json` or Grok-specific `[memories]` model overrides into this
+unified example: those are global settings, not per-provider settings. The
+runtime's Grok compatibility catalog supplies `grok-4.6` without a catalog
+file. This is distinct from the bundled Grok-only profile and its `models.json`
+(which lists `grok-4.7` and `grok-4.6`).
+
+After starting `bin/grok app-server` with this Home and initializing the App
+Server, a client selects both provider and model on each `thread/start`, for
+example with these `params` objects:
+
+```json
+{"modelProvider":"openai","model":"<an available OpenAI model>"}
+```
+
+```json
+{"modelProvider":"grok","model":"grok-4.6"}
+```
+
+Use an available OpenAI model from the default provider's `model/list` response
+in place of the placeholder. `model/list` remains a view of the configured
+default provider, not a merged cross-provider catalog: when OpenAI is the
+default it does not advertise Grok. A client must therefore know the configured
+Grok provider ID and supported model, rather than infer them from `model/list`.
+A thread retains its provider for subsequent turns and resume; select a different
+provider by starting another thread, not by switching a turn. This App Server
+contract does not imply that every CLI, TUI, or SDK picker can select both
+providers in one session.
+
 For credential-free startup diagnostics, use the stock one-shot entrypoint:
 
 ```sh

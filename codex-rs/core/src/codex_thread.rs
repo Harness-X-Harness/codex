@@ -1100,6 +1100,11 @@ impl CodexThread {
         self.session.get_config().await
     }
 
+    /// Model metadata bound to this thread's provider, auth scope, and originator.
+    pub fn models_manager(&self) -> codex_models_manager::manager::SharedModelsManager {
+        Arc::clone(&self.session.services.models_manager)
+    }
+
     /// List the thread's current hook declarations, including its selected, ready environments.
     pub fn list_hooks(&self) -> codex_hooks::HookListOutcome {
         let environments = self.session.services.turn_environments.snapshot_now();

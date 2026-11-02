@@ -16,9 +16,12 @@ exact release-bundled Grok catalog
   -> model picker
 ```
 
-One App Server process serves one Provider Profile. Using another Provider
-means starting another process. Remote Provider catalog observations are separate evidence. They are not read
-or merged into the Grok runtime catalog.
+`model/list` reflects the configured default Provider Profile, not every
+Provider available to threads in the process. An App Server client can explicitly
+select a configured Provider and model for each thread in the same process;
+that thread route is distinct from this default-catalog view. Remote Provider
+catalog observations are separate evidence. They are not read or merged into
+the Grok runtime catalog.
 
 ## Acceptance
 
@@ -46,7 +49,7 @@ or merged into the Grok runtime catalog.
 
 ## Material failure boundaries
 
-- Catalogs from different Providers must not merge in one process.
+- Catalogs from different Providers must not merge in the default `model/list` view.
 - Remote `/models` must not become a runtime catalog authority.
 
 ## What this does not prove

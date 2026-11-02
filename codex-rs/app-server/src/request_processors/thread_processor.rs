@@ -2600,7 +2600,7 @@ impl ThreadRequestProcessor {
         let (_, thread) = self.load_thread(&thread_id).await?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
         self.config_manager
-            .check_thread_model_provider_for_input(thread.config().await.as_ref())
+            .check_thread_model_provider(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
         self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
@@ -4772,7 +4772,7 @@ impl ThreadRequestProcessor {
                 );
             }
             self.config_manager
-                .check_thread_model_provider_for_input(existing_thread.config().await.as_ref())
+                .check_thread_model_provider(existing_thread.config().await.as_ref())
                 .await
                 .map_err(|err| config_load_error(&err))?;
             let redact_resume_payloads =
@@ -5407,9 +5407,8 @@ impl ThreadRequestProcessor {
                     .items()
                     .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
                 && let Some(model) = options.config.model.as_deref()
-                && self
-                    .thread_manager
-                    .get_models_manager()
+                && parent
+                    .models_manager()
                     .get_model_info(model, &options.config.to_models_manager_config())
                     .await
                     .use_responses_lite

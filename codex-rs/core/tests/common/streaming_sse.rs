@@ -17,10 +17,15 @@ pub struct StreamingSseChunk {
     pub body: String,
 }
 
+struct StreamingSseRequest {
+    headers: String,
+    body: Vec<u8>,
+}
+
 /// Minimal streaming SSE server for tests that need gated per-chunk delivery.
 pub struct StreamingSseServer {
     uri: String,
-    requests: Arc<TokioMutex<Vec<Vec<u8>>>>,
+    requests: Arc<TokioMutex<Vec<StreamingSseRequest>>>,
     request_notify: Arc<Notify>,
     shutdown: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
@@ -32,7 +37,22 @@ impl StreamingSseServer {
     }
 
     pub async fn requests(&self) -> Vec<Vec<u8>> {
-        self.requests.lock().await.clone()
+        self.requests
+            .lock()
+            .await
+            .iter()
+            .map(|request| request.body.clone())
+            .collect()
+    }
+
+    /// Headers (including the request line) for the same POSTs returned by `requests`.
+    pub async fn request_headers(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .await
+            .iter()
+            .map(|request| request.headers.clone())
+            .collect()
     }
 
     pub async fn wait_for_request_count(&self, count: usize) {
@@ -133,7 +153,7 @@ pub async fn start_streaming_sse_server(
                                     return;
                                 }
                             };
-                            requests.lock().await.push(body);
+                            requests.lock().await.push(StreamingSseRequest { headers: request, body });
                             request_notify.notify_one();
                             let Some((chunks, completion)) = take_next_stream(&state).await else {
                                 let _ = write_http_response(&mut stream, /*status*/ 500, "no responses queued", "text/plain").await;
