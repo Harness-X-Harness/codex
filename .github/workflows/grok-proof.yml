@@ -655,6 +655,8 @@ jobs:
           just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::unified_provider_runtime::)'
           just test -p codex-core --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(thread_models_manager_) | test(injected_models_manager_controls_refresh_policy)'
           just test -p codex-tui --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::provider_defaults::)'
+          just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(server_account_requirement_controls_login_screen) | test(provider_login_bypass_does_not_bypass_managed_login_restrictions)'
+          just test -p codex-app-server --test all --locked --cargo-profile ci-test --no-tests=fail -E 'test(suite::v2::account::provider_credentials_skip_login_without_fabricating_account) | test(suite::v2::account::get_account_) | test(suite::v2::account::login_account_api_key_rejected_when_forced_chatgpt) | test(suite::v2::account::login_account_chatgpt_rejected_when_forced_api)'
           just test -p codex-app-server-protocol --lib --locked --cargo-profile ci-test --no-tests=fail -E 'test(model_provider_error::tests::)'
       - name: Test internal model consumers and child ownership
         working-directory: codex-rs
