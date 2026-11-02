@@ -14,6 +14,7 @@ use codex_login::LoginOnboardingEntrypoint;
 use codex_login::login_with_bedrock_access_keys;
 use codex_mcp::ema_auth_scope;
 use codex_model_provider::is_supported_amazon_bedrock_region;
+use codex_model_provider::provider_uses_first_party_auth_path;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_rmcp_client::EnterpriseOAuthCredentialGuard;
 
@@ -1103,11 +1104,9 @@ impl AccountRequestProcessor {
 
         self.refresh_token_if_requested(do_refresh).await;
 
-        // Determine whether auth is required based on the active model provider.
-        // If a custom provider is configured with `requires_openai_auth == false`,
-        // then no auth step is required; otherwise, default to requiring auth.
+        // Match account/read and the actual credential route without resolving credentials.
         let config = self.load_latest_config().await;
-        let requires_openai_auth = config.model_provider.requires_openai_auth;
+        let requires_openai_auth = provider_uses_first_party_auth_path(&config.model_provider);
 
         let response = if !requires_openai_auth {
             GetAuthStatusResponse {

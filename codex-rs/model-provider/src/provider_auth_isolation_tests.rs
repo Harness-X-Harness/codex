@@ -8,6 +8,36 @@ use http::header::AUTHORIZATION;
 use pretty_assertions::assert_eq;
 use std::num::NonZeroU64;
 
+#[test]
+fn explicit_provider_key_does_not_require_login_or_project_an_ambient_account() {
+    for wire_api in [WireApi::Responses, WireApi::GrokResponses] {
+        for login in [
+            None,
+            Some(CodexAuth::from_api_key("synthetic-unrelated-openai-key")),
+            Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        ] {
+            let provider = create_model_provider(
+                ModelProviderInfo {
+                    name: "Independent provider".into(),
+                    base_url: Some("https://provider.example.test/v1".into()),
+                    wire_api,
+                    requires_openai_auth: true,
+                    experimental_bearer_token: Some("synthetic-provider-token".into()),
+                    ..Default::default()
+                },
+                login.map(AuthManager::from_auth_for_testing),
+            );
+            assert_eq!(
+                provider.account_state(),
+                Ok(ProviderAccountState {
+                    account: None,
+                    requires_openai_auth: false,
+                })
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn explicit_provider_credentials_isolate_auth_recovery_attestation_and_catalog() {
     let login = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -50,6 +80,13 @@ async fn explicit_provider_credentials_isolate_auth_recovery_attestation_and_cat
             assert!(provider.auth_manager().is_none());
             assert!(provider.auth().await.is_none());
             assert!(!provider.supports_attestation());
+            assert_eq!(
+                provider.account_state(),
+                Ok(ProviderAccountState {
+                    account: None,
+                    requires_openai_auth: false,
+                })
+            );
             assert_eq!(
                 provider.recover_from_unauthorized().await.unwrap(),
                 ProviderUnauthorizedRecovery::NotConfigured
@@ -223,11 +260,13 @@ async fn provider_env_key_never_falls_back_to_shared_openai_login() {
     let Ok(mode) = std::env::var(CHILD) else {
         // Set/remove only a synthetic key in child processes; never mutate the
         // parent environment while other credential tests run concurrently.
-        for mode in ["present", "missing"] {
+        for mode in ["present", "empty", "missing"] {
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());
             command.arg("--exact").arg(TEST_NAME).env(CHILD, mode);
             if mode == "present" {
                 command.env(KEY, "synthetic-env-provider-token");
+            } else if mode == "empty" {
+                command.env(KEY, "   ");
             } else {
                 command.env_remove(KEY);
             }
@@ -235,36 +274,59 @@ async fn provider_env_key_never_falls_back_to_shared_openai_login() {
         }
         return;
     };
-    let provider = create_model_provider(
-        ModelProviderInfo {
-            name: "Grok".into(),
-            base_url: Some("https://provider.example.test/v1".into()),
-            env_key: Some(KEY.into()),
-            wire_api: WireApi::GrokResponses,
-            requires_openai_auth: false,
-            ..Default::default()
-        },
-        Some(AuthManager::from_auth_for_testing(
-            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        )),
-    );
-    assert!(provider.auth_manager().is_none());
-    assert!(!provider.supports_attestation());
-    let auth = provider.api_auth().await;
-    if mode == "present" {
-        assert_eq!(
-            auth.unwrap().to_auth_headers().unwrap(),
-            HeaderMap::from_iter([(
-                AUTHORIZATION,
-                HeaderValue::from_static("Bearer synthetic-env-provider-token"),
-            )])
-        );
-    } else {
-        let error = auth.err().expect("a missing provider key must fail closed");
-        assert!(matches!(
-            error.details(),
-            codex_protocol::error::CodexErrorDetails::EnvVar(_)
-        ));
+    for wire_api in [WireApi::Responses, WireApi::GrokResponses] {
+        for requires_openai_auth in [false, true] {
+            for fallback in [None, Some("synthetic-lower-priority-bearer")] {
+                let provider = create_model_provider(
+                    ModelProviderInfo {
+                        name: "Independent provider".into(),
+                        base_url: Some("https://provider.example.test/v1".into()),
+                        env_key: Some(KEY.into()),
+                        env_key_instructions: Some("Set the configured provider key".into()),
+                        experimental_bearer_token: fallback.map(Into::into),
+                        wire_api,
+                        requires_openai_auth,
+                        ..Default::default()
+                    },
+                    Some(AuthManager::from_auth_for_testing(
+                        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                    )),
+                );
+                assert!(provider.auth_manager().is_none());
+                assert!(!provider.supports_attestation());
+                // Account read describes the selected credential source, not whether
+                // its key exists or will be accepted by a server. Missing keys must
+                // not send the user through an unrelated OpenAI login flow.
+                assert_eq!(
+                    provider.account_state(),
+                    Ok(ProviderAccountState {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                );
+                let auth = provider.api_auth().await;
+                if mode == "present" {
+                    assert_eq!(
+                        auth.unwrap().to_auth_headers().unwrap(),
+                        HeaderMap::from_iter([(
+                            AUTHORIZATION,
+                            HeaderValue::from_static("Bearer synthetic-env-provider-token"),
+                        )])
+                    );
+                } else {
+                    let error = auth.err().expect("a missing provider key must fail closed");
+                    let codex_protocol::error::CodexErrorDetails::EnvVar(error) = error.details()
+                    else {
+                        panic!("expected a provider environment-variable error");
+                    };
+                    assert_eq!(error.var, KEY);
+                    assert_eq!(
+                        error.instructions.as_deref(),
+                        Some("Set the configured provider key")
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -272,22 +334,36 @@ async fn provider_env_key_never_falls_back_to_shared_openai_login() {
 fn command_auth_keeps_its_independent_provider_manager() {
     let credentials =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let provider = create_model_provider(
+    let info = ModelProviderInfo {
+        auth: Some(ModelProviderAuthInfo {
+            command: "not-executed-by-this-ownership-test".into(),
+            args: Vec::new(),
+            timeout_ms: NonZeroU64::new(5_000).unwrap(),
+            refresh_interval_ms: 300_000,
+            cwd: std::env::current_dir().unwrap().try_into().unwrap(),
+        }),
+        requires_openai_auth: false,
+        ..ModelProviderInfo::default()
+    };
+    assert_eq!(info.validate(), Ok(()));
+    assert_eq!(
         ModelProviderInfo {
-            auth: Some(ModelProviderAuthInfo {
-                command: "not-executed-by-this-ownership-test".into(),
-                args: Vec::new(),
-                timeout_ms: NonZeroU64::new(5_000).unwrap(),
-                refresh_interval_ms: 300_000,
-                cwd: std::env::current_dir().unwrap().try_into().unwrap(),
-            }),
-            requires_openai_auth: false,
-            ..ModelProviderInfo::default()
-        },
-        Some(Arc::clone(&credentials)),
+            requires_openai_auth: true,
+            ..info.clone()
+        }
+        .validate(),
+        Err("provider auth cannot be combined with requires_openai_auth".to_string())
     );
+    let provider = create_model_provider(info, Some(Arc::clone(&credentials)));
     let selected = provider.auth_manager().unwrap();
     assert!(selected.has_external_auth());
     assert!(!Arc::ptr_eq(&selected, &credentials));
     assert!(!provider.supports_attestation());
+    assert_eq!(
+        provider.account_state(),
+        Ok(ProviderAccountState {
+            account: None,
+            requires_openai_auth: false,
+        })
+    );
 }

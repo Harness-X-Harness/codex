@@ -48,6 +48,9 @@ use crate::workspace_routing::WorkspaceRoutingContext;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountState {
     pub account: Option<ProviderAccount>,
+    /// Whether the selected credential path depends on OpenAI-managed login.
+    /// This is not a credential-presence or validity check: an explicit provider
+    /// key skips OpenAI login even when its environment variable is missing.
     pub requires_openai_auth: bool,
 }
 
@@ -437,6 +440,9 @@ fn resolve_api_provider_with_auth_mode(
     Ok(provider)
 }
 
+/// Classifies the configured credential source without resolving credentials.
+/// Explicit provider credentials take precedence over OpenAI-managed login;
+/// missing or invalid credentials remain errors when that source is used.
 pub fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
     provider.requires_openai_auth
         && provider.env_key.is_none()
@@ -808,7 +814,7 @@ impl ModelProvider for ConfiguredModelProvider {
 
         Ok(ProviderAccountState {
             account,
-            requires_openai_auth: self.info.requires_openai_auth,
+            requires_openai_auth: provider_uses_first_party_auth_path(&self.info),
         })
     }
 

@@ -523,6 +523,23 @@ cancels the previous attempt and waits for its callback listener to close. Use
 `account/login/cancel` to cancel explicitly. Start a fresh session after success to
 use the saved grant.
 
+# Provider credentials and interactive login
+
+`account/read.requiresOpenaiAuth` (and legacy `getAuthStatus`) reports whether the
+selected provider uses the first-party OpenAI login credential path, not merely
+its raw `requires_openai_auth` configuration flag. Explicit provider credentials
+such as `env_key`, a bearer token, or command authentication take their existing
+request-time precedence. They do not require an unrelated OpenAI login, and
+`account` remains `null` when no account belongs to that provider's auth path.
+
+This flag classifies the configured source; it does not validate credential
+presence, freshness, or network access. A missing or empty configured `env_key`
+fails with the existing provider-key configuration error on first use, without
+falling back to a bearer token or an ambient ChatGPT login. Account reads do not
+execute credential helpers just to determine whether to show login. Explicit
+`refreshToken` requests retain their existing account-refresh semantics. Managed
+login-method and workspace restrictions are enforced separately and unchanged.
+
 # Selected workspace routing
 
 The experimental `account/read.workspaceRouting` response field returns the selected ChatGPT workspace's `chatgptAccountId`, resolved HTTPS `backendOrigin`, and backend-provided `accountRoutingOverride`. The routing value is `us`, `us_cr`, or the explicit `NO_CONSTRAINT` value. API-only and signed-out accounts return `null` and do not need `accounts/check`.
