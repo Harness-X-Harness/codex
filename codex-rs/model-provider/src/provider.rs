@@ -607,7 +607,7 @@ impl ConfiguredModelProvider {
         let origin = if config_model_catalog.is_some() {
             codex_models_manager::ModelOrigin::ExplicitConfig
         } else {
-            codex_models_manager::ModelOrigin::Bundled
+            codex_models_manager::ModelOrigin::Provider
         };
         if let Some(model_catalog) = self.configured_model_catalog(config_model_catalog) {
             return Arc::new(StaticModelsManager::new(

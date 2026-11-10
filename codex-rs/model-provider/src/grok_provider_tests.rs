@@ -230,7 +230,7 @@ async fn grok_catalog_replaces_remote_bundled_and_cached_models_in_every_constru
             let origin = if supplied.is_some() {
                 ModelOrigin::ExplicitConfig
             } else {
-                ModelOrigin::Bundled
+                ModelOrigin::Provider
             };
             let expected = supplied.clone().unwrap_or_else(|| fallback.clone());
             for manager in [
