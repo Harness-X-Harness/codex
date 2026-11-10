@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use codex_extension_api::ToolExecutor;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_model_provider::WorkspaceRoutingContext;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use pretty_assertions::assert_eq;
@@ -11,6 +14,9 @@ fn trusted_web_tool_spec_keeps_unsigned_numeric_bounds() {
         session_id: "schema-thread".to_string(),
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         provider: create_model_provider(ModelProviderInfo::default(), /*auth_manager*/ None),
+        workspace_routing: Arc::new(WorkspaceRoutingContext::new(
+            "https://chatgpt.com/backend-api".to_string(),
+        )),
         settings: Default::default(),
         supports_literature_search: false,
         originator: None,
