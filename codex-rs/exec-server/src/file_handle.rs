@@ -115,40 +115,47 @@ impl FileHandleManager {
                 )
             })? as u64;
         let file = self.get(handle_id)?;
-        tokio::task::spawn_blocking(move || {
-            let mut position = offset;
-            while position < end {
-                let written = (position - offset) as usize;
-                #[cfg(unix)]
-                let result = std::os::unix::fs::FileExt::write_at(
-                    file.as_ref(),
-                    &bytes[written..],
-                    position,
-                );
-                #[cfg(windows)]
-                let result = std::os::windows::fs::FileExt::seek_write(
-                    file.as_ref(),
-                    &bytes[written..],
-                    position,
-                );
-                match result {
-                    Ok(0) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "failed to write file block",
-                        ));
+        #[cfg(test)]
+        let mutation_key = std::path::PathBuf::from(handle_id);
+        crate::file_system_mutation::run(async move {
+            tokio::task::spawn_blocking(move || {
+                #[cfg(test)]
+                crate::file_system_mutation::test_support::pause_blocking(&mutation_key);
+                let mut position = offset;
+                while position < end {
+                    let written = (position - offset) as usize;
+                    #[cfg(unix)]
+                    let result = std::os::unix::fs::FileExt::write_at(
+                        file.as_ref(),
+                        &bytes[written..],
+                        position,
+                    );
+                    #[cfg(windows)]
+                    let result = std::os::windows::fs::FileExt::seek_write(
+                        file.as_ref(),
+                        &bytes[written..],
+                        position,
+                    );
+                    match result {
+                        Ok(0) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "failed to write file block",
+                            ));
+                        }
+                        Ok(count) => position += count as u64,
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                        Err(error) => return Err(error),
                     }
-                    Ok(count) => position += count as u64,
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                    Err(error) => return Err(error),
                 }
-            }
-            Ok(())
+                Ok(())
+            })
+            .await
+            .map_err(|error| {
+                io::Error::other(format!("file write task stopped unexpectedly: {error}"))
+            })?
         })
         .await
-        .map_err(|error| {
-            io::Error::other(format!("file write task stopped unexpectedly: {error}"))
-        })?
     }
 
     fn get(&self, handle_id: &str) -> io::Result<Arc<File>> {

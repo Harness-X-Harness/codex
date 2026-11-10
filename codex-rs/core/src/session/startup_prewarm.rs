@@ -407,6 +407,7 @@ async fn schedule_startup_prewarm_inner(
                 .for_prompt(
                     &step_context.settings.model_info.input_modalities,
                     session.services.image_store.as_ref(),
+                    step_context.turn.provider.api_dialect(),
                 )
                 .await;
             session

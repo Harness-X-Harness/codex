@@ -152,12 +152,15 @@ pub fn create_tools_raw_json_for_responses_api(
 pub struct ResponsesApiWebSearchFilters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_domains: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_domains: Option<Vec<String>>,
 }
 
 impl From<ConfigWebSearchFilters> for ResponsesApiWebSearchFilters {
     fn from(filters: ConfigWebSearchFilters) -> Self {
         Self {
             allowed_domains: filters.allowed_domains,
+            excluded_domains: filters.excluded_domains,
         }
     }
 }

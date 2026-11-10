@@ -106,6 +106,7 @@ async fn resume_lists_all_providers_and_fork_keeps_provider_filter() -> Result<(
                         })?;
                 }
             } else {
+                // Explicit selection affects fork history lookup, not the daemon's default route.
                 let (expected, excluded) = if embedded || explicit {
                     ("Client provider history", "Server provider history")
                 } else {

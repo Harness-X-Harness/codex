@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
@@ -15,11 +16,13 @@ use codex_login::GatewayAuthManager;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
+use codex_protocol::auth::AuthMode;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
@@ -45,6 +48,9 @@ use crate::workspace_routing::WorkspaceRoutingContext;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderAccountState {
     pub account: Option<ProviderAccount>,
+    /// Whether the selected credential path depends on OpenAI-managed login.
+    /// This is not a credential-presence or validity check: an explicit provider
+    /// key skips OpenAI login even when its environment variable is missing.
     pub requires_openai_auth: bool,
 }
 
@@ -123,6 +129,14 @@ pub const DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL: &str = "gpt-6.1-terra";
 pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the configured provider metadata.
     fn info(&self) -> &ModelProviderInfo;
+
+    /// Selects API semantics from explicit configuration, independent of name and URL.
+    fn api_dialect(&self) -> ApiDialect {
+        match self.info().wire_api {
+            WireApi::Responses => ApiDialect::OpenAi,
+            WireApi::GrokResponses => ApiDialect::Grok,
+        }
+    }
 
     /// Returns whether the resolved Responses provider may receive internal tool metadata.
     fn include_internal_metadata(&self, provider: &Provider) -> bool {
@@ -411,13 +425,24 @@ pub fn resolve_api_provider(
     info: &ModelProviderInfo,
     auth: Option<&CodexAuth>,
 ) -> codex_protocol::error::Result<Provider> {
-    let mut provider = info.to_api_provider(auth.map(CodexAuth::auth_mode))?;
+    resolve_api_provider_with_auth_mode(info, auth, auth.map(CodexAuth::auth_mode))
+}
+
+fn resolve_api_provider_with_auth_mode(
+    info: &ModelProviderInfo,
+    auth: Option<&CodexAuth>,
+    auth_mode: Option<AuthMode>,
+) -> codex_protocol::error::Result<Provider> {
+    let mut provider = info.to_api_provider(auth_mode)?;
     if info.base_url.is_none() && uses_fedramp_api_key(auth, info)? {
         provider.base_url = FEDRAMP_API_BASE_URL.to_string();
     }
     Ok(provider)
 }
 
+/// Classifies the configured credential source without resolving credentials.
+/// Explicit provider credentials take precedence over OpenAI-managed login;
+/// missing or invalid credentials remain errors when that source is used.
 pub fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
     provider.requires_openai_auth
         && provider.env_key.is_none()
@@ -436,14 +461,18 @@ pub fn create_model_provider(
 }
 
 pub(crate) fn create_model_provider_with_runtime(
-    provider_info: ModelProviderInfo,
+    mut provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
     runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
 ) -> SharedModelProvider {
-    if provider_info.is_amazon_bedrock() {
+    if provider_info.wire_api == WireApi::GrokResponses {
+        provider_info.stream_idle_timeout_ms.get_or_insert(60_000);
+        provider_info.stream_max_retries.get_or_insert(1);
+    }
+    if provider_info.wire_api == WireApi::Responses && provider_info.is_amazon_bedrock() {
         return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
     }
-    if provider_info.is_gcp() {
+    if provider_info.wire_api == WireApi::Responses && provider_info.is_gcp() {
         return Arc::new(GcpModelProvider::new(provider_info, auth_manager));
     }
     Arc::new(ConfiguredModelProvider::new(
@@ -458,6 +487,10 @@ pub(crate) fn create_model_provider_with_runtime(
 struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    // Legacy OpenAI default-endpoint selection can depend on the ambient login
+    // even when an explicit provider key owns authentication. Never expose this
+    // routing-only context to auth, recovery, attestation, or model catalogs.
+    default_endpoint_auth_manager: Option<Arc<AuthManager>>,
     // Construct eagerly; report setup failures when auth is requested because the factory is infallible.
     gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
@@ -471,6 +504,14 @@ enum ModelsCacheConfig {
 }
 
 impl ConfiguredModelProvider {
+    // Explicit catalogs are authoritative replacements. Grok has no remote discovery;
+    // its compatibility catalog must also avoid the stock bundled/cache path.
+    fn configured_model_catalog(&self, catalog: Option<ModelsResponse>) -> Option<ModelsResponse> {
+        catalog.or_else(|| {
+            (self.api_dialect() == ApiDialect::Grok).then(crate::grok_catalog::static_model_catalog)
+        })
+    }
+
     fn new(
         info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
@@ -485,7 +526,18 @@ impl ConfiguredModelProvider {
                 .gateway_auth(config, &manager.runtime_config())
                 .map_err(|_| "failed to create provider OAuth HTTP client".to_string())
         });
-        let auth_manager = auth_manager_for_provider(auth_manager, &info);
+        let default_endpoint_auth_manager = auth_manager.clone().filter(|_| {
+            info.requires_openai_auth
+                && info.wire_api == WireApi::Responses
+                && info.base_url.is_none()
+                && (info.env_key.is_some() || info.experimental_bearer_token.is_some())
+                && !info.has_command_auth()
+        });
+        // An explicit provider credential (or unauthenticated provider) must not
+        // expose the unrelated OpenAI login to request recovery, attestation, or
+        // catalog filtering. Command auth still owns its independent manager.
+        let auth_manager = auth_manager_for_provider(auth_manager, &info)
+            .filter(|_| provider_uses_first_party_auth_path(&info) || info.has_command_auth());
         let runtime_for_destination = |destination: Option<&str>| {
             runtime_auth.clone().filter(|_| {
                 destination.is_none_or(|url| {
@@ -505,6 +557,7 @@ impl ConfiguredModelProvider {
         Self {
             info,
             auth_manager,
+            default_endpoint_auth_manager,
             gateway_auth_manager,
             runtime_auth: inference_runtime_auth,
             catalog_runtime_auth,
@@ -551,11 +604,16 @@ impl ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         cache: ModelsCacheConfig,
     ) -> SharedModelsManager {
-        if let Some(model_catalog) = config_model_catalog {
+        let origin = if config_model_catalog.is_some() {
+            codex_models_manager::ModelOrigin::ExplicitConfig
+        } else {
+            codex_models_manager::ModelOrigin::Bundled
+        };
+        if let Some(model_catalog) = self.configured_model_catalog(config_model_catalog) {
             return Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
-                codex_models_manager::ModelOrigin::ExplicitConfig,
+                origin,
             ));
         }
         let endpoint = Arc::new(
@@ -595,6 +653,9 @@ impl ModelProvider for ConfiguredModelProvider {
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
+        if self.api_dialect() == ApiDialect::Grok {
+            return crate::grok_catalog::GROK_4_6_MODEL_ID;
+        }
         if self
             .auth_manager
             .as_ref()
@@ -604,6 +665,20 @@ impl ModelProvider for ConfiguredModelProvider {
             API_KEY_APPROVAL_REVIEW_PREFERRED_MODEL
         } else {
             DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+        }
+    }
+
+    fn memory_extraction_preferred_model(&self) -> &'static str {
+        match self.api_dialect() {
+            ApiDialect::Grok => crate::grok_catalog::GROK_4_6_MODEL_ID,
+            ApiDialect::OpenAi => DEFAULT_MEMORY_EXTRACTION_PREFERRED_MODEL,
+        }
+    }
+
+    fn memory_consolidation_preferred_model(&self) -> &'static str {
+        match self.api_dialect() {
+            ApiDialect::Grok => crate::grok_catalog::GROK_4_6_MODEL_ID,
+            ApiDialect::OpenAi => DEFAULT_MEMORY_CONSOLIDATION_PREFERRED_MODEL,
         }
     }
 
@@ -651,6 +726,24 @@ impl ModelProvider for ConfiguredModelProvider {
         Box::pin(async move {
             Ok(self.resolve_auth(/*scope*/ None).await?.auth)
         })
+    }
+
+    fn api_provider_for_auth(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> codex_protocol::error::Result<Provider> {
+        // Read only the cached routing context. An independent provider key must
+        // not trigger an unrelated login's proactive refresh or recovery.
+        let default_endpoint_auth_mode = self
+            .default_endpoint_auth_manager
+            .as_ref()
+            .and_then(|manager| manager.auth_mode());
+        resolve_api_provider_with_auth_mode(
+            &self.info,
+            auth,
+            auth.map(CodexAuth::auth_mode)
+                .or(default_endpoint_auth_mode),
+        )
     }
 
     fn api_provider_and_auth(
@@ -726,7 +819,7 @@ impl ModelProvider for ConfiguredModelProvider {
 
         Ok(ProviderAccountState {
             account,
-            requires_openai_auth: self.info.requires_openai_auth,
+            requires_openai_auth: provider_uses_first_party_auth_path(&self.info),
         })
     }
 
@@ -753,6 +846,10 @@ impl ModelProvider for ConfiguredModelProvider {
         self.create_models_manager(config_model_catalog, ModelsCacheConfig::Custom(cache))
     }
 }
+
+#[cfg(test)]
+#[path = "provider_auth_isolation_tests.rs"]
+mod auth_isolation_tests;
 
 #[cfg(test)]
 mod tests {
@@ -835,6 +932,7 @@ mod tests {
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
+            x_search: None,
             supports_standalone_web_search: false,
             capabilities: None,
             project_id: None,

@@ -302,6 +302,7 @@ async fn run_compact_task_inner_impl(
             .for_prompt(
                 &turn_context.model_info().input_modalities,
                 sess.services.image_store.as_ref(),
+                turn_context.provider.api_dialect(),
             )
             .await;
         sess.services

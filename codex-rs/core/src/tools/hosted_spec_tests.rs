@@ -15,6 +15,7 @@ fn web_search_tool_preserves_configured_options() {
             web_search_config: Some(&WebSearchConfig {
                 filters: Some(WebSearchFilters {
                     allowed_domains: Some(vec!["example.com".to_string()]),
+                    excluded_domains: None,
                 }),
                 user_location: Some(WebSearchUserLocation {
                     r#type: WebSearchUserLocationType::Approximate,
@@ -32,6 +33,7 @@ fn web_search_tool_preserves_configured_options() {
             indexed_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
+                excluded_domains: None,
             }),
             user_location: Some(ResponsesApiWebSearchUserLocation {
                 r#type: WebSearchUserLocationType::Approximate,

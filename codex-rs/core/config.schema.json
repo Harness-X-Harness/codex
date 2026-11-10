@@ -1509,7 +1509,7 @@
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Optional path to a JSON model catalog (applied on startup only)."
+          "description": "Optional path to a JSON model catalog for threads using this profile."
         },
         "model_instructions_file": {
           "allOf": [
@@ -2152,6 +2152,19 @@
         "rules",
         "sandbox_approval"
       ],
+      "type": "object"
+    },
+    "GrokXSearchOptions": {
+      "additionalProperties": false,
+      "description": "Legacy X Search options retained solely for explicit configuration rejection. Hosted X Search is retired from the Codex product; these settings never enable it.",
+      "properties": {
+        "from_date": {
+          "type": "string"
+        },
+        "to_date": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "GuardianV2ConfigToml": {
@@ -3216,6 +3229,14 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "x_search": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/GrokXSearchOptions"
+            }
+          ],
+          "description": "Retired Hosted X configuration, retained only to reject existing settings explicitly."
         }
       },
       "type": "object"
@@ -7324,6 +7345,13 @@
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
         },
+        "excluded_domains": {
+          "description": "Grok hosted Web Search only; at most five domains, exclusive with allowed_domains.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"
         }
@@ -7358,6 +7386,13 @@
           "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
           "enum": [
             "responses"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The Grok Responses dialect over HTTP/SSE.",
+          "enum": [
+            "grok_responses"
           ],
           "type": "string"
         }
@@ -8385,7 +8420,7 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         }
       ],
-      "description": "Optional path to a JSON model catalog (applied on startup only). Per-thread `config` overrides are accepted but do not reapply this (no-ops)."
+      "description": "Optional path to a JSON model catalog, resolved when materializing thread config. Per-thread `config` overrides select that thread's catalog without changing other threads."
     },
     "model_context_window": {
       "description": "Size of the context window for the model, in tokens.",
