@@ -430,27 +430,6 @@ impl ConfigManager {
         Ok(CloudStartupConfig { bootstrap, config })
     }
 
-    /// Admits resumed threads and input only on the currently selected provider.
-    pub(crate) async fn check_thread_model_provider_for_input(
-        &self,
-        current: &Config,
-    ) -> std::io::Result<()> {
-        self.check_thread_model_provider(current).await?;
-        let configured = self
-            .load_latest_config(Some(current.cwd.to_path_buf()))
-            .await?;
-        if current.model_provider_id != configured.model_provider_id {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                ModelProviderError::ModelProviderMismatch {
-                    model_provider: current.model_provider_id.clone(),
-                    current_model_provider: configured.model_provider_id,
-                },
-            ));
-        }
-        Ok(())
-    }
-
     /// Installs local policy before cloud access; failed policy loads block traffic while
     /// non-strict startup remains available for configuration repair.
     pub(crate) async fn load_startup_config(
@@ -540,7 +519,7 @@ impl ConfigManager {
         &self,
         saved_provider: Option<&str>,
         request_overrides: Option<HashMap<String, serde_json::Value>>,
-        typesafe_overrides: ConfigOverrides,
+        mut typesafe_overrides: ConfigOverrides,
         cwd: Option<PathBuf>,
     ) -> std::io::Result<Config> {
         let requested_provider = typesafe_overrides.model_provider.clone().or_else(|| {
@@ -550,11 +529,12 @@ impl ConfigManager {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         });
-        // Resolve the selection before the saved provider is applied as a resume override.
-        let current_provider = self
-            .load_latest_config(typesafe_overrides.cwd.clone().or_else(|| cwd.clone()))
-            .await
-            .map(|config| config.model_provider_id);
+        // A default change is not a history migration. Bind an omitted override to
+        // the saved route before resolving configuration; explicit cross-provider
+        // resumes are rejected below even when both providers are configured.
+        if requested_provider.is_none() {
+            typesafe_overrides.model_provider = saved_provider.map(str::to_owned);
+        }
         self.load_with_validation(
             &self.current_cli_overrides(),
             request_overrides,
@@ -563,6 +543,7 @@ impl ConfigManager {
             |config, _overrides, layers| {
                 let requested_provider = requested_provider
                     .as_deref()
+                    .or(saved_provider)
                     .or(config.model_provider.as_deref())
                     .unwrap_or("openai");
                 // Validate the saved route even when a client sends a provider override.
@@ -593,20 +574,16 @@ impl ConfigManager {
                         ));
                     }
                 }
-                let current_provider = current_provider?;
-                for provider in [
-                    saved_provider.unwrap_or(requested_provider),
-                    requested_provider,
-                ] {
-                    if provider != current_provider {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            ModelProviderError::ModelProviderMismatch {
-                                model_provider: provider.to_owned(),
-                                current_model_provider: current_provider,
-                            },
-                        ));
-                    }
+                if let Some(saved_provider) = saved_provider
+                    && saved_provider != requested_provider
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        ModelProviderError::ModelProviderMismatch {
+                            model_provider: saved_provider.to_owned(),
+                            current_model_provider: requested_provider.to_owned(),
+                        },
+                    ));
                 }
                 Ok(())
             },

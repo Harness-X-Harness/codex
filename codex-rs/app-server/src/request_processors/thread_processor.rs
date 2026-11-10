@@ -38,6 +38,7 @@ use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ThreadIdleCause;
+use codex_model_provider_info::WireApi;
 use codex_protocol::SanitizedGitUrl;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::error::CodexErrorDetails;
@@ -309,6 +310,28 @@ fn has_model_resume_override(
         })
         || request_overrides
             .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
+}
+
+// Request-level model policy overrides intentionally select current config semantics.
+// Process profile defaults remain defaults; they must not replace a pinned Grok model.
+fn has_model_fork_override(
+    request_overrides: Option<&HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &ConfigOverrides,
+) -> bool {
+    typesafe_overrides.model.is_some()
+        || typesafe_overrides.model_provider.is_some()
+        || request_overrides.is_some_and(|overrides| {
+            overrides.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "model"
+                        | "model_provider"
+                        | "model_reasoning_effort"
+                        | "model_catalog_json"
+                        | "model_providers"
+                ) || key.starts_with("model_providers.")
+            })
+        })
 }
 
 fn has_permission_override(
@@ -2585,7 +2608,7 @@ impl ThreadRequestProcessor {
         let (_, thread) = self.load_thread(&thread_id).await?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
         self.config_manager
-            .check_thread_model_provider_for_input(thread.config().await.as_ref())
+            .check_thread_model_provider(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
         self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
@@ -4756,7 +4779,7 @@ impl ThreadRequestProcessor {
                 );
             }
             self.config_manager
-                .check_thread_model_provider_for_input(existing_thread.config().await.as_ref())
+                .check_thread_model_provider(existing_thread.config().await.as_ref())
                 .await
                 .map_err(|err| config_load_error(&err))?;
             let redact_resume_payloads =
@@ -5391,9 +5414,8 @@ impl ThreadRequestProcessor {
                     .items()
                     .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
                 && let Some(model) = options.config.model.as_deref()
-                && self
-                    .thread_manager
-                    .get_models_manager()
+                && parent
+                    .models_manager()
                     .get_model_info(model, &options.config.to_models_manager_config())
                     .await
                     .use_responses_lite
@@ -5611,12 +5633,41 @@ impl ThreadRequestProcessor {
         let options = if let Some(options) = inherited_options {
             *options
         } else {
-            // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-            let config = self
+            // Resolve current definitions first; a stored id is not a persisted provider definition.
+            let retain_source_model =
+                !has_model_fork_override(request_overrides.as_ref(), &typesafe_overrides);
+            let mut config = self
                 .config_manager
-                .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+                .load_for_cwd(
+                    request_overrides.clone(),
+                    typesafe_overrides.clone(),
+                    history_cwd.clone(),
+                )
                 .await
                 .map_err(|err| config_load_error(&err))?;
+            if retain_source_model
+                && config
+                    .model_providers
+                    .get(&source_thread.model_provider)
+                    .is_some_and(|provider| provider.wire_api == WireApi::GrokResponses)
+            {
+                typesafe_overrides.model = source_thread.model.clone();
+                typesafe_overrides.model_provider = Some(source_thread.model_provider.clone());
+                config = self
+                    .config_manager
+                    .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                // Managed requirements outrank request overrides. Never route the retained
+                // model through a different provider if policy changes or conflicts here.
+                if config.model_provider_id != source_thread.model_provider
+                    || config.model_provider.wire_api != WireApi::GrokResponses
+                {
+                    return Err(invalid_request(
+                        "current configuration does not permit the source thread's Grok provider",
+                    ));
+                }
+            }
             StartThreadOptions {
                 client_mcp_extensions,
                 ..StartThreadOptions::new(config)

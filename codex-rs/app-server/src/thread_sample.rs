@@ -182,8 +182,8 @@ impl SampleTask {
         })
         .await
         .map_err(|error| internal_error(error.to_string()))?;
-        let model = manager
-            .get_models_manager()
+        let model = parent
+            .models_manager()
             .get_model_info(
                 options.config.model.as_deref().unwrap_or(&snapshot.model),
                 &options.config.to_models_manager_config(),

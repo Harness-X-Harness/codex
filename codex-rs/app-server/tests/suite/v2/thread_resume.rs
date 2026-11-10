@@ -6934,7 +6934,7 @@ async fn thread_resume_returns_provider_error_even_with_provider_override(
 }
 
 #[test_case::test_case(false; "missing_definition")]
-#[test_case::test_case(true; "provider_mismatch")]
+#[test_case::test_case(true; "different_default")]
 #[tokio::test]
 async fn thread_resume_recovers_after_provider_configuration_is_restored(
     configured: bool,
@@ -6969,23 +6969,8 @@ async fn thread_resume_recovers_after_provider_configuration_is_restored(
         thread_id,
         ..Default::default()
     };
-    let id = client.send_thread_resume_request(params.clone()).await?;
-    let error = client
-        .read_stream_until_error_message(RequestId::Integer(id))
-        .await?;
-    assert_eq!(
-        error
-            .error
-            .data
-            .as_ref()
-            .expect("provider error should include structured data")["type"],
-        if configured {
-            "modelProviderMismatch"
-        } else {
-            "modelProviderNotConfigured"
-        }
-    );
     if configured {
+        // Both routes are configured, but a resume cannot migrate saved history.
         for overrides in [
             ThreadResumeParams {
                 model_provider: Some("mock_provider".into()),
@@ -7000,11 +6985,32 @@ async fn thread_resume_recovers_after_provider_configuration_is_restored(
             },
         ] {
             let id = client.send_thread_resume_request(overrides).await?;
-            let overridden = client
+            let error = client
                 .read_stream_until_error_message(RequestId::Integer(id))
                 .await?;
-            assert_eq!(overridden.error, error.error);
+            assert_eq!(
+                error.error.data,
+                Some(serde_json::to_value(
+                    codex_app_server_protocol::ModelProviderError::ModelProviderMismatch {
+                        model_provider: "old_provider".into(),
+                        current_model_provider: "mock_provider".into(),
+                    }
+                )?)
+            );
         }
+    } else {
+        let id = client.send_thread_resume_request(params.clone()).await?;
+        let error = client
+            .read_stream_until_error_message(RequestId::Integer(id))
+            .await?;
+        assert_eq!(
+            error.error.data,
+            Some(serde_json::to_value(
+                codex_app_server_protocol::ModelProviderError::ModelProviderNotConfigured {
+                    model_provider: "old_provider".into(),
+                }
+            )?)
+        );
     }
     let id = client
         .send_raw_request(
@@ -7014,16 +7020,17 @@ async fn thread_resume_recovers_after_provider_configuration_is_restored(
         .await?;
     let read: codex_app_server_protocol::ThreadReadResponse = client.read_response(id).await?;
     assert_eq!(read.thread.model_provider, "old_provider");
-    let config = std::fs::read_to_string(&config_path)?;
-    let restored = if configured {
-        config.replace(
-            "model_provider = \"mock_provider\"",
-            "model_provider = \"old_provider\"",
-        )
-    } else {
-        config.replace("mock_provider", "old_provider")
-    };
-    std::fs::write(config_path, restored)?;
+    if !configured {
+        let config = std::fs::read_to_string(&config_path)?;
+        let server_uri = server.uri();
+        std::fs::write(
+            config_path,
+            format!(
+                "{config}\n[model_providers.old_provider]\nname = 'Original provider'\nbase_url = '{server_uri}/v1'\n"
+            ),
+        )?;
+    }
+    // Restoring the definition is sufficient; the default stays mock_provider.
     let id = client.send_thread_resume_request(params).await?;
     let resumed: ThreadResumeResponse = client.read_response(id).await?;
     assert_eq!(resumed.model_provider, "old_provider");

@@ -674,7 +674,8 @@ impl CodexThread {
     ///
     /// This is the thread-level bridge to `Session::inject_if_running` for
     /// callers that only hold a `CodexThread`.
-    /// Returns the unchanged batch when there is no active turn or an item requires typed turn input.
+    /// Returns the unchanged batch when there is no active turn, its input queue
+    /// has closed for completion, or an item requires typed turn input.
     pub async fn inject_if_running(
         &self,
         items: Vec<ResponseItem>,
@@ -1134,6 +1135,11 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.session.get_config().await
+    }
+
+    /// Model metadata bound to this thread's provider, auth scope, and originator.
+    pub fn models_manager(&self) -> codex_models_manager::manager::SharedModelsManager {
+        Arc::clone(&self.session.services.models_manager)
     }
 
     /// List the thread's current hook declarations, including its selected, ready environments.

@@ -12,6 +12,7 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
+use codex_protocol::json_whole_number;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
@@ -27,15 +28,16 @@ pub use exec_command::ExecCommandHandler;
 pub(crate) use exec_command::ExecCommandHandlerOptions;
 pub use write_stdin::WriteStdinHandler;
 
+#[derive(Deserialize)]
+struct TerminalSessionArgs {
+    #[serde(deserialize_with = "json_whole_number::deserialize")]
+    session_id: i32,
+}
+
 /// Terminal tools expose the unified-exec process ID as `session_id`.
 pub(crate) fn terminal_session_for_input(
     invocation: &ToolInvocation,
 ) -> BoxFuture<'_, Result<ToolEnvironments, FunctionCallError>> {
-    #[derive(Deserialize)]
-    struct TerminalSessionArgs {
-        session_id: i32,
-    }
-
     Box::pin(async move {
         let ToolPayload::Function { arguments } = &invocation.payload else {
             return Err(FunctionCallError::Fatal(
@@ -72,11 +74,14 @@ pub(crate) struct ExecCommandArgs {
     login: Option<bool>,
     #[serde(default = "default_tty")]
     tty: bool,
-    #[serde(default = "default_exec_yield_time_ms")]
+    #[serde(
+        default = "default_exec_yield_time_ms",
+        deserialize_with = "json_whole_number::deserialize"
+    )]
     yield_time_ms: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     timeout_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: Option<SandboxPermissions>,
@@ -180,3 +185,7 @@ pub(crate) fn get_command(
 #[cfg(test)]
 #[path = "unified_exec_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "unified_exec_numeric_tests.rs"]
+mod numeric_tests;

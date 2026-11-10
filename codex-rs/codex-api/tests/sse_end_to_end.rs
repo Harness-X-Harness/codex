@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used)]
+mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -467,3 +468,5 @@ async fn responses_stream_dispatches_mixed_metadata_independently() -> Result<()
     assert_eq!(response_id, "resp_1");
     Ok(())
 }
+#[path = "sse/grok_responses_tests.rs"]
+mod grok_responses_tests;

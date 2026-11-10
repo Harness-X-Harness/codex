@@ -38,8 +38,10 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolExecutor;
+use crate::tools::runtimes::apply_patch::ApplyPatchHookIdentity;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::runtimes::apply_patch::ApplyPatchWriteMode;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::windows_sandbox::windows_sandbox_level_for_legacy_checks;
@@ -565,8 +567,25 @@ fn prepare_verified_patch(
         exec_approval_requirement,
         additional_permissions: effective_additional_permissions.additional_permissions,
         permissions_preapproved: effective_additional_permissions.permissions_preapproved,
+        write_mode: ApplyPatchWriteMode::ReparsePatch,
+        hook_identity: ApplyPatchHookIdentity::ApplyPatch,
     })
 }
+
+pub(super) async fn execute_verified_patch(
+    action: ApplyPatchAction,
+    turn_environment: TurnEnvironment,
+    tracker: Option<&SharedTurnDiffTracker>,
+    tool_ctx: ToolCtx,
+    write_mode: ApplyPatchWriteMode,
+    hook_identity: ApplyPatchHookIdentity,
+) -> Result<String, FunctionCallError> {
+    let mut request = prepare_verified_patch(action, turn_environment, &tool_ctx.step_context)?;
+    request.write_mode = write_mode;
+    request.hook_identity = hook_identity;
+    execute_prepared_patch(request, tracker, tool_ctx).await
+}
+
 async fn execute_prepared_patch(
     request: ApplyPatchRequest,
     tracker: Option<&SharedTurnDiffTracker>,
