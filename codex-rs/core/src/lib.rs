@@ -100,6 +100,7 @@ pub mod exec_env;
 mod exec_policy;
 #[cfg(test)]
 mod git_info_tests;
+mod grok_narration;
 mod guardian;
 pub mod guardian_review;
 mod hook_environment_executor;
