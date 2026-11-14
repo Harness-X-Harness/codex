@@ -459,6 +459,17 @@ pub(crate) async fn handle_output_item_done(
                 ctx.sess
                     .emit_turn_item_completed(&ctx.step_context.turn, finalized_turn_item.turn_item)
                     .await;
+                if ctx.step_context.turn.provider.api_dialect() == codex_api::ApiDialect::Grok
+                    && let Some(commentary) = crate::grok_narration::commentary_turn_item(&item)
+                {
+                    // Display copy only. The reasoning response item remains the model record.
+                    ctx.sess
+                        .emit_turn_item_started(&ctx.step_context.turn, &commentary)
+                        .await;
+                    ctx.sess
+                        .emit_turn_item_completed(&ctx.step_context.turn, commentary)
+                        .await;
+                }
             }
             record_completed_response_item_with_finalized_facts(
                 ctx.sess.as_ref(),
