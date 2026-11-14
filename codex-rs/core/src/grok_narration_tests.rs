@@ -44,12 +44,10 @@ fn narration_signature_becomes_commentary_and_thinking_does_not() {
     };
     assert_eq!(message.phase, Some(MessagePhase::Commentary));
     assert!(message.id.starts_with("msg_"));
-    assert_eq!(
-        message.content,
-        vec![AgentMessageContent::Text {
-            text: "Found the bug.".to_string(),
-        }]
-    );
+    let [AgentMessageContent::Text { text }] = message.content.as_slice() else {
+        panic!("expected one narration text part");
+    };
+    assert_eq!(text, "Found the bug.");
 
     assert!(
         commentary_turn_item(&reasoning(
