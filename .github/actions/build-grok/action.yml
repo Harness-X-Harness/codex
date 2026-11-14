@@ -64,6 +64,29 @@ runs:
         # Supply the static PIE linker mode explicitly, preserving PIE/ASLR.
         # https://github.com/rust-lang/rust/issues/95926
         echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=-C link-arg=-Wl,-static,-pie,--no-dynamic-linker,-z,text" >> "$GITHUB_ENV"
+    - name: Enable Linux release swap
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # One release rustc can fill the 16 GiB runner. Swap is only a safety
+        # net; swappiness 10 keeps ordinary compilation in RAM.
+        if [[ -z "$(swapon --show=NAME --noheadings)" ]]; then
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          if ! sudo swapon /swapfile; then
+            sudo swapoff /swapfile 2>/dev/null || true
+            sudo rm -f /swapfile
+            sudo dd if=/dev/zero of=/swapfile bs=1M count=16384 status=none
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+        fi
+        sudo sysctl vm.swappiness=10
+        swapon --show
+        free -h
     - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
       if: runner.os == 'Linux'
       with:
