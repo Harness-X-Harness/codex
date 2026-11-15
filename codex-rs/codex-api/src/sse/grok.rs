@@ -83,10 +83,12 @@ impl GrokSequencer {
                     return Err(invalid("output item lifetime is out of order"));
                 }
                 let (item, id, kind) = parse_item(event)?;
+                // Identity ends at done. Ordered delivery can keep a closed item
+                // buffered behind an earlier open index; that delay must not keep its ID.
                 if id.as_ref().is_some_and(|id| {
                     self.lifetimes
                         .values()
-                        .any(|bound| bound.id.as_ref() == Some(id))
+                        .any(|bound| !bound.closed && bound.id.as_ref() == Some(id))
                 }) {
                     return Err(invalid("output item ID is already bound to another index"));
                 }

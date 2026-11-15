@@ -342,15 +342,6 @@ jobs:
         run: cargo clippy --fix --allow-dirty -p codex-code-mode-host --test stdio --locked --profile ci-test --timings
       - name: Require unchanged host construction input
         uses: ./.github/actions/check-clean-worktree
-      - name: Fix scoped Provider runtime lint
-        working-directory: codex-rs
-        run: >-
-          just fix -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
-          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-message-board -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings
-      - name: Require unchanged runtime construction input
-        uses: ./.github/actions/check-clean-worktree
       - name: Install pinned SDK generator runner
         run: python3 -m pip install uv==0.10.11
       - name: Regenerate owned configuration and public API schemas
@@ -377,8 +368,8 @@ jobs:
         run: just fix -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings
       - name: Require unchanged filesystem construction input
         uses: ./.github/actions/check-clean-worktree
-      # Owner construction above stays uncached. Subsequent build/test compilation and
-      # strict Clippy use sccache; every selected test still executes.
+      # Small owner construction above stays uncached. The large Provider runtime
+      # lint is the first step under sccache, before the selected tests.
       - name: Mask the ephemeral compiler-cache token
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
@@ -415,6 +406,16 @@ jobs:
             "SCCACHE_GHA_ENABLED=$SCCACHE_GHA_ENABLED" \
             "SCCACHE_GHA_VERSION=$SCCACHE_GHA_VERSION" \
             "SCCACHE_IDLE_TIMEOUT=$SCCACHE_IDLE_TIMEOUT" >> "$GITHUB_ENV"
+      - name: Check scoped Provider runtime lint
+        env:
+          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
+          RUSTC: rustc
+        working-directory: codex-rs
+        run: >-
+          just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
+          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
+          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
+          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-message-board -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Test conditional API and actual mutation ownership
         working-directory: codex-rs
         run: |
@@ -783,16 +784,6 @@ jobs:
           RUSTC: rustc
         working-directory: codex-rs
         run: just clippy -p codex-file-system -p codex-exec-server-protocol -p codex-exec-server --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
-      - name: Check scoped Provider runtime lint
-        env:
-          # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
-          RUSTC: rustc
-        working-directory: codex-rs
-        run: >-
-          just clippy -p codex-model-provider-info -p codex-model-provider -p codex-config
-          -p codex-core -p core_test_support -p codex-exec -p codex-tui -p codex-code-mode-host
-          -p codex-protocol -p codex-rollout -p codex-thread-store -p codex-rollout-trace -p codex-goal-extension -p codex-otel -p codex-analytics -p codex-app-server-protocol -p codex-apply-patch -p codex-models-manager
-          -p codex-prompts -p codex-image-generation-extension -p codex-utils-image -p codex-tools -p codex-app-server -p codex-history-notes-extension -p codex-message-board -p codex-agent-message-board-extension -p codex-memories-extension -p codex-memories-write -p codex-web-search-extension --locked --profile ci-test --timings -- --no-deps --cap-lints=forbid
       - name: Verify clean worktree
         if: ${{ always() }}
         uses: ./.github/actions/check-clean-worktree
