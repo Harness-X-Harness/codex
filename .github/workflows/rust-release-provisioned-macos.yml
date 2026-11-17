@@ -135,7 +135,7 @@ jobs:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
         include:
           - target: aarch64-apple-darwin
-            runner: macos-15-xlarge
+            runner: macos-latest-xlarge
           - target: x86_64-apple-darwin
             runner: macos-15-intel
     env:

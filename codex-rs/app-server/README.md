@@ -365,6 +365,23 @@ error's `data` contains `modelProviderNotConfigured` for a missing provider or
 to display history when input is blocked. A resume request that explicitly selects a
 different provider cannot change the thread's saved provider.
 
+A client may select a configured provider and model on `thread/start`. A thread retains its
+provider across turns and resume, independently of the process's default provider. Cold resume
+requires the saved provider to remain configured and rejects an explicit override to a different
+provider. Rejoining a running thread warns about and ignores conflicting overrides rather than
+changing its route. Starting a new thread can select a different provider.
+
+A running thread uses its retained provider configuration; deleting an ordinary provider
+configuration or changing or breaking the ordinary default does not revoke that route. Managed
+requirements still apply, including when they change or cannot be loaded. Cold resume must
+resolve the saved provider again and satisfy those requirements.
+
+The JSON-RPC error's `data` contains `ModelProviderError`: `modelProviderMismatch` identifies
+a conflicting provider, `modelProviderNotConfigured` identifies a missing provider, and
+`modelProviderPolicyConflict` identifies a mandatory-policy conflict. Clients can still use
+`thread/read` to display history and disable the composer with the error's explanation. Older
+clients retain their normal error fallback for unrecognized structured error variants.
+
 ## Managed network requirements
 
 In `requirements.toml`, put shared network constraints directly in `[permissions.network]`,
@@ -591,6 +608,23 @@ return `null`. The ID belongs to the same account snapshot as the rest of the
 response. Clients should also accept an absent field from older app servers.
 PAT sessions continue to return no bearer token from `getAuthStatus`.
 
+# Provider credentials and interactive login
+
+`account/read.requiresOpenaiAuth` (and legacy `getAuthStatus`) reports whether the
+selected provider uses the first-party OpenAI login credential path, not merely
+its raw `requires_openai_auth` configuration flag. Explicit provider credentials
+such as `env_key`, a bearer token, or command authentication take their existing
+request-time precedence. They do not require an unrelated OpenAI login, and
+`account` remains `null` when no account belongs to that provider's auth path.
+
+This flag classifies the configured source; it does not validate credential
+presence, freshness, or network access. A missing or empty configured `env_key`
+fails with the existing provider-key configuration error on first use, without
+falling back to a bearer token or an ambient ChatGPT login. Account reads do not
+execute credential helpers just to determine whether to show login. Explicit
+`refreshToken` requests retain their existing account-refresh semantics. Managed
+login-method and workspace restrictions are enforced separately and unchanged.
+
 # Selected workspace routing
 
 `account/securitySetup/read` returns an optional backend-owned security reminder for the saved ChatGPT login. A returned notice includes its account and user IDs; clients must discard it after an account change and validate its copy and action URL before rendering. Ineligible, unavailable, and timed-out reads return `notice: null`. Older app-servers may not support this optional read.
@@ -745,6 +779,31 @@ credential discovery/signing, are disabled while restrictions apply. Supported
 HTTP, WebSocket, and code-mode gRPC requests use the shared destination checks.
 User-directed Git, SSH, shell, and other subprocess traffic retain their existing
 execution and sandbox policies.
+
+
+# Hosted search items
+
+Hosted Web search uses the existing v2 `webSearch` item through the ordered
+`item/started` and `item/completed` notifications. Clients settle the started item
+when its canonical completion arrives. Completed items retain their identity,
+query, action, and optional results in thread history; same-thread continuation
+and cold history reads use that canonical representation. There is no separate
+public early-preview notification.
+
+Within a turn, a retained search ID cannot be reused or rebound to another item,
+including across sampling requests. A conflicting stream fails before replacing
+the retained result. New turns have independent identity reservations.
+
+Product Hosted X search is retired. The public protocol has no `xSearch` item or
+`item/searchActivity` notification. Grok requests do not advertise `x_search`;
+explicit legacy configuration and unexpected hosted X responses fail with an
+explanatory error. They are not converted into Web items, assistant messages, or
+local tool calls and results.
+
+History containing the former public X representation is unsupported and remains
+unchanged on disk. Grok replay also rejects unpaired retired hosted X calls.
+Provider-neutral custom-tool records and genuine paired local tool history remain
+separate; a custom-tool name alone does not establish hosted provenance.
 
 # Item history anchors
 

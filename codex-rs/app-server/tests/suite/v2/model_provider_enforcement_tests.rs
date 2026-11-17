@@ -1,5 +1,6 @@
 //! Verifies provider selection and requirements at app-server input and queue admission boundaries.
 
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
@@ -20,6 +21,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
@@ -266,8 +268,88 @@ base_url = "{}/v1"
     Ok(())
 }
 
+#[test_case(false; "changed_default")]
+#[test_case(true; "removed_user_definition")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result<()> {
+async fn ordinary_provider_config_changes_preserve_existing_thread_route(
+    remove: bool,
+) -> Result<()> {
+    let provider = MockServer::start().await;
+    let other = MockServer::start().await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&provider.uri()).write(home.path())?;
+    let path = home.path().join("config.toml");
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let started = server.start_thread(ThreadStartParams::default()).await?;
+    let requests = responses::mount_sse_once(
+        &provider,
+        responses::sse(vec![
+            responses::ev_assistant_message("retained", "ORIGINAL_PROVIDER_REPLY"),
+            responses::ev_completed("retained"),
+        ]),
+    )
+    .await;
+    let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path)?)?;
+    config["model_provider"] = "other".into();
+    let mut replacement = config["model_providers"]["mock_provider"].clone();
+    replacement["base_url"] = format!("{}/v1", other.uri()).into();
+    config["model_providers"]
+        .as_table_mut()
+        .context("provider definitions")?
+        .insert("other".into(), replacement);
+    if remove {
+        config["model_providers"]
+            .as_table_mut()
+            .context("provider definitions")?
+            .remove("mock_provider");
+    }
+    std::fs::write(&path, toml::to_string(&config)?)?;
+    let id = server
+        .send_turn_start_request(TurnStartParams {
+            thread_id: started.thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Continue on the original provider.".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = server.read_response(id).await?;
+    let completed: codex_app_server_protocol::TurnCompletedNotification = timeout(
+        Duration::from_secs(60),
+        server.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(completed.thread_id, started.thread.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    let id = server
+        .send_raw_request(
+            "thread/read",
+            Some(json!({"threadId": started.thread.id, "includeTurns": true})),
+        )
+        .await?;
+    let read: codex_app_server_protocol::ThreadReadResponse = server.read_response(id).await?;
+    assert_eq!(read.thread.model_provider, "mock_provider");
+    assert!(read.thread.turns.iter().flat_map(|turn| &turn.items).any(|item| {
+        matches!(&item.payload, codex_app_server_protocol::ThreadItemPayload::AgentMessage { text, .. } if text == "ORIGINAL_PROVIDER_REPLY")
+    }));
+    assert_eq!(requests.single_request().body_json()["model"], "mock-model");
+    assert!(
+        other
+            .received_requests()
+            .await
+            .context("replacement requests")?
+            .is_empty()
+    );
+    server.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_system_defaults_do_not_replace_a_retained_provider_route() -> Result<()> {
     let provider = MockServer::start().await;
     let home = TempDir::new()?;
     MockResponsesConfig::new(&provider.uri()).write(home.path())?;
@@ -337,8 +419,8 @@ async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result
             },
         })
         .await?
-        .expect("turn/start should succeed");
-    let _: TurnStartResponse = serde_json::from_value(response)?;
+        .expect("ordinary defaults do not revoke an existing session route");
+    let started_turn: TurnStartResponse = serde_json::from_value(response)?;
     timeout(Duration::from_secs(/*secs*/ 60), async {
         loop {
             let Some(event) = client.next_event().await else {
@@ -347,13 +429,16 @@ async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result
             if let InProcessServerEvent::ServerNotification(notification) = event
                 && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
                 && completed.thread_id == started.thread.id
+                && completed.turn.id == started_turn.turn.id
             {
+                assert_eq!(completed.turn.status, TurnStatus::Completed);
                 return Ok::<(), anyhow::Error>(());
             }
         }
     })
     .await??;
     assert_eq!(requests.requests().len(), 1);
+    assert_eq!(requests.single_request().body_json()["model"], "mock-model");
     client.shutdown().await?;
     Ok(())
 }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_api::ApiDialect;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
@@ -94,7 +95,9 @@ impl ToolContributor for ImageGenerationExtension {
         let Some(config) = thread_store.get::<ImageGenerationExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.available {
+        let provider =
+            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone()));
+        if !config.available && provider.api_dialect() != ApiDialect::Grok {
             return Vec::new();
         }
         let auth = thread_store
@@ -108,7 +111,7 @@ impl ToolContributor for ImageGenerationExtension {
 
         vec![Arc::new(ImageGenerationTool::new(
             CodexImagesBackend::new(
-                auth.model_provider(config.provider.clone()),
+                provider,
                 config.http_client_factory.clone(),
                 thread_store
                     .get::<ThreadOriginator>()

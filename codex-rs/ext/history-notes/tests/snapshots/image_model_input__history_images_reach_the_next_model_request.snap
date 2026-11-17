@@ -26,7 +26,7 @@ Settings:
       - function/list_windows
       - function/read_item
       - function/search_contents
-    - namespace/notes:    ; hash=1984d9e2f2d6c4f0
+    - namespace/notes:    ; hash=76c3742036bb46b7
       - function/append_to_file
       - function/list_files_by_prefix
       - function/read_file

@@ -77,6 +77,7 @@ pub(super) async fn load_from_rollout_path(
         let lineage = store
             .resolve_rollout_lineage(thread_id, Some(path.to_path_buf()))
             .await?;
+        super::thread_history::validate_supported_lineage(store, &lineage).await?;
         let mut items = lineage
             .read_with_fallback(store, scan_model_context_from_lineage)
             .await?;
@@ -96,6 +97,7 @@ pub(super) async fn load_from_rollout_path(
 
 /// Loads startup context from a fork's frozen inherited prefix.
 pub(super) async fn load_for_fork(
+    store: &LocalThreadStore,
     lineage: RolloutLineage,
     history_base: Option<HistoryPosition>,
 ) -> ThreadStoreResult<Vec<RolloutItem>> {
@@ -128,8 +130,19 @@ pub(super) async fn load_for_fork(
                     Some(end_byte_offset) => ReverseJsonlScanner::new_at(file, end_byte_offset)?,
                     None => ReverseJsonlScanner::new(file)?,
                 };
-                while let Some(outcome) = scanner.scan_next_rollout_line()? {
-                    let ScanOutcome::Parsed(line) = outcome else {
+                while let Some(outcome) = scanner.scan_next::<serde_json::Value>()? {
+                    let ScanOutcome::Parsed(value) = outcome else {
+                        continue;
+                    };
+                    // This scan recovers runtime metadata outside the requested fork cutoff;
+                    // item support is checked only for the actual inherited history below.
+                    if !matches!(
+                        value["type"].as_str(),
+                        Some("session_meta" | "turn_context" | "compacted")
+                    ) {
+                        continue;
+                    }
+                    let Ok(line) = codex_rollout::decode_rollout_line(value) else {
                         continue;
                     };
                     if let Some(version) = codex_rollout::resume_multi_agent_version(&line.item) {
@@ -155,6 +168,7 @@ pub(super) async fn load_for_fork(
     let mut items = match history_base {
         Some(history_base) => {
             let lineage = lineage.truncate_at(history_base).await?;
+            super::thread_history::validate_supported_lineage(store, &lineage).await?;
             scan_model_context_from_lineage(lineage).await?
         }
         None => Vec::new(),

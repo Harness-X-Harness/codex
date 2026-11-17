@@ -99,7 +99,7 @@ async fn read_fork_history(
 
     let history_base = history_base_at_boundary(store, thread_id, boundary, &lineage).await?;
     drop(source_writer_guard);
-    let model_context = model_context::load_for_fork(lineage.clone(), history_base).await?;
+    let model_context = model_context::load_for_fork(store, lineage.clone(), history_base).await?;
     // A bounded replay starts with session metadata followed by the compaction. Its opening
     // user message can only be recovered from the transcript within the same fork boundary.
     let preview = if let [RolloutItem::SessionMeta(_), RolloutItem::Compacted(_), ..] =

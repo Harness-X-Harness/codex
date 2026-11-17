@@ -192,6 +192,11 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     /// Static catalogs ignore this setting.
     fn set_api_key_model_discovery_enabled(&self, _enabled: bool) {}
 
+    /// Effective discovery policy, or `None` when this manager ignores the setting.
+    fn api_key_model_discovery_enabled(&self) -> Option<bool> {
+        None
+    }
+
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
@@ -614,6 +619,10 @@ impl ModelsManager for OpenAiModelsManager {
 
     fn set_api_key_model_discovery_enabled(&self, enabled: bool) {
         self.settings.set_api_key_model_discovery_enabled(enabled);
+    }
+
+    fn api_key_model_discovery_enabled(&self) -> Option<bool> {
+        Some(self.api_key_model_discovery_enabled.load(Ordering::SeqCst))
     }
 
     fn refresh_after_auth_change(

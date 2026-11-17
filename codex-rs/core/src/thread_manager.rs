@@ -86,6 +86,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
@@ -1195,6 +1196,13 @@ impl ThreadManager {
         self.state
             .model_catalog
             .set_api_key_model_discovery_enabled(enabled);
+    }
+
+    /// Select model metadata for a materialized thread config, rather than the
+    /// process default. Loaded threads should use their retained models manager.
+    pub fn models_manager_for_config(&self, config: &Config) -> SharedModelsManager {
+        self.state
+            .models_manager_for_config(config, &self.state.auth_manager)
     }
 
     pub async fn list_models(

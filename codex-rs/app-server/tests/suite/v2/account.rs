@@ -222,6 +222,73 @@ async fn read_account(mcp: &mut TestAppServer) -> Result<GetAccountResponse> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await?
 }
 
+#[tokio::test]
+async fn provider_credentials_skip_login_without_fabricating_account() -> Result<()> {
+    for provider_key in [None, Some("synthetic-provider-key")] {
+        for ambient_login in [false, true] {
+            let codex_home = TempDir::new()?;
+            std::fs::write(
+                codex_home.path().join("config.toml"),
+                r#"
+cli_auth_credentials_store = "file"
+model_provider = "provider-key"
+[model_providers.provider-key]
+name = "Provider key"
+base_url = "http://127.0.0.1:0/v1"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "CODEX_TEST_PROVIDER_LOGIN_KEY"
+"#,
+            )?;
+            if ambient_login {
+                login_with_api_key(
+                    codex_home.path(),
+                    "synthetic-ambient-key",
+                    AuthCredentialsStoreMode::File,
+                    AuthKeyringBackendKind::default(),
+                )?;
+            }
+            let mut mcp = TestAppServer::builder()
+                .with_codex_home(codex_home.path())
+                .without_auto_env()
+                .with_env_overrides(&[
+                    ("CODEX_TEST_PROVIDER_LOGIN_KEY", provider_key),
+                    ("OPENAI_API_KEY", None),
+                ])
+                .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+                .await?;
+            assert_eq!(
+                read_account(&mut mcp).await?,
+                GetAccountResponse {
+                    account: None,
+                    requires_openai_auth: false,
+                    workspace_routing: None,
+                }
+            );
+            let request_id = mcp
+                .send_get_auth_status_request(GetAuthStatusParams {
+                    include_token: Some(true),
+                    refresh_token: Some(true),
+                })
+                .await?;
+            let response = timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+            )
+            .await??;
+            assert_eq!(
+                to_response::<GetAuthStatusResponse>(response)?,
+                GetAuthStatusResponse {
+                    auth_method: None,
+                    auth_token: None,
+                    requires_openai_auth: Some(false),
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn assert_account_updated(
     mcp: &mut TestAppServer,
     auth_mode: Option<AuthMode>,

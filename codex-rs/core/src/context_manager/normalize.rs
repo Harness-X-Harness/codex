@@ -21,6 +21,7 @@ const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52
 pub(crate) fn ensure_call_outputs_present(
     items: &mut Vec<ResponseItemEnvelope>,
     restored_through_sequence: u64,
+    is_hosted: impl Fn(&ResponseItem) -> bool,
 ) {
     // Forks and recovered sessions can inherit a call before its output was written.
     let may_be_unfinished = |envelope: &ResponseItemEnvelope| {
@@ -97,7 +98,8 @@ pub(crate) fn ensure_call_outputs_present(
                 ));
             }
             ResponseItem::CustomToolCall { id, call_id, .. }
-                if !custom_tool_output_ids.contains(call_id.as_str()) =>
+                if !custom_tool_output_ids.contains(call_id.as_str())
+                    && !is_hosted(&envelope.item) =>
             {
                 if !may_be_unfinished(envelope) {
                     error_or_panic(format!(

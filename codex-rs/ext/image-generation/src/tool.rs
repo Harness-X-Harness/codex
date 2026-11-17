@@ -3,6 +3,7 @@ use std::io;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_api::ApiDialect;
 use codex_api::GifOptions;
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
@@ -22,7 +23,6 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
-use codex_extension_api::parse_tool_input_schema;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::image_generation::GeneratedImageRef;
 use codex_extension_items::image_generation::ImageGenerationFailure;
@@ -41,18 +41,11 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
-use codex_tools::ResponsesApiNamespace;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
 use codex_tools::ToolExposure;
-use codex_tools::default_namespace_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use codex_utils_path_uri::PathUri;
-use schemars::JsonSchema;
-use schemars::r#gen::SchemaSettings;
-use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
 use sha2::Digest;
@@ -64,8 +57,8 @@ use crate::artifact::GeneratedImageFormat;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
+use crate::policy::ImagePolicy;
 
-const IMAGE_MODEL: &str = "gpt-image-2";
 const MAX_EDIT_IMAGES: usize = 5;
 const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
@@ -142,7 +135,11 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
 
     /// Advertises a rewritten prompt, background choice, and optional edit references.
     fn spec(&self) -> ToolSpec {
-        imagegen_tool_spec(self.gif_enabled)
+        if self.backend.dialect() == ApiDialect::Grok {
+            ImagePolicy::for_dialect(ApiDialect::Grok).tool_spec()
+        } else {
+            imagegen_tool_spec(self.gif_enabled)
+        }
     }
 
     /// Exposes image generation directly and through the nested code-mode tool surface.
@@ -164,7 +161,9 @@ impl ImageGenerationTool {
         &self,
         call: ToolCall<'_>,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        let policy = ImagePolicy::for_dialect(self.backend.dialect());
         let args = parse_args(&call)?;
+        policy.parse_args(call.function_arguments()?)?;
         if args.gif.is_some() && !self.gif_enabled {
             return Err(FunctionCallError::RespondToModel(
                 "GIF output is unavailable in this session.".to_string(),
@@ -173,8 +172,13 @@ impl ImageGenerationTool {
         let PreparedImageRequest {
             request,
             input_images,
-        } = request_for_call_args(&args, call.conversation_history.items(), &call.environments)
-            .await?;
+        } = request_for_call_args(
+            &args,
+            call.conversation_history.items(),
+            &call.environments,
+            policy,
+        )
+        .await?;
         call.turn_item_emitter
             .emit_started(extension_turn_item(
                 ImageGenerationItem {
@@ -222,12 +226,15 @@ impl ImageGenerationTool {
                 Some(ImageBackground::Auto) | None => None,
             };
             match response.data.into_iter().next() {
-                Some(data) => Ok((
-                    data.b64_json,
-                    transparent_background,
-                    imagegen_request_id,
-                    data.generation_id,
-                )),
+                Some(data) => match policy.normalize_result(data.b64_json) {
+                    Ok(result) => Ok((
+                        result,
+                        transparent_background,
+                        imagegen_request_id,
+                        data.generation_id,
+                    )),
+                    Err(message) => Err((message, None, imagegen_request_id)),
+                },
                 None => Err((
                     "image generation returned no image data".to_string(),
                     None,
@@ -411,7 +418,7 @@ async fn save_image_generation_result(
             let output_dir = cwd.join("generated_images");
             let save_result: io::Result<AbsolutePathBuf> = async {
                 let result = result.trim();
-                if result.len() > MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES {
+                if result.len() > MAX_GENERATED_IMAGE_BASE64_BYTES {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "generated image exceeds the executor file size limit",
@@ -420,7 +427,7 @@ async fn save_image_generation_result(
                 let bytes = BASE64_STANDARD
                     .decode(result.as_bytes())
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-                if bytes.len() > MAX_EXECUTOR_GENERATED_IMAGE_BYTES {
+                if bytes.len() > MAX_GENERATED_IMAGE_BYTES {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "generated image exceeds the executor file size limit",
@@ -510,16 +517,26 @@ async fn request_for_call_args(
     args: &ImagegenArgs,
     history: &[ResponseItem],
     environments: &[ToolEnvironment<'_>],
+    policy: ImagePolicy,
 ) -> Result<PreparedImageRequest, FunctionCallError> {
     let background = if args.transparent_background {
         ImageBackground::Transparent
     } else {
         ImageBackground::Opaque
     };
+    let max_edit_images = policy.max_edit_images;
+    let (background, quality, size) = match policy.dialect {
+        codex_api::ApiDialect::OpenAi => (
+            Some(background),
+            Some(ImageQuality::Auto),
+            Some("auto".to_string()),
+        ),
+        codex_api::ApiDialect::Grok => (None, None, None),
+    };
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
-    if paths.len() > MAX_EDIT_IMAGES {
+    if paths.len() > max_edit_images {
         return Err(FunctionCallError::RespondToModel(format!(
-            "`referenced_image_paths` must contain at most {MAX_EDIT_IMAGES} paths"
+            "`referenced_image_paths` must contain at most {max_edit_images} paths"
         )));
     }
     let mut input_images = Vec::with_capacity(paths.len());
@@ -529,11 +546,11 @@ async fn request_for_call_args(
                 request: ImageRequest::Generate(ImageGenerationRequest {
                     prompt: args.prompt.clone(),
                     output: args.gif.map(ImageOutput::Gif),
-                    background: Some(background),
-                    model: IMAGE_MODEL.to_string(),
+                    background,
+                    model: policy.model.to_string(),
                     n: None,
-                    quality: Some(ImageQuality::Auto),
-                    size: Some("auto".to_string()),
+                    quality,
+                    size,
                 }),
                 input_images,
             });
@@ -556,9 +573,9 @@ async fn request_for_call_args(
             images
         }
         (true, Some(count)) => {
-            if !(1..=MAX_EDIT_IMAGES).contains(&count) {
+            if !(1..=max_edit_images).contains(&count) {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
+                    "`num_last_images_to_include` must be between 1 and {max_edit_images}"
                 )));
             }
             // Pathless images have no stable reference, so this bounded window may include newer
@@ -579,11 +596,11 @@ async fn request_for_call_args(
             images,
             prompt: args.prompt.clone(),
             output: args.gif.map(ImageOutput::Gif),
-            background: Some(background),
-            model: IMAGE_MODEL.to_string(),
+            background,
+            model: policy.model.to_string(),
             n: None,
-            quality: Some(ImageQuality::Auto),
-            size: Some("auto".to_string()),
+            quality,
+            size,
         }),
         input_images,
     })

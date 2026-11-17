@@ -5,9 +5,11 @@
 //! sandboxing enforced by the explicit filesystem sandbox context.
 use crate::exec::is_likely_sandbox_denied;
 use crate::session::turn_context::TurnEnvironment;
+use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
@@ -42,6 +44,50 @@ pub(crate) struct ApplyPatchApprovalKey {
     pub(crate) path: PathUri,
 }
 
+/// Hook/policy identity for file-change approvals that reuse ApplyPatchRuntime.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ApplyPatchHookIdentity {
+    /// Stock `apply_patch` hook contract: name `apply_patch`, input `{ command }`.
+    #[default]
+    ApplyPatch,
+    /// Canonical structured-edit arguments without a synthetic patch command.
+    StructuredEdit { arguments: serde_json::Value },
+}
+
+impl ApplyPatchHookIdentity {
+    pub(crate) fn permission_request_payload(&self, patch: &str) -> PermissionRequestPayload {
+        match self {
+            Self::ApplyPatch => PermissionRequestPayload {
+                tool_name: HookToolName::apply_patch(),
+                tool_cwd: None,
+                tool_input: serde_json::json!({ "command": patch }),
+            },
+            Self::StructuredEdit { arguments } => PermissionRequestPayload {
+                tool_name: HookToolName::new("structured_edit"),
+                tool_cwd: None,
+                tool_input: arguments.clone(),
+            },
+        }
+    }
+
+    pub(crate) fn telemetry_tool_name(&self) -> &'static str {
+        match self {
+            Self::ApplyPatch => "apply_patch",
+            Self::StructuredEdit { .. } => "structured_edit",
+        }
+    }
+}
+
+/// How a verified file mutation is written after approval and sandbox checks.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ApplyPatchWriteMode {
+    /// Re-parse `action.patch` and apply hunks. Stock `apply_patch` behavior.
+    #[default]
+    ReparsePatch,
+    /// Write the already-computed file bytes without re-parsing the patch.
+    VerifiedContents,
+}
+
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub turn_environment: TurnEnvironment,
@@ -51,6 +97,8 @@ pub struct ApplyPatchRequest {
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
     pub permissions_preapproved: bool,
+    pub write_mode: ApplyPatchWriteMode,
+    pub(crate) hook_identity: ApplyPatchHookIdentity,
 }
 
 impl ApplyPatchRequest {
@@ -63,6 +111,7 @@ impl ApplyPatchRequest {
             patch: self.action.patch.clone(),
             changes: Arc::clone(&self.changes),
             permissions_preapproved: self.permissions_preapproved,
+            hook_identity: self.hook_identity.clone(),
         }
     }
 }
@@ -180,32 +229,51 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let result = codex_apply_patch::apply_patch_with_options(
-            &req.action.patch,
-            ApplyPatchOptions {
-                // Only reject links when an otherwise-required sandbox was bypassed.
-                // Executor-managed sandboxes can have SandboxType::None.
-                follow_symlinks: attempt.sandbox_requested
-                    || !attempt.manager.should_sandbox(
-                        attempt.permissions,
-                        self.sandbox_preference(),
-                        attempt.enforce_managed_network,
-                    ),
-            },
-            &req.action.cwd,
-            &mut stdout,
-            &mut stderr,
-            fs.as_ref(),
-            sandbox.as_ref(),
-        )
-        .await;
+        let options = ApplyPatchOptions {
+            // Only reject links when an otherwise-required sandbox was bypassed.
+            // Executor-managed sandboxes can have SandboxType::None.
+            follow_symlinks: attempt.sandbox_requested
+                || !attempt.manager.should_sandbox(
+                    attempt.permissions,
+                    self.sandbox_preference(),
+                    attempt.enforce_managed_network,
+                ),
+        };
+        let result = match req.write_mode {
+            ApplyPatchWriteMode::ReparsePatch => {
+                codex_apply_patch::apply_patch_with_options(
+                    &req.action.patch,
+                    options,
+                    &req.action.cwd,
+                    &mut stdout,
+                    &mut stderr,
+                    fs.as_ref(),
+                    sandbox.as_ref(),
+                )
+                .await
+            }
+            ApplyPatchWriteMode::VerifiedContents => {
+                codex_apply_patch::apply_verified_action(
+                    &req.action,
+                    options,
+                    &mut stdout,
+                    &mut stderr,
+                    fs.as_ref(),
+                    sandbox.as_ref(),
+                )
+                .await
+            }
+        };
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr).into_owned();
         let failed = result.is_err();
         let exit_code = if failed { 1 } else { 0 };
-        let delta = match result {
-            Ok(delta) => delta,
-            Err(failure) => failure.into_parts().1,
+        let (delta, retryable_read_denial) = match result {
+            Ok(delta) => (delta, false),
+            Err(failure) => {
+                let retryable_read_denial = failure.is_retryable_read_denial();
+                (failure.into_parts().1, retryable_read_denial)
+            }
         };
         // Count committed paths, including changes made before a later patch failure.
         for change in delta.changes() {
@@ -239,10 +307,21 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
             timed_out: false,
         };
         let sandbox_denied = failed
-            && if attempt.sandbox == SandboxType::None {
-                attempt.sandbox_requested && is_likely_executor_managed_sandbox_denied(&output)
-            } else {
-                is_likely_sandbox_denied(attempt.sandbox, &output)
+            && match req.write_mode {
+                ApplyPatchWriteMode::ReparsePatch => {
+                    if attempt.sandbox == SandboxType::None {
+                        attempt.sandbox_requested
+                            && is_likely_executor_managed_sandbox_denied(&output)
+                    } else {
+                        is_likely_sandbox_denied(attempt.sandbox, &output)
+                    }
+                }
+                // Exact edits must never resubmit a conditional write after an
+                // uncertain response. Only trusted pre-write read provenance can
+                // authorize the orchestrator's approval/retry path.
+                ApplyPatchWriteMode::VerifiedContents => {
+                    attempt.sandbox_requested && retryable_read_denial
+                }
             };
         if sandbox_denied {
             // TODO(iceweasel): Report executor filesystem sandbox backends like process/start so
