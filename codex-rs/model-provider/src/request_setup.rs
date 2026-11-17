@@ -31,6 +31,7 @@ use std::sync::Arc;
 pub(crate) async fn resolve_request_auth(
     info: ModelProviderInfo,
     manager: Option<Arc<AuthManager>>,
+    runtime_config: Option<codex_login::AuthRuntimeConfig>,
     runtime: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
     scope: Option<ProviderAuthScope>,
     destination: Option<String>,
@@ -43,8 +44,12 @@ pub(crate) async fn resolve_request_auth(
                 if let Some((runtime, mode)) = runtime {
                     crate::validate_runtime_destination(destination.as_deref())?;
                     crate::validate_runtime_environment(&runtime, destination.as_deref())?;
-                    let runtime =
-                        crate::select_runtime_provider(&info, manager.as_ref(), &runtime)?;
+                    let runtime = crate::runtime_auth::select_runtime_provider_with_config(
+                        &info,
+                        manager.as_ref(),
+                        runtime_config.as_ref(),
+                        &runtime,
+                    )?;
                     let headers = info.build_header_map()?;
                     let selected =
                         crate::runtime_auth::select_runtime_auth(&runtime, &headers).await?;
@@ -87,14 +92,14 @@ pub(crate) async fn resolve_request_auth(
 /// Capture the selected source's owner before starting work such as a turn or classification.
 /// Request preparation returns the owner it actually used so callers can detect a source change.
 pub fn request_auth_owner(provider: &dyn ModelProvider) -> Option<AuthOwner> {
-    let credentials = provider.auth_manager();
-    match provider.runtime_auth() {
-        Some((runtime, _)) => {
-            crate::select_runtime_provider(provider.info(), credentials.as_ref(), runtime)
-                .ok()
-                .map(|binding| binding.auth_owner())
-        }
-        None => credentials.map(|manager| manager.auth_owner()),
+    if provider.runtime_auth().is_some() {
+        provider
+            .runtime_auth_binding()
+            .ok()
+            .flatten()
+            .map(|binding| binding.auth_owner())
+    } else {
+        provider.auth_manager().map(|manager| manager.auth_owner())
     }
 }
 

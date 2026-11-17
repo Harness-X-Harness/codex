@@ -32,6 +32,8 @@ codex_rust_crate(
     },
     test_data_extra = [
         "//codex-rs/message-board-mcp:package-files",
+        "//grok/dist:config.toml.example",
+        "//grok/dist:models.json",
         "config.schema.json",
     ] + glob(["src/**/snapshots/**"]) + [
     ],

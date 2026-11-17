@@ -12,8 +12,10 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_protocol::json_whole_number;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
+use serde_json::value::RawValue;
 
 use super::push_unique;
 use crate::model::ExecutionStatus;
@@ -592,9 +594,15 @@ fn json_text_content(value: &JsonValue) -> Option<String> {
     }
 }
 
-fn process_id_from_json(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
+fn process_id_from_json(value: &RawValue) -> Option<String> {
+    let mut deserializer = serde_json::Deserializer::from_str(value.get());
+    if let Ok(session_id) = json_whole_number::deserialize::<_, i32>(&mut deserializer) {
+        return Some(session_id.to_string());
+    }
+    // Retain historical display keys, including Serde sentinel objects that
+    // Value already coerced into numbers. Only actual raw numbers normalize.
+    match serde_json::from_str::<JsonValue>(value.get()).ok()? {
+        JsonValue::String(value) if !value.is_empty() => Some(value),
         JsonValue::Number(value) => Some(value.to_string()),
         _ => None,
     }
@@ -632,10 +640,12 @@ struct DispatchedToolPayload {
 
 #[derive(Deserialize)]
 struct DispatchedWriteStdinArgs {
-    session_id: JsonValue,
+    session_id: Box<RawValue>,
     #[serde(default)]
     chars: String,
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     yield_time_ms: Option<u64>,
+    #[serde(default, deserialize_with = "json_whole_number::deserialize_optional")]
     max_output_tokens: Option<usize>,
 }
 

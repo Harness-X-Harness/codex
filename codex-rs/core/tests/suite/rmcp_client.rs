@@ -3678,6 +3678,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 default_verbosity: None,
                 availability_nux: None,
                 apply_patch_tool_type: None,
+                structured_edit_tool_type: None,
                 web_search_tool_type: Default::default(),
                 web_search_provider: None,
                 truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),

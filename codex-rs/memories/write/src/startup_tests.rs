@@ -1814,3 +1814,6 @@ async fn memories_startup_uses_thread_runtime_and_keeps_custom_destinations_inde
     server.verify().await;
     Ok(())
 }
+
+#[path = "grok_startup_tests.rs"]
+mod grok;
