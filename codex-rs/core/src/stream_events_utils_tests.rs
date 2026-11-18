@@ -6,6 +6,7 @@ use super::handle_non_tool_response_item;
 use super::handle_output_item_done;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
+use crate::session::search_activity::SearchActivityScope;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
@@ -330,7 +331,11 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let item = assistant_output_text("original assistant text");
 
     let output = handle_output_item_done(
-        &mut ctx, item, /*previously_active_item*/ None, /*moderation*/ None,
+        &mut ctx,
+        item,
+        /*previously_active_item*/ None,
+        /*moderation*/ None,
+        &SearchActivityScope::new().unwrap(),
     )
     .await
     .expect("assistant message should complete");
@@ -365,7 +370,11 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         }))
         .expect("direct input");
         let result = handle_output_item_done(
-            &mut ctx, call, /*previously_active_item*/ None, /*moderation*/ None,
+            &mut ctx,
+            call,
+            /*previously_active_item*/ None,
+            /*moderation*/ None,
+            &SearchActivityScope::new().unwrap(),
         )
         .await
         .expect("direct call should be handled");
@@ -426,7 +435,11 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         .expect("direct input");
         pending.push(
             handle_output_item_done(
-                &mut ctx, call, /*previously_active_item*/ None, /*moderation*/ None,
+                &mut ctx,
+                call,
+                /*previously_active_item*/ None,
+                /*moderation*/ None,
+                &SearchActivityScope::new().unwrap(),
             )
             .await
             .expect("direct call should be handled")

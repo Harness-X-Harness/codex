@@ -29,7 +29,8 @@ expression: "serde_json::to_string_pretty(&specs).unwrap()"
             },
             "limit": {
               "type": "integer",
-              "description": "Maximum number of windows to return."
+              "description": "Maximum number of windows to return.",
+              "minimum": 1
             },
             "recent_first": {
               "type": "boolean",
@@ -66,11 +67,13 @@ expression: "serde_json::to_string_pretty(&specs).unwrap()"
             },
             "limit": {
               "type": "integer",
-              "description": "Maximum number of items to return."
+              "description": "Maximum number of items to return.",
+              "minimum": 1
             },
             "max_chars_per_item": {
               "type": "integer",
-              "description": "Maximum characters returned in each item's truncated_content."
+              "description": "Maximum characters returned in each item's truncated_content.",
+              "minimum": 1
             },
             "recent_first": {
               "type": "boolean",
@@ -162,11 +165,13 @@ expression: "serde_json::to_string_pretty(&specs).unwrap()"
             },
             "limit_chars": {
               "type": "integer",
-              "description": "Maximum number of characters to return."
+              "description": "Maximum number of characters to return.",
+              "minimum": 1
             },
             "offset_chars": {
               "type": "integer",
-              "description": "Zero-based character offset at which reading starts."
+              "description": "Zero-based character offset at which reading starts.",
+              "minimum": 0
             },
             "window_id": {
               "type": "string",
@@ -207,7 +212,8 @@ expression: "serde_json::to_string_pretty(&specs).unwrap()"
             },
             "limit": {
               "type": "integer",
-              "description": "Maximum number of matching items to return."
+              "description": "Maximum number of matching items to return.",
+              "minimum": 1
             },
             "query": {
               "type": "string",
@@ -309,7 +315,8 @@ expression: "serde_json::to_string_pretty(&specs).unwrap()"
             },
             "max_results": {
               "type": "integer",
-              "description": "Maximum number of files to return."
+              "description": "Maximum number of files to return.",
+              "minimum": 1
             },
             "prefix": {
               "description": "Note path prefix to list.",
@@ -389,11 +396,13 @@ expression: "serde_json::to_string_pretty(&specs).unwrap()"
           "properties": {
             "max_files": {
               "type": "integer",
-              "description": "Maximum number of matching files returned."
+              "description": "Maximum number of matching files returned.",
+              "minimum": 1
             },
             "max_matches_per_file": {
               "type": "integer",
-              "description": "Maximum number of matching lines returned per file."
+              "description": "Maximum number of matching lines returned per file.",
+              "minimum": 1
             },
             "path_prefix": {
               "description": "Note path prefix to search.",

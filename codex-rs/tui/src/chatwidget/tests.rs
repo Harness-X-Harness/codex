@@ -309,6 +309,8 @@ mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;
 mod usage;
+#[path = "tests/web_search_tests.rs"]
+mod web_search_tests;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;
 

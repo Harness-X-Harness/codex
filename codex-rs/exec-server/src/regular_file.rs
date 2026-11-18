@@ -28,6 +28,10 @@ pub(crate) fn open_sync(path: &Path, mode: FsOpenMode) -> io::Result<std::fs::Fi
     }
     configure_open(&mut options);
 
+    #[cfg(test)]
+    if mode == FsOpenMode::Replace {
+        crate::file_system_mutation::test_support::pause_blocking(path);
+    }
     let file = options.open(path)?;
     if !is_disk_file(&file) || !file.metadata()?.is_file() {
         return Err(io::Error::new(

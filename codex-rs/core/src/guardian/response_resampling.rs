@@ -98,6 +98,7 @@ impl ResponseResampling {
                     token_usage.is_some() && !self.accepted_output.is_empty();
             }
             ResponseEvent::Created { .. }
+            | ResponseEvent::SearchActivity { .. }
             | ResponseEvent::SafetyBuffering(_)
             | ResponseEvent::ServerModel(_)
             | ResponseEvent::ModelVerifications(_)

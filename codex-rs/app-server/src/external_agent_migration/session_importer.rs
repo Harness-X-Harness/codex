@@ -432,7 +432,7 @@ impl ExternalAgentSessionImporter {
                     format!("failed to load imported session config: {err}"),
                 )
             })?;
-        let models_manager = self.thread_manager.get_models_manager();
+        let models_manager = self.thread_manager.models_manager_for_config(&config);
         let model = models_manager
             .get_default_model(
                 &config.model,

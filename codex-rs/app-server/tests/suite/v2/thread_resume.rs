@@ -7000,12 +7000,27 @@ async fn thread_resume_returns_provider_error_even_with_provider_override(
     Ok(())
 }
 
+#[test_case::test_case(false; "missing_definition")]
+#[test_case::test_case(true; "different_default")]
 #[tokio::test]
-async fn thread_resume_recovers_after_provider_configuration_is_restored() -> Result<()> {
+async fn thread_resume_recovers_after_provider_configuration_is_restored(
+    configured: bool,
+) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let home = TempDir::new()?;
     mock_responses_config(&server.uri()).write(home.path())?;
     let thread_id = create_saved_gateway_rollout(home.path())?;
+    let config_path = home.path().join("config.toml");
+    if configured {
+        let config = std::fs::read_to_string(&config_path)?;
+        let server_uri = server.uri();
+        std::fs::write(
+            &config_path,
+            format!(
+                "{config}\n[model_providers.old_provider]\nname = 'Original provider'\nbase_url = '{server_uri}/v1'\n"
+            ),
+        )?;
+    }
     let mut client = TestAppServer::builder()
         .with_codex_home(home.path())
         .build_initialized()
@@ -7014,28 +7029,68 @@ async fn thread_resume_recovers_after_provider_configuration_is_restored() -> Re
         thread_id,
         ..Default::default()
     };
-    let id = client.send_thread_resume_request(params.clone()).await?;
-    let error = client
-        .read_stream_until_error_message(RequestId::Integer(id))
+    if configured {
+        // Both routes are configured, but a resume cannot migrate saved history.
+        for overrides in [
+            ThreadResumeParams {
+                model_provider: Some("mock_provider".into()),
+                ..params.clone()
+            },
+            ThreadResumeParams {
+                config: Some(std::collections::HashMap::from([(
+                    "model_provider".into(),
+                    json!("mock_provider"),
+                )])),
+                ..params.clone()
+            },
+        ] {
+            let id = client.send_thread_resume_request(overrides).await?;
+            let error = client
+                .read_stream_until_error_message(RequestId::Integer(id))
+                .await?;
+            assert_eq!(
+                error.error.data,
+                Some(serde_json::to_value(
+                    codex_app_server_protocol::ModelProviderError::ModelProviderMismatch {
+                        model_provider: "old_provider".into(),
+                        current_model_provider: "mock_provider".into(),
+                    }
+                )?)
+            );
+        }
+    } else {
+        let id = client.send_thread_resume_request(params.clone()).await?;
+        let error = client
+            .read_stream_until_error_message(RequestId::Integer(id))
+            .await?;
+        assert_eq!(
+            error.error.data,
+            Some(serde_json::to_value(
+                codex_app_server_protocol::ModelProviderError::ModelProviderNotConfigured {
+                    model_provider: "old_provider".into(),
+                }
+            )?)
+        );
+    }
+    let id = client
+        .send_raw_request(
+            "thread/read",
+            Some(json!({"threadId": params.thread_id, "includeTurns": true})),
+        )
         .await?;
-    assert_eq!(
-        error
-            .error
-            .data
-            .as_ref()
-            .and_then(|data| data["type"].as_str()),
-        Some("modelProviderNotConfigured")
-    );
-
-    let config_path = home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    let server_uri = server.uri();
-    std::fs::write(
-        &config_path,
-        format!(
-            "{config}\n[model_providers.old_provider]\nname = 'Original provider'\nbase_url = '{server_uri}/v1'\n"
-        ),
-    )?;
+    let read: codex_app_server_protocol::ThreadReadResponse = client.read_response(id).await?;
+    assert_eq!(read.thread.model_provider, "old_provider");
+    if !configured {
+        let config = std::fs::read_to_string(&config_path)?;
+        let server_uri = server.uri();
+        std::fs::write(
+            config_path,
+            format!(
+                "{config}\n[model_providers.old_provider]\nname = 'Original provider'\nbase_url = '{server_uri}/v1'\n"
+            ),
+        )?;
+    }
+    // Restoring the definition is sufficient; the default stays mock_provider.
     let id = client
         .send_thread_resume_request(ThreadResumeParams {
             model: Some("gpt-5.2-codex".into()),

@@ -1136,6 +1136,79 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
     Ok(())
 }
 
+#[test]
+fn responses_lite_tool_shape_follows_explicit_dialect() -> anyhow::Result<()> {
+    let tools = vec![codex_tools::ToolSpec::Function(
+        codex_tools::ResponsesApiTool {
+            name: "lookup".to_string(),
+            description: "Look up a value.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                /*additional_properties*/ None,
+            ),
+            output_schema: None,
+        },
+    )];
+    let prompt = Prompt {
+        tools: tools.clone().into(),
+        // Keep this tool-shape fixture independent of the stock instruction prefix.
+        base_instructions: BaseInstructions {
+            text: String::new(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut model = test_model_info();
+    model.use_responses_lite = true;
+    for wire_api in [WireApi::Responses, WireApi::GrokResponses] {
+        let mut client = test_model_client(SessionSource::Cli);
+        Arc::get_mut(&mut client.state)
+            .expect("test client should have unique session state")
+            .provider = create_model_provider(
+            ModelProviderInfo {
+                name: "Grok".to_string(),
+                base_url: Some("https://api.x.ai/v1".to_string()),
+                wire_api,
+                ..Default::default()
+            },
+            /*auth_manager*/ None,
+        );
+        let request = client.build_responses_request(
+            &prompt,
+            &model,
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &test_responses_metadata_for_client(
+                &client,
+                /*turn_id*/ None,
+                format!("{}:0", client.state.thread_id),
+                /*parent_thread_id*/ None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            /*include_internal*/ false,
+        )?;
+        let [ResponseItem::AdditionalTools { tools: actual, .. }] = request.input.as_slice() else {
+            panic!("expected a Responses-lite tool prefix");
+        };
+        let expected = match wire_api {
+            WireApi::Responses => codex_tools::create_tools_json_for_responses_lite(&tools)?,
+            WireApi::GrokResponses => {
+                let (flat, _) =
+                    codex_tools::project_flat_function_tools(&tools).map_err(anyhow::Error::msg)?;
+                codex_tools::create_tools_json_for_responses_api(&flat)?
+            }
+        };
+        assert_eq!(actual.as_ref(), expected.as_slice());
+        assert_eq!(prompt.tools.as_ref(), tools.as_slice());
+        assert!(request.tools.is_none());
+    }
+    Ok(())
+}
+
 #[test_case::test_case(false; "standard")]
 #[test_case::test_case(true; "responses_lite")]
 fn prefix_ids_track_thread_and_payload(responses_lite: bool) -> anyhow::Result<()> {
@@ -2482,12 +2555,12 @@ async fn existing_call_sideband_headers_include_attestation() {
 }
 
 fn realtime_auth_context(
-    model_client: &ModelClient,
+    credentials: Arc<AuthManager>,
     registration: &wiremock::MockServer,
     mode: RuntimeAuthMode,
 ) -> codex_model_provider::ProviderAuthContext {
     let runtime = Arc::new(RuntimeAuthManager::new(
-        model_client.auth_manager().unwrap(),
+        Arc::clone(&credentials),
         AgentHostAuthorization::InstallationId {
             installation_id: uuid::Uuid::nil(),
         },
@@ -2499,7 +2572,7 @@ fn realtime_auth_context(
         format!("{}/register", registration.uri()).parse().unwrap(),
     ));
     codex_model_provider::ProviderAuthContext {
-        credentials: model_client.auth_manager().unwrap(),
+        credentials,
         runtime_auth: Some((runtime, mode)),
     }
 }
@@ -2545,7 +2618,7 @@ async fn realtime_auth_uses_request_scope_on_reconnect(mode: RuntimeAuthMode, ga
         )
     });
     Arc::get_mut(&mut model_client.state).unwrap().provider =
-        create_model_provider(info, Some(credentials));
+        create_model_provider(info, Some(Arc::clone(&credentials)));
     let runtime_id = uuid::Uuid::new_v4().to_string();
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::body_partial_json(serde_json::json!({
@@ -2570,7 +2643,7 @@ async fn realtime_auth_uses_request_scope_on_reconnect(mode: RuntimeAuthMode, ga
         .expect(1)
         .mount(&registration)
         .await;
-    let context = realtime_auth_context(&model_client, &registration, mode);
+    let context = realtime_auth_context(credentials, &registration, mode);
     let headers = http::HeaderMap::from_iter([(
         http::HeaderName::from_static("openai-project"),
         http::HeaderValue::from_static("project-selected"),
@@ -2681,7 +2754,7 @@ async fn realtime_custom_call_keeps_selected_key_for_openai_sideband(mode: Runti
     let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     info.experimental_bearer_token = Some("realtime-key".into());
     Arc::get_mut(&mut model_client.state).unwrap().provider =
-        create_model_provider(info, Some(credentials));
+        create_model_provider(info, Some(Arc::clone(&credentials)));
     let registration = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/register"))
@@ -2704,7 +2777,7 @@ async fn realtime_custom_call_keeps_selected_key_for_openai_sideband(mode: Runti
         .expect(1)
         .mount(&registration)
         .await;
-    let context = realtime_auth_context(&model_client, &registration, mode);
+    let context = realtime_auth_context(credentials, &registration, mode);
     let calls = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/realtime/calls"))
@@ -2784,8 +2857,11 @@ async fn realtime_registration_failure_does_not_fall_back_to_bearer_auth() {
     let (model_client, _) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
     let registration = wiremock::MockServer::start().await;
-    let context =
-        realtime_auth_context(&model_client, &registration, RuntimeAuthMode::AssertionOnly);
+    let context = realtime_auth_context(
+        model_client.auth_manager().unwrap(),
+        &registration,
+        RuntimeAuthMode::AssertionOnly,
+    );
 
     let result = model_client
         .realtime_sideband_auth(
@@ -2901,6 +2977,9 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
     Ok(())
 }
+
+#[path = "client_retired_history_tests.rs"]
+mod retired_history_tests;
 
 #[tokio::test]
 async fn inference_tools_changes_follow_full_specs_across_turns() {

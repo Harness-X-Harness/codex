@@ -533,8 +533,11 @@ impl ConfigManager {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         });
-        if let Some(saved) = saved_provider {
-            typesafe_overrides.model_provider = Some(saved.to_owned());
+        // A default change is not a history migration. Bind an omitted override to
+        // the saved route before resolving configuration; explicit cross-provider
+        // resumes are rejected below even when both providers are configured.
+        if requested_provider.is_none() {
+            typesafe_overrides.model_provider = saved_provider.map(str::to_owned);
         }
         self.load_with_validation(
             &self.current_cli_overrides(),
@@ -575,12 +578,15 @@ impl ConfigManager {
                         ));
                     }
                 }
-                if let Some(saved) = saved_provider
-                    && saved != requested_provider
+                if let Some(saved_provider) = saved_provider
+                    && saved_provider != requested_provider
                 {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("Cannot change this thread's model provider from `{saved}` to `{requested_provider}` on resume."),
+                        ModelProviderError::ModelProviderMismatch {
+                            model_provider: saved_provider.to_owned(),
+                            current_model_provider: requested_provider.to_owned(),
+                        },
                     ));
                 }
                 Ok(())
