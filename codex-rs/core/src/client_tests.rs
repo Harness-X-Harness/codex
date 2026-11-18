@@ -2555,12 +2555,12 @@ async fn existing_call_sideband_headers_include_attestation() {
 }
 
 fn realtime_auth_context(
-    model_client: &ModelClient,
+    credentials: Arc<AuthManager>,
     registration: &wiremock::MockServer,
     mode: RuntimeAuthMode,
 ) -> codex_model_provider::ProviderAuthContext {
     let runtime = Arc::new(RuntimeAuthManager::new(
-        model_client.auth_manager().unwrap(),
+        Arc::clone(&credentials),
         AgentHostAuthorization::InstallationId {
             installation_id: uuid::Uuid::nil(),
         },
@@ -2572,7 +2572,7 @@ fn realtime_auth_context(
         format!("{}/register", registration.uri()).parse().unwrap(),
     ));
     codex_model_provider::ProviderAuthContext {
-        credentials: model_client.auth_manager().unwrap(),
+        credentials,
         runtime_auth: Some((runtime, mode)),
     }
 }
@@ -2618,7 +2618,7 @@ async fn realtime_auth_uses_request_scope_on_reconnect(mode: RuntimeAuthMode, ga
         )
     });
     Arc::get_mut(&mut model_client.state).unwrap().provider =
-        create_model_provider(info, Some(credentials));
+        create_model_provider(info, Some(Arc::clone(&credentials)));
     let runtime_id = uuid::Uuid::new_v4().to_string();
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::body_partial_json(serde_json::json!({
@@ -2643,7 +2643,7 @@ async fn realtime_auth_uses_request_scope_on_reconnect(mode: RuntimeAuthMode, ga
         .expect(1)
         .mount(&registration)
         .await;
-    let context = realtime_auth_context(&model_client, &registration, mode);
+    let context = realtime_auth_context(credentials, &registration, mode);
     let headers = http::HeaderMap::from_iter([(
         http::HeaderName::from_static("openai-project"),
         http::HeaderValue::from_static("project-selected"),
@@ -2754,7 +2754,7 @@ async fn realtime_custom_call_keeps_selected_key_for_openai_sideband(mode: Runti
     let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     info.experimental_bearer_token = Some("realtime-key".into());
     Arc::get_mut(&mut model_client.state).unwrap().provider =
-        create_model_provider(info, Some(credentials));
+        create_model_provider(info, Some(Arc::clone(&credentials)));
     let registration = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/register"))
@@ -2777,7 +2777,7 @@ async fn realtime_custom_call_keeps_selected_key_for_openai_sideband(mode: Runti
         .expect(1)
         .mount(&registration)
         .await;
-    let context = realtime_auth_context(&model_client, &registration, mode);
+    let context = realtime_auth_context(credentials, &registration, mode);
     let calls = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/realtime/calls"))
@@ -2857,8 +2857,11 @@ async fn realtime_registration_failure_does_not_fall_back_to_bearer_auth() {
     let (model_client, _) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
     let registration = wiremock::MockServer::start().await;
-    let context =
-        realtime_auth_context(&model_client, &registration, RuntimeAuthMode::AssertionOnly);
+    let context = realtime_auth_context(
+        model_client.auth_manager().unwrap(),
+        &registration,
+        RuntimeAuthMode::AssertionOnly,
+    );
 
     let result = model_client
         .realtime_sideband_auth(

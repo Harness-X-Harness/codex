@@ -93,7 +93,6 @@ goals = false
 shell_tool = false
 view_image = false
 sleep_tool = false
-multi_agent = false
 multi_agent_v2 = false
 code_mode = false
 apps = false
