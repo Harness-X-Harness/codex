@@ -138,6 +138,53 @@ Story only when consumer behavior or supported scope intentionally changes.
 Verify the actual resulting HEAD under the ordinary development and test
 rules above; successful cherry-pick or tree checks do not establish acceptance.
 
+### Inspect the candidate before acceptance
+
+From a trusted checkout of this policy, inventory the **committed product
+candidate**, not the overlay or a dirty worktree:
+
+```sh
+python3 grok/tools/carry_forward_preflight.py "$PRODUCT_REPO" \
+  "$OLD_STOCK" "$OLD_GROK" "$NEW_STOCK" "$CANDIDATE"
+```
+
+Use Git with `--no-lazy-fetch`, full commit SHAs, and a local clone with the
+objects and history to prove both ancestry relations. The command does not check out or modify the
+product. Its JSON compares old stock → old Grok, old stock → new stock,
+and new stock → candidate. Review paths touched on both sides, **including
+clean applications**, as well as deleted paths and both names of renames (an unmatched
+rename can appear as delete/add). For a stock workflow still different from
+new stock, restore stock or explain the present Grok requirement and its
+test. Do not prefilter the original delta, discard all CI changes, or treat
+an empty intersection as proof: changes in another file can affect a
+caller, configuration key, generator or observable behavior. A zero exit
+means that the Git inventory was produced, not that the port passed.
+
+Use these findings to choose the version branch's existing owners and tests:
+
+1. **Compile before iterating on behavior.** Build affected production,
+   unit and integration test targets together, including clean-applied
+   consumers of changed stock APIs; use the version CI's locked toolchain,
+   profile, features and lint settings. Regenerate affected schema/SDK/lock
+   outputs with their owner and compare exact bytes, not just parsed values.
+   Follow compile-only checks with nonempty native tests and the affected
+   stock and Grok behaviors. If local prerequisites are missing, record what
+   did not run and use the corresponding credential-free CI, not a substitute.
+2. **Explain changed assertions.** Cite the current Story or owning stock
+   behavior. Demonstrate the original failure and test the intended observable
+   result, including material negative cases, without loosening the oracle.
+   Before attributing a suspected stock defect, run the same controlled
+   reproduction on the pinned pristine new stock; if not reproducible or not
+   run, leave the cause unresolved. For timing failures, establish the
+   relevant readiness event rather than adding a sleep or removing assertions.
+3. **Record the subject and limits in the PR.** Cite the pins, candidate,
+   materially retained/replaced stock differences and their evidence. Name the
+   actual checkout and run/attempt separately from PR head and base. Give
+   the commands or links to the executed steps, with their outcomes. Separate
+   controlled fixtures, real-provider runs and individual package targets.
+   Mark skipped or missing evidence `NOT_RUN`; do not start paid runs to fill
+   the report. Refresh evidence for the final candidate. No new manifest, test catalog or aggregate is needed.
+
 ## Evidence, delivery and maintenance
 
 Maintain the distinction between source SHA, binary SHA-256, PR merge
