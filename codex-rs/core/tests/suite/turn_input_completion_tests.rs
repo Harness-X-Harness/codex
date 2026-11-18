@@ -500,11 +500,14 @@ async fn start_or_steer_preserves_payload_while_old_completion_finishes() -> any
             .iter()
             .any(|text| text.contains("replacement application context"))
     );
-    assert!(
-        request
-            .message_input_texts("user")
+    let outputs = request.inputs_of_type("function_call_output");
+    assert_eq!(
+        outputs
             .iter()
-            .any(|text| text.contains("replacement untrusted context"))
+            .filter(|item| item["namespace"] == "agent" && item["name"] == "untrusted_context")
+            .map(|item| &item["output"])
+            .collect::<Vec<_>>(),
+        vec!["replacement untrusted context"]
     );
     let body = request.body_json();
     let turn_metadata: serde_json::Value = serde_json::from_str(
