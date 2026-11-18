@@ -95,11 +95,16 @@ async fn resume_lists_all_providers_and_fork_keeps_provider_filter() -> Result<(
             let case = format!("{action}: embedded={embedded}, last={last}, explicit={explicit}");
             let mut terminal = PtyCodex::start_cli(&cwd, home, &args)?;
             if action == "resume" && last && explicit {
-                // --last finds the newest thread across providers. An explicit override
-                // cannot switch that thread from server-provider to openai.
-                terminal
-                    .wait_for_screen("Cannot change this thread's model provider")
-                    .with_context(|| format!("{case}; screen:\n{}", terminal.screen_contents()))?;
+                // --last opens the newest history, but an explicit provider mismatch
+                // leaves that chat read-only instead of switching its provider.
+                for expected in [
+                    "Server provider history",
+                    "This chat uses Server provider, but Codex now uses OpenAI, so this chat is read-only.",
+                ] {
+                    terminal.wait_for_screen(expected).with_context(|| {
+                        format!("{case}; screen:\n{}", terminal.screen_contents())
+                    })?;
+                }
             } else if action == "resume" {
                 terminal
                     .wait_for_screen("Server provider history")
