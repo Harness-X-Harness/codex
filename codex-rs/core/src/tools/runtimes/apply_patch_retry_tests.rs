@@ -66,7 +66,7 @@ async fn structured_edit_native_read_denial_retry_keeps_original_snapshot() {
         .primary()
         .expect("Local environment")
         .clone();
-    assert!(!turn_environment.environment.is_remote());
+    assert!(!turn_environment.environment().is_remote());
     assert_eq!(
         turn_environment.permission_profile(),
         &PermissionProfile::read_only()
