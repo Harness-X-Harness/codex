@@ -88,10 +88,10 @@ wire_api = "grok_responses"
     let mut provider = config.model_provider.clone();
     provider.supports_websockets = true;
     let client = ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(provider, /*auth_manager*/ None),
         AgentIdentityAuthPolicy::JwtOnly,
         thread,
-        provider,
+        codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
         SessionSource::Exec,
         "test_originator".into(),
         /*model_verbosity*/ None,
