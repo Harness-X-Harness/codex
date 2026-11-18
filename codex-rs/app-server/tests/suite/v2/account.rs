@@ -3330,7 +3330,6 @@ async fn get_account_no_auth() -> Result<()> {
     assert_eq!(
         account,
         GetAccountResponse {
-            user_id: None,
             account: None,
             user_id: None,
             requires_openai_auth: true,
