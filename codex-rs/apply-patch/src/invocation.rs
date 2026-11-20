@@ -238,6 +238,7 @@ async fn try_verify_apply_patch_args(
                             .map(|path| effective_cwd.join(&path.to_string_lossy()))
                             .transpose()?,
                         new_content: contents,
+                        expected_content: None,
                     },
                 );
             }
@@ -784,6 +785,7 @@ PATCH"#,
                         .to_string(),
                         move_path: None,
                         new_content: "updated session directory content\n".to_string(),
+                        expected_content: None,
                     },
                 )]),
                 patch: argv[1].clone(),

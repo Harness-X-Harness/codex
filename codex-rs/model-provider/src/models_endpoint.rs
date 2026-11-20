@@ -74,6 +74,7 @@ fn supports_gateway_catalog(info: &ModelProviderInfo) -> bool {
 pub(crate) struct OpenAiModelsEndpoint {
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    runtime_auth_config: Option<codex_login::AuthRuntimeConfig>,
     gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     transport_builder: Arc<dyn ModelsTransportBuilder>,
     runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
@@ -103,6 +104,9 @@ impl OpenAiModelsEndpoint {
         };
         Self {
             runtime_auth: None,
+            runtime_auth_config: auth_manager
+                .as_ref()
+                .map(|manager| manager.runtime_config()),
             provider_info,
             auth_manager,
             gateway_auth_manager,
@@ -116,6 +120,14 @@ impl OpenAiModelsEndpoint {
         runtime_auth: Option<(Arc<RuntimeAuthManager>, RuntimeAuthMode)>,
     ) -> Self {
         self.runtime_auth = runtime_auth;
+        self
+    }
+
+    pub(crate) fn with_runtime_auth_config(
+        mut self,
+        config: Option<codex_login::AuthRuntimeConfig>,
+    ) -> Self {
+        self.runtime_auth_config = config;
         self
     }
 
@@ -160,6 +172,7 @@ impl OpenAiModelsEndpoint {
         let resolved = resolve_request_auth(
             self.provider_info.clone(),
             self.auth_manager.clone(),
+            self.runtime_auth_config.clone(),
             self.runtime_auth.clone(),
             /*scope*/ None,
             self.provider_info
@@ -308,6 +321,7 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
         Some(Arc::new(Self {
             provider_info,
             auth_manager: self.auth_manager.clone(),
+            runtime_auth_config: self.runtime_auth_config.clone(),
             gateway_auth_manager: self.gateway_auth_manager.clone(),
             runtime_auth: self.runtime_auth.clone(),
             transport_builder: Arc::clone(&self.transport_builder),
