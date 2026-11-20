@@ -185,9 +185,14 @@ async fn explicit_provider_key_keeps_the_requested_project_scope() {
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         });
+        assert!(provider.auth_manager().is_none());
+        assert!(provider.auth().await.is_none());
+        let owner =
+            crate::request_auth_owner(provider.as_ref()).expect("explicit key runtime owner");
         let selected = provider.request_auth(/*scope*/ None).await.unwrap();
         let runtime = selected.runtime.as_ref().unwrap();
         assert_eq!(runtime.auth().api_key(), Some("selected-key"));
+        assert_eq!(&owner, runtime.auth_owner());
         assert!(matches!(
             runtime.runtime().actor().info(),
             ActorInfo::Platform { project_id: Some(project), .. } if project == "proj-selected"

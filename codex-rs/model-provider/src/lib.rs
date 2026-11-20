@@ -9,6 +9,10 @@ mod combined_auth;
 mod gateway_auth;
 mod gateway_export;
 mod gcp;
+mod grok_catalog;
+#[cfg(test)]
+#[path = "grok_provider_tests.rs"]
+mod grok_provider_tests;
 mod models_endpoint;
 mod models_identity;
 mod provider;

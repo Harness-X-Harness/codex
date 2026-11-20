@@ -218,8 +218,8 @@ async fn command_start_receives_rewritten_command_and_executor_workdir(
     assert!(
         begin
             .command
-            .last()
-            .is_some_and(|argument| argument.contains(rewritten_command)),
+            .iter()
+            .any(|argument| argument.contains(rewritten_command)),
         "the executor must receive the post-hook shell command"
     );
     assert_eq!(
@@ -338,8 +338,9 @@ async fn interrupting_command_preparation_does_not_start_the_command(
     )
     .await;
     start_command_turn(test).await?;
-    let mut process_id = None;
-    let mut exit_code = None;
+    let mut begun = None;
+    let mut ended = None;
+    let mut completed_turn = None;
     wait_for_event_with_timeout(
         &test.codex,
         |event| {
@@ -349,10 +350,29 @@ async fn interrupting_command_preparation_does_not_start_the_command(
             );
             match event {
                 EventMsg::ExecCommandBegin(begin) => {
-                    process_id = begin.process_id.clone();
+                    assert!(
+                        begin
+                            .command
+                            .iter()
+                            .any(|part| part.contains("command-after-interruption"))
+                    );
+                    begun = Some((
+                        begin.call_id.clone(),
+                        begin.turn_id.clone(),
+                        begin.process_id.clone(),
+                    ));
                 }
                 EventMsg::ExecCommandEnd(end) => {
-                    exit_code = Some(end.exit_code);
+                    assert!(end.aggregated_output.contains("command-after-interruption"));
+                    ended = Some((
+                        end.call_id.clone(),
+                        end.turn_id.clone(),
+                        end.process_id.clone(),
+                        end.exit_code,
+                    ));
+                }
+                EventMsg::TurnComplete(completed) => {
+                    completed_turn = Some(completed.turn_id.clone());
                 }
                 _ => {}
             }
@@ -361,8 +381,19 @@ async fn interrupting_command_preparation_does_not_start_the_command(
         Duration::from_secs(30),
     )
     .await;
-    assert_eq!(process_id.as_deref(), Some("1000"));
-    assert_eq!(exit_code, Some(0));
+    let (begin_call, begin_turn, process_id) = begun.expect("command began");
+    let (end_call, end_turn, end_process, exit_code) = ended.expect("command ended");
+    assert!(!begin_call.is_empty());
+    assert_eq!(Some(begin_turn.clone()), completed_turn);
+    if matches!(mode, CommandCallMode::Direct) {
+        assert_eq!(begin_call, call_id);
+    }
+    assert!(process_id.as_deref().is_some_and(|id| !id.is_empty()));
+    assert_eq!(
+        (end_call, end_turn, end_process),
+        (begin_call, begin_turn, process_id)
+    );
+    assert_eq!(exit_code, 0);
     let request = follow_up.single_request();
     let output = match mode {
         CommandCallMode::Direct => request.function_call_output(call_id),

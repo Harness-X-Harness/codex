@@ -101,6 +101,20 @@ pub fn select_runtime_provider(
     credentials: Option<&Arc<AuthManager>>,
     runtime: &Arc<RuntimeAuthManager>,
 ) -> CodexResult<Arc<RuntimeAuthBinding>> {
+    select_runtime_provider_with_config(
+        info,
+        credentials,
+        credentials.map(|manager| manager.runtime_config()).as_ref(),
+        runtime,
+    )
+}
+
+pub(crate) fn select_runtime_provider_with_config(
+    info: &ModelProviderInfo,
+    credentials: Option<&Arc<AuthManager>>,
+    config: Option<&codex_login::AuthRuntimeConfig>,
+    runtime: &Arc<RuntimeAuthManager>,
+) -> CodexResult<Arc<RuntimeAuthBinding>> {
     let unsupported = || {
         CodexErr::UnsupportedOperation(
             "runtime auth requires the model provider's selected OpenAI credential".to_string(),
@@ -109,15 +123,14 @@ pub fn select_runtime_provider(
     if info.aws.is_some() {
         return Err(unsupported());
     }
-    let credentials = credentials.ok_or_else(unsupported)?;
     if let Some(bearer) = crate::auth::bearer_auth_for_provider(info)? {
         let token = bearer.token.ok_or_else(unsupported)?;
-        return Ok(runtime.bind_api_key(&token, &credentials.runtime_config()));
+        return Ok(runtime.bind_api_key(&token, config.ok_or_else(unsupported)?));
     }
     if !info.requires_openai_auth && info.auth.is_none() {
         return Err(unsupported());
     }
-    Ok(runtime.bind(Arc::clone(credentials)))
+    Ok(runtime.bind(Arc::clone(credentials.ok_or_else(unsupported)?)))
 }
 
 /// An unrecognized OpenAI origin must not silently fall back to legacy auth.

@@ -833,7 +833,8 @@ impl CodexThread {
     ///
     /// This is the thread-level bridge to `Session::inject_if_running` for
     /// callers that only hold a `CodexThread`.
-    /// Returns the unchanged batch when there is no active turn or an item requires typed turn input.
+    /// Returns the unchanged batch when there is no active turn, its input queue
+    /// has closed for completion, or an item requires typed turn input.
     pub async fn inject_if_running(
         &self,
         items: Vec<ResponseItem>,

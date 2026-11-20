@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+case "${CODEX_HOME:-}" in
+  /*) ;;
+  *) echo "Choose an existing absolute dedicated CODEX_HOME; see INSTALL.md." >&2; exit 2 ;;
+esac
+product_home=$(CDPATH= cd -- "$CODEX_HOME" && pwd -P) || exit 2
+if [ -n "${HOME:-}" ]; then
+  user_home=$(CDPATH= cd -- "$HOME" && pwd -P) || exit 2
+  for shared_home in "$user_home/.codex" "$user_home/.grok"; do
+    if [ -d "$shared_home" ]; then
+      shared_home=$(CDPATH= cd -- "$shared_home" && pwd -P) || exit 2
+    fi
+    if [ "$product_home" = "$shared_home" ]; then
+      echo "Refusing a shared Codex or Grok Home; see INSTALL.md." >&2
+      exit 2
+    fi
+  done
+fi
+if [ ! -f "$product_home/config.toml" ]; then
+  echo "The dedicated Home needs an explicitly installed config.toml; see INSTALL.md." >&2
+  exit 2
+fi
+
+export CODEX_HOME
+exec "$script_dir/grok-bin" "$@"

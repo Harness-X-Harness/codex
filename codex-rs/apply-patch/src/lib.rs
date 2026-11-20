@@ -4,6 +4,7 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod structured_edit;
 mod text_file;
 
 use std::collections::HashMap;
@@ -39,6 +40,10 @@ pub use invocation::maybe_parse_apply_patch;
 pub use invocation::maybe_parse_apply_patch_verified;
 pub use invocation::verify_apply_patch_args;
 pub use standalone_executable::main;
+pub use structured_edit::STALE_STRUCTURED_EDIT_MESSAGE;
+pub use structured_edit::StructuredEditError;
+pub use structured_edit::apply_exact_replacement;
+pub use structured_edit::apply_verified_action;
 
 use crate::invocation::ExtractHeredocError;
 
@@ -145,6 +150,8 @@ pub enum ApplyPatchFileChange {
         move_path: Option<PathUri>,
         /// new_content that will result after the unified_diff is applied.
         new_content: String,
+        /// Original bytes required by an exact update; absent for stock patches.
+        expected_content: Option<String>,
     },
 }
 
@@ -186,6 +193,41 @@ impl ApplyPatchAction {
     /// Returns the changes that would be made by applying the patch.
     pub fn changes(&self) -> &HashMap<PathUri, ApplyPatchFileChange> {
         &self.changes
+    }
+
+    /// Builds one existing-file update from exact, already-computed UTF-8 bytes.
+    ///
+    /// `patch` and `unified_diff` are presentation only. Execute this action with
+    /// [`apply_verified_action`] so neither line endings nor final newlines change.
+    pub fn from_exact_update(
+        cwd: PathUri,
+        path: PathUri,
+        old_content: &str,
+        new_content: String,
+    ) -> Self {
+        let display_path = path
+            .basename()
+            .unwrap_or_else(|| path.inferred_native_path_string());
+        let unified_diff = similar::TextDiff::from_lines(old_content, &new_content)
+            .unified_diff()
+            .context_radius(3)
+            .to_string();
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {display_path}\n{unified_diff}*** End Patch\n"
+        );
+        Self {
+            changes: HashMap::from([(
+                path,
+                ApplyPatchFileChange::Update {
+                    unified_diff,
+                    move_path: None,
+                    new_content,
+                    expected_content: Some(old_content.to_owned()),
+                },
+            )]),
+            patch,
+            cwd,
+        }
     }
 
     /// Should be used exclusively for testing. (Not worth the overhead of
@@ -283,11 +325,17 @@ pub struct ApplyPatchFailure {
     #[source]
     error: ApplyPatchError,
     delta: AppliedPatchDelta,
+    // Set only by the exact writer's native read error, before invoking CAS.
+    retryable_read_denial: bool,
 }
 
 impl ApplyPatchFailure {
     fn new(error: ApplyPatchError, delta: AppliedPatchDelta) -> Self {
-        Self { error, delta }
+        Self {
+            error,
+            delta,
+            retryable_read_denial: false,
+        }
     }
 
     fn without_delta(error: ApplyPatchError) -> Self {
@@ -296,6 +344,14 @@ impl ApplyPatchFailure {
 
     pub fn delta(&self) -> &AppliedPatchDelta {
         &self.delta
+    }
+
+    /// Whether an exact edit hit a native read permission denial before any write.
+    ///
+    /// No conditional-write error carries this permission to retry. Transport,
+    /// helper and remote errors with erased provenance conservatively return false.
+    pub fn is_retryable_read_denial(&self) -> bool {
+        self.retryable_read_denial
     }
 
     pub fn into_parts(self) -> (ApplyPatchError, AppliedPatchDelta) {

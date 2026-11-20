@@ -122,6 +122,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
+        structured_edit_tool_type: None,
         web_search_tool_type: WebSearchToolType::Text,
         web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
