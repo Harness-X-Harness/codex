@@ -204,28 +204,30 @@ async fn grok_local_tool_history_reaches_transport_with_exact_arguments() -> Res
 
 #[tokio::test]
 async fn grok_user_image_survives_first_request_and_later_history_replay() -> Result<()> {
+    use codex_protocol::models::ContentItem;
     use codex_protocol::models::ImageDetail;
     use codex_protocol::models::ImageReference;
     use codex_protocol::models::ResponseInputItem;
-    use codex_protocol::user_input::UserInput;
 
     let image_url = "data:image/png;base64,aW1hZ2U=";
-    let user_input = vec![
-        UserInput::Text {
-            text: "Describe this image".into(),
-            text_elements: vec![],
-        },
-        UserInput::Image {
-            image: ImageReference::Inline {
-                image_url: image_url.into(),
+    let user_message = ResponseInputItem::Message {
+        role: "user".into(),
+        content: vec![
+            ContentItem::InputText {
+                text: "Describe this image".into(),
             },
-            detail: Some(ImageDetail::High),
-        },
-        UserInput::Text {
-            text: "Keep its colors in mind".into(),
-            text_elements: vec![],
-        },
-    ];
+            ContentItem::InputImage {
+                image: ImageReference::Inline {
+                    image_url: image_url.into(),
+                },
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputText {
+                text: "Keep its colors in mind".into(),
+            },
+        ],
+        phase: None,
+    };
     let mut input = vec![];
     for _ in 0..5 {
         input.push(serde_json::from_value(json!({
@@ -233,7 +235,7 @@ async fn grok_user_image_survives_first_request_and_later_history_replay() -> Re
             "content": [{"type": "input_text", "text": "Context"}]
         }))?);
     }
-    input.push(ResponseItem::from(ResponseInputItem::from(user_input)));
+    input.push(ResponseItem::from(user_message));
     let expected_image_message = json!({
         "type": "message", "role": "user", "content": [
             {"type": "input_text", "text": "Describe this image"},
