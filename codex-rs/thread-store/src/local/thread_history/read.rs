@@ -6,6 +6,7 @@ use sqlx::Row;
 
 use super::super::LocalThreadStore;
 use super::super::rollout_lineage::LineageWalk;
+use super::super::rollout_lineage::RolloutLineage;
 use super::segment_paging::page_item_rows;
 use super::segment_paging::page_turn_rows;
 use super::segment_paging::validate_page_size;
