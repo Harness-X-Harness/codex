@@ -115,7 +115,7 @@ fn semantic_item(item: ResponseItem) -> ResponseItem {
 fn recorded_client_items(
     history: &[RolloutItem],
     expected: &[ResponseItem],
-) -> Vec<(ResponseItem, bool, bool)> {
+) -> Vec<(ResponseItem, Option<bool>, bool, bool)> {
     history
         .iter()
         .filter_map(|item| {
@@ -127,6 +127,7 @@ fn recorded_client_items(
                 let metadata = envelope.metadata.as_ref();
                 (
                     item,
+                    metadata.and_then(|metadata| metadata.retain_across_windows),
                     metadata.is_some_and(|metadata| metadata.client_authored),
                     metadata.is_some_and(|metadata| metadata.harness_authored_configuration),
                 )
@@ -208,9 +209,9 @@ async fn closed_completion_redirects_client_items_and_survives_resume(
         developer("<image_resize_notice>client marker-shaped context</image_resize_notice>"),
     ];
     let expected_recorded = vec![
-        (client_items[0].clone(), false, false),
-        (client_items[1].clone(), true, false),
-        (client_items[2].clone(), true, false),
+        (client_items[0].clone(), None, false, false),
+        (client_items[1].clone(), Some(true), false, false),
+        (client_items[2].clone(), Some(true), false, false),
     ];
     test.codex
         .inject_response_items(client_items.clone())
@@ -328,11 +329,11 @@ async fn closed_completion_redirects_client_items_and_survives_resume(
     ] {
         assert!(!request.body_contains_text(text));
     }
-    assert!(
-        request.input().iter().all(|item| {
-            item.get("metadata").is_none() && item.get("client_authored").is_none()
-        })
-    );
+    assert!(request.input().iter().all(|item| {
+        item.get("metadata").is_none()
+            && item.get("client_authored").is_none()
+            && item.get("retain_across_windows").is_none()
+    }));
     assert_eq!(window.starts.load(Ordering::SeqCst), 2);
     resumed.thread.shutdown_and_wait().await?;
     Ok(())

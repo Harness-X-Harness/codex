@@ -140,7 +140,7 @@ async fn generic_inject_rejects_without_converting_original_input() {
 }
 
 #[test_case::test_case(false; "plain history")]
-#[test_case::test_case(true; "client provenance")]
+#[test_case::test_case(true; "client developer retention")]
 #[tokio::test]
 async fn client_inject_records_history_after_turn_input_is_closed(retain_client_messages: bool) {
     let (session, turn_context, rx_event) = make_session_and_context_with_auth_and_config_and_rx(
@@ -218,15 +218,22 @@ async fn client_inject_records_history_after_turn_input_is_closed(retain_client_
         recorded[0]
             .metadata
             .as_ref()
-            .is_some_and(|metadata| metadata.client_authored),
-        retain_client_messages
+            .and_then(|metadata| metadata.retain_across_windows),
+        retain_client_messages.then_some(true)
     );
-    assert!(
-        !recorded[1]
+    assert_eq!(
+        recorded[1]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.retain_across_windows),
+        None
+    );
+    assert!(recorded.iter().all(|envelope| {
+        !envelope
             .metadata
             .as_ref()
             .is_some_and(|metadata| metadata.client_authored)
-    );
+    }));
     let rollout_items = recorded
         .iter()
         .cloned()
