@@ -12,23 +12,22 @@ fn history_tool_specs_keep_declared_count_and_offset_bounds() {
         (
             tool_spec::<HistoryListWindows, Value>(None, None),
             "limit",
-            1,
+            1.0,
         ),
         (
             tool_spec::<HistoryReadItem, Value>(None, None),
             "offset_chars",
-            0,
+            0.0,
         ),
         (
             tool_spec::<NotesSearchContents, Value>(None, None),
             "max_matches_per_file",
-            1,
+            1.0,
         ),
     ] {
         let wire = serde_json::to_value(spec).expect("history spec");
-        assert_eq!(
-            wire["tools"][0]["parameters"]["properties"][field]["minimum"],
-            minimum
-        );
+        let property = &wire["tools"][0]["parameters"]["properties"][field];
+        assert_eq!(property["type"], "integer");
+        assert_eq!(property["minimum"].as_f64(), Some(minimum));
     }
 }
