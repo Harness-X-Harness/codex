@@ -785,12 +785,10 @@ fn whole_number_stdin_replay_joins_runtime_sessions_and_preserves_limits() -> an
                     &Some(payloads[1].0.raw_payload_id.clone()),
                 ),
             );
+            let mut reader = crate::PayloadReader::new(temp.path());
             for (reference, original) in payloads {
                 assert_eq!(rollout.raw_payloads[&reference.raw_payload_id], reference);
-                assert_eq!(
-                    std::fs::read(temp.path().join(&reference.path))?,
-                    serde_json::to_vec_pretty(&original)?,
-                );
+                assert_eq!(reader.read(&reference)?, serde_json::to_vec(&original)?);
             }
         }
         assert_eq!(
@@ -884,12 +882,10 @@ fn whole_number_stdin_replay_preserves_historical_keys_and_raw_evidence() -> any
                 &Some(payloads[1].0.raw_payload_id.clone()),
             ),
         );
+        let mut reader = crate::PayloadReader::new(temp.path());
         for (reference, original) in payloads {
             assert_eq!(rollout.raw_payloads[&reference.raw_payload_id], reference);
-            assert_eq!(
-                std::fs::read(temp.path().join(&reference.path))?,
-                serde_json::to_vec_pretty(&original)?,
-            );
+            assert_eq!(reader.read(&reference)?, serde_json::to_vec(&original)?);
         }
     }
     Ok(())
@@ -959,12 +955,13 @@ fn whole_number_stdin_replay_rejects_invalid_limits_and_missing_session_keys() -
             ),
             "{arguments}",
         );
+        let mut reader = crate::PayloadReader::new(temp.path());
         for (reference, original) in payloads {
             assert_eq!(rollout.raw_payloads[&reference.raw_payload_id], reference);
             assert_eq!(
-                std::fs::read(temp.path().join(&reference.path))?,
-                serde_json::to_vec_pretty(&original)?,
-                "{arguments}",
+                reader.read(&reference)?,
+                serde_json::to_vec(&original)?,
+                "{arguments}"
             );
         }
     }
