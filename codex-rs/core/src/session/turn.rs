@@ -2078,6 +2078,7 @@ async fn run_sampling_request(
             .for_prompt(
                 &step_context.settings.model_info.input_modalities,
                 sess.services.image_store.as_ref(),
+                step_context.turn.provider.api_dialect(),
             )
             .await;
         sess.services
@@ -2586,6 +2587,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
                 .ok()
                 .map(|request| RealtimeEventText::Handoff(format!("{message}\n\n{request}"), None))
         }
+        // A live search preview is visual state, not assistant narration or a handoff.
+        EventMsg::SearchActivity(_) => None,
         EventMsg::Error(_)
         | EventMsg::Warning(_)
         | EventMsg::AuthRecoveryStarted(_)
@@ -2922,7 +2925,8 @@ async fn handle_assistant_item_done_in_plan_mode(
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut AssistantMessages,
     moderation: Option<&codex_protocol::protocol::TargetedAnswerModeration>,
-) -> bool {
+    search_activity: &super::search_activity::SearchActivityScope,
+) -> CodexResult<bool> {
     let turn_context = &step_context.turn;
     if let ResponseItem::Message { role, .. } = item
         && role == "assistant"
@@ -2942,6 +2946,11 @@ async fn handle_assistant_item_done_in_plan_mode(
                 &mut finalized_turn_item.turn_item,
                 moderation,
             );
+            search_activity.validate_canonical(
+                turn_context,
+                item,
+                Some(&finalized_turn_item.turn_item),
+            )?;
             finalized_facts = Some(finalized_turn_item.facts.clone());
             emit_turn_item_in_plan_mode(
                 sess,
@@ -2967,9 +2976,9 @@ async fn handle_assistant_item_done_in_plan_mode(
         if let Some(agent_message) = final_last_agent_message {
             last_agent_message.record(agent_message);
         }
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -3150,6 +3159,7 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message = AssistantMessages::default();
     let mut active_item: Option<TurnItem> = None;
+    let mut search_activity = super::search_activity::SearchActivityScope::new()?;
     let mut active_tool_argument_diff_consumer: Option<(
         String,
         Box<dyn ToolArgumentDiffConsumer>,
@@ -3171,6 +3181,10 @@ async fn try_run_sampling_request(
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state =
         plan_mode.then(|| PlanModeStreamState::new(unfinished_plan_id.clone()));
+    if let Some(state) = plan_mode_state.as_ref() {
+        // Plan text can publish its generated item before assistant finalization.
+        search_activity.claim_canonical_identity(&turn_context, &state.plan_item_state.item_id)?;
+    }
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
     let mut active_item_is_streaming_to_client = false;
@@ -3207,6 +3221,7 @@ async fn try_run_sampling_request(
         );
 
         let receive_started = Instant::now();
+        let replaying_accepted_output = !resampling.accepted_output.is_empty();
         let receive = resampling
             .next(&mut stream)
             .instrument(trace_span!(parent: &handle_responses, "receiving"))
@@ -3308,6 +3323,24 @@ async fn try_run_sampling_request(
             continue;
         }
 
+        // Resampled output was restored to canonical identities before buffering.
+        // Only raw provider events may pass through the flat-tool mapping.
+        let event = if replaying_accepted_output {
+            event
+        } else {
+            if let ResponseEvent::OutputItemAdded(item) | ResponseEvent::OutputItemDone(item) =
+                &event
+                && let Err(error) = search_activity.validate_response_identity(&turn_context, item)
+            {
+                break Err(error);
+            }
+            match step_context.tool_router.normalize_response_event(event) {
+                Ok(Some(event)) => event,
+                Ok(None) => continue,
+                Err(error) => break Err(CodexErr::InvalidRequest(error)),
+            }
+        };
+
         let Some(event) = resampling.filter(event, &step_context.tool_router) else {
             continue;
         };
@@ -3316,6 +3349,19 @@ async fn try_run_sampling_request(
             .record_responses(&handle_responses, &event);
 
         match event {
+            ResponseEvent::SearchActivity {
+                output_index,
+                item_id,
+                kind,
+                state,
+            } => {
+                if let Err(error) = search_activity
+                    .observe(&sess, &turn_context, output_index, item_id, kind, state)
+                    .await
+                {
+                    break Err(error);
+                }
+            }
             ResponseEvent::Created { response_id } => {
                 answer_moderation = None;
                 response_id_for_assessment.clone_from(&response_id);
@@ -3394,8 +3440,8 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut()
-                    && handle_assistant_item_done_in_plan_mode(
+                if let Some(state) = plan_mode_state.as_mut() {
+                    match handle_assistant_item_done_in_plan_mode(
                         &sess,
                         &step_context,
                         turn_store.as_ref(),
@@ -3404,10 +3450,14 @@ async fn try_run_sampling_request(
                         previously_streamed_item.as_ref(),
                         &mut last_agent_message,
                         answer_moderation.as_ref(),
+                        &search_activity,
                     )
                     .await
-                {
-                    continue;
+                    {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => break Err(error),
+                    }
                 }
 
                 let mut tool_runtime = tool_runtime.clone();
@@ -3454,11 +3504,17 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
+                let retained_search_id = match &item {
+                    ResponseItem::WebSearchCall { id: Some(id), .. }
+                    | ResponseItem::CustomToolCall { id: Some(id), .. } => Some(id.to_string()),
+                    _ => None,
+                };
                 let output_result = match handle_output_item_done(
                     &mut ctx,
                     item,
                     previously_streamed_item,
                     answer_moderation.as_ref(),
+                    &search_activity,
                 )
                 .instrument(handle_responses)
                 .await
@@ -3466,8 +3522,13 @@ async fn try_run_sampling_request(
                     Ok(output_result) => output_result,
                     Err(err) => break Err(err),
                 };
-                if let Some(tool) = output_result.tool_future {
-                    in_flight.push_back(tool);
+                if let Some(item_id) = retained_search_id
+                    && output_result.retained_search_id.as_deref() == Some(item_id.as_str())
+                {
+                    search_activity.retained(&turn_context, &item_id);
+                }
+                if let Some(tool_future) = output_result.tool_future {
+                    in_flight.push_back(tool_future);
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message.record(agent_message);
@@ -3546,8 +3607,17 @@ async fn try_run_sampling_request(
                     let mut turn_item = turn_item;
                     // An interrupted response may discard its partial item. Only expose
                     // items received during this drain once OutputItemDone confirms them.
-                    let stream_item_to_client =
-                        !*draining_for_mailbox && !defer_streamed_turn_items_for_contributors;
+                    // The public Web item has no failure status. Grok can finish
+                    // an individual hosted operation with `failed` and continue
+                    // the response, so publish its Web lifecycle only after a
+                    // successful done item. Internal activity still owns the
+                    // in-flight identity; failures have a separate warning path.
+                    let defer_hosted_web = turn_context.provider.api_dialect()
+                        == codex_api::ApiDialect::Grok
+                        && matches!(&item, ResponseItem::WebSearchCall { .. });
+                    let stream_item_to_client = !*draining_for_mailbox
+                        && !defer_streamed_turn_items_for_contributors
+                        && !defer_hosted_web;
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
                     let mut seeded_item_id: Option<String> = None;
                     if stream_item_to_client
@@ -3912,6 +3982,11 @@ async fn try_run_sampling_request(
         }
     }
     drop(stream);
+    // Cancellation, normalization failure and early exits can bypass an API
+    // terminal event. Clear before potentially blocking assistant/tool drain and
+    // before the outer retry loop can start the next attempt.
+    search_activity.clear(&sess, &turn_context).await;
+
     drop(sampling_span);
     drop(sampling_timing_guard);
     flush_assistant_text_segments_all(

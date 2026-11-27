@@ -573,3 +573,38 @@ async fn review_execution_uses_frozen_profile_window(capture_enabled: bool) {
     assert_eq!(totals.auto_review, review_end.duration_since(review_start));
     assert_eq!(first.1, Some(end.duration_since(start).as_millis() as i64));
 }
+
+#[tokio::test]
+async fn search_activity_does_not_replace_the_first_ordered_output_timing() {
+    let state = TurnTimingState::default();
+    state.mark_turn_started(Instant::now()).await;
+    for activity_state in [
+        codex_protocol::SearchActivityState::Running,
+        codex_protocol::SearchActivityState::Completed,
+        codex_protocol::SearchActivityState::Cleared,
+    ] {
+        assert_eq!(
+            state
+                .record_ttft_for_response_event(&ResponseEvent::SearchActivity {
+                    output_index: 1,
+                    item_id: "search-1".to_string(),
+                    kind: codex_protocol::SearchActivityKind::Web,
+                    state: activity_state,
+                })
+                .await,
+            None
+        );
+    }
+    assert!(
+        state
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("A".to_string()))
+            .await
+            .is_some()
+    );
+    assert_eq!(
+        state
+            .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("B".to_string()))
+            .await,
+        None
+    );
+}

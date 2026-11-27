@@ -599,6 +599,7 @@ pub struct GetAccountResponse {
     /// ChatGPT user ID belonging to this account response, when available.
     #[serde(default)]
     pub user_id: Option<String>,
+    // Whether the configured provider uses OpenAI login, not credential availability.
     pub requires_openai_auth: bool,
     #[experimental("account/read.workspaceRouting")]
     pub workspace_routing: Option<WorkspaceRouting>,
