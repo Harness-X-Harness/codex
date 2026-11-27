@@ -210,6 +210,7 @@ pub struct ExecOneOffCommandParams {
 pub struct GetAuthStatusResponse {
     pub auth_method: Option<AuthMode>,
     pub auth_token: Option<String>,
+    // Whether the configured provider uses OpenAI login, not credential availability.
     pub requires_openai_auth: Option<bool>,
 }
 

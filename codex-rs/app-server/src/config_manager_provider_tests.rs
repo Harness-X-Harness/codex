@@ -1,4 +1,4 @@
-//! Checks retained providers against managed policy and the current provider selection.
+//! Checks retained providers against managed policy independently of the default provider.
 
 use super::*;
 use anyhow::Result;
@@ -259,5 +259,118 @@ async fn catalog_reload_uses_latest_model_provider() -> Result<()> {
         .await?
         .config;
     assert_eq!(refreshed.model_provider_id, "openai");
+    Ok(())
+}
+
+/// Invocation defaults do not invalidate another thread's retained provider.
+#[test_case("model_provider", "gateway"; "explicit_provider")]
+#[test_case("profile", "gateway-profile"; "selected_profile")]
+#[tokio::test]
+async fn input_provider_check_retains_route_across_default_changes(
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+model_provider = "openai"
+[model_providers.gateway]
+name = "Gateway"
+"#,
+    )?;
+    let mut loader_overrides = LoaderOverrides::without_managed_config_for_tests();
+    let cli_overrides = if key == "profile" {
+        std::fs::write(
+            home.path().join(format!("{value}.config.toml")),
+            "model_provider = 'gateway'\n[model_providers.gateway]\nname = 'Gateway'\n",
+        )?;
+        loader_overrides.user_config_path = Some(AbsolutePathBuf::from_absolute_path(
+            home.path().join(format!("{value}.config.toml")),
+        )?);
+        loader_overrides.user_config_profile = Some(value.parse()?);
+        Vec::new()
+    } else {
+        vec![(key.into(), TomlValue::String(value.into()))]
+    };
+    let manager = ConfigManager::new_for_tests(
+        home.path().to_path_buf(),
+        cli_overrides,
+        loader_overrides,
+        CloudConfigBundleLoader::default(),
+    );
+    let current = manager
+        .load_latest_config(Some(home.path().to_path_buf()))
+        .await?;
+    assert_eq!(current.model_provider_id, "gateway");
+    manager.check_thread_model_provider(&current).await?;
+    let default_manager =
+        ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    default_manager
+        .check_thread_model_provider(&current)
+        .await?;
+    Ok(())
+}
+
+#[test_case(None; "implicit_saved_route")]
+#[test_case(Some("gateway"); "explicit_saved_route")]
+#[tokio::test]
+async fn resume_retains_saved_provider_when_default_differs(requested: Option<&str>) -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model_provider = 'openai'\n[model_providers.gateway]\nname = 'Gateway'\n",
+    )?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let config = manager
+        .load_for_resume(
+            Some("gateway"),
+            None,
+            ConfigOverrides {
+                model_provider: requested.map(str::to_owned),
+                ..Default::default()
+            },
+            Some(home.path().to_path_buf()),
+        )
+        .await?;
+    assert_eq!(config.model_provider_id, "gateway");
+    Ok(())
+}
+
+#[test_case(false; "typed_override")]
+#[test_case(true; "config_override")]
+#[tokio::test]
+async fn resume_rejects_cross_provider_history_even_when_both_configured(
+    use_config_override: bool,
+) -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "model_provider = 'openai'\n[model_providers.gateway]\nname = 'Gateway'\n",
+    )?;
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    let overrides = use_config_override
+        .then(|| HashMap::from([("model_provider".into(), serde_json::json!("openai"))]));
+    let error = manager
+        .load_for_resume(
+            Some("gateway"),
+            overrides,
+            ConfigOverrides {
+                model_provider: (!use_config_override).then(|| "openai".into()),
+                ..Default::default()
+            },
+            Some(home.path().to_path_buf()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<ModelProviderError>()),
+        Some(&ModelProviderError::ModelProviderMismatch {
+            model_provider: "gateway".into(),
+            current_model_provider: "openai".into(),
+        })
+    );
     Ok(())
 }

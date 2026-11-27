@@ -224,3 +224,7 @@ fn without_thread_item_media(mut item: ThreadItemPayload) -> ThreadItemPayload {
     }
     item
 }
+
+#[cfg(test)]
+#[path = "notification_media_tests.rs"]
+mod tests;
