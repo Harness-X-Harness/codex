@@ -308,7 +308,7 @@ async fn retry_header_does_not_override_terminal_errors() {
 async fn keep_open_error(event: serde_json::Value) -> crate::ApiError {
     let bytes =
         stream::iter([Ok(Bytes::from(format!("data: {event}\n\n")))]).chain(stream::pending());
-    let mut response = spawn_response_stream(
+    let mut response = spawn_response_stream_with_search(
         StreamResponse {
             status: StatusCode::OK,
             headers: HeaderMap::new(),
@@ -317,6 +317,8 @@ async fn keep_open_error(event: serde_json::Value) -> crate::ApiError {
         Duration::from_secs(60),
         /*telemetry*/ None,
         /*turn_state*/ None,
+        ApiDialect::OpenAi,
+        SearchActivityAdmission::Disabled,
     );
     let started = tokio::time::Instant::now();
     let error = loop {
