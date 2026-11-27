@@ -170,3 +170,59 @@ async fn sampling_drain_does_not_reopen_closed_turn_input() {
         Err(vec![item])
     );
 }
+
+#[tokio::test]
+async fn interrupted_agent_message_snapshot_preserves_teardown_input() {
+    let input_queue = InputQueue::new();
+    let active_turn = ActiveTurn::default();
+    let turn_state = active_turn.turn_state.as_ref();
+    let agent_message = ResponseItemEnvelope {
+        item: ResponseItem::AgentMessage {
+            id: None,
+            author: "worker".to_owned(),
+            recipient: "root".to_owned(),
+            content: vec![],
+            internal_chat_message_metadata_passthrough: None,
+        },
+        metadata: Some(CodexHarnessMetadata {
+            client_authored: true,
+            ..Default::default()
+        }),
+    };
+    let other = TurnInput::ResponseItem(ResponseItem::Other.into());
+    input_queue
+        .extend_pending_input_and_notify_for_turn_state(
+            turn_state,
+            vec![
+                other.clone(),
+                TurnInput::ResponseItem(agent_message.clone()),
+            ],
+        )
+        .await
+        .expect("open queue accepts input");
+
+    assert_eq!(
+        input_queue
+            .close_and_take_interrupted_agent_messages(turn_state)
+            .await,
+        vec![agent_message]
+    );
+    assert_eq!(
+        input_queue
+            .extend_pending_input_and_notify_for_turn_state(turn_state, vec![other.clone()])
+            .await,
+        Err(vec![other.clone()])
+    );
+    assert!(
+        input_queue
+            .close_and_take_interrupted_agent_messages(turn_state)
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        input_queue
+            .take_pending_input_for_turn_state(turn_state)
+            .await,
+        vec![other]
+    );
+}

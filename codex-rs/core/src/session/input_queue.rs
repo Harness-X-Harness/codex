@@ -482,6 +482,29 @@ impl InputQueue {
         turn_state.pending_input.take_items()
     }
 
+    /// Closes admission and takes accepted agent messages for interrupted history.
+    /// Other input stays queued for teardown, which requeues native terminal results.
+    pub(crate) async fn close_and_take_interrupted_agent_messages(
+        &self,
+        turn_state: &Mutex<TurnState>,
+    ) -> Vec<ResponseItemEnvelope> {
+        let mut state = turn_state.lock().await;
+        let queue = &mut state.pending_input;
+        queue.closed = true;
+        let mut messages = Vec::new();
+        for input in queue.take_items() {
+            match input {
+                TurnInput::ResponseItem(item)
+                    if matches!(item.item, ResponseItem::AgentMessage { .. }) =>
+                {
+                    messages.push(item);
+                }
+                input => queue.items.push(input),
+            }
+        }
+        messages
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
