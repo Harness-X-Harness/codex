@@ -193,7 +193,7 @@ jobs:
     name: Native runtime proof
     needs: subject
     runs-on: ubuntu-22.04
-    timeout-minutes: 135
+    timeout-minutes: 180
     outputs:
       integration-artifact-id: ${{ steps.integration-artifact.outputs.artifact-id }}
       integration-source-sha: ${{ steps.integration-binary.outputs.source-sha }}
