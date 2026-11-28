@@ -51,7 +51,7 @@ impl std::fmt::Display for ModelProviderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ModelProviderMismatch { model_provider, current_model_provider } => write!(f,
-                "This chat uses {model_provider}, but your current provider is {current_model_provider}. Switch to {model_provider} to continue."),
+                "This chat uses {model_provider} and cannot be resumed with {current_model_provider}. Resume with {model_provider}, or start a new chat with {current_model_provider}."),
             Self::ModelProviderNotConfigured { model_provider } => write!(f,
                 "This chat uses model provider “{model_provider}”, which is no longer configured. Restore this provider’s configuration to continue."),
             Self::ModelProviderPolicyConflict { model_provider, required_model_provider }

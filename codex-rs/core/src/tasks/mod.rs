@@ -1285,25 +1285,9 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             // Injection acknowledges queueing. Preserve accepted agent mail before
             // teardown discards pending input and the host observes TurnAborted.
-            let mut pending_mail = Vec::new();
-            let mut remaining_input = Vec::new();
-            for input in self
+            let pending_mail = self
                 .input_queue
-                .take_pending_input_for_turn_state(turn_state)
-                .await
-            {
-                match input {
-                    TurnInput::ResponseItem(item)
-                        if matches!(item.item, ResponseItem::AgentMessage { .. }) =>
-                    {
-                        pending_mail.push(item);
-                    }
-                    input => remaining_input.push(input),
-                }
-            }
-            // Existing cleanup requeues native terminal results from this input.
-            self.input_queue
-                .extend_pending_input_for_turn_state(turn_state, remaining_input)
+                .close_and_take_interrupted_agent_messages(turn_state)
                 .await;
             if !pending_mail.is_empty() {
                 self.record_annotated_conversation_items(

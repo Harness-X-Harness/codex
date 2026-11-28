@@ -150,7 +150,7 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseItemEnvelope, CodexErr>> {
         let error_call = call.clone();
-        let source = call.direct_source();
+        let source = self.step_context.tool_router.direct_source(&call);
         let file_backed_tool_audio = self
             .step_context
             .turn

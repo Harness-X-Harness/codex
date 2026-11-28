@@ -39,39 +39,88 @@ async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
 
 #[tokio::test]
 async fn server_account_requirement_controls_login_screen() -> color_eyre::Result<()> {
-    for requires_openai_auth in [false, true] {
-        let home = TempDir::new()?;
-        std::fs::write(
-            home.path().join("config.toml"),
-            format!(
-                r#"
+    for (requires_openai_auth, credentials, uses_login) in [
+        (false, "", false),
+        (true, "", true),
+        (
+            true,
+            "experimental_bearer_token = \"synthetic-provider-key\"",
+            false,
+        ),
+        (true, "env_key = \"CODEX_TEST_PROVIDER_LOGIN_KEY\"", false),
+    ] {
+        for ambient_login in [false, true] {
+            let home = TempDir::new()?;
+            std::fs::write(
+                home.path().join("config.toml"),
+                format!(
+                    r#"
+cli_auth_credentials_store = "file"
 model_provider = "test-provider"
 [model_providers.test-provider]
 name = "Test provider"
 base_url = "http://example.test/v1"
 wire_api = "responses"
 requires_openai_auth = {requires_openai_auth}
+{credentials}
 "#
-            ),
-        )?;
-        let server_config = build_config(&home).await?;
-        let mut server = AppServerSession::new(
-            crate::backend_id::BackendId::new(),
-            AppServerClient::InProcess(start_test_embedded_app_server(server_config).await?),
-            ThreadParamsMode::Embedded,
-        );
-        let (login_status, account) = get_login_status(&mut server).await?;
-        assert_eq!(account.requires_openai_auth, requires_openai_auth);
-        assert_eq!(
-            should_show_login_screen(login_status, account.requires_openai_auth),
-            requires_openai_auth
-        );
-        assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::Chatgpt),
-            account.requires_openai_auth
-        ));
-        server.shutdown().await?;
+                ),
+            )?;
+            if ambient_login {
+                codex_login::login_with_api_key(
+                    home.path(),
+                    "synthetic-ambient-key",
+                    codex_config::types::AuthCredentialsStoreMode::File,
+                    codex_login::AuthKeyringBackendKind::default(),
+                )?;
+            }
+            let server_config = build_config(&home).await?;
+            let mut server = AppServerSession::new(
+                crate::backend_id::BackendId::new(),
+                AppServerClient::InProcess(start_test_embedded_app_server(server_config).await?),
+                ThreadParamsMode::Embedded,
+            );
+            let (login_status, account) = get_login_status(&mut server).await?;
+            assert_eq!(account.requires_openai_auth, uses_login);
+            assert_eq!(account.account.is_some(), uses_login && ambient_login);
+            assert_eq!(
+                should_show_login_screen(login_status, account.requires_openai_auth),
+                uses_login && !ambient_login
+            );
+            server.shutdown().await?;
+        }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_login_bypass_does_not_bypass_managed_login_restrictions() -> color_eyre::Result<()>
+{
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"
+cli_auth_credentials_store = "file"
+forced_login_method = "chatgpt"
+model_provider = "provider-key"
+[model_providers.provider-key]
+name = "Provider key"
+wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "synthetic-provider-key"
+"#,
+    )?;
+    codex_login::login_with_api_key(
+        home.path(),
+        "synthetic-ambient-key",
+        codex_config::types::AuthCredentialsStoreMode::File,
+        codex_login::AuthKeyringBackendKind::default(),
+    )?;
+    let config = build_config(&home).await?;
+    let error = enforce_login_restrictions(&config.auth_config())
+        .await
+        .expect_err("managed login restrictions remain independent of provider credentials");
+    assert!(error.to_string().contains("ChatGPT login is required"));
     Ok(())
 }
 

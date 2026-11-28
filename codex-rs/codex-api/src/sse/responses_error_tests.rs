@@ -1,9 +1,11 @@
 //! Regression coverage for retry advice carried by failed Responses events.
 
 use super::process_responses_event;
-use super::spawn_response_stream;
+use super::spawn_response_stream_with_search;
 use crate::api_bridge::map_api_error;
 use crate::common::ResponseEvent;
+use crate::common::SearchActivityAdmission;
+use crate::provider::ApiDialect;
 use bytes::Bytes;
 use codex_client::StreamResponse;
 use codex_http_client::RetryAfter;
@@ -157,7 +159,7 @@ async fn terminal_failure_with_retry_header_ends_stream_immediately() {
                 "data: {failure}\n\ndata: {completed}\n\n"
             )))])
             .chain(stream::pending());
-            let mut stream = spawn_response_stream(
+            let mut stream = spawn_response_stream_with_search(
                 StreamResponse {
                     status: StatusCode::OK,
                     headers: HeaderMap::new(),
@@ -166,6 +168,8 @@ async fn terminal_failure_with_retry_header_ends_stream_immediately() {
                 Duration::from_secs(60),
                 /*telemetry*/ None,
                 /*turn_state*/ None,
+                ApiDialect::OpenAi,
+                SearchActivityAdmission::Disabled,
             );
             let error = loop {
                 match stream.next().await {
@@ -304,7 +308,7 @@ async fn retry_header_does_not_override_terminal_errors() {
 async fn keep_open_error(event: serde_json::Value) -> crate::ApiError {
     let bytes =
         stream::iter([Ok(Bytes::from(format!("data: {event}\n\n")))]).chain(stream::pending());
-    let mut response = spawn_response_stream(
+    let mut response = spawn_response_stream_with_search(
         StreamResponse {
             status: StatusCode::OK,
             headers: HeaderMap::new(),
@@ -313,6 +317,8 @@ async fn keep_open_error(event: serde_json::Value) -> crate::ApiError {
         Duration::from_secs(60),
         /*telemetry*/ None,
         /*turn_state*/ None,
+        ApiDialect::OpenAi,
+        SearchActivityAdmission::Disabled,
     );
     let started = tokio::time::Instant::now();
     let error = loop {

@@ -1,10 +1,12 @@
 #![allow(clippy::expect_used)]
+mod common;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
+use codex_api::ApiDialect;
 use codex_api::ApiError;
 use codex_api::AuthError;
 use codex_api::AuthProvider;
@@ -534,6 +536,39 @@ async fn responses_retry_keeps_tool_results_and_redirect_omits_them() -> Result<
     enriched["input"][0]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
         ["tool_result"] = private;
 
+    // The same canonical tool output is sent to Grok without OpenAI-only private results.
+    let state = RecordingState::default();
+    let grok = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        provider("openai"),
+        Arc::new(NoAuth),
+    )
+    .with_dialect(ApiDialect::Grok);
+    let mut observed = Bytes::new();
+    let _stream = grok
+        .stream_request_with_observer(
+            request.clone(),
+            ResponsesOptions {
+                tool_results: vec![(0, 0, Arc::clone(&body))],
+                ..Default::default()
+            },
+            |json| observed = json.clone(),
+        )
+        .await?;
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    let sent = requests[0]
+        .prepare_body_for_send()
+        .expect("projected Grok request body should prepare");
+    assert_eq!(sent.body.as_deref(), Some(observed.as_ref()));
+    let projected: Value = serde_json::from_slice(&observed)?;
+    assert_eq!(
+        projected["input"],
+        serde_json::json!([{
+            "type": "function_call_output", "call_id": "read", "output": "one match"
+        }])
+    );
+
     for status in [307, 308] {
         let origin = MockServer::start().await;
         let destination = MockServer::start().await;
@@ -868,3 +903,6 @@ async fn async_auth_provider_rejects_sync_resolution_and_authenticates_requests(
     );
     Ok(())
 }
+
+#[path = "clients/grok_responses_tests.rs"]
+mod grok_responses_tests;

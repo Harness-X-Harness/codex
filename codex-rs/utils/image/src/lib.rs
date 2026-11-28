@@ -35,9 +35,11 @@ pub const MAX_SANITIZED_IMAGE_BYTES: usize = 79 * 1024 * 1024;
 const MAX_IMAGE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 pub mod error;
+mod normalize;
 mod sanitizer;
 
 pub use crate::error::ImageProcessingError;
+pub use normalize::normalize_to_png;
 
 #[derive(Debug, Clone)]
 pub struct EncodedImage {
@@ -97,6 +99,21 @@ impl PromptImageMode {
 struct ImageMetadata {
     icc_profile: Option<Vec<u8>>,
     exif: Option<Vec<u8>>,
+}
+
+impl ImageMetadata {
+    fn from_decoder(decoder: &mut impl ImageDecoder) -> Self {
+        Self {
+            // JPEG decoding may turn CMYK into RGB. A retained CMYK profile would
+            // mislabel those pixels, so only preserve RGB profiles when encoding.
+            icc_profile: decoder
+                .icc_profile()
+                .ok()
+                .flatten()
+                .filter(|profile| profile.get(16..20) == Some(b"RGB ")),
+            exif: decoder.exif_metadata().ok().flatten(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -167,17 +184,7 @@ fn load_for_prompt_bytes_uncached(
         // Preserve the metadata most important for rendering prompt images faithfully: the color
         // profile and EXIF data, including orientation. Other format-specific metadata is
         // intentionally not copied.
-        let metadata = ImageMetadata {
-            // Only RGB profiles are safe across every re-encoding path. For example, JPEG decoding
-            // can convert CMYK/YCCK pixels to RGB while retaining the source profile; copying it
-            // would mislabel the output. Bytes 16..20 are the ICC data color space signature.
-            icc_profile: decoder
-                .icc_profile()
-                .ok()
-                .flatten()
-                .filter(|profile| profile.get(16..20) == Some(b"RGB ")),
-            exif: decoder.exif_metadata().ok().flatten(),
-        };
+        let metadata = ImageMetadata::from_decoder(&mut decoder);
         let dynamic = DynamicImage::from_decoder(decoder)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
 

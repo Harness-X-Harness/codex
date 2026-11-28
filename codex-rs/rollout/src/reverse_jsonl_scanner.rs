@@ -133,11 +133,17 @@ where
 
     /// Scans the next rollout record through the canonical persisted JSON decoder.
     pub fn scan_next_rollout_line(&mut self) -> io::Result<Option<ScanOutcome<RolloutLine>>> {
-        Ok(self.scan_next::<Value>()?.map(|outcome| match outcome {
-            ScanOutcome::Parsed(value) => match crate::decode_rollout_line(value) {
-                Ok(line) => ScanOutcome::Parsed(line),
-                Err(error) => ScanOutcome::Rejected(error),
-            },
+        let Some(outcome) = self.scan_next::<Value>()? else {
+            return Ok(None);
+        };
+        Ok(Some(match outcome {
+            ScanOutcome::Parsed(value) => {
+                crate::validate_supported_history(&value)?;
+                match crate::decode_rollout_line(value) {
+                    Ok(line) => ScanOutcome::Parsed(line),
+                    Err(error) => ScanOutcome::Rejected(error),
+                }
+            }
             ScanOutcome::Rejected(error) => ScanOutcome::Rejected(error),
         }))
     }

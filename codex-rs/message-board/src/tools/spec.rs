@@ -156,3 +156,7 @@ pub(super) fn tool(
         None => ToolSpec::Function(tool),
     }
 }
+
+#[cfg(test)]
+#[path = "spec_bounds_tests.rs"]
+mod bounds_tests;

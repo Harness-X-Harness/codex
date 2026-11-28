@@ -1,6 +1,16 @@
 pub use codex_client::Provider;
 pub use codex_client::RetryConfig;
 
+/// API request and response semantics, independent of destination and name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ApiDialect {
+    /// Preserve the stock OpenAI/ChatGPT API contracts.
+    #[default]
+    OpenAi,
+    /// Apply the explicit Grok Responses and Images contracts.
+    Grok,
+}
+
 pub fn is_azure_responses_provider(name: &str, base_url: Option<&str>) -> bool {
     if name.eq_ignore_ascii_case("azure") {
         true

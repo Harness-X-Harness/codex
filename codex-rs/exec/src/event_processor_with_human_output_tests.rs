@@ -4,9 +4,12 @@ use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::ConfigBuilder;
+use codex_model_provider_info::WireApi;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -349,6 +352,27 @@ async fn config_summary_entries_include_only_writable_workspace_roots() {
     let sandbox_summary =
         sandbox_summary.replace(extra_root.to_string_lossy().as_ref(), "<extra root>");
     insta::assert_snapshot!(sandbox_summary, @"workspace-write [workdir, <extra root>]");
+    config.model_reasoning_effort = Some(ReasoningEffort::High);
+    config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+    for wire_api in [WireApi::Responses, WireApi::GrokResponses] {
+        config.model_provider.wire_api = wire_api;
+        let reasoning = config_summary_entries(
+            &config,
+            &session_configured_event,
+            &config.effective_workspace_roots(),
+        )
+        .into_iter()
+        .filter(|(key, _)| key.starts_with("reasoning"))
+        .map(|(key, value)| format!("{key}: {value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(reasoning, @"
+            reasoning effort: high
+            reasoning summaries: detailed
+            ");
+        }
+    }
 }
 
 #[test]

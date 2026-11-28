@@ -125,6 +125,7 @@ async fn api_key_discovery_respects_provider_routing() {
             auth_manager: Some(auth.clone()),
             gateway_auth_manager: None,
             runtime_auth: None,
+            runtime_auth_config: None,
             transport_builder: capture.clone(),
         });
         let provider = crate::provider::create_model_provider(
@@ -200,6 +201,7 @@ async fn provider_api_key_without_endpoint_overrides_uses_codex_backend() {
             auth_manager: auth_manager.clone(),
             gateway_auth_manager: None,
             runtime_auth: None,
+            runtime_auth_config: None,
             transport_builder: capture.clone(),
         });
         let provider = crate::provider::create_model_provider(
@@ -293,6 +295,7 @@ async fn model_request_uses_request_time_proxy_policy_and_exact_url() {
         auth_manager: None,
         gateway_auth_manager: None,
         runtime_auth: None,
+        runtime_auth_config: None,
         transport_builder: Arc::new(RecordingTransportBuilder {
             observed_request: Arc::clone(&observed_request),
         }),
@@ -340,6 +343,7 @@ async fn model_discovery_enforces_managed_residency_over_provider_headers() {
         auth_manager: None,
         gateway_auth_manager: None,
         runtime_auth: None,
+        runtime_auth_config: None,
         transport_builder: Arc::new(RecordingTransportBuilder {
             observed_request: Arc::new(Mutex::new(None)),
         }),

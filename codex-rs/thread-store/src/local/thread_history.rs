@@ -20,6 +20,7 @@ mod turn_lookup;
 
 pub(super) use read::list_items;
 pub(super) use read::list_turns;
+pub(super) use read::validate_supported_lineage;
 pub(super) use realtime::list_timeline;
 pub(super) use realtime_stream::has_canonical_realtime_session;
 pub(super) use realtime_stream::list_realtime;
