@@ -194,6 +194,11 @@ jobs:
     needs: subject
     runs-on: ubuntu-22.04
     timeout-minutes: 135
+    outputs:
+      integration-artifact-id: ${{ steps.integration-artifact.outputs.artifact-id }}
+      integration-source-sha: ${{ steps.integration-binary.outputs.source-sha }}
+      integration-binary-sha256: ${{ steps.integration-binary.outputs.binary-sha256 }}
+      integration-build-attempt: ${{ steps.integration-binary.outputs.build-attempt }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_BUILD_JOBS: "2"
@@ -729,55 +734,6 @@ jobs:
         run: >-
           just test -p codex-tui --lib --locked --cargo-profile ci-test --no-tests=fail
           -E 'test(status::tests::status_snapshot_responses_dialects_show_configured_reasoning)'
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: grok/go.mod
-          cache: false
-      - name: Test only real App Server and controlled Grok HTTP composition
-        working-directory: grok
-        env:
-          GROK_FACTS: "0"
-          GROK_LIVE: "0"
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          export GROK_CODEX_BIN="$CARGO_TARGET_DIR/ci-test/codex"
-          test -x "$GROK_CODEX_BIN"
-          mkdir "$RUNNER_TEMP/grok-integration-evidence"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$CODEX_C4B_TEST_CLI_SOURCE_SHA" = "$GITHUB_SHA"
-          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256"
-          python3 - <<'PYCODE'
-          import json, os
-          from pathlib import Path
-          fields = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
-                    "GITHUB_REF", "GITHUB_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
-                    "PR_HEAD_SHA", "PR_BASE_SHA", "CODEX_C4B_TEST_CLI_SOURCE_SHA", "CODEX_C4B_TEST_CLI_SHA256")
-          subject = {key: os.environ[key] for key in fields}
-          subject["subject_kind"] = "pr_test_merge" if os.environ["GITHUB_EVENT_NAME"] == "pull_request" else "branch_head"
-          subject["binary_target"] = "x86_64-unknown-linux-gnu"
-          subject["binary_profile"] = "ci-test"
-          (Path(os.environ["RUNNER_TEMP"]) / "grok-integration-evidence/subject.json").write_text(json.dumps(subject, sort_keys=True) + "\n")
-          PYCODE
-          status=0
-          go test -race -tags=integration -count=1 -timeout=20m -json \
-            ./tests/integration \
-            > "$RUNNER_TEMP/grok-integration-evidence/tests.json" || status=$?
-          go run ./cmd/grok-test-results --integration \
-            --input "$RUNNER_TEMP/grok-integration-evidence/tests.json" \
-            > "$RUNNER_TEMP/grok-integration-evidence/summary.json" || status=1
-          cat "$RUNNER_TEMP/grok-integration-evidence/summary.json"
-          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256" || status=1
-          exit "$status"
-      - name: Retain Go integration results even on failure
-        if: ${{ always() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: grok-integration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/grok-integration-evidence
-          if-no-files-found: error
-          retention-days: 7
       - name: Check scoped filesystem API lint
         env:
           # sccache 0.18 expects the literal compiler name in Clippy wrapper arguments.
@@ -889,6 +845,111 @@ jobs:
             ${{ runner.temp }}/provider-native-subject.txt
           if-no-files-found: error
 
+      - name: Bind the exact integration binary for the dependent job
+        id: integration-binary
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$CODEX_C4B_TEST_CLI_SOURCE_SHA" = "$GITHUB_SHA"
+          test -x "$CODEX_C4B_TEST_CLI"
+          digest="$(sha256sum "$CODEX_C4B_TEST_CLI" | cut -d ' ' -f 1)"
+          test "$digest" = "$CODEX_C4B_TEST_CLI_SHA256"
+          printf '%s\n' "source-sha=$GITHUB_SHA" "binary-sha256=$digest" \
+            "build-attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Upload the verified integration binary
+        id: integration-artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-integration-binary-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.CODEX_C4B_TEST_CLI }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  integration:
+    name: Controlled App Server and Grok HTTP integration
+    needs: runtime
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    env:
+      CODEX_C4B_TEST_CLI_SOURCE_SHA: ${{ needs.runtime.outputs.integration-source-sha }}
+      CODEX_C4B_TEST_CLI_SHA256: ${{ needs.runtime.outputs.integration-binary-sha256 }}
+      INTEGRATION_ARTIFACT_ID: ${{ needs.runtime.outputs.integration-artifact-id }}
+      INTEGRATION_BUILD_ATTEMPT: ${{ needs.runtime.outputs.integration-build-attempt }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Verify integration checkout and build receipt
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$CODEX_C4B_TEST_CLI_SOURCE_SHA" = "$GITHUB_SHA"
+          [[ "$CODEX_C4B_TEST_CLI_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$INTEGRATION_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$INTEGRATION_BUILD_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test "$INTEGRATION_BUILD_ATTEMPT" -le "$GITHUB_RUN_ATTEMPT"
+      # Download the producer's artifact even when only this job is rerun.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.runtime.outputs.integration-artifact-id }}
+          path: ${{ runner.temp }}/grok-integration-bin
+      - name: Install native Linux integration dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libasound2 bubblewrap
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: grok/go.mod
+          cache: false
+      - name: Test only real App Server and controlled Grok HTTP composition
+        working-directory: grok
+        env:
+          GROK_FACTS: "0"
+          GROK_LIVE: "0"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          export GROK_CODEX_BIN="$RUNNER_TEMP/grok-integration-bin/codex"
+          chmod u+x "$GROK_CODEX_BIN"
+          test -x "$GROK_CODEX_BIN"
+          mkdir "$RUNNER_TEMP/grok-integration-evidence"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$CODEX_C4B_TEST_CLI_SOURCE_SHA" = "$GITHUB_SHA"
+          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256"
+          python3 - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          fields = ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME",
+                    "GITHUB_REF", "GITHUB_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
+                    "PR_HEAD_SHA", "PR_BASE_SHA", "CODEX_C4B_TEST_CLI_SOURCE_SHA", "CODEX_C4B_TEST_CLI_SHA256",
+                    "INTEGRATION_ARTIFACT_ID", "INTEGRATION_BUILD_ATTEMPT")
+          subject = {key: os.environ[key] for key in fields}
+          subject["subject_kind"] = "pr_test_merge" if os.environ["GITHUB_EVENT_NAME"] == "pull_request" else "branch_head"
+          subject["binary_target"] = "x86_64-unknown-linux-gnu"
+          subject["binary_profile"] = "ci-test"
+          (Path(os.environ["RUNNER_TEMP"]) / "grok-integration-evidence/subject.json").write_text(json.dumps(subject, sort_keys=True) + "\n")
+          PYCODE
+          status=0
+          go test -race -tags=integration -count=1 -timeout=20m -json \
+            ./tests/integration \
+            > "$RUNNER_TEMP/grok-integration-evidence/tests.json" || status=$?
+          go run ./cmd/grok-test-results --integration \
+            --input "$RUNNER_TEMP/grok-integration-evidence/tests.json" \
+            > "$RUNNER_TEMP/grok-integration-evidence/summary.json" || status=1
+          cat "$RUNNER_TEMP/grok-integration-evidence/summary.json"
+          test "$(sha256sum "$GROK_CODEX_BIN" | cut -d ' ' -f 1)" = "$CODEX_C4B_TEST_CLI_SHA256" || status=1
+          exit "$status"
+      - name: Retain Go integration results even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: grok-integration-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/grok-integration-evidence
+          if-no-files-found: error
+          retention-days: 7
+
   go:
     name: Deterministic Go contracts
     needs: subject
@@ -897,7 +958,7 @@ jobs:
 
   complete:
     name: Native proof result
-    needs: [subject, locks, runtime, go]
+    needs: [subject, locks, runtime, integration, go]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
@@ -906,11 +967,12 @@ jobs:
           SUBJECT_RESULT: ${{ needs.subject.result }}
           LOCKS_RESULT: ${{ needs.locks.result }}
           RUNTIME_RESULT: ${{ needs.runtime.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
           GO_RESULT: ${{ needs.go.result }}
           OFFLINE_GO: ${{ inputs.offline_go }}
         run: |
           set -euo pipefail
-          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT"; do
+          for result in "$SUBJECT_RESULT" "$LOCKS_RESULT" "$RUNTIME_RESULT" "$INTEGRATION_RESULT"; do
             if [[ "$result" != "success" ]]; then
               echo "Required native job did not succeed: $result" >&2
               exit 1
